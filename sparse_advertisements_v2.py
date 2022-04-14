@@ -1,6 +1,8 @@
 import matplotlib.pyplot as plt, copy, time, numpy as np, itertools
 import networkx as nx
-
+import matplotlib.pyplot as plt, scipy.stats
+import sys
+np.set_printoptions(threshold=sys.maxsize)
 from bgpsim import (
 	Announcement,
 	ASGraph,
@@ -132,7 +134,7 @@ class Sparse_Advertisement_Wrapper:
 
 		return g1.g.nodes
 
-	def calculate_path_probabilities(self, init=False):
+	def calculate_path_probabilities_old(self, init=False):
 		"""Update path probabilities based on measured paths."""
 
 		try:
@@ -215,6 +217,57 @@ class Sparse_Advertisement_Wrapper:
 		# you announce the prefix to and the user group
 		self.path_probabilities = np.tile(self.path_probabilities, (1, self.n_prefixes, 1))
 
+
+	def calculate_path_probabilities(self, init=False):
+		"""Update path probabilities based on measured paths."""
+
+		
+		def violates(ordering, bigger, smallers):
+			ordering = np.array(ordering)
+			smallers = np.array(smallers)
+			wb = np.where(bigger == ordering)[0]
+			for s in get_intersection(smallers, ordering):
+				if wb > np.where(ordering == s)[0]:
+					return True
+			return False
+		if init:
+			# basic initialization is
+			# uniform over paths for each user_netork, same for each prefix
+			# (need to check that a path exists)
+			self.reachable_peers = {}
+			self.orderings = {}
+			self.measured_prefs = {}
+			for ui in range(len(self.user_networks)):
+				reachable_peers = np.where(self.measured_latencies[:,0,ui] != BIG_BAD_VALUE)[0]
+				self.reachable_peers[ui] = reachable_peers # static, property of the Internet
+				reachable_peers = np.array([self.peers[pi] for pi in reachable_peers])
+				non_transit_peers = np.array(get_intersection(reachable_peers, self.non_transit_peers))
+				# Initialize valid orderings to have uniform probability
+				# orderings are w.r.t. reachable peers
+				self.orderings[ui] = {}
+				n_combs = np.math.factorial(len(self.reachable_peers[ui]))
+				for ordering in itertools.permutations(self.reachable_peers[ui],len(self.reachable_peers[ui])):
+					self.orderings[ui][ordering] = 1 / n_combs
+		else:
+			# Update orderings to be consistent with observed pairwise preferences
+			print(self.peers)
+			print(self.user_networks)
+			print(self.measured_prefs)
+			for ui in self.measured_prefs:
+				print("UI : {} Before: {}".format(ui, len(self.orderings[ui])))
+				for winning_path, active_paths in self.measured_prefs[ui]:
+					# delete orderings that violate this measurement, then re-normalize ordering pdf
+					all_orderings = list(self.orderings[ui].keys())
+					for ordering in all_orderings:
+						print("{} {}".format(ordering, violates(ordering,winning_path,active_paths)))
+						if violates(ordering, winning_path, active_paths): 
+							del self.orderings[ui][ordering]
+				norm_v = sum(self.orderings[ui].values())
+				for ordering in self.orderings[ui]:
+					self.orderings[ui][ordering] /= norm_v
+
+				print("UI : {} After: {}".format(ui, len(self.orderings[ui])))
+
 	def calculate_user_latency_by_peer(self):
 		"""Calculate latency from each user to each peer. In practice, you would measure these latencies
 			once using Anyopt-type techniques.
@@ -261,10 +314,28 @@ class Sparse_Advertisement_Wrapper:
 				if latency < user_latencies[i]: user_latencies[i] = latency
 		return user_latencies
 
-	def latency_benefit(self, a, calc_uncertainty=False):
+	def latency_benefit(self, a, calc_uncertainty=False,plotit=False):
 		"""Way of estimating expecting latency benefit from an advertisement. Look at expected
 			latency for a given advertisement."""
 		a_effective = self.threshold_a(a)
+		active_peers = np.sum(a_effective,axis=1) > 0
+
+		self.path_probabilities = np.zeros((self.n_peers, 1, len(self.user_networks)))
+		# Convert ordering probabilities to pdf where prob_mat ij is probability peer i wins for user group j
+		self.path_probabilities = np.expand_dims(self.path_probabilities[:,0,:],axis=1)
+		for ug in range(len(self.user_networks)):
+			possible_peers = get_intersection(self.reachable_peers[ug], np.where(active_peers)[0])
+			pi = np.zeros((self.n_peers))
+			for ordering, p in self.orderings[ug].items():
+				sub_order = [o for o in ordering if o in possible_peers]
+				if sub_order != []:
+					pi[sub_order[0]] += p
+			self.path_probabilities[:,0,ug] = pi / np.sum(pi + 1e-8)
+
+
+		# We tile since the path probabilities don't depend on the prefix being announced, only who
+		# you announce the prefix to and the user group
+		self.path_probabilities = np.tile(self.path_probabilities, (1, self.n_prefixes, 1))
 
 		# Dims are path, prefix, user
 
@@ -276,21 +347,7 @@ class Sparse_Advertisement_Wrapper:
 		min_e_user_lat = np.min(e_user_lat, axis=0) # minimum over prefixes
 		benefit = self.benefit_from_user_latencies(min_e_user_lat)
 
-		if self.verbose:
-			actual_ul = np.clip(self.user_latencies_from_bgp(a_effective), 0, 1e5)
-			min_e_user_lat = np.clip(min_e_user_lat, 0, 1e5)
-			self.metrics['twopart_EL_difference'].append(actual_ul - min_e_user_lat)
-			# if self.iter == 10:
-			# 	print(np.squeeze(p_mat[:,0,:]))
-			# 	print(np.squeeze(self.measured_latencies[:,0,:]))
-			# 	print(e_user_lat)
-			# 	print(actual_ul)
-			# 	print("\n")
-			# 	if np.random.random() > .95:
-			# 		exit(0)
-
-		if calc_uncertainty: 
-			# perhaps matrixify this later
+		if False: 
 			uncertainties = np.zeros((len(self.user_networks)))
 			chosen_prefixes = np.argmin(e_user_lat, axis=0) # indicates which prefix's uncertainty we should focus on
 			l_mat = self.measured_latencies
@@ -312,6 +369,112 @@ class Sparse_Advertisement_Wrapper:
 			uncertainty = np.sum(uncertainties)
 
 			return benefit, uncertainty
+
+
+
+		# SWITCH TO LATENCY UNTIL THE VERY END
+		
+		# if calc_uncertainty: 
+		delta = .1
+		# perhaps matrixify this later
+		l_mat = self.measured_latencies
+		benefits = np.log(1 / l_mat).clip(0,np.inf)
+		p_mat = p_mat / (np.sum(p_mat,axis=0) + 1e-8)
+
+		min_b, max_b = np.min((benefits * A_mat).flatten()), np.max((A_mat * benefits).flatten())
+		n_pts = int(np.ceil((max_b - min_b) / delta))
+		lbx = np.linspace(min_b,max_b,num=n_pts)
+		# holds P(latency benefit) for each user
+		px = np.zeros((n_pts, len(self.user_networks)))
+		roll_min, roll_max = 0, 0
+		for ui in range(len(self.user_networks)):
+			maxb = -1 * BIG_BAD_VALUE
+			all_pv = [(j,v,p) for j in range(self.n_prefixes) for v,p in zip(benefits[:,j,ui], p_mat[:,j,ui]) if p > 0]
+			if len(all_pv) == 1:
+				_, lb, p = all_pv[0]
+				lbx_i = np.where(lb - lbx <= 0)[0][0]
+				px[lbx_i, ui] += p
+				maxb = np.maximum(maxb,lb)
+			else:
+				all_pv = sorted(all_pv,key=lambda el : el[1])
+				running_probs = np.ones((self.n_prefixes))
+				all_pref_inds = np.arange(self.n_prefixes)
+				# print(all_pv)
+				for i in range(1,len(all_pv)):
+					pref_j, lb, p = all_pv[i]
+
+					# calculate prob(max latency benefit)
+					# we calculate this iteratively, from the smallest to the largest value
+					# probability calc is basically probability of this value (p) times probability 
+					# other prefixes are one of the smaller values (running prob)
+					max_prob = p * np.prod(running_probs[all_pref_inds!=pref_j])
+					if running_probs[pref_j] == 1:
+						running_probs[pref_j] = p
+					else:
+						running_probs[pref_j] += p
+
+					lbx_i = np.where(lb - lbx <= 0)[0][0]
+					px[lbx_i, ui] += max_prob
+					maxb = np.maximum(maxb,lb)
+			if np.sum(px[:,ui]) == 0:
+				px[0,ui] = 1.0 # lowest benefit # TODO Make this better
+			if maxb != -1 * BIG_BAD_VALUE:
+				roll_max += maxb
+		px = px / (np.sum(px,axis=0) + 1e-8)
+		n_pts_output = int(np.ceil((roll_max - roll_min) / delta)) + 1
+		n_fft = int(2**(np.ceil(np.log2(n_pts_output)+1)))
+
+		px = np.concatenate([px,np.zeros((n_fft - n_pts, len(self.user_networks)))], axis=0)
+		Px = np.fft.fft(px,axis=0)
+		Psumx = np.prod(Px,axis=1)
+		psumx = np.real(np.fft.ifft(Psumx))
+		psumx = psumx[0:n_pts_output]
+
+		# pmf of benefits is now xsumx with probabilities psumx
+		xsumx = np.linspace(roll_min, roll_max, num=n_pts_output) / len(self.user_networks)
+
+		plotit = plotit or np.sum(psumx) < .99 # Checks that this is a probability distribution
+		
+		if plotit:
+			import matplotlib.pyplot as plt
+			print(self.orderings[3])
+			print(a)
+			print(benefits[:,0,:])
+			print(benefits[:,1,:])
+			print(p_mat[:,0,:])
+			print(p_mat[:,1,:])
+			print(px)
+			plt.plot(xsumx, psumx)
+			plt.show()
+
+
+		if self.verbose:
+			actual_ul = np.clip(self.user_latencies_from_bgp(a_effective), 0, 1e5)
+			predicted_user_lat = 
+			self.metrics['twopart_EL_difference'].append(actual_ul - min_e_user_lat)
+			if np.min(self.metrics['twopart_EL_difference'][-1]) < -.003:
+				print(np.where(active_peers)[0])
+				print(self.reachable_peers[0])
+				print(self.orderings[0])
+				print(self.path_probabilities[:,0,:])
+				print(self.path_probabilities[:,1,:])
+				print(a_effective)
+				print(A_mat[:,0,:])
+				print(A_mat[:,1,:])
+				print(np.squeeze(p_mat[:,0,:]))
+				print(np.squeeze(p_mat[:,1,:]))
+				print(np.squeeze(self.measured_latencies[:,0,:]))
+				print(e_user_lat)
+				print(e_user_lat.shape)
+				print(min_e_user_lat)
+				print(min_e_user_lat.shape)
+				print(actual_ul)
+				print("\n")
+				exit(0)
+
+		benefit = np.sum(xsumx * psumx)
+		if calc_uncertainty:
+			return benefit, (xsumx,psumx)
 		else:
 			return benefit
 
@@ -352,15 +515,20 @@ class Sparse_Advertisement_Wrapper:
 	def measure_paths(self, a):
 		"""Between rounds, measure paths from users to CP given advertisement a."""
 		try:
-			self.measured_prefs
+			self.measured
 		except AttributeError:
-			self.measured_prefs = {}
+			self.measured = {}
 
 		self.path_measures += 1
+
+		# TODO -- don't remeasure only one peer being active at once, useless
 
 		best_paths = {}
 		actives = {}
 		a = self.threshold_a(a)
+
+		# print("Measuring : \n{}".format(a))
+		self.measured[tuple(a.flatten())] = None
 		for prefix_i in range(a.shape[1]):
 			actives[prefix_i] = np.where(a[:,prefix_i] == 1)[0]
 			if np.sum(a[:,prefix_i]) == 0:
@@ -585,7 +753,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			best_pref_i = best_delta % self.n_prefixes
 			advertisement[best_peer_i,best_pref_i] = 1 - advertisement[best_peer_i,best_pref_i]
 
-			stop = self.stopping_condition([i,np.abs(deltas[best_peer_i, best_pref_i]), -1])
+			stop = self.stopping_condition([i,np.abs(deltas[best_peer_i, best_pref_i]), deltas[best_peer_i, best_pref_i]])
 
 			i += 1
 		print("Sparse greedy solution measured {} advertisements".format(n_measures))
@@ -664,7 +832,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'l0_advertisement': l0_oracle_adv,
 		}
 
-	def compare_different_solutions(self,n_run=40,verbose=True,init_adv=None,which='outerinner'):
+	def compare_different_solutions(self,n_run=10,verbose=True,init_adv=None,which='outerinner'):
 		# oracle
 		self.solve_oracle(verbose=verbose)
 		# Extremes
@@ -780,6 +948,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after = self.latency_benefit(a_effective)
 				a_effective[a_i,a_j] = 0
 				before = self.latency_benefit(a_effective)
+
 			L_grad[a_i, a_j] = 	self.heaviside_gradient(before, after, a[a_i,a_j])
 			a_effective[a_i,a_j] = a_ij
 		return L_grad
@@ -890,7 +1059,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# Focus on the largest gradients
 		self.gradient_support = list([inds[i] for i in sorted_inds[0:self.gradient_support_settings['support_size']]])
 
-	def solve_max_information(self, current_advertisement):
+	def solve_max_information_old(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""
 		uncertainties = np.zeros(current_advertisement.shape)
 		MIN_UNCERTAINTY = .1
@@ -912,6 +1081,54 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		else:
 			a[ind] = 1 - a[ind]
 			return a
+
+	def solve_max_information(self, current_advertisement):
+		"""Search through neighbors of a, calculate maximum uncertainty."""
+		uncertainties = {}
+
+		a = np.copy(self.threshold_a(current_advertisement))
+		current_benefit = self.latency_benefit(a)
+
+		# TODO -- try 1, then try more randomly until we beat the threshold so this can scale
+
+		MIN_POTENTIAL_VALUE = .01
+		n_flips = 1
+		max_n_flips = 2
+		while True:
+			if n_flips > max_n_flips: return None
+			all_inds = [(i,j) for i in range(self.n_peers) for j in range(self.n_prefixes)]
+			for flips in itertools.permutations(all_inds, n_flips):
+				for flip in flips: # flip bits
+					a[flip] = 1 - a[flip]
+				if np.sum(a.flatten()) == 0: continue
+				_, u = self.latency_benefit(a, calc_uncertainty=True)
+				uncertainties[flips] = u
+				for flip in flips: # flip back
+					a[flip] = 1 - a[flip]
+
+			potential_value_measure = {}
+			# print("CB: {}".format(current_benefit))
+			max_benefit = -10
+			best_flips = None
+			for flips,(benefits,probs) in uncertainties.items():
+				# if np.max(benefits) <= current_benefit: continue # definitely no increase in benefit
+				# if np.sum(probs[benefits>current_benefit]) > .95: continue # no uncertainty
+				# potential_value_measure[flips] = np.sum(benefits[benefits>current_benefit] * probs[benefits>current_benefit])
+				potential_value_measure[flips] = scipy.stats.entropy(probs+1e-8)
+				if potential_value_measure[flips] >= max_benefit:
+					best_flips = flips
+					max_benefit = potential_value_measure[flips]
+			# print(best_flips)
+			# print("Max potential additional benefit mass : {}".format(max_benefit))
+			if best_flips is not None:
+				if potential_value_measure[best_flips] > MIN_POTENTIAL_VALUE:
+					for flip in best_flips:
+						a[flip] = 1 - a[flip]
+					if tuple(a.flatten()) in self.measured:
+						self.latency_benefit(a, calc_uncertainty=True,plotit=True)
+						exit(0)
+					return a
+			n_flips += 1
 
 	def solve(self, init_adv=None):
 		self.set_alpha()
@@ -1037,6 +1254,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def solve_twopart(self, init_adv=None):
 		self.set_alpha()
+		self.measured = {}
 		if init_adv is None:
 			advertisement = self.init_advertisement()
 		else:
@@ -1070,7 +1288,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		last_objective = current_objective
 
 		# Add to metrics
-		self.metrics['twopart_path_likelihoods'].append(copy.copy(self.path_probabilities))
 		self.metrics['twopart_actual_objectives'].append(current_objective)
 		self.metrics['twopart_effective_objectives'].append(self.objective(self.threshold_a(advertisement)))
 		self.metrics['twopart_advertisements'].append(copy.copy(advertisement))
@@ -1078,7 +1295,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		while not stop:
 			
 			# calculate gradients
+			# print(self.path_probabilities[:,0,:])
 			grads = self.gradient_fn(advertisement)
+			# print(grads)
+			# print(self.threshold_a(advertisement))
+			# if self.iter == 7:
+			# 	exit(0)
 			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
 			a_k = advertisement
 			w_k = a_k - self.alpha * grads + self.beta * (a_k - a_km1)
@@ -1116,18 +1338,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.calculate_path_probabilities()
 
 			# Add to metrics
+			self.latency_benefit(np.ones(advertisement.shape))
 			self.metrics['twopart_path_likelihoods'].append(copy.copy(self.path_probabilities))
 
 			t_per_iter = (time.time() - t_start) / self.iter
 
 			if self.iter % 20 == 0 and self.verbose:
 				print("Optimizing, iter: {}, t_per_iter : {}".format(self.iter, t_per_iter))
-		# if self.verbose:
 		print("Stopped train loop on {}, t per iter: {}, {} path measures".format(self.iter, t_per_iter, self.path_measures))
 		self.metrics['twopart_t_per_iter'] = t_per_iter
 
 def main():
-	# np.random.seed(31415)
+	np.random.seed(31419)
 	# ## Generating graphs
 	# gen_random_graph('test_graph',n_transit=1,n_user=50)
 
@@ -1155,19 +1377,19 @@ def main():
 	# 	graph_md_fn="multi_prefix_test_md.json", mu=mu, cont_grads=False)
 	# sae.compare_different_solutions(which='twopart')
 
-	# ## Simple test
-	# mu = .1
-	# sas = Sparse_Advertisement_Solver(graph_fn="multi_prefix_test.csv", graph_md_fn="multi_prefix_test_md.json", 
-	# 	mu=mu,verbose=True,cont_grads=False)
-	# sas.solve_twopart()
-	# sas.make_plots('twopart')
-	# print(sas.threshold_a(sas.get_last_advertisement()))
+	## Simple test
+	mu = .1
+	sas = Sparse_Advertisement_Solver(graph_fn="multi_prefix_test.csv", graph_md_fn="multi_prefix_test_md.json", 
+		mu=mu,verbose=True,cont_grads=False)
+	sas.solve_twopart()
+	sas.make_plots('twopart')
+	print(sas.threshold_a(sas.get_last_advertisement()))
 
-	# Sweep mu
-	mu = .001
-	sae = Sparse_Advertisement_Eval(graph_fn="multi_prefix_test.csv", 
-		graph_md_fn="multi_prefix_test_md.json",mu=mu,verbose=False,cont_grads=False)
-	sae.compare_peer_value()
+	# # Sweep mu
+	# mu = .001
+	# sae = Sparse_Advertisement_Eval(graph_fn="multi_prefix_test.csv", 
+	# 	graph_md_fn="multi_prefix_test_md.json",mu=mu,verbose=False,cont_grads=False)
+	# sae.compare_peer_value()
 
 
 if __name__ == "__main__":
