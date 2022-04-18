@@ -117,11 +117,11 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 	# Now assign edge lengths to the graph
 	edge_lengths = {}
 	el_models = { # gaussian models
-		"user_to_rp": (1000,300),
+		"user_to_rp": (3000,900),
 		"rp_to_brp": (100,20),
 		"user_to_cp": (500,300),
 		"ntwrk_to_cp": (10,1),
-		"ntwrk_to_transit": (2000,800),
+		"ntwrk_to_transit": (5000,2000),
 	}
 	for ntwrk1,ntwrk2 in graph:
 		if ntwrk1 in transit_networks or ntwrk2 in transit_networks:
