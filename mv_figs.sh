@@ -1,0 +1,1 @@
+cp figures/* sparse_advertisement_paper/figures/

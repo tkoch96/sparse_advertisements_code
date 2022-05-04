@@ -1,4 +1,4 @@
-import numpy as np, csv, socket, struct, os, re
+import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt
 from bisect import bisect_left
 
 try:
@@ -13,6 +13,14 @@ except:
 
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
+
+def save_fig(fn, lgd=None):
+	if lgd is None:
+		plt.savefig(os.path.join("figures",fn), bbox_inches='tight')
+	else:
+		plt.savefig(os.path.join("figures", fn), bbox_extra_artists=(lgd,), bbox_inches='tight')
+	plt.clf()
+	plt.close()
 
 def haversine(loc1,loc2):
 	"""

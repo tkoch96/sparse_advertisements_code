@@ -130,3 +130,5 @@ dmypy.json
 #  My stuff
 sparse_advertisement_proposal
 sparse_advertisement_paper
+cache
+.DS_Store

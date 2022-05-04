@@ -33,7 +33,7 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 			'brp': 1,
 		},
 		'network_to_cp': { # Peering arrangements
-			'user': .6,
+			'user': .2,
 			'rp': .5,
 			'brp': 1,
 		}
