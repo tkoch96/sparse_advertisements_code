@@ -9,54 +9,56 @@ from bgpsim import (
 )
 from helpers import *
 from graph_utils import *
+from constants import *
 
-KM_TO_MS = .01
-BIG_BAD_VALUE = 1e6 # latency with no path
-bp_cache = {}
-lb_cache = {}
-
-CACHE_DIR = "cache"
-GRAPH_DIR = "graphs"
 TOY_GRAPH_FN = "toy_graph.csv"
 TOY_GRAPH_MD_FN = "toy_graph_md.json"
 
-cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','darkseagreen','palegoldenrod',
-	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
-	'lightsteelblue']
+bp_cache = {}
+lb_cache = {}
 
-def _gen_random_graph(*args,**kwargs):
+def gen_random_graph_(*args,**kwargs):
 	global bp_cache
 	bp_cache = {}
 	gen_random_graph(*args,**kwargs)
 
 class Sparse_Advertisement_Wrapper:
-	def __init__(self, graph_fn=TOY_GRAPH_FN, graph_md_fn=TOY_GRAPH_MD_FN, mu=1.0, verbose=True, 
+	def __init__(self, graph_fn=TOY_GRAPH_FN, graph_md_fn=TOY_GRAPH_MD_FN, lambduh=1.0, verbose=True, 
 			cont_grads=False,  advertisement_cost="l1",
 			init={'type':'normal','var':.001}, explore='entropy',
-			n_prefixes=2):
+			n_prefixes=2, resilience_benefit=False, gamma=0):
 		# (hyper-) parameters
-		self.mu = mu
+		self.lambduh = lambduh
+		self.gamma = gamma
 		self.advertisement_threshold = .5
-		self.epsilon = .0005
+		self.epsilon = .00005
 		self.max_n_iter = 300
 		self.iter_outer = 0
 		self.iter = 0
 		self.initialization = init
 		self.explore = explore
-		self.stopping_condition = lambda el : el[0] > self.max_n_iter or el[1] < self.epsilon or el[2] > 0
-		# Gradient function
+		self.stopping_condition = lambda el : el[0] > self.max_n_iter or el[1] < self.epsilon or np.abs(el[2]) < self.epsilon
+		# Continuous gradients, generally performs poorly relative to the additional calculation cost
 		if cont_grads:
 			self.latency_benefit_fn = self.latency_benefit_continuous
 			self.gradient_fn = self.gradients_continuous
 		else:
 			self.latency_benefit_fn = self.latency_benefit
 			self.gradient_fn = self.gradients
+		# Resilience function
+		if resilience_benefit:
+			self.resilience_benefit_fn = self.resilience_benefit
+			self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
+		else:
+			self.resilience_benefit_fn = lambda a : 0
+			self.gradients_resilience_benefit_fn = lambda a : np.zeros(a.shape)
+
 		# Different types of advertisement cost
 		self.advertisement_cost = {
-			"l1": self.l1_norm,
-			"sigmoid": self.sigmoid_prod_cost,
+			"l1": self.l1_norm, # simple but possibly ineffective approximation of true cost
+			"sigmoid": self.sigmoid_prod_cost, # doesn't perform too well in practice but good numerical approx.
 		}[advertisement_cost]
-		if advertisement_cost == "sigmoid":
+		if advertisement_cost == "sigmoid": 
 			self.gradient_fn = self.gradients_sigmoid
 			self.proximal = False
 			self.sigmoid_cost_k = 5
@@ -138,6 +140,9 @@ class Sparse_Advertisement_Wrapper:
 	def gradients_sigmoid(self,*args, **kwargs):
 		pass
 
+	def gradients_resilience_benefit(self,*args, **kwargs):
+		pass
+
 	def l1_norm(self, a):
 		return np.sum(np.abs(a).flatten())
 
@@ -185,94 +190,8 @@ class Sparse_Advertisement_Wrapper:
 
 		return g1.g.nodes
 
-	def calculate_path_probabilities_old(self, init=False):
-		"""Update path probabilities based on measured paths."""
-
-		try:
-			self.peer_preferences
-		except AttributeError:
-			self.peer_preferences = {ui: {pi:BIG_BAD_VALUE for pi in range(self.n_peers)} for ui in range(len(self.user_networks))}
-
-		if init:
-			self.path_probabilities = BIG_BAD_VALUE * np.ones((self.n_peers, 1, len(self.user_networks)))
-			# basic initialization is
-			# uniform over paths for each user_netork, same for each prefix
-			# (need to check that a path exists)
-			self.reachable_peers = {}
-			self.uncertainties = {}
-			self.measured_prefs = {}
-			for ui in range(len(self.user_networks)):
-				reachable_peers = np.where(self.measured_latencies[:,0,ui] != BIG_BAD_VALUE)[0]
-				self.reachable_peers[ui] = reachable_peers # static, property of the Internet
-				reachable_peers = np.array([self.peers[pi] for pi in reachable_peers])
-				non_transit_peers = np.array(get_intersection(reachable_peers, self.non_transit_peers))
-				non_transit_prefs = np.arange(len(non_transit_peers)) 
-				transit_prefs = len(non_transit_prefs) + np.arange(len(self.transit_providers)) # all transit should be reachable
-				np.random.shuffle(transit_prefs)
-				np.random.shuffle(non_transit_prefs)
-				for pi in range(len(reachable_peers)):
-					univ_pi = np.where(reachable_peers[pi] == self.peers)[0][0]
-					# Simple init -- deprioritize transit
-					if reachable_peers[pi] in self.transit_providers:
-						self.peer_preferences[ui][univ_pi] = 1
-					else:
-						self.peer_preferences[ui][univ_pi] = 0
-
-				# For each pair of paths, init uncertainties to prior values
-				for pi in range(len(reachable_peers)):
-					for pj in range(len(reachable_peers)):
-						if pi != pj:
-							# could have more complicated prior uncertainty
-							self.uncertainties[ui,self.reachable_peers[ui][pi],self.reachable_peers[ui][pj]] = 1
-		else:
-			# Update probabilities to be consistent with observed pairwise preferences
-			for ui in self.measured_prefs:
-				for winning_path, active_paths in self.measured_prefs[ui]:
-					# indicate we are no longer uncertain about the pairwise preferences between these paths
-					# could also propagate lack of uncertainty
-					for peer in active_paths:
-						self.uncertainties[ui,winning_path,peer] = 0
-						self.uncertainties[ui,peer,winning_path] = 0
-
-					arg_max_pref = np.argmin([self.peer_preferences[ui][pi] for pi in active_paths])
-					max_pref_path = active_paths[arg_max_pref]
-					max_pref = self.peer_preferences[ui][max_pref_path]
-					# we only update information if we learned something about preferences
-					# the chosen path should be a higher priority than all other active paths
-					if self.peer_preferences[ui][winning_path] >= max_pref:
-						self.peer_preferences[ui][winning_path] = max_pref - .1
-						# resort to give everything an integer preference
-						tmp = sorted(self.peer_preferences[ui].items(), key = lambda el : el[1])
-						self.peer_preferences[ui] = {}
-						i=0
-						for k,v in tmp: # TODO -- maybe reconsider this assignment; we arbitrarily break ties here but we may not want to do that
-							if v != BIG_BAD_VALUE:
-								self.peer_preferences[ui][k] = i
-								i += 1
-							else:
-								self.peer_preferences[ui][k] = BIG_BAD_VALUE
-		# Put all preferences into a matrix
-		self.path_probabilities = np.expand_dims(self.path_probabilities[:,0,:],axis=1)
-		for ui in self.peer_preferences:
-			for pi in self.peer_preferences[ui]:
-				self.path_probabilities[pi,0,ui] = self.peer_preferences[ui][pi] 
-
-		# Convert preferences to pdf via softmax
-		# interpretation is that preference k - 1 is exp(k) times as likely as preference k
-		# since we set unreachable paths to preference of BIG_BAD_VALUE, those probabilities are 0
-		# softmax_k = .5 + 2 * np.exp(-1 / (self.iter_outer + .001))
-		softmax_k = .5 + 4 * np.exp(-1 / (self.iter + .001))
-		self.path_probabilities = np.exp(-1 * softmax_k * self.path_probabilities)
-
-		# We tile since the path probabilities don't depend on the prefix being announced, only who
-		# you announce the prefix to and the user group
-		self.path_probabilities = np.tile(self.path_probabilities, (1, self.n_prefixes, 1))
-
-
 	def calculate_path_probabilities(self, init=False):
 		"""Update path probabilities based on measured paths."""
-
-		
 		def violates(ordering, bigger, smallers):
 			ordering = np.array(ordering)
 			smallers = np.array(smallers)
@@ -389,7 +308,6 @@ class Sparse_Advertisement_Wrapper:
 					if sub_order != []:
 						pi[sub_order[0]] += p
 				self.path_probabilities[:,pref_i,ug] = pi / np.sum(pi + 1e-8)
-
 		# Dims are path, prefix, user
 
 		delta = .1
@@ -530,11 +448,15 @@ class Sparse_Advertisement_Wrapper:
 			exit(0)
 
 		if self.verbose:
-			# Add to metrics
-			e_user_lat = np.sum((self.measured_latencies * p_mat + 1e-8) / np.sum(p_mat+1e-14, axis=0), axis=0)
-			min_e_user_lat = np.min(e_user_lat, axis=0) # minimum over prefixes
-			actual_ul = self.user_latencies_from_bgp(a_effective)
-			self.metrics['twopart_EL_difference'].append(actual_ul - min_e_user_lat)
+			try:
+				self.metrics
+				# Add to metrics
+				e_user_lat = np.sum((self.measured_latencies * p_mat + 1e-8) / np.sum(p_mat+1e-14, axis=0), axis=0)
+				min_e_user_lat = np.min(e_user_lat, axis=0) # minimum over prefixes
+				actual_ul = self.user_latencies_from_bgp(a_effective)
+				self.metrics['twopart_EL_difference'].append(actual_ul - min_e_user_lat)
+			except AttributeError:
+				pass
 
 		benefit = np.sum(xsumx * psumx)
 
@@ -569,6 +491,26 @@ class Sparse_Advertisement_Wrapper:
 		# average user benefit -- important that this function is not affected by the number of user groups
 		return np.mean(user_benefits)
 
+	def resilience_benefit(self, a):
+		"""1 / N_peers * sum over peers of E(benefit when that peer is knocked out)."""
+
+		benefit = 0
+		tmp = np.ones(a.shape)
+		for peer in self.peers:
+			tmp[self.peer_to_ind[peer],:] = 0
+			benefit += self.latency_benefit(a * tmp)
+			tmp[self.peer_to_ind[peer],:] = 1
+		return benefit / len(self.peers)
+
+	def resilience_benefit_from_bgp(self, a):
+		benefit = 0
+		tmp = np.ones(a.shape)
+		for peer in self.peers:
+			tmp[self.peer_to_ind[peer],:] = 0
+			benefit += self.latency_benefit_from_bgp(a * tmp)
+			tmp[self.peer_to_ind[peer],:] = 1
+		return benefit / len(self.peers)
+
 	def init_advertisement(self):
 		mode = self.initialization['type']
 		if mode == 'random_binary':
@@ -583,6 +525,26 @@ class Sparse_Advertisement_Wrapper:
 			return np.zeros((self.n_peers, self.n_prefixes))
 		elif mode == 'uniform':
 			return np.random.random(size=(self.n_peers, self.n_prefixes))
+		elif mode == 'pseudo_anycast':
+			a = np.zeros((self.n_peers, self.n_prefixes))
+			a[:,0] = 1
+			return a
+		elif mode == 'using_objective':
+			a = np.ones((self.n_peers, self.n_prefixes))
+			obj_on = self.objective(a)
+			exclude = []
+			for i in range(self.n_peers):
+				a[i,:] = 0
+				if self.objective(a) < obj_on:
+					exclude.append(i)
+				a[i,:] = 1
+			a = self.advertisement_threshold + np.sqrt(.001) \
+				* np.random.normal(size=(self.n_peers, self.n_prefixes))
+			a[:,0] = .55
+			if len(exclude) > 0:
+				a[np.array(exclude),0] = .45
+			return a
+
 		else:
 			raise ValueError("Adv init {} not recognized.".format(mode))
 
@@ -629,8 +591,9 @@ class Sparse_Advertisement_Wrapper:
 		"""Approx actual objective with our belief."""
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.latency_benefit_fn(a)
+		resilience_benefit = self.resilience_benefit_fn(a)
 		# print("We believe: NP: {}, LB: {}".format(norm_penalty,latency_benefit))
-		return self.mu * norm_penalty - latency_benefit
+		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
 	def actual_objective(self, a):
 		# Don't approximate the L0 norm with anything
@@ -648,7 +611,9 @@ class Sparse_Advertisement_Wrapper:
 		cost_prefs = np.sum(has_pref) * c_pref
 		norm_penalty = cost_peers + cost_prefs
 		latency_benefit = self.latency_benefit_from_bgp(a)
-		return self.mu * norm_penalty - latency_benefit
+		resilience_benefit = self.resilience_benefit_from_bgp(a)
+
+		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
 	def outer_objective(self, a):
 		# Approximate L0 norm with whatever approximation we're using
@@ -656,29 +621,30 @@ class Sparse_Advertisement_Wrapper:
 
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.latency_benefit_from_bgp(a)
+		resilience_benefit = self.resilience_benefit_from_bgp(a)
 
 		# print("Actual: NP: {}, LB: {}".format(norm_penalty,latency_benefit))
-		return self.mu * norm_penalty - latency_benefit
+		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
 class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 	def __init__(self, **kwargs):
 		super().__init__(**kwargs)
 		self.sas = Sparse_Advertisement_Solver(**kwargs)
 
-	def compare_peer_value(self,minmu=.01,maxmu=5,make_plots=True):
+	def compare_peer_value(self,minlambduh=.01,maxlambduh=5,make_plots=True):
 		soln_keys = ['ours','oracle']#,'sparse_greedy']
 		soln_peer_alives = {k:[] for k in soln_keys}
 		linestyles = ['-','*','^']
 		colors = ['r','b','k','orange','fuchsia','sandybrown']
-		mus = np.logspace(np.log10(minmu),np.log10(maxmu),num=50)
-		mus = np.flip(mus)
+		lambduhs = np.logspace(np.log10(minlambduh),np.log10(maxlambduh),num=50)
+		lambduhs = np.flip(lambduhs)
 		init_advs = []
 		if self.n_peers <= 1:
 			return None
-		for mu in mus:
+		for lambduh in lambduhs:
 			if make_plots:
-				print(mu)
-			self.mu = mu; self.sas.mu = mu
+				print(lambduh)
+			self.lambduh = lambduh; self.sas.lambduh = lambduh
 			self.compare_different_solutions(which='twopart',n_run=1,verbose=False)
 			if self.oracle is None:
 				# This only works if we can calculate the oracle solution
@@ -703,7 +669,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			if make_plots:
 				if k == 'oracle': continue
 				for i in range(self.n_peers):
-					ax[0].semilogx(mus, soln_peer_alives[k][:,i], 
+					ax[0].semilogx(lambduhs, soln_peer_alives[k][:,i], 
 						linestyles[si+1], c=colors[i], label="{}".format(i))
 		if make_plots:
 			ax[0].legend(fontsize=14,ncol=2)
@@ -712,28 +678,28 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			ax[0].set_ylabel("Peer On/Off")
 
 		alpha = self.advertisement_threshold / 2
-		soln_peer_alives_smoothed = {k: np.zeros((self.n_peers, len(mus) - 1)) for k in soln_keys}
+		soln_peer_alives_smoothed = {k: np.zeros((self.n_peers, len(lambduhs) - 1)) for k in soln_keys}
 		for si,k in enumerate(soln_keys):
 			soln_peer_alives[k] = np.array(soln_peer_alives[k])
 			for i in range(self.n_peers):
 				avg = soln_peer_alives[k][0,i]
-				for mui in range(len(mus) - 1):
-					soln_peer_alives_smoothed[k][i,mui] = avg
-					avg = alpha * soln_peer_alives[k][mui,i] + (1 - alpha) * avg
+				for lambduhi in range(len(lambduhs) - 1):
+					soln_peer_alives_smoothed[k][i,lambduhi] = avg
+					avg = alpha * soln_peer_alives[k][lambduhi,i] + (1 - alpha) * avg
 				if make_plots:
 					if k == 'oracle': continue
-					ax[1].semilogx(mus[0:-1], soln_peer_alives_smoothed[k][i,:], linestyles[si+1], 
+					ax[1].semilogx(lambduhs[0:-1], soln_peer_alives_smoothed[k][i,:], linestyles[si+1], 
 						c=colors[i], label="Peer {}".format(i))
 		
 		rankings = {k:{} for k in soln_keys}
 		for peer_i in range(self.n_peers):
 			for k in soln_keys:
-				crit_mu = np.where(np.flip(soln_peer_alives_smoothed[k][peer_i,:]) < self.advertisement_threshold)[0]
-				if len(crit_mu) == 0:
-					crit_mu = minmu
+				crit_lambduh = np.where(np.flip(soln_peer_alives_smoothed[k][peer_i,:]) < self.advertisement_threshold)[0]
+				if len(crit_lambduh) == 0:
+					crit_lambduh = minlambduh
 				else:
-					crit_mu = np.flip(mus)[crit_mu[0]]
-				rankings[k][peer_i] = crit_mu
+					crit_lambduh = np.flip(lambduhs)[crit_lambduh[0]]
+				rankings[k][peer_i] = crit_lambduh
 
 		if make_plots:
 			ax[1].legend(fontsize=14,ncol=2)
@@ -744,17 +710,17 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			ax[1].set_aspect('equal', adjustable='datalim')
 			for peer_i in rankings['ours']:
 				# Circle the critical values
-				mu_j = rankings['ours'][peer_i]
+				lambduh_j = rankings['ours'][peer_i]
 				try:
-					where_mu_j = np.where(mus==mu_j)[0][0]
-					if where_mu_j == len(mus) - 1:
-						where_mu_j = len(mus) - 2
-					ax[1].plot(mu_j,soln_peer_alives_smoothed['ours'][peer_i,where_mu_j],
+					where_lambduh_j = np.where(lambduhs==lambduh_j)[0][0]
+					if where_lambduh_j == len(lambduhs) - 1:
+						where_lambduh_j = len(lambduhs) - 2
+					ax[1].plot(lambduh_j,soln_peer_alives_smoothed['ours'][peer_i,where_lambduh_j],
 						marker='o',ms=12,mfc=(1.,0.,0.,.05),mec='red')
 				except IndexError:
-					print(np.where(mus==mu_j))
-					print(mu_j)
-					print(mus)
+					print(np.where(lambduhs==lambduh_j))
+					print(lambduh_j)
+					print(lambduhs)
 					exit(0)
 			save_fig("peer_value_demonstration.pdf")
 
@@ -762,8 +728,8 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		peer_rankings = {}
 		for k in rankings:
 			peer_rankings[k] = []
-			crit_mus = sorted(list(set(rankings[k].values())))
-			for m in crit_mus:
+			crit_lambduhs = sorted(list(set(rankings[k].values())))
+			for m in crit_lambduhs:
 				these_peers = [self.peers[p] for p in rankings[k] if rankings[k][p] == m]
 				peer_rankings[k].append(these_peers)
 		tmp = {}
@@ -808,7 +774,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			else:
 				first_occurence = lambda_j_locs[0]
 				last_occurence = lambda_j_locs[1]
-				lambda_j_distance = np.log10(np.flip(mus)[last_occurence]/np.flip(mus)[first_occurence])
+				lambda_j_distance = np.log10(np.flip(lambduhs)[last_occurence]/np.flip(lambduhs)[first_occurence])
 			lambda_j_distances.append(lambda_j_distance)
 			if self.peers[peer_i] not in self.transit_providers:
 				lambda_j_distances_not_transit.append(lambda_j_distance)
@@ -827,10 +793,21 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'lambda_j_distances_not_transit': lambda_j_distances_not_transit,
 		}
 
+	def simulate_peer_failure(self, a, peers):
+		"""Simulate what would happen if all the peers went down."""
+		tmp = np.ones(a.shape)
+		for peer in peers:
+			peer_i = self.peer_to_ind[peer]
+			tmp[peer_i,:] = 0
+		simulated_a = tmp * a
+		_, u = self.latency_benefit(simulated_a, calc_uncertainty=True)
+		return u
+
 	def solve_extremes(self, verbose=True):
 		# Find minimal and maximal set of advertisements
-		# maximal is just everything turned on
-		maximal_advertisement = np.ones((self.n_peers, self.n_prefixes))
+		# maximal is just everything turned on for a single prefix
+		maximal_advertisement = np.zeros((self.n_peers, self.n_prefixes))
+		maximal_advertisement[:,0] = 1
 		maximal_objective = self.outer_objective(maximal_advertisement)
 
 		self.cc_cache = {}
@@ -889,9 +866,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'maximal_objective': maximal_objective,
 		}
 
-	def solve_sparse_greedy(self, init_adv, verbose=True):
+	def solve_sparse_greedy(self, verbose=True):
 		# at each iteration, toggle the entry that yields the largest objective function benefit
 
+		init_adv = self.advertisement_threshold + .001 * np.random.normal(size=(self.n_peers, self.n_prefixes))
 		advertisement = np.copy(self.threshold_a(init_adv))
 		stop = False
 		i = 0
@@ -923,9 +901,9 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'n_adv': n_measures,
 		}
 
-	def solve_greedy(self, init_adv, verbose=True):
+	def solve_greedy(self, verbose=True):
 		# at each iteration, toggle the entry that yields the largest delta latency benefit
-
+		init_adv = self.advertisement_threshold + .001 * np.random.normal(size=(self.n_peers, self.n_prefixes))
 		advertisement = copy.copy(self.threshold_a(init_adv))
 		stop = False
 		i = 0
@@ -1032,10 +1010,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			if verbose:
 				print("solving greedy")
 			# Greedy solution
-			self.solve_greedy(init_adv=adv,verbose=verbose)
+			self.solve_greedy(verbose=verbose)
 
 			# Sparse greedy solution
-			self.solve_sparse_greedy(init_adv=adv,verbose=verbose)
+			self.solve_sparse_greedy(verbose=verbose)
 			objective_vals['ours'].append(our_objective)
 			objective_vals['greedy'].append(self.greedy['objective'])
 			objective_vals['sparse greedy'].append(self.sparse_greedy['objective'])
@@ -1072,12 +1050,13 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 
 		objective_vals['maximal'] = self.extreme['maximal_objective']
 		objective_vals['minimal'] = self.extreme['minimal_objective']
-		advs['maximal'] = self.extreme['maximal_advertisement']
-		advs['minimal'] = self.extreme['minimal_advertisement']
+		
 		advs = {
 			'ours': our_advs,
 			'sparse greedy': self.sparse_greedy['advertisement'],
 		}
+		advs['maximal'] = self.extreme['maximal_advertisement']
+		advs['minimal'] = self.extreme['minimal_advertisement']
 		if self.oracle is None:  # we can't always solve for the oracle, infeasible
 			objective_vals['approx_oracle'] = None
 			objective_vals['l0_oracle'] = None
@@ -1111,7 +1090,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	def apply_prox_l1(self, w_k):
 		"""Applies proximal gradient method to updated variable. Proximal gradient
 			for L1 norm is a soft-threshold at the learning rate."""
-		return np.sign(w_k) * np.maximum(np.abs(w_k) - self.mu * self.alpha, np.zeros(w_k.shape))
+		return np.sign(w_k) * np.maximum(np.abs(w_k) - self.lambduh * self.alpha, np.zeros(w_k.shape))
 
 	def heaviside_gradient(self, before, after, a_ij):
 		# Gradient of sigmoid function
@@ -1134,7 +1113,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			return self.outer_objective(self.threshold_a(self.get_last_advertisement()))
 		else:
 			return self.outer_objective(self.get_last_advertisement())
-
+	
 	def grad_latency_benefit(self, a, inds=None):
 		L_grad = np.zeros(a.shape)
 		a_effective = self.threshold_a(a)
@@ -1157,14 +1136,16 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def gradients(self, a, add_metrics=True):
 		# gradient is the proximal gradient of the L1 norm
-		# minus mu times gradient of L 
+		# minus lambduh times gradient of L 
 		# gradient of L is calculated via a continuous approximation
 		L_grad = self.grad_latency_benefit(a)
+		res_grad = self.gradients_resilience_benefit_fn(a)
 		if add_metrics:
-			self.metrics['twopart_benefit_grads'].append(L_grad)
-			self.metrics['twopart_cost_grads'].append(self.mu * self.alpha * np.ones(L_grad.shape))
+			self.metrics['twopart_l_benefit_grads'].append(L_grad)
+			self.metrics['twopart_res_benefit_grads'].append(self.gamma * res_grad)
+			self.metrics['twopart_cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
 
-		return -1 * L_grad
+		return -1 * (L_grad + self.gamma * res_grad)
 
 	def gradients_sigmoid(self, a):
 		# LB Grad
@@ -1186,14 +1167,52 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		pref_prod = np.tile(np.expand_dims(pref_prod,axis=0),(self.n_peers, 1))
 		pref_grad = pref_prod * S		
 
-		cost_grad = self.mu * (peer_grad + pref_grad)
+		cost_grad = self.lambduh * (peer_grad + pref_grad)
 
 		self.metrics['twopart_cost_grads'].append(cost_grad)
-		self.metrics['twopart_benefit_grads'].append(l_grad)
+		self.metrics['twopart_l_benefit_grads'].append(l_grad)
 
 		return cost_grad + l_grad
 
+	def gradients_resilience_benefit(self, a):
+		if False:
+			# Better, slower way of calculating resilience
+			tmp_a = copy.copy(a)
+			grad_rb = np.zeros(a.shape)
+			for peer in self.peers:
+				tmp_a[self.peer_to_ind[peer],:] = 0
+				res_off = self.resilience_benefit(tmp_a)
+				tmp_a[self.peer_to_ind[peer],:] = 1
+				res_on = self.resilience_benefit(tmp_a)
+
+				grad = self.heaviside_gradient(res_off, res_on, np.max(a[self.peer_to_ind[peer], :]))
+				grad_rb[self.peer_to_ind[peer],:] = grad
+		else:
+			# More heuristic, faster way of calculating resilience
+			a_effective = self.threshold_a(a)
+			self.path_probabilities = np.zeros((self.n_peers, self.n_prefixes, len(self.user_networks)))
+			for ug in range(len(self.user_networks)):
+				for pref_i in range(self.n_prefixes):
+					possible_peers = get_intersection(self.reachable_peers[ug], np.where(a_effective[:,pref_i])[0])
+					pi = np.zeros((self.n_peers))
+					for ordering, p in self.orderings[ug].items():
+						sub_order = [o for o in ordering if o in possible_peers]
+						if sub_order != []:
+							pi[sub_order[0]] += p
+					self.path_probabilities[:,pref_i,ug] = pi / np.sum(pi + 1e-8)
+			reachabilities_by_user = (np.sum(self.path_probabilities,axis=1) > 1e-5).astype(np.int32)
+			grad_rb = np.zeros(a.shape)
+			for peer_i in range(self.n_peers):
+				for user_i in range(len(self.user_networks)):
+					if peer_i in self.reachable_peers[user_i] and \
+						np.sum(reachabilities_by_user[:,user_i]) <= 2:
+						grad_rb[peer_i,:] += 1 - 1/(1 + np.exp(-5 * np.max(a[peer_i,:])))
+		return grad_rb
+
+
+
 	def gradients_continuous(self, a):
+		# Defunct
 		inds = self.gradient_support
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			# periodically calculate all gradients
@@ -1212,7 +1231,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			self.update_gradient_support(L_grad)
 
-		self.metrics['twopart_latency_benefit_grads'].append(L_grad)
+		self.metrics['twopart_l_benefit_grads'].append(L_grad)
 		return -1 * L_grad
 
 	def impose_advertisement_constraint(self, a):
@@ -1221,7 +1240,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return a
 
 	def make_plots(self, *args, **kwargs):
-		f,ax = plt.subplots(4,2)
+		plt.rcParams["figure.figsize"] = (10,10)
+		plt.rcParams.update({'font.size': 14})
+		f,ax = plt.subplots(5,2)
 
 		# General convergence metrics plot
 		which = args[0]
@@ -1229,7 +1250,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_as = np.array(self.metrics['{}_advertisements'.format(which)])
 		all_grads = np.array(self.metrics['{}_grads'.format(which)])
 		all_cost_grads = np.array(self.metrics['{}_cost_grads'.format(which)])
-		all_benefit_grads = np.array(self.metrics['{}_benefit_grads'.format(which)])
+		all_l_benefit_grads = np.array(self.metrics['{}_l_benefit_grads'.format(which)])
+		all_res_benefit_grads = np.array(self.metrics['{}_res_benefit_grads'.format(which)])
 		linestyles = ['-','*','^']
 		colors = ['orange','brown','aqua','deeppink','peru','grey','k','tan']
 		for pref_i in range(self.n_prefixes):
@@ -1241,12 +1263,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					ax[0,0].plot(all_as[:,peer_i,pref_i][::5], pref_sty, c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
 				ax[1,0].plot(all_grads[:,peer_i,pref_i], c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
 				ax[2,0].plot(all_cost_grads[:,peer_i,pref_i], c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
-				ax[3,0].plot(all_benefit_grads[:,peer_i,pref_i], c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
+				ax[3,0].plot(all_l_benefit_grads[:,peer_i,pref_i], c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
+				ax[4,0].plot(all_res_benefit_grads[:,peer_i,pref_i], c=colors[peer_i%len(colors)], label="Peer {} Prefix {}".format(self.peers[peer_i], pref_i))
 		ax[0,0].legend(fontsize=6)
 		ax[0,0].set_ylabel("a")
 		ax[1,0].set_ylabel("Net Grad")
 		ax[2,0].set_ylabel("Cost Grad")
 		ax[3,0].set_ylabel("LB Grad")
+		ax[4,0].set_ylabel("Res Grad")
 
 		all_objectives = self.metrics['{}_actual_objectives'.format(which)]
 		all_pseudo_objectives = self.metrics['{}_pseudo_objectives'.format(which)]
@@ -1384,138 +1408,17 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if n_flips == 2:
 				return None
 
-	def solve(self, init_adv=None):
-		self.set_alpha()
-		if init_adv is None:
-			outer_advertisement = self.init_advertisement()
-		else:
-			outer_advertisement = init_adv
-		# Initialize model of path probabilities
-		self.calculate_path_probabilities(init=True)
-		self.measure_paths(outer_advertisement)
-		self.calculate_path_probabilities()
-		a_km1 = outer_advertisement
-		if self.verbose:
-			# self.print_adv(advertisement)
-			print("Optimizing over {} peers".format(self.n_peers))
-			print(self.peers)
-			print(self.user_networks)
-
-		stop_outer = False
-		self.iter_outer = 0
-
-		t_start = time.time()
-		# For analysis
-		for oi in ['outer','inner']:
-			for k in ['actual_objectives', 'advertisements', 'effective_objectives', 'grads', 
-				'latency_benefit_grads', 'prox_l1_grads', 'path_likelihoods', 'EL_difference']:
-				self.metrics["{}_{}".format(oi,k)] = []
-
-		rolling_delta_outer = 10
-		delta_alpha = .7
-		delta_dot_alpha = .9
-		current_outer_objective = self.outer_objective(outer_advertisement)
-
-
-		# Add to metrics
-		self.metrics['outer_path_likelihoods'].append(copy.copy(self.path_probabilities))
-		self.metrics['outer_actual_objectives'].append(current_outer_objective)
-		self.metrics['outer_effective_objectives'].append(self.outer_objective(self.threshold_a(outer_advertisement)))
-		self.metrics['outer_advertisements'].append(copy.copy(outer_advertisement))
-
-		while not stop_outer: # outer measurement loop
-			stop_inner = False
-			self.iter_inner = 0
-			rolling_delta_inner = 10
-			rolling_delta_dot_inner = -1
-			current_inner_objective = self.objective(outer_advertisement)
-			inner_advertisement = outer_advertisement
-			for k in self.metrics: # reset inner metrics
-				if 'inner' in k:
-					self.metrics[k] = []
-			a_km1 = outer_advertisement
-			while not stop_inner:
-				# calculate gradients
-				grads = self.gradient_fn(inner_advertisement)
-				# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
-				a_k = inner_advertisement
-				w_k = a_k - self.alpha * grads + self.beta * (a_k - a_km1)
-				inner_advertisement = self.apply_prox_l1(w_k)
-				self.metrics['inner_advertisements'].append(copy.copy(inner_advertisement))
-				self.metrics['inner_grads'].append(inner_advertisement - a_k)
-				a_km1 = a_k
-
-				# project onto constraints
-				# one constraint we may want is Ra <= 1 
-				# not sure how to do this
-
-				# another constraint we may want is 0 <= a_ij <= 1
-				# the solution is just clipping to be in the set
-				# clipping can mess with gradient descent
-				inner_advertisement = self.impose_advertisement_constraint(inner_advertisement)
-
-				# re-calculate objective
-				last_inner_objective = current_inner_objective
-				current_inner_objective = self.objective(inner_advertisement,v=False)
-				self.metrics['inner_actual_objectives'].append(current_inner_objective)
-				self.metrics['inner_effective_objectives'].append(self.objective(self.threshold_a(inner_advertisement)))
-
-				# Stop when the objective doesn't change, but use an EWMA to track the change so that we don't spuriously exit
-				rolling_delta_inner = (1 - delta_alpha) * rolling_delta_inner + delta_alpha * np.abs(current_inner_objective - last_inner_objective)
-				rolling_delta_dot_inner = delta_dot_alpha * rolling_delta_dot_inner + (1-delta_dot_alpha) * (current_inner_objective - last_inner_objective)
-				stop_inner = self.stopping_condition([self.iter_inner,rolling_delta_inner,rolling_delta_dot_inner])
-				self.iter_inner += 1
-			
-			t_per_iter = (time.time() - t_start) / self.iter_inner
-			# if self.verbose:
-			# 	print("Stopped inner loop on {}, t per iter: {}".format(self.iter_inner, t_per_iter))
-			# 	if self.iter_inner > 2:
-			# 		self.make_plots('inner')
-			# 		exit(0)
-			self.iter_outer += 1
-			last_outer_objective = current_outer_objective
-			# Now we would actually issue the advertisement based on what our algorithm converged to
-			# for now, just accept whatever the algorithm spits out
-			# in the future we might want to gradually try out updates our inner algorithm suggests
-			# TODO following the new observed catchments, we may want to update our p_i's for each user group
-			last_outer_advertisement = outer_advertisement
-			outer_advertisement = self.update_outer_advertisement(inner_advertisement,outer_advertisement)
-			if self.verbose:
-				print("Old outer: {}\n Inner Solution: {}\n New Outer: {}\n".format(last_outer_advertisement,
-					inner_advertisement, outer_advertisement))
-			current_outer_objective = self.outer_objective(outer_advertisement)
-
-			# After updating advertisement, re-measure the paths to the CP and update path probabilities
-			self.measure_paths(outer_advertisement)
-			self.calculate_path_probabilities()
-
-
-			rolling_delta_outer = (1 - delta_alpha) * rolling_delta_outer + delta_alpha * np.abs(current_outer_objective - last_outer_objective)
-			stop_outer = self.stopping_condition([self.iter_outer,rolling_delta_outer,-1])
-
-			# Add to metrics
-			self.metrics['t_per_iter_inner'] = t_per_iter
-			self.metrics['outer_actual_objectives'].append(current_outer_objective)
-			self.metrics['outer_effective_objectives'].append(self.outer_objective(self.threshold_a(outer_advertisement)))
-			self.metrics['outer_advertisements'].append(copy.copy(outer_advertisement))
-			self.metrics['outer_grads'].append(outer_advertisement - last_outer_advertisement)
-			self.metrics['outer_path_likelihoods'].append(copy.copy(self.path_probabilities))
-
-		t_per_iter = (time.time() - t_start) / self.iter_outer
-		if self.verbose:
-			print("Stopped outer loop on {}, t per iter: {}".format(self.iter_outer, t_per_iter))
-		self.metrics['t_per_iter_outer'] = t_per_iter
-
 	def solve_twopart(self, init_adv=None):
 		self.set_alpha()
 		self.measured = {}
+		# Initialize model of path probabilities
+		self.calculate_path_probabilities(init=True)
 		if init_adv is None:
 			advertisement = self.init_advertisement()
 		else:
 			advertisement = init_adv
 		self.path_measures = 0 
-		# Initialize model of path probabilities
-		self.calculate_path_probabilities(init=True)
+		# Measure where we start, update model of path probabilities
 		self.measure_paths(advertisement)
 		self.calculate_path_probabilities()
 		a_km1 = advertisement
@@ -1531,17 +1434,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		t_start = time.time()
 		# For analysis
 		for k in ['actual_objectives', 'advertisements', 'effective_objectives', 
-			'pseudo_objectives', 'grads', 'cost_grads', 'benefit_grads', 
-			'latency_benefit_grads', 'prox_l1_grads', 'path_likelihoods', 'EL_difference']:
+			'pseudo_objectives', 'grads', 'cost_grads', 'l_benefit_grads', 'res_benefit_grads',
+			'path_likelihoods', 'EL_difference']:
 			self.metrics["twopart_" + k] = []
 
 		rolling_delta = 10
+		rolling_delta_eff = 10
 		delta_alpha = .7
-		delta_dot_alpha = .9
-		rolling_delta_dot = -10
+		delta_eff_alpha = .25
 		current_objective = self.outer_objective(advertisement)
 		current_pseudo_objective = self.objective(advertisement)
+		current_effective_objective = self.objective(self.threshold_a(advertisement))
 		last_objective = current_pseudo_objective
+		last_effective_objective = current_effective_objective
 
 		# Add to metrics
 		self.metrics['twopart_pseudo_objectives'].append(current_pseudo_objective)
@@ -1569,22 +1474,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.metrics['twopart_advertisements'].append(copy.copy(advertisement))
 			self.metrics['twopart_grads'].append(advertisement - a_k)
 
-			# Stop when the objective doesn't change, but use an EWMA to track the change so that we don't spuriously exit
-			rolling_delta = (1 - delta_alpha) * rolling_delta + delta_alpha * np.abs(current_pseudo_objective - last_objective)
-			stop = self.stopping_condition([self.iter,rolling_delta,rolling_delta_dot])
-			self.iter += 1
-
 			# Take a gradient step and update measured paths + probabilities
 			if not np.array_equal(self.threshold_a(advertisement), self.threshold_a(a_km1)):
 				self.measure_paths(advertisement)
 				self.calculate_path_probabilities()
-
-			# re-calculate objective
-			last_objective = current_pseudo_objective
-			current_pseudo_objective = self.objective(advertisement)
-			self.metrics['twopart_pseudo_objectives'].append(current_pseudo_objective)
-			self.metrics['twopart_actual_objectives'].append(self.outer_objective(advertisement))
-			self.metrics['twopart_effective_objectives'].append(self.outer_objective(copy.copy(self.threshold_a(advertisement))))
 
 			# Calculate, advertise & measure information about the prefix that would 
 			# give us the most new information
@@ -1592,6 +1485,23 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if maximally_informative_advertisement is not None:
 				self.measure_paths(maximally_informative_advertisement)
 				self.calculate_path_probabilities()
+
+			# re-calculate objective
+			last_objective = current_pseudo_objective
+			last_effective_objective = current_effective_objective
+			current_pseudo_objective = self.objective(advertisement)
+			current_effective_objective = self.objective(self.threshold_a(advertisement))
+			self.metrics['twopart_pseudo_objectives'].append(current_pseudo_objective)
+			self.metrics['twopart_actual_objectives'].append(self.outer_objective(advertisement))
+			self.metrics['twopart_effective_objectives'].append(self.outer_objective(copy.copy(self.threshold_a(advertisement))))
+
+			# Stop when the objective doesn't change, but use an EWMA to track the change so that we don't spuriously exit
+
+			rolling_delta = (1 - delta_alpha) * rolling_delta + delta_alpha * np.abs(current_pseudo_objective - last_objective)
+			rolling_delta_eff = (1 - delta_eff_alpha) * rolling_delta_eff + \
+				delta_eff_alpha * np.abs(current_effective_objective - last_effective_objective)
+			stop = self.stopping_condition([self.iter,rolling_delta,rolling_delta_eff])
+			self.iter += 1
 
 			# Add to metrics
 			self.latency_benefit(np.ones(advertisement.shape))
@@ -1606,334 +1516,67 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.iter, self.t_per_iter, self.path_measures, current_pseudo_objective))
 		self.metrics['twopart_t_per_iter'] = self.t_per_iter
 
-
-N_SIM = 200
-
-def do_eval_compare_peer_value():
-	metrics = {}
-	metrics_fn = os.path.join(CACHE_DIR, 'compare_peer_value.pkl')
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
-	for i in range(N_SIM):
-		print("CPV: {}".format(i))
-		if metrics != {}:
-			if len([metrics[k] for k in metrics][0]) >= N_SIM:
-				break
-		ret  = None
-		while ret is None:
-			_gen_random_graph('test_graph',n_transit=2,n_user=5+np.random.randint(5))
-			mu = .001
-			sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", 
-				graph_md_fn="test_graph_md.json",mu=mu,verbose=False)
-			ret = sae.compare_peer_value(make_plots=False)
-		for k in ret:
-			try:
-				metrics[k].append(ret[k])
-			except KeyError:
-				metrics[k] = [ret[k]]
-	pickle.dump(metrics, open(metrics_fn,'wb'))
-
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	labs = {"frac_disagree": "Disagreement with Oracle", "lambda_j_distances": "Uncertainty", 
-		"lambda_j_distances_not_transit": "Not-Transit Uncertainty"}
-	for k in ['frac_disagree']:
-		x,cdf_x = get_cdf_xy(metrics[k])
-		ax.plot(x,cdf_x,label=labs[k])
-	ax.set_ylim([0,1.0])
-	ax.set_xlabel("Fraction of Peer Importance Agreement")
-	ax.set_ylabel("CDF of Trials")
-	save_fig("peer_value_disagreement.pdf")
-
-
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	for k in ['frac_monotone', 'frac_monotone_not_transit']:
-		v = [np.max(arr) for arr in metrics[k]]
-		x,cdf_x = get_cdf_xy(v)
-		ax.plot(x,cdf_x,label=labs[k])
-	ax.set_ylim([0,1.0])
-	ax.set_xlabel("Lambda_j Uncertainty")
-	ax.legend()
-	ax.set_ylabel("CDF of Trials")
-	save_fig("lambda_j_uncertainty.pdf")
-
-
-def err_adv(adv1,adv2):
-	# advertisements are said to be equal if their columns are a permutation of each other
-	# so find the minimum error over all permutations of columns
-
-	n_col = adv1.shape[1]
-	errs = []
-	for p in itertools.permutations(list(range(n_col)), n_col):
-		tmp = adv1[:,p]
-		errs.append(np.sum(np.abs(tmp.flatten() - adv2.flatten())))
-	return min(errs)
-
-
-def do_eval_compare_initializations():
-	mu = .1
-	inits = [{'type': 'uniform'}, {'type': 'ones'}, {'type': 'zeros'}, {'type':'random_binary'},
-		{'type': 'normal', 'var': .01}, {'type': 'normal', 'var': .001}]
-	hr_labs = ["Uniform","All On","All Off","Random","N(.5,.01)","N(.5,.001)"]
-	
-	metrics = {}
-	metrics_fn = os.path.join(CACHE_DIR, 'compare_inits.pkl')
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
-
-	for init_i, initialization in enumerate(inits):
-		if init_i in metrics: continue
-		metrics[init_i] = {
-			'n_off_adv_approx': [],
-			'n_off_adv_l0': [],
-			'delta_obj_approx': [],
-			'delta_obj_l0': [],
-			'delta_obj_l0_greedy': [],
-		}
-		for _i in range(N_SIM):
-			ret_oracle = None
-			while ret_oracle is None:
-				_gen_random_graph('test_graph',n_transit=1,n_user=4)
-				sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", 
-					graph_md_fn="test_graph_md.json", mu=mu,
-					verbose=False,cont_grads=False, init=initialization)
-				ret = sae.compare_different_solutions(n_run=1,verbose=False)
-				ret_oracle = ret['objectives']['approx_oracle']
-			our_adv = sae.threshold_a(ret['advertisements']['ours'][0])
-			metrics[init_i]['n_off_adv_approx'].append(err_adv(our_adv,ret['advertisements']['approx_oracle']))
-			metrics[init_i]['n_off_adv_l0'].append(err_adv(our_adv,ret['advertisements']['l0_oracle']))
-			metrics[init_i]['delta_obj_approx'].append(np.abs(ret['objectives']['ours'][0] - \
-				ret['objectives']['approx_oracle']))
-			metrics[init_i]['delta_obj_l0'].append(np.abs(ret['objectives']['ours'][0] - \
-				ret['objectives']['l0_oracle']))
-			metrics[init_i]['delta_obj_l0_greedy'].append(np.abs(ret['objectives']['sparse greedy'][0] - \
-				ret['objectives']['l0_oracle']))
-	pickle.dump(metrics,open(metrics_fn,'wb'))
-	
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	for i in metrics:
-		# # % of runs we arrive within N entries of optimal advertisement
-		# n_off_approx_optimal = metrics[i]['n_off_adv_approx']
-		# x,cdf_x = get_cdf_xy(n_off_approx_optimal)
-		# ax[0].plot(x,cdf_x,c=cols[2*i],label=hr_labs[i] + " Approx")
-		n_off_optimal = metrics[i]['n_off_adv_l0']
-		x,cdf_x = get_cdf_xy(n_off_optimal)
-		ax.plot(x,cdf_x,c=cols[2*i+1],label=hr_labs[i].capitalize())
-	ax.legend()
-	ax.set_xlabel("Number of Entries off Optimal")
-	ax.set_ylabel("CDF of Trials")
-	save_fig("compare_initializations_delta_advertisement.pdf")
-
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	for i in metrics:
-		# # % of runs we arrive within epsilon of optimal cost-beenfit
-		# epsilon_off_approx_optimal = metrics[i]['delta_obj_approx']
-		# x,cdf_x = get_cdf_xy(epsilon_off_approx_optimal)
-		# ax[1].plot(x,cdf_x,c=cols[2*i],label=hr_labs[i] + " Approx")
-		epsilon_off_optimal = metrics[i]['delta_obj_l0']
-		x,cdf_x = get_cdf_xy(epsilon_off_optimal)
-		ax.plot(x,cdf_x,c=cols[2*i+1],label=hr_labs[i].capitalize())
-	ax.legend()
-	ax.set_ylim([0,1.0])
-	ax.set_xlabel("Objective Function Error")
-	ax.set_ylabel("CDF of Trials")
-	save_fig("compare_initializations_delta_objective.pdf")
-
-def do_eval_compare_strategies():
-	mu = 1
-	metrics = {}
-	metrics_fn = os.path.join(CACHE_DIR, 'compare_strategies.pkl')
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
-	for cost_strat in ['sigmoid', 'l1']:
-		if cost_strat in metrics: continue
-		metrics[cost_strat] = {'p_ours_best': []}
-		for _i in range(N_SIM):
-			ret = None
-			while ret is None:
-				_gen_random_graph('test_graph',n_transit=2,n_user=10+np.random.randint(5))
-				sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", 
-					graph_md_fn="test_graph_md.json", mu=mu,
-					verbose=False,advertisement_cost=cost_strat,
-					n_prefixes=1+np.random.randint(3))
-				ret = sae.compare_different_solutions(n_run=30,verbose=False)
-			our_obj = ret['objectives']['ours']
-			ours_best = np.ones((len(our_obj)))
-			print(ret['objectives'])
-			for k in ret['objectives']:
-				if k == 'ours' or 'oracle' in k: continue
-				if type(ret['objectives'][k]) == np.float64:
-					for i, obj in enumerate(our_obj):
-						if obj > ret['objectives'][k]:
-							ours_best[i] = 0
-				else:
-					i=0
-					for ours, theirs in zip(our_obj, ret['objectives'][k]):
-						if ours > theirs:
-							ours_best[i] = 0
-						i += 1
-			metrics[cost_strat]['p_ours_best'].append(np.sum(ours_best) / len(our_obj))
-	
-	pickle.dump(metrics,open(metrics_fn,'wb'))
-	
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	labs = {'sigmoid': "Sigmoid Cost", 'l1': "L1 Cost"}
-	print(metrics['l1']['p_ours_best'])
-	for k in metrics:
-		x, cdf_x = get_cdf_xy(1 - np.array(metrics[k]['p_ours_best']))
-		ax.plot(x,cdf_x,label=labs[k])
-	ax.legend()
-	ax.set_ylim([0,1.0])
-	ax.set_ylabel("CDF of Trial Batches")
-	ax.set_xlabel("Fraction of Trials Our Algorithm Was Not The Best")
-	save_fig("compare_across_strategies.pdf")
-
-def do_eval_scale():
-	metrics = {
-		't_per_iter': [],
-		'n_iter': [],
-		'n_users': [],
-		'n_peers': [],
-		'n_advs': {
-			'sparse_greedy': [],
-			'ours_entropy': [],
-			'ours_positive_benefit': [],
-		},
-	}
-	metrics_fn = os.path.join(CACHE_DIR, 'scale_eval.pkl')
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
-	mu = .1
-	# for n_user in [5,10,15,20,25,30,35,40]:
-	# 	print("NU: {}".format(n_user))
-	# 	for _i in range(N_SIM):
-	# 		print(_i)
-	# 		_gen_random_graph('test_graph',n_transit=1,n_user=n_user)
-	# 		sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", 
-	# 			graph_md_fn="test_graph_md.json", mu=mu,
-	# 			verbose=False,	explore='entropy')
-	# 		ret = sae.compare_different_solutions(n_run=1,verbose=False)
-	# 		metrics['t_per_iter'].append(sae.sas.t_per_iter)
-	# 		metrics['n_iter'].append(sae.sas.iter)
-	# 		metrics['n_advs']['sparse_greedy'].append(ret['n_advs']['sparse_greedy'][0])
-	# 		metrics['n_advs']['ours_entropy'].append(ret['n_advs']['ours'][0])
-	# 		_gen_random_graph('test_graph',n_transit=1,n_user=n_user)
-	# 		sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", 
-	# 			graph_md_fn="test_graph_md.json", mu=mu,
-	# 			verbose=False, explore='positive_benefit')
-	# 		ret = sae.compare_different_solutions(n_run=1,verbose=False)
-	# 		metrics['n_advs']['ours_positive_benefit'].append(ret['n_advs']['ours'][0])
-
-	# 		metrics['n_users'].append(len(sae.sas.user_networks))
-	# 		metrics['n_peers'].append(len(sae.sas.peers))
-
-	# pickle.dump(metrics,open(metrics_fn,'wb'))
-
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax = plt.subplots(1,1)
-	
-	x = np.array(metrics['n_users']) * np.array(metrics['n_peers'])	
-	y = np.array(metrics['t_per_iter'])
-		
-	z = np.poly1d(np.polyfit(x,y,2))
-	x_sm = np.linspace(x[0],x[-1])
-	y_sm = z(x_sm)
-	ax.plot(x_sm, y_sm,'r',marker='.')
-	ax.tick_params(axis='y', colors='red')
-	ax.yaxis.label.set_color('red')
-	ax.set_ylabel("Time per Iter (s)")
-
-	axd = ax.twinx()
-	y = np.array(metrics['n_iter'])
-	z = np.poly1d(np.polyfit(x,y,2))
-	y_sm = z(x_sm)
-	axd.plot(x_sm, y_sm,'k')
-	axd.tick_params(axis='y', colors='black')
-	axd.set_ylabel("Number of Iters")
-
-	ax.set_xlabel("Problem Size")
-
-	save_fig("scale_time.pdf")
-
-
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax = plt.subplots(1,1)
-
-	x = np.array(metrics['n_users']) * np.array(metrics['n_peers'])	
-	labs = {
-		'sparse_greedy': "Greedy",
-		"ours_entropy": "Entropy Exploration",
-		"ours_positive_benefit": "Max Benefit Exploration"
-	}
-	for i,k in enumerate(metrics['n_advs']):
-		y = metrics['n_advs'][k]
-		z = np.poly1d(np.polyfit(x,y,2))
-		y_sm = z(x_sm)
-		ax.plot(x_sm,y_sm,c=cols[3*i],label=labs[k])
-	ax.legend()
-	ax.set_xlabel("Problem Size")
-	ax.set_ylabel("Number of Advertisements")
-	save_fig("scale_n_advs.pdf")
-
-
 def main():
-	np.random.seed(31413)
+	np.random.seed(31415)
 	## Generating graphs
-	_gen_random_graph('test_graph',n_transit=1,n_user=5)
+	gen_random_graph_('test_graph',n_transit=2,n_user=7)
 
 	# # Comparing different solutions
-	# mu = .05
+	# lambduh = .05
 	# sae = Sparse_Advertisement_Eval(graph_fn="multi_prefix_test.csv", verbose=False,
-	# 	graph_md_fn="multi_prefix_test_md.json", mu=mu, explore='positive_benefit')
+	# 	graph_md_fn="multi_prefix_test_md.json", lambduh=lambduh, explore='positive_benefit')
 	# print(sae.compare_peer_value())
 	# exit(0)
 
 	# # ## Simple test
-	# mu = .1
-	# sas = Sparse_Advertisement_Solver(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
-	# 	mu=mu,verbose=True)
-	# sas.solve_twopart()
-	# print(sas.threshold_a(sas.get_last_advertisement()))
-	# print(sas.get_last_objective(effective=True))
-	# sas.make_plots('twopart')
+	# lambduh = 1
+	# gamma = 0   
+	# sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
+	# 	lambduh=lambduh,verbose=True,n_prefixes=3,resilience_benefit=True, gamma=gamma)
+	# sae.sas.solve_twopart()
+	# print(sae.sas.get_last_objective(effective=True))
+	# final_a = sae.sas.threshold_a(sae.sas.get_last_advertisement())
+	# for peer in sae.peers:
+	# 	result = sae.simulate_peer_failure(final_a, [peer])
+	# 	print("Peer {} dies: {}".format(peer, np.dot(result[0],result[1])))
+	# print(sae.sas.resilience_benefit_from_bgp(final_a))
+	# sae.sas.make_plots('twopart')
 	# exit(0)
 
-	# # Comparing different solutions
-	# mu = .05
-	# sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", verbose=True,
-	# 	graph_md_fn="test_graph_md.json", mu=mu, explore='positive_benefit')
-	# sae.compare_different_solutions(which='twopart',n_run=150)
-	# exit(0)
+	# Comparing different solutions
+	lambduh = .05
+	sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", verbose=True,
+		graph_md_fn="test_graph_md.json", lambduh=lambduh, explore='positive_benefit',
+		init={'type':'using_objective'})
+	sae.compare_different_solutions(which='twopart',n_run=150)
+	exit(0)
+
+	# ## Init Testing
+	# lambduh = .01
+	# sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
+	# 	lambduh=lambduh,verbose=True, init={'type': 'using_objective'})
+	# ret = sae.compare_different_solutions(which='twopart',n_run=3)
+	# oracle_adv = ret['advertisements']['l0_oracle']
+	# sas = Sparse_Advertisement_Solver(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
+	# 	lambduh=lambduh,verbose=True, init={'type': 'pseudo_anycast'})
+	# sas.solve_twopart()
+	# sas.make_plots('twopart')
+	# print(sas.threshold_a(sas.get_last_advertisement()))
+
 
 	# ## Simple test
-	# mu = .1
+	# lambduh = .1
 	# sas = Sparse_Advertisement_Solver(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
-	# 	mu=mu,verbose=True,cont_grads=False,advertisement_cost="sigmoid")
+	# 	lambduh=lambduh,verbose=True)
 	# sas.solve_twopart()
 	# sas.make_plots('twopart')
 	# print(sas.threshold_a(sas.get_last_advertisement()))
 
 	# # Comparing different solutions
-	# mu = .001
+	# lambduh = .001
 	# sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", verbose=False,
-	# 	graph_md_fn="test_graph_md.json", mu=mu, cont_grads=False,advertisement_cost="sigmoid")
+	# 	graph_md_fn="test_graph_md.json", lambduh=lambduh, cont_grads=False,advertisement_cost="sigmoid")
 	# sae.compare_different_solutions(which='twopart')
-
-	# do_eval_scale()
-	# do_eval_compare_peer_value()
-	# do_eval_compare_initializations()
-	do_eval_compare_strategies()
 
 if __name__ == "__main__":
 	main()

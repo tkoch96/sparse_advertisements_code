@@ -2,6 +2,11 @@ import numpy as np, json, os
 from helpers import *
 GRAPH_DIR = "graphs"
 
+def _gen_random_graph(*args,**kwargs):
+	global bp_cache
+	bp_cache = {}
+	gen_random_graph(*args,**kwargs)
+
 def create_random_md_from_graph(graph_fn, cp_network, user_networks):
 	graph = {}
 	with open(os.path.join("graphs", graph_fn + '.csv'),'r') as f:
