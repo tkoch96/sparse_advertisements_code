@@ -301,11 +301,11 @@ def do_eval_scale():
 	save_fig("scale_n_advs.pdf")
 
 if __name__ == "__main__":
-	# all_args = []
-	# n_workers = multiprocessing.cpu_count()
-	# for i in range(n_workers):
-	# 	all_args.append((i,))
-	# ppool = multiprocessing.Pool(processes=n_workers)
-	# print("Launching workers")
-	# all_rets = ppool.map(do_eval_compare_peer_value, all_args)
-	do_eval_compare_strategies()
+	all_args = []
+	n_workers = multiprocessing.cpu_count() // 2
+	for i in range(n_workers):
+		all_args.append((i,))
+	ppool = multiprocessing.Pool(processes=n_workers)
+	print("Launching workers")
+	all_rets = ppool.map(do_eval_compare_peer_value, all_args)
+	# do_eval_compare_strategies()
