@@ -41,7 +41,8 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 			'user': .2,
 			'rp': .5,
 			'brp': 1,
-		}
+		},
+		'peering': .1,
 	}
 
 	graph = {}
@@ -57,7 +58,9 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 	for transit_provider in transit_networks:
 		graph[transit_provider, cp_network] = -1
 	# Each transit provider connects to all other transit providers
+	ntwrk_to_type = {cp_network:'cp'}
 	for tp in transit_networks:
+		ntwrk_to_type[tp] = 'transit'
 		for _tp in transit_networks:
 			graph[tp,_tp] = 0
 
@@ -89,6 +92,7 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 	# could possibly add random paid peering arrangements, or pseudo-random connects between certain networks
 	for ntwrk_type, ntwrk_set in zip(['user','rp','brp'], [user_networks, rp_networks, brp_networks]):
 		for ntwrk in ntwrk_set:
+			ntwrk_to_type[ntwrk] = ntwrk_type
 			if np.random.random() < connection_probabilities['network_to_transit'][ntwrk_type]:
 				transit_choice = np.random.choice(transit_networks)
 				graph[transit_choice, ntwrk] = -1
@@ -106,7 +110,6 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 			adjacency_graph[ntwrk2].append(ntwrk1)
 		except KeyError:
 			adjacency_graph[ntwrk2] = [ntwrk1]
-
 	for (ntwrk_type, ntwrk_set) in zip(['user','rp','brp'], [user_networks, rp_networks, brp_networks]):
 		for ntwrk in ntwrk_set:
 			pc = get_pc(ntwrk,adjacency_graph)
@@ -119,38 +122,52 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 				except KeyError:
 					adjacency_graph[ntwrk] = [transit_choice]
 
+	## Randomly add peering links to the graph
+	# valid peering links are between networks at the same "tier"
+	all_ntwrks = set([ntwrk for ntwrk,_ in graph] + [ntwrk for _,ntwrk in graph])
+	for ntwrk_i in all_ntwrks:
+		for ntwrk_j in all_ntwrks:
+			if ntwrk_i == ntwrk_j: continue # lol
+			if ntwrk_i in adjacency_graph[ntwrk_j]: continue # link already exits
+			if ntwrk_to_type[ntwrk_i] != ntwrk_to_type[ntwrk_j]: continue # need to be same tier
+			if np.random.random() < connection_probabilities['peering']:
+				graph[ntwrk_i, ntwrk_j] = 0
+	for ntwrk1,ntwrk2 in graph:
+		try:
+			adjacency_graph[ntwrk1].append(ntwrk2)
+		except KeyError:
+			adjacency_graph[ntwrk1] = [ntwrk2]
+		try:
+			adjacency_graph[ntwrk2].append(ntwrk1)
+		except KeyError:
+			adjacency_graph[ntwrk2] = [ntwrk1]
+	for ntwrk in adjacency_graph: adjacency_graph[ntwrk] = list(set(adjacency_graph[ntwrk]))
+
+	## Randomly assign capacities to each peering link with the CP, and volumes for the users
+	pl_caps = {str(p):.5+np.random.uniform() for p in adjacency_graph[cp_network]}
+	user_vols = {str(un): .4 + .3*np.random.uniform() for un in user_networks}
+
+
 	# Now assign edge lengths to the graph
 	edge_lengths = {}
 	el_models = { # gaussian models
-		"user_to_rp": (3000,900),
-		"rp_to_brp": (100,20),
-		"user_to_cp": (500,300),
-		"ntwrk_to_cp": (10,1),
-		"ntwrk_to_transit": (5000,2000),
+		('user','rp'): lambda : 300 + 2000 * np.random.uniform(), # could be close, but also could be far
+		('user','user'): lambda : 200 + 1000 * np.random.uniform(), # if users peer, probably close
+		('user','cp'): lambda : 300 + 300 * np.random.uniform(), # probably close
+		('user', 'transit'): lambda : 500 + 3000 * np.random.uniform(), # wide variance
+		('rp', 'cp'): lambda : 500 + 1000 * np.random.uniform(),  # probably lowish
+		('rp', 'transit'): lambda : 300 + 300 * np.random.uniform(), # probably quite low
+		('rp','rp'): lambda : 500 + 4000 * np.random.uniform(), # probably wide variance
+		('transit','cp'): lambda : 800 + 2000 + np.random.uniform(), # probably pretty bad
+		('transit','transit'): lambda : 1000 + 5000 * np.random.uniform(), # probably pretty far
 	}
 	for ntwrk1,ntwrk2 in graph:
-		if ntwrk1 in transit_networks or ntwrk2 in transit_networks:
-			if ntwrk2 != cp_network:
-				m,std = el_models['ntwrk_to_transit']
-			else:
-				m,std = el_models['ntwrk_to_cp']
-		elif ntwrk1 in user_networks or ntwrk2 in user_networks:
-			if ntwrk1 in user_networks:
-				un, other = ntwrk1, ntwrk2
-			else:
-				un, other = ntwrk2, ntwrk1
-			if other == cp_network:
-				m,std = el_models['user_to_cp']
-			elif other in rp_networks:
-				m,st = el_models['user_to_rp']
-			else: # assumes last type is brp
-				m,std = el_models['user_to_brp']
-		elif ntwrk2 == cp_network:
-			m,std = el_models['ntwrk_to_cp']
-		else: # rp to to brp
-			m,std = el_models['rp_to_brp']
-
-		edge_lengths["{}-{}".format(ntwrk1,ntwrk2)] = np.maximum(m+std*np.random.normal(), 10)
+		t1,t2 = ntwrk_to_type[ntwrk1], ntwrk_to_type[ntwrk2]
+		try:
+			_mod = el_models[t1,t2]
+		except KeyError:
+			_mod = el_models[t2,t1]
+		edge_lengths["{}-{}".format(ntwrk1,ntwrk2)] = np.maximum(_mod(), 10)
 
 	graph_fn = os.path.join(GRAPH_DIR, "{}.csv".format(output_fn))
 	graph_md_fn = os.path.join(GRAPH_DIR, "{}_md.json".format(output_fn))
@@ -161,7 +178,9 @@ def gen_random_graph(output_fn, n_transit=1, n_user=10):
 	md = {
 		"content_provider": str(cp_network),
 		"user_networks": [str(el) for el in user_networks],
-		"edge_lengths": edge_lengths
+		"edge_lengths": edge_lengths,
+		"peering_link_capacities": pl_caps,
+		"user_volumes": user_vols,
 	}
 	json.dump(md, open(graph_md_fn,'w'))
 

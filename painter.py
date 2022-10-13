@@ -1,26 +1,21 @@
 import geopy.distance, numpy as np, copy
 from helpers import *
+from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
 def vol_to_val(vol):
 	return np.log10(vol + 1)
 
-class Painter_Adv_Solver():
-	# Minimal class for solving PAINTER advertisements
-	# Useful for multiprocessing
-	def __init__(self, ug_perfs, ug_to_vol, metro_loc, pop_to_loc):
-		self.ug_perfs = ug_perfs
-		self.metro_loc = metro_loc
-		self.pop_to_loc = pop_to_loc
-		self.ug_to_vol = ug_to_vol
+class Painter_Adv_Solver(Optimal_Adv_Wrapper):
+	def __init__(self, *args, **kwargs):
+		super().__init__(*args,**kwargs)
+		# distance between pops
 		self.pop_dist_cache = {}
 		for popi in self.pop_to_loc:
 			for popj in self.pop_to_loc:
 				self.pop_dist_cache[popi,popj] = geopy.distance.geodesic(self.pop_to_loc[popi],self.pop_to_loc[popj]).km
-		self.advertisement_selection_fs = {
-			'painter_v4': self.painter_v4,
-		}
-
 		self.calc_popp_to_ug()
+		self.stopping_condition = lambda el : el[0] > self.max_n_iter or el[1] < self.epsilon
+		self.path_measures = 0 
 
 	def calc_popp_to_ug(self):
 		self.popp_to_ug = {}
@@ -33,11 +28,45 @@ class Painter_Adv_Solver():
 				except KeyError:
 					self.popp_to_ug[popp] = [ug]
 
+	def painter_advs_to_sparse_advs(self, advs, **kwargs):
+		painter_budget = self.n_prefixes - 1
+		painter_adv = np.zeros((self.n_popp, painter_budget + 1))
+		painter_adv[:,0] = 1
+		for prefix_i in advs[painter_budget]: # 1 - based
+			for popp in advs[painter_budget][prefix_i]:
+				painter_adv[self.popp_to_ind[popp],prefix_i] = 1
+		return painter_adv
+
+	def stop_tracker(self, advs):
+		delta_alpha = .7
+		self.last_objective = self.obj
+		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs))
+		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
+		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
+
+	def painter_v5(self, **kwargs):
+		### Wraps painter_v4 with learning preferences
+		advs = self.painter_v4(**kwargs)
+		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs)) # technically this is a measurement, uncounted
+		self.stop = False
+		self.rolling_delta = 10
+		self.iter = 0
+		self.path_measures = 0 
+		self.clear_caches()
+		while not self.stop:
+			## conduct measurement with this advertisement strategy
+			self.measure_ingresses(self.painter_advs_to_sparse_advs(advs))
+			## recalc painter decision with new information
+			advs = self.painter_v4(**kwargs)
+			self.stop_tracker(advs)
+			self.iter += 1
+
+			self.advs = advs
+
 	def painter_v4(self, **kwargs):
 		# print("Solving for Painter v4 solution")
 
-		self.budget = kwargs.get('max_budget')
-		assert self.budget is not None
+		self.budget = self.n_prefixes - 1
 		ret_advs_obj = {} # returned object
 		advs_by_pfxi = {} # stores pfx->popp mappings during calculation
 		# conflicting distance / minimum reuse distance
@@ -64,21 +93,42 @@ class Painter_Adv_Solver():
 			# and if we include a peer somewhere, we have to include it everywhere (worst case intra AS assumption)
 			all_available_options = get_intersection(being_adved, self.ug_perfs[ug]) # checks (a) and (b)
 			if len(all_available_options) == 0: return []
+
+			ui = self.ug_to_ind[ug]
+			# Remove impossible options based on our known information
+			available_popp_inds = [self.popp_to_ind[popp] for popp in all_available_options]
+			# print(available_popp_inds)
+			for nodeid in get_intersection(self.measured_prefs[ui], available_popp_inds):
+				node = self.measured_prefs[ui][nodeid]
+				if node.has_parent(available_popp_inds):
+					node.kill()
+			possible_peers = [nodeid for nodeid, node in self.measured_prefs[ui].items() if node.alive]
+			# print(possible_peers)
+			available_options_limited = get_intersection(available_popp_inds, possible_peers)
+			# print(available_options_limited)
+			# print("\n")
+			# Reset for next time
+			for nodeid in list(self.measured_prefs[ui]):
+				self.measured_prefs[ui][nodeid].alive = True
+
 			available_options = []
 			dists = []
-			for pop,p in all_available_options:
+			for popp_i in available_options_limited:
+				pop,p = self.popps[popp_i]
 				try:
 					d = pop_to_metro_dist_cache[self.metro_loc[ug[0]], self.pop_to_loc[pop]]
 				except KeyError:
 					d = geopy.distance.geodesic(self.metro_loc[ug[0]], self.pop_to_loc[pop]).km
 					pop_to_metro_dist_cache[self.metro_loc[ug[0]], self.pop_to_loc[pop]] = d
 				dists.append(d)
-			min_pop = all_available_options[np.argmin(np.array(dists))][0]
-			available_options = [popp for popp in all_available_options if self.pop_dist_cache[popp[0], min_pop] < cd] # check (c)
+			min_pop = self.popps[available_options_limited[np.argmin(np.array(dists))]][0]
+			available_options = [self.popps[poppi] for poppi in available_options_limited if \
+				self.pop_dist_cache[self.popps[poppi][0], min_pop] < cd] # check (c)
 			available_peers = [popp[1] for popp in available_options]
 			# Also include popp's too far away for which the same peer is just as close
-			ret_available_options = [popp for popp in all_available_options if popp[1] in available_peers] # final note
-
+			ret_available_options = [self.popps[poppi] for poppi in available_options_limited if \
+				self.popps[poppi][1] in available_peers] # final note
+			
 			return ret_available_options
 
 		# maybe store ug -> pfx perfs (prepoulate "perf" thing)

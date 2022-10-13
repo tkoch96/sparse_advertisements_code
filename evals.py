@@ -1,5 +1,3 @@
-from sparse_advertisements_v2 import *
-from graph_utils import *
 from constants import *
 
 import pickle, numpy as np, matplotlib.pyplot as plt
@@ -7,18 +5,29 @@ plt.rcParams.update({
     "text.usetex": True
 })
 
-N_SIM = 100
+N_SIM = 50
 
 import multiprocessing
+from sparse_advertisements_v3 import *
 
 
 def do_eval_compare_peer_value(args):
 	worker_n, = args
 
 	metrics = {}
-	metrics_fn = os.path.join(CACHE_DIR, 'compare_peer_value_{}.pkl'.format(worker_n))
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
+	if worker_n > 0:
+		metrics_fns = [os.path.join(CACHE_DIR, 'compare_peer_value_{}.pkl'.format(worker_n))]
+	else:
+		import glob
+		metrics_fns = glob.glob(os.path.join(CACHE_DIR, 'compare_peer_value*.pkl'))
+	for metrics_fn in metrics_fns:
+		if os.path.exists(metrics_fn):
+			tmp = pickle.load(open(metrics_fn,'rb'))
+			for k,v in tmp.items():
+				try:
+					metrics[k] = metrics[k] + v
+				except KeyError:
+					metrics[k] = v
 	for i in range(N_SIM):
 		print("Worker: {} CPV: {}".format(worker_n,i))
 		if metrics != {}:
@@ -80,6 +89,58 @@ def err_adv(adv1,adv2):
 		errs.append(np.sum(np.abs(tmp.flatten() - adv2.flatten())))
 	return min(errs)
 
+
+def do_eval_compare_explores():
+	N_SIM = 10
+	lambduh = .1
+	explores = ['other_bimodality','gmm','positive_benefit', 'entropy', 'bimodality']
+	hr_labs = ['other_bimodality','gmm',"Positive Benefit", "Entropy", "Bimodality"]
+	
+	metrics = {}
+	metrics_fn = os.path.join(CACHE_DIR, 'compare_explores.pkl')
+	if os.path.exists(metrics_fn):
+		metrics = pickle.load(open(metrics_fn,'rb'))
+
+	for explore_i, explore in enumerate(explores):
+		if explore_i in metrics: continue
+		metrics[explore_i] = {
+			'n_advs': [],
+			'obj': [],
+		}
+		for _i in range(N_SIM):
+			sae = Sparse_Advertisement_Eval(get_random_deployment('really_friggin_small'), 
+				lambduh=lambduh,verbose=False,with_capacity=False, explore=explore,n_prefixes=2)
+			ret = sae.compare_different_solutions(n_run=1,verbose=False)
+			our_adv = sae.threshold_a(ret['advertisements']['sparse'][0])
+			metrics[explore_i]['obj'].append(ret['objectives']['sparse'][0])
+			metrics[explore_i]['n_advs'].append(sae.sas.path_measures)
+	pickle.dump(metrics,open(metrics_fn,'wb'))
+
+	plt.rcParams["figure.figsize"] = (10,5)
+	plt.rcParams.update({'font.size': 22})
+	f,ax=plt.subplots(1,1)
+	for i in metrics:
+		obj = metrics[i]['obj']
+		x,cdf_x = get_cdf_xy(obj)
+		ax.plot(x,cdf_x,c=cols[2*i+1],label=hr_labs[i].capitalize())
+	ax.legend()
+	ax.set_ylim([0,1.0])
+	ax.grid(True)
+	ax.set_xlabel("Objective Function Value")
+	ax.set_ylabel("CDF of Trials")
+	save_fig("compare_explores_objective.pdf")
+
+	plt.rcParams["figure.figsize"] = (10,5)
+	plt.rcParams.update({'font.size': 22})
+	f,ax=plt.subplots(1,1)
+	for i in metrics:
+		obj,n_adv = metrics[i]['obj'],metrics[i]['n_advs']
+		ax.scatter(obj,n_adv,c=cols[2*i+1],label=hr_labs[i].capitalize())
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Objective Function")
+	ax.set_ylabel("Number of Advs")
+	save_fig("compare_explores_nadv_obj_scatter.pdf")
 
 def do_eval_compare_initializations():
 	lambduh = .1
@@ -302,10 +363,12 @@ def do_eval_scale():
 
 if __name__ == "__main__":
 	# all_args = []
-	# n_workers = multiprocessing.cpu_count()
+	# n_workers = multiprocessing.cpu_count() // 2
 	# for i in range(n_workers):
 	# 	all_args.append((i,))
 	# ppool = multiprocessing.Pool(processes=n_workers)
 	# print("Launching workers")
 	# all_rets = ppool.map(do_eval_compare_peer_value, all_args)
-	do_eval_compare_strategies()
+	# do_eval_compare_peer_value((-1,))
+	# do_eval_compare_strategies()
+	do_eval_compare_explores()
