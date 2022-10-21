@@ -72,7 +72,7 @@ def sum_pdf_new(px):
     output = output.clip(0,np.inf)
     if output.shape[1] >= 2:
         output = sum_pdf_new(output)
-    return output / np.sum(output,axis=0)
+    return output / np.sum(output+1e-16,axis=0)
 
 def sum_pdf_old(px):
     l_post_pad = (px.shape[1] + 1) * px.shape[0]
