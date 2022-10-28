@@ -14,6 +14,48 @@ except:
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+class Calc_Cache():
+	### For caching results to computationally intensive tasks
+	def __init__(self):
+		## VARIOUS CACHES
+		self.all_caches = {
+			'gti': {}, # ground truth ingresses for UGs given advertisements
+			'measured': {}, # measured preferences
+			'lb': {}, # latency benefit by advertisement
+			'ing_prob': {}, # ingress probabilities by active ingresses
+			'distance': {}, # geographic distances between UGs and PoPs
+		}
+
+	def clear_new_measurement_caches(self):
+		## Clear the caches that should be cleared when we execute a new measurement
+		for k in ['lb', 'ing_prob']:
+			self.all_caches[k] = {}
+
+	def clear_all_caches(self):
+		for k in self.all_caches:
+			self.all_caches[k] = {}
+
+	def update_cache(self, new_cache_obj):
+		## Just update each entry
+		for cache_key in self.all_caches:
+			current_cache, new_cache = self.all_caches[cache_key], new_cache_obj.all_caches[cache_key]
+			for entry_key in get_difference(new_cache, current_cache):
+				self.all_caches[cache_key][entry_key] = new_cache[entry_key]
+
+	def get_cache(self):
+		cc = Calc_Cache()
+		for k in self.all_caches:
+			# if k == 'ing_prob' or k == 'gti': continue
+			cc.all_caches[k] = self.all_caches[k]
+		return cc
+
+	def print_summary(self):
+		print("\n")
+		for _id,cache in self.all_caches.items():
+			print("Cache {} has {} entries.".format(_id, len(cache)))
+		print("\n")
+
+
 def save_fig(fn, lgd=None):
 	if lgd is None:
 		plt.savefig(os.path.join("figures",fn), bbox_inches='tight')
