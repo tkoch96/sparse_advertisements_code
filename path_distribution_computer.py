@@ -22,7 +22,8 @@ class Path_Distribution_Computer:
 		self.with_capacity = kwargs.get('with_capacity', False)
 
 		## Latency benefit is -1 * mean latency, so latency benefits must lie in this region
-		self.lbx = np.linspace(-1*MAX_LATENCY, 0)
+		# what is the right granularity?
+		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=1000)
 
 		self.calc_cache = Calc_Cache()
 
@@ -73,7 +74,7 @@ class Path_Distribution_Computer:
 			if np.sum(a[:,pref_i]) == 0:
 				continue
 			try:
-				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tuple(a[:,pref_i].flatten())]
+				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())]
 				continue
 			except KeyError:
 				pass
@@ -114,7 +115,7 @@ class Path_Distribution_Computer:
 				nmlp = len(most_likely_peers)
 				for mlp,_ in most_likely_peers:
 					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
-			self.calc_cache.all_caches['ing_prob'][tuple(a[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+			self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
 
 			# for ug in self.ugs:
 			# 	# perform a sort on these in particular
@@ -220,8 +221,8 @@ class Path_Distribution_Computer:
 			# 	ax[1].plot(p_vol_this_ingress)
 			# 	plt.show()
 
-		if kwargs.get('verb'):
-			print("PLF: {}".format(p_link_fails))
+		# if kwargs.get('verb'):
+		# 	print("PLF: {}".format(p_link_fails))
 		
 		## holds P(latency benefit) for each user
 		px = np.zeros((len(lbx), self.n_ug))
@@ -263,7 +264,6 @@ class Path_Distribution_Computer:
 					lbx_i = np.where(lb - lbx <= 0)[0][0]
 					px[lbx_i, ui] += max_prob * (1 - plf)
 					px[0, ui] += max_prob * plf
-
 		for ui in reversed(range(self.n_ug)):
 			if np.sum(px[:,ui]) == 0:
 				# This user experiences no benefit with probability 1
@@ -272,8 +272,10 @@ class Path_Distribution_Computer:
 		px = px / (np.sum(px,axis=0) + 1e-8)
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		psumx = sum_pdf_new(px)
+		# print(px)
+		# print(psumx);exit(0)
 		### pmf of benefits is now xsumx with probabilities psumx
-		xsumx = self.lbx # possible average benefits across users
+		xsumx = self.lbx * self.n_ug # possible average benefits across users
 
 		plotit = (kwargs.get('plotit') == True) or np.sum(psumx) < .9 # Checks that this is a probability distribution
 		if plotit:

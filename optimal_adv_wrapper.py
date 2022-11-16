@@ -1,4 +1,5 @@
 import numpy as np, multiprocessing
+np.setbufsize(262144*8)
 from constants import *
 from helpers import *
 from path_distribution_computer import Path_Distribution_Computer
@@ -42,7 +43,7 @@ class Optimal_Adv_Wrapper:
 		self.verbose = verbose
 		self.advertisement_cost = self.l1_norm
 		self.epsilon = .00005 # change in objective less than this -> stop
-		self.max_n_iter = 300 # maximum number of learning iterations
+		self.max_n_iter = 150 # maximum number of learning iterations
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
@@ -53,7 +54,8 @@ class Optimal_Adv_Wrapper:
 
 	def get_n_workers(self):
 		## Limited by python pickle
-		return 1#np.minimum(16, multiprocessing.cpu_count() // 2)
+		# return np.minimum(32, multiprocessing.cpu_count() // 2)
+		return multiprocessing.cpu_count()
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
@@ -69,8 +71,9 @@ class Optimal_Adv_Wrapper:
 		self.calc_cache.update_cache(new_cache)
 		self.pdc.calc_cache.update_cache(new_cache)
 		### Keeps the parent-tracker up to date
-		for routed_through_ingress, actives in self.calc_cache.all_caches['gti'].values():
-			self.enforce_measured_prefs(routed_through_ingress, actives)
+		for ui, inds in self.calc_cache.all_caches['parents_on'].items():
+			for childi,parenti in inds:
+				self.pdc.parent_tracker[ui,childi,parenti] = True
 
 	def update_deployment(self, deployment):
 		self.deployment = deployment
@@ -81,13 +84,16 @@ class Optimal_Adv_Wrapper:
 		# Shape of the variables
 		self.popps = list(set(deployment['popps']))
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
+		self.provider_popps = deployment['provider_popps']
+		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
 		self.n_popp = len(get_difference(self.popps,['anycast']))
 		self.n_prefixes = np.maximum(2,self.n_popp // 3)
-		self.n_providers = deployment['n_providers']
+		self.n_providers = deployment['n_providers'] # number of provider ASes
 		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
 
 		self.metro_loc = deployment['metro_loc']
 		self.pop_to_loc = deployment['pop_to_loc']
+		self.link_capacities_by_popp = deployment['link_capacities']
 		self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
 		self.link_capacities_arr = np.zeros(self.n_popp)
 		for poppi, cap in self.link_capacities.items():
@@ -115,8 +121,8 @@ class Optimal_Adv_Wrapper:
 		
 		self.pdc.update_deployment(deployment)
 
-		self.calculate_user_latency_by_peer()
 		self.clear_caches()
+		self.calculate_user_latency_by_peer()
 
 	def calculate_user_latency_by_peer(self):
 		"""
@@ -133,8 +139,9 @@ class Optimal_Adv_Wrapper:
 			for popp in self.popps:
 				popp_i = self.popp_to_ind[popp]
 				self.measured_latencies[popp_i,ugi] = self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY)
-				self.pdc.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * \
-					self.ug_vols[ugi] / total_vol
+				weight = self.ug_vols[ugi] / total_vol
+				self.pdc.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
+					
 		# same for each prefix (ease of calculation later)
 		self.measured_latencies = np.tile(np.expand_dims(self.measured_latencies, axis=1), 
 			(1, self.n_prefixes, 1))
@@ -185,15 +192,15 @@ class Optimal_Adv_Wrapper:
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
-		if kwargs.get('verb'):
-			print(user_latencies)
+		# if kwargs.get('verb'):
+		# 	print(user_latencies)
 		return user_latencies
 
 	def benefit_from_user_latencies(self, user_latencies):
 		# sum of the benefits, simple model for benefits is 1 / latency
 		user_benefits = -1 * user_latencies
 		# average user benefit -- important that this function is not affected by the number of user groups
-		return np.mean(user_benefits * self.ug_vols) / np.sum(self.ug_vols)
+		return np.sum(user_benefits * self.ug_vols) / np.sum(self.ug_vols)
 
 	def get_ground_truth_resilience_benefit(self, a):
 		benefit = 0
@@ -208,26 +215,30 @@ class Optimal_Adv_Wrapper:
 		### Returns routed_through ingress -> prefix -> ug -> popp_i
 		## and actives prefix -> [active popp indices]
 
-		try:
-			return self.calc_cache.all_caches['gti'][tuple(a.flatten())]
-		except KeyError:
-			pass
-
 		### Somewhat efficient implementation using matrix logic
 		routed_through_ingress = {} # prefix -> UG -> ingress index
 		actives = {} # prefix -> indices where we adv
-		for prefix_i in range(a.shape[1]):
-			actives[prefix_i] = np.where(a[:,prefix_i] == 1)[0]
-			routed_through_ingress[prefix_i] = {}
+		for prefix_i in range(self.n_prefixes):
+			try:
+				routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())]
+				continue
+			except KeyError:
+				pass
+			this_actives = np.where(a[:,prefix_i] == 1)[0]
+			actives[prefix_i] = this_actives
+			this_routed_through_ingress = {}
 			if np.sum(a[:,prefix_i]) == 0:
+				routed_through_ingress[prefix_i] = this_routed_through_ingress
+				self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
 				continue
 			active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,self.n_ug))
 			active_popp_ug_indicator = self.popp_by_ug_indicator * active_popp_indicator
 			best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
 			for ui, bao in zip(range(self.n_ug), best_available_options):
 				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
-				routed_through_ingress[prefix_i][self.ugs[ui]] = bao
-		self.calc_cache.all_caches['gti'][tuple(a.flatten())] = (routed_through_ingress,actives)
+				this_routed_through_ingress[self.ugs[ui]] = bao
+			routed_through_ingress[prefix_i] = this_routed_through_ingress
+			self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
 		return routed_through_ingress, actives
 
 	def enforce_measured_prefs(self, routed_through_ingress, actives):
@@ -249,6 +260,10 @@ class Optimal_Adv_Wrapper:
 						routed_ingress_obj.add_child(beaten_ingress_obj)
 
 						self.pdc.parent_tracker[ui,beaten_ingress,routed_ingress] = True
+						try:
+							self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
+						except KeyError:
+							self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
 
 	def measure_ingresses(self, a):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
@@ -305,5 +320,5 @@ class Optimal_Adv_Wrapper:
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
 		resilience_benefit = self.get_ground_truth_resilience_benefit(a)
-		print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
+		# print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)

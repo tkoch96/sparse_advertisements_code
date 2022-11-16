@@ -1,4 +1,4 @@
-import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt
+import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle
 from bisect import bisect_left
 
 try:
@@ -19,12 +19,16 @@ class Calc_Cache():
 	def __init__(self):
 		## VARIOUS CACHES
 		self.all_caches = {
+		### GTI IS THE PROBLEM I THINK, solution could just be to store the indices to set to true
 			'gti': {}, # ground truth ingresses for UGs given advertisements
-			'measured': {}, # measured preferences
-			'lb': {}, # latency benefit by advertisement
-			'ing_prob': {}, # ingress probabilities by active ingresses
-			'distance': {}, # geographic distances between UGs and PoPs
+			'lb': {}, # latency benefit by advertisement (very small)
+			'ing_prob': {}, # ingress probabilities by active ingresses, each entry is npopp x nug
+			'distance': {}, # geographic distances between UGs and PoPs, (very small)
+			'parents_on': {}, # stores indices of parent tracker that should be set to 'on'
 		}
+		# self.disallowed_caches = ['gti', 'ing_prob', 'lb'] ## wont be transferred among processes
+		self.disallowed_caches = []
+
 
 	def clear_new_measurement_caches(self):
 		## Clear the caches that should be cleared when we execute a new measurement
@@ -38,21 +42,25 @@ class Calc_Cache():
 	def update_cache(self, new_cache_obj):
 		## Just update each entry
 		for cache_key in self.all_caches:
+			if cache_key in self.disallowed_caches: continue
 			current_cache, new_cache = self.all_caches[cache_key], new_cache_obj.all_caches[cache_key]
 			for entry_key in get_difference(new_cache, current_cache):
 				self.all_caches[cache_key][entry_key] = new_cache[entry_key]
 
 	def get_cache(self):
 		cc = Calc_Cache()
-		for k in self.all_caches:
-			# if k == 'ing_prob' or k == 'gti': continue
-			cc.all_caches[k] = self.all_caches[k]
+		for cache_key in self.all_caches:
+			if cache_key in self.disallowed_caches: continue
+			cc.all_caches[cache_key] = self.all_caches[cache_key]
 		return cc
 
 	def print_summary(self):
 		print("\n")
 		for _id,cache in self.all_caches.items():
-			print("Cache {} has {} entries.".format(_id, len(cache)))
+			print("Cache {} has {} entries, {} mem.".format(_id, len(cache), round(sys.getsizeof(pickle.dumps(cache,-1))/1e6)))
+			# if _id == 'gti':
+			# 	adv = list(cache.keys())[np.random.randint(len(cache))]
+			# 	print("Key is {}, val 1 is {} val 2 is {}".format(len(adv), len(cache[adv][0]), len(cache[adv][1])))
 		print("\n")
 
 
