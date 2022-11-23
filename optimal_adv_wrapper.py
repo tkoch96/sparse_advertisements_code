@@ -1,8 +1,7 @@
-import numpy as np, multiprocessing
+import numpy as np, multiprocessing, zmq, time
 np.setbufsize(262144*8)
 from constants import *
 from helpers import *
-from path_distribution_computer import Path_Distribution_Computer
 
 
 class Ing_Obj:
@@ -47,7 +46,6 @@ class Optimal_Adv_Wrapper:
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
-		self.pdc = Path_Distribution_Computer(**kwargs)
 
 		self.calc_cache = Calc_Cache()
 		self.update_deployment(deployment)	
@@ -55,25 +53,22 @@ class Optimal_Adv_Wrapper:
 	def get_n_workers(self):
 		## Limited by python pickle
 		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return multiprocessing.cpu_count()
+		return 2#multiprocessing.cpu_count()
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
-		self.pdc.clear_caches()
 		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
 			self.ug_perfs[self.ugs[ui]] if popp != 'anycast'} for ui in range(self.n_ug)}
 
 	def get_cache(self):
-		self.calc_cache.update_cache(self.pdc.calc_cache)
 		return self.calc_cache.get_cache()
 
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
-		self.pdc.calc_cache.update_cache(new_cache)
 		### Keeps the parent-tracker up to date
 		for ui, inds in self.calc_cache.all_caches['parents_on'].items():
 			for childi,parenti in inds:
-				self.pdc.parent_tracker[ui,childi,parenti] = True
+				self.parent_tracker[ui,childi,parenti] = True
 
 	def update_deployment(self, deployment):
 		self.deployment = deployment
@@ -118,9 +113,18 @@ class Optimal_Adv_Wrapper:
 			for popp in self.ug_perfs[self.ugs[ui]]:
 				if popp == 'anycast': continue
 				self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
-		
-		self.pdc.update_deployment(deployment)
 
+		## only sub-workers should spawn these arrays if they get too big
+		max_entries = 1e6
+		if self.n_popp * self.n_prefixes * self.n_ug < max_entries:
+			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
+		if self.n_popp**2 * self.n_ug < max_entries:
+			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
+		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
+		for ui in range(self.n_ug):
+			for popp in self.ug_perfs[self.ugs[ui]]:
+				if popp == 'anycast': continue
+				self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
 
@@ -132,7 +136,7 @@ class Optimal_Adv_Wrapper:
 			This function turns ug -> popp -> lat into 3D array of popp, ug, prefixes for ease of use
 		"""
 		self.measured_latencies = np.zeros((self.n_popp, len(self.ugs)))
-		self.pdc.measured_latency_benefits = np.zeros((self.n_popp, len(self.ugs)))
+		self.measured_latency_benefits = np.zeros((self.n_popp, len(self.ugs)))
 		total_vol = np.sum(self.ug_vols)
 		for ug in self.ugs:
 			ugi = self.ug_to_ind[ug]
@@ -140,12 +144,12 @@ class Optimal_Adv_Wrapper:
 				popp_i = self.popp_to_ind[popp]
 				self.measured_latencies[popp_i,ugi] = self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY)
 				weight = self.ug_vols[ugi] / total_vol
-				self.pdc.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
+				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
 					
 		# same for each prefix (ease of calculation later)
 		self.measured_latencies = np.tile(np.expand_dims(self.measured_latencies, axis=1), 
 			(1, self.n_prefixes, 1))
-		self.pdc.measured_latency_benefits = np.tile(np.expand_dims(self.pdc.measured_latency_benefits, axis=1), 
+		self.measured_latency_benefits = np.tile(np.expand_dims(self.measured_latency_benefits, axis=1), 
 			(1, self.n_prefixes, 1))
 
 
@@ -259,11 +263,19 @@ class Optimal_Adv_Wrapper:
 						beaten_ingress_obj.add_parent(routed_ingress_obj)
 						routed_ingress_obj.add_child(beaten_ingress_obj)
 
-						self.pdc.parent_tracker[ui,beaten_ingress,routed_ingress] = True
+						self.parent_tracker[ui,beaten_ingress,routed_ingress] = True
 						try:
 							self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
 						except KeyError:
 							self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
+		## Update workers about new parent tracker information
+		for worker, worker_socket in self.worker_sockets.items():
+			uis_of_interest = self.worker_to_uis[worker]
+			sub_cache = {worker_ui: self.calc_cache.all_caches['parents_on'][global_ui] for \
+				worker_ui, global_ui in enumerate(uis_of_interest)}
+			msg = pickle.dumps(('update_parent_tracker', sub_cache))
+			worker_socket.send(msg)
+			worker_socket.recv()
 
 	def measure_ingresses(self, a):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
@@ -279,7 +291,6 @@ class Optimal_Adv_Wrapper:
 			pass
 
 		## Reset benefit calculations cache since we now have more info
-		self.pdc.calc_cache.clear_new_measurement_caches()	
 		self.calc_cache.clear_new_measurement_caches()
 
 		self.path_measures += 1

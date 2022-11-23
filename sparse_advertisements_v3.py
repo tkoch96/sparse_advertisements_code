@@ -1,10 +1,11 @@
-import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, multiprocessing
+import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, multiprocessing, zmq
+from subprocess import call, check_output
 np.setbufsize(262144*8)
 import scipy.stats
 import sys
-from sklearn.mixture import GaussianMixture
-from sklearn.exceptions import ConvergenceWarning
-import warnings
+# from sklearn.mixture import GaussianMixture
+# from sklearn.exceptions import ConvergenceWarning
+# import warnings
 np.set_printoptions(threshold=sys.maxsize)
 from helpers import *
 from constants import *
@@ -277,14 +278,42 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		pass
 
 	def get_n_most_likely_peers_justsort(self, ug, available_peers, n=5, verb=False):
-		
 		sorted_available_peers = sorted(available_peers, key = rank_f)
 		return sorted_available_peers[0:n]
 
 	def latency_benefit(self, *args, **kwargs):
-		ret = self.pdc.latency_benefit(*args,**kwargs)
+		n_workers = self.get_n_workers()
+		for worker, worker_socket in self.worker_sockets.items():
+			msg = pickle.dumps(['calc_lb', (args,kwargs)])
+			worker_socket.send(msg)
+		rets = {}
+		while True:
+			# wait for responses from workers
+			for worker in range(n_workers):
+				try:
+					rets[worker]
+				except KeyError:
+					try:
+						rets[worker] = pickle.loads(self.worker_sockets[worker].recv())
+					except:
+						pass
+			if len(rets) == n_workers:
+				break
+		### combine pdf rets across sub-deployments
+		pdfs = []
+		for ret in rets.values():
+			lbret = ret
+			## TODO -- update cache?
+			mean, (vals,pdf) = lbret
+			pdfs.append(pdf)
+		px = np.zeros((len(vals), len(pdfs)))
+		for sdi in range(len(pdfs)):
+			px[:,sdi] = pdfs[sdi]
+		if px.shape[1] > 1:
+			px = sum_pdf_new(px) ## Do I need to care about user volume here?
+		mean = np.sum(px.flatten()*vals.flatten())
 		self.get_cache()
-		return ret
+		return (mean, (vals.flatten(), px.flatten()))
 
 	def resilience_benefit(self, a):
 		"""1 / n_popp * sum over peers of E(benefit when that peer is knocked out)."""
@@ -326,7 +355,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		elif mode == 'normal':
 			return ADVERTISEMENT_THRESHOLD+ np.sqrt(self.initialization['var']) \
 				* np.random.normal(size=(self.n_popp, self.n_prefixes))
-
 		elif mode == 'ones':
 			return np.ones((self.n_popp, self.n_prefixes))
 		elif mode == 'zeros':
@@ -342,29 +370,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			a = np.ones((self.n_popp, self.n_prefixes))
 			obj_on = self.modeled_objective(a, multiprocess=False)
 			advs = {}
-			if self.multiprocess:
-				for i in range(self.n_popp):
-					a[i,:] = 0
-					advs[i] = copy.copy(a)
-					a[i,:] = 1
-				n_workers = self.get_n_workers()
-				split_advs = split_seq(list(advs), n_workers)
-				all_args = []
-				for worker_i in range(n_workers):
-					kwa = copy.copy({
-						'lambduh': self.lambduh, 
-						'gamma': self.gamma, 
-						'with_capacity': self.with_capacity,
-						'verbose': False,
-						'init': self.initialization,
-						'explore': self.explore,
-						'resilience_benefit': self.resilience_benefit,
-					})
-					these_advs = copy.copy({i:advs[i] for i in split_advs[worker_i]})
-					all_args.append((these_advs, copy.copy(self.deployment), copy.copy(self.get_cache()), kwa, worker_i, ))
-				## I don't actually care about these return values, I just want to cache the calculations
-				self.wrap_call_evaluate_adv(all_args)
-			## Now when I evaluate, everything's cached so this line is very quick
 			exclude = []
 			for i in range(self.n_popp):
 				a[i,:] = 0
@@ -874,6 +879,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'support_size': np.minimum(self.n_popp * self.n_prefixes,max_support), # setting this value to size(a) turns it off
 		}
 
+		self.worker_sockets = {}
+		self.start_workers()
+
 	def apply_prox_l1(self, w_k):
 		"""Applies proximal gradient method to updated variable. Proximal gradient
 			for L1 norm is a soft-threshold at the learning rate."""
@@ -1287,10 +1295,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			delta_eff_alpha * np.abs(self.current_effective_objective - self.last_effective_objective)
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff])
 
-	def start_workers(self):
-		n_workers = self.get_num_workers()
-		subdeployments = split_deployment_by_ug(deployment, limit=int(np.ceil(self.n_ug/n_workers)))
-		kwa = {
+	def get_init_kwa(self):
+		return {
 			'lambduh': self.lambduh, 
 			'gamma': self.gamma, 
 			'with_capacity': self.with_capacity,
@@ -1299,15 +1305,41 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'explore': self.explore,
 			'resilience_benefit': self.resilience_benefit,
 		}
+
+	def start_workers(self):
+		self.worker_to_uis = {}
+		self.worker_to_deployments = {}
+		n_workers = self.get_n_workers()
+		subdeployments = split_deployment_by_ug(self.deployment, limit=int(np.ceil(self.n_ug/n_workers)))
+		
+		context = zmq.Context()
 		for worker in range(n_workers):
-			call("../congestion_analyzer/venv/bin/python path_distribution_computer.py {}".format(worker), shell=True)
+			call("../congestion_analysis/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
+			# send worker startup information
+			args = [subdeployments[worker]]
+			this_deployment_ugs = subdeployments[worker]['ugs']
+			self.worker_to_deployments[worker] = subdeployments[worker]
+			self.worker_to_uis[worker] = list([self.ug_to_ind[ug] for ug in this_deployment_ugs])
+			kwargs = self.get_init_kwa()
+			self.worker_sockets[worker] = context.socket(zmq.REQ)
+			self.worker_sockets[worker].setsockopt(zmq.RCVTIMEO, 1000)
 			while True:
-				# send worker startup information
-				pass
+				self.worker_sockets[worker].connect('tcp://localhost:{}'.format(BASE_SOCKET+worker))
+				msg = pickle.dumps(('init',(args,kwargs)))
+				self.worker_sockets[worker].send(msg)
+				time.sleep(1)
+				msg = pickle.loads(self.worker_sockets[worker].recv())
+				if msg == 'ACK':
+					break
+
+	def stop_workers(self):
+		for worker, socket in self.worker_sockets.items():
+			msg = pickle.dumps(('end','end'))
+			socket.send(msg)
+			socket.close()
 
 	def solve(self, init_adv=None):
 		self.clear_caches()
-
 		self.set_alpha()
 		self.measured = {}
 		# Initialize model of path probabilities
@@ -1391,29 +1423,35 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['t_per_iter'] = self.t_per_iter
 
 def main():
-	np.random.seed(31413)
+	try:
+		np.random.seed(31413)
 
-	# Comparing different solutions
-	lambduh = .1
-	sae = Sparse_Advertisement_Eval(get_random_deployment('small'), verbose=True,
-		lambduh=lambduh,with_capacity=False,multiprocess=False)
-	sae.compare_different_solutions(deployment_size='small',n_run=100)
-	exit(0)
+		# # Comparing different solutions
+		# lambduh = .1
+		# sae = Sparse_Advertisement_Eval(get_random_deployment('small'), verbose=True,
+		# 	lambduh=lambduh,with_capacity=False,multiprocess=False)
+		# sae.compare_different_solutions(deployment_size='small',n_run=100)
+		# exit(0)
 
 
-	# ## Simple test
-	# lambduh = .01
-	# sas = Sparse_Advertisement_Solver(get_random_deployment('really_friggin_small'), 
-	# 	lambduh=lambduh,verbose=True,with_capacity=False)
-	# sas.solve()
-	# sas.make_plots()
+		## Simple test
+		lambduh = .01
+		sas = Sparse_Advertisement_Solver(get_random_deployment('really_friggin_small'), 
+			lambduh=lambduh,verbose=True,with_capacity=False)
+		sas.solve()
+		sas.make_plots()
 
-	# ## Capacity Test ( I think this works, but not positive )
-	# lambduh = .1
-	# sas = Sparse_Advertisement_Solver(get_random_deployment('small'), 
-	# 	lambduh=lambduh,verbose=True,with_capacity=True)
-	# sas.solve()
-	# sas.make_plots()
+		# ## Capacity Test ( I think this works, but not positive )
+		# lambduh = .1
+		# sas = Sparse_Advertisement_Solver(get_random_deployment('small'), 
+		# 	lambduh=lambduh,verbose=True,with_capacity=True)
+		# sas.solve()
+		# sas.make_plots()
+	except:
+		import traceback
+		traceback.print_exc()
+	finally:
+		sas.stop_workers()
 
 
 if __name__ == "__main__":

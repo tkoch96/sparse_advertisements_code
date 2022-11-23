@@ -1,9 +1,10 @@
-import numpy as np, numba as nb, pickle, copy
+import numpy as np, numba as nb, pickle, copy, zmq, time
 np.setbufsize(262144*8)
 
 from constants import *
 from helpers import *
 from test_polyphase import sum_pdf_new
+from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
 
 remeasure_a = None
@@ -17,47 +18,70 @@ except:
 def large_logical_and(arr1,arr2):
 	return np.logical_and(arr1,arr2)
 
-class Path_Distribution_Computer:
-	def __init__(self, **kwargs):
+class Path_Distribution_Computer(Optimal_Adv_Wrapper):
+	def __init__(self, worker_i):
+		self.worker_i = worker_i
+		args, kwargs = self.start_connection()
+		super().__init__(*args, **kwargs)
+		self.calculate_user_latency_by_peer()
 		self.with_capacity = kwargs.get('with_capacity', False)
 
 		## Latency benefit is -1 * mean latency, so latency benefits must lie in this region
-		# what is the right granularity?
+		# TODO : what is the right granularity?
 		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=1000)
 
+		self.stop = False
 		self.calc_cache = Calc_Cache()
+		print('started in worker {}'.format(self.worker_i))
+		self.run()
 
-	def update_deployment(self, deployment):
-		self.ugs = list(deployment['ug_perfs'])
-		self.n_ug = len(self.ugs)
-		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
-		self.popps = list(set(deployment['popps']))
-		self.n_popp = len(get_difference(self.popps,['anycast']))
-		self.n_prefixes = np.maximum(2,self.n_popp // 3)
-		self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
-		self.metro_loc = deployment['metro_loc']
-		self.pop_to_loc = deployment['pop_to_loc']
-		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
-		self.ug_perfs = deployment['ug_perfs']
+	def start_connection(self):
+		context = zmq.Context()
+		self.main_socket = context.socket(zmq.REP)
+		self.main_socket.setsockopt(zmq.RCVTIMEO, 1000)
+		self.main_socket.bind('tcp://*:{}'.format(BASE_SOCKET+self.worker_i))
+		while True:
+			try:
+				init_msg = self.main_socket.recv()
+				break
+			except zmq.error.Again:
+				time.sleep(.01)
+		self.main_socket.send(pickle.dumps('ACK'))
+		msg_decoded = pickle.loads(init_msg)
+		_, data = msg_decoded
+		return data
 
-		self.ug_to_vol = deployment['ug_to_vol']
-		self.ug_vols = np.zeros(self.n_ug)
-		for ug, v in self.ug_to_vol.items():
-			self.ug_vols[self.ug_to_ind[ug]] = v
-		all_vols = list(self.ug_to_vol.values())
-		self.vol_x = np.linspace(min(all_vols),max(all_vols))
+	# def update_deployment(self, deployment):
+	# 	self.ugs = list(deployment['ug_perfs'])
+	# 	self.n_ug = len(self.ugs)
+	# 	self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
+	# 	self.popps = list(set(deployment['popps']))
+	# 	self.n_popp = len(get_difference(self.popps,['anycast']))
+	# 	self.n_prefixes = np.maximum(2,self.n_popp // 3)
+	# 	self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
+	# 	self.metro_loc = deployment['metro_loc']
+	# 	self.pop_to_loc = deployment['pop_to_loc']
+	# 	self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
+	# 	self.ug_perfs = deployment['ug_perfs']
 
-		self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
-		self.link_capacities_arr = np.zeros(self.n_popp)
-		for poppi, cap in self.link_capacities.items():
-			self.link_capacities_arr[poppi] = cap
+	# 	self.ug_to_vol = deployment['ug_to_vol']
+	# 	self.ug_vols = np.zeros(self.n_ug)
+	# 	for ug, v in self.ug_to_vol.items():
+	# 		self.ug_vols[self.ug_to_ind[ug]] = v
+	# 	all_vols = list(self.ug_to_vol.values())
+	# 	self.vol_x = np.linspace(min(all_vols),max(all_vols))
 
-		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
-		for ui in range(self.n_ug):
-			for popp in self.ug_perfs[self.ugs[ui]]:
-				if popp == 'anycast': continue
-				self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
-		self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
+	# 	self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
+	# 	self.link_capacities_arr = np.zeros(self.n_popp)
+	# 	for poppi, cap in self.link_capacities.items():
+	# 		self.link_capacities_arr[poppi] = cap
+
+	# 	self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
+	# 	for ui in range(self.n_ug):
+	# 		for popp in self.ug_perfs[self.ugs[ui]]:
+	# 			if popp == 'anycast': continue
+	# 			self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
+	# 	self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
@@ -295,3 +319,52 @@ class Path_Distribution_Computer:
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		return benefit, (xsumx.flatten(),psumx.flatten())
+
+	def check_for_commands(self):
+		print("checking for commands in worker {}".format(self.worker_i))
+		try:
+			msg = self.main_socket.recv()
+		except zmq.error.Again:
+			return
+		msg = pickle.loads(msg)
+		cmd, data = msg
+		print("received command {} in worker {}".format(cmd, self.worker_i))
+		if cmd == 'calc_lb':
+			args,kwargs = data
+			ret = self.latency_benefit(*args, **kwargs)
+		elif cmd == 'reset_new_meas_cache':
+			self.calc_cache.clear_new_measurement_caches()
+			ret = "ACK"
+		elif cmd == 'update_parent_tracker':
+			parents_on = data
+			for ui in parents_on:
+				for beaten_ingress, routed_ingress in parents_on[ui]:
+					self.parent_tracker[ui, beaten_ingress, routed_ingress] = True
+			ret = "ACK"
+		elif cmd == 'update_deployment':
+			deployment = data
+			self.update_deployment(deployment)
+			ret = "ACK"
+		elif cmd == 'reset_cache':
+			self.clear_caches()
+			ret = "ACK"
+		elif cmd == 'init':
+			self.start_connection()
+			ret = 'ACk'
+		elif cmd == 'end':
+			self.stop = True
+			self.main_socket.close()
+			return
+		else:
+			print("Invalid CMD in worker {} : {}".format(self.worker_i, cmd))
+			exit(0)
+		self.main_socket.send(pickle.dumps(ret))
+
+	def run(self):
+		while not self.stop:
+			self.check_for_commands()
+			time.sleep(.1)
+
+if __name__ == "__main__":
+	worker_i = int(sys.argv[1])
+	pdc = Path_Distribution_Computer(worker_i)
