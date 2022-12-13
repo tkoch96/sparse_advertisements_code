@@ -1,7 +1,8 @@
-import numpy as np, multiprocessing, zmq, time
+import numpy as np, time
 np.setbufsize(262144*8)
 from constants import *
 from helpers import *
+from worker_comms import Worker_Manager
 
 
 class Ing_Obj:
@@ -50,18 +51,38 @@ class Optimal_Adv_Wrapper:
 		self.calc_cache = Calc_Cache()
 		self.update_deployment(deployment)	
 
+	def set_worker_manager(self, wm):
+		self.worker_manager = wm
+
+	def get_worker_manager(self):
+		return self.worker_manager
+
 	def get_n_workers(self):
-		## Limited by python pickle
-		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return 2#multiprocessing.cpu_count()
+		return self.worker_manager.get_n_workers()
+
+	def send_receive_workers(self, msg):
+		return self.worker_manager.send_receive_workers(msg)
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
 		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
 			self.ug_perfs[self.ugs[ui]] if popp != 'anycast'} for ui in range(self.n_ug)}
+		try:
+			msg = pickle.dumps(['reset_cache', ()])
+			self.send_receive_workers(msg)
+		except AttributeError:
+			# not initialized yet
+			pass
 
 	def get_cache(self):
 		return self.calc_cache.get_cache()
+
+	def get_init_kwa(self):
+		return {
+			'lambduh': self.lambduh, 
+			'gamma': self.gamma, 
+			'verbose': False,
+		}
 
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
@@ -115,10 +136,10 @@ class Optimal_Adv_Wrapper:
 				self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
 
 		## only sub-workers should spawn these arrays if they get too big
-		max_entries = 1e6
+		max_entries = 10000e6
 		if self.n_popp * self.n_prefixes * self.n_ug < max_entries:
 			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
-		if self.n_popp**2 * self.n_ug < max_entries:
+		if self.n_popp**2 * self.n_ug < max_entries*64: # more lenient since dtype is bool
 			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
 		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
 		for ui in range(self.n_ug):
@@ -262,17 +283,22 @@ class Optimal_Adv_Wrapper:
 						beaten_ingress_obj = self.measured_prefs[ui].get(beaten_ingress)
 						beaten_ingress_obj.add_parent(routed_ingress_obj)
 						routed_ingress_obj.add_child(beaten_ingress_obj)
-
 						self.parent_tracker[ui,beaten_ingress,routed_ingress] = True
 						try:
 							self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
 						except KeyError:
 							self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
+		
 		## Update workers about new parent tracker information
-		for worker, worker_socket in self.worker_sockets.items():
-			uis_of_interest = self.worker_to_uis[worker]
-			sub_cache = {worker_ui: self.calc_cache.all_caches['parents_on'][global_ui] for \
-				worker_ui, global_ui in enumerate(uis_of_interest)}
+		for worker, worker_socket in self.worker_manager.worker_sockets.items():
+			this_deployment_ugs = self.worker_manager.worker_to_deployments[worker]['ugs']
+			uis_of_interest = list([self.ug_to_ind[ug] for ug in this_deployment_ugs])
+			sub_cache = {}
+			for worker_ui, global_ui in enumerate(uis_of_interest):
+				try:
+					sub_cache[worker_ui] = self.calc_cache.all_caches['parents_on'][global_ui] 
+				except KeyError:
+					pass
 			msg = pickle.dumps(('update_parent_tracker', sub_cache))
 			worker_socket.send(msg)
 			worker_socket.recv()
@@ -333,3 +359,5 @@ class Optimal_Adv_Wrapper:
 		resilience_benefit = self.get_ground_truth_resilience_benefit(a)
 		# print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
+
+

@@ -91,7 +91,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if np.array_equal(a, remeasure_a): verb = True
 		a_log = a.astype(bool)
 		self.ingress_probabilities[:,:,:] = 0
-		mprocess = kwargs.get('multiprocess',False)
+		mprocess = True#kwargs.get('multiprocess',False)
 		for pref_i in range(self.n_prefixes):
 			##### WARNING -- if number of UGs and number of popps is the same, there could be ambiguity with the broadcasting
 			##### but the likelihood of that event is pretty small
@@ -139,7 +139,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				nmlp = len(most_likely_peers)
 				for mlp,_ in most_likely_peers:
 					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
-			self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
 
 			# for ug in self.ugs:
 			# 	# perform a sort on these in particular
@@ -321,17 +321,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
 	def check_for_commands(self):
-		print("checking for commands in worker {}".format(self.worker_i))
+		# print("checking for commands in worker {}".format(self.worker_i))
 		try:
 			msg = self.main_socket.recv()
 		except zmq.error.Again:
 			return
 		msg = pickle.loads(msg)
 		cmd, data = msg
-		print("received command {} in worker {}".format(cmd, self.worker_i))
+		# print("received command {} in worker {}".format(cmd, self.worker_i))
 		if cmd == 'calc_lb':
-			args,kwargs = data
-			ret = self.latency_benefit(*args, **kwargs)
+			ret = []
+			for (args,kwargs) in data:
+				ret.append(self.latency_benefit(*args, **kwargs))
 		elif cmd == 'reset_new_meas_cache':
 			self.calc_cache.clear_new_measurement_caches()
 			ret = "ACK"

@@ -1,4 +1,4 @@
-import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, zmq
+import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, zmq, copy
 from bisect import bisect_left
 
 try:
@@ -13,6 +13,26 @@ except:
 
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
+
+def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
+	### Create a bunch of sub-deployment objects, each with a subset of UGs
+	ugs = deployment['ugs']
+	if limit is not None:
+		n_chunks = int(np.ceil(len(ugs) / limit))
+	ug_chunks = split_seq(ugs, n_chunks)
+
+	deployments = []
+	for ug_chunk in ug_chunks:
+		deployments.append({
+			'ugs': ug_chunk,
+			'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
+			'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
+			'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
+		})
+		for k in get_difference(deployment, deployments[-1]):
+			deployments[-1][k] = copy.copy(deployment[k])
+
+	return deployments
 
 class Calc_Cache():
 	### For caching results to computationally intensive tasks
