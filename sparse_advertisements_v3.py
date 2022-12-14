@@ -237,6 +237,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def flush_latency_benefit_queue(self):
 		msg = pickle.dumps(['calc_lb', self.lb_args_queue])
+		print("Sending message to workers with length : {}".format(len(msg)))
 		rets = self.send_receive_workers(msg)
 		### combine pdf rets across sub-deployments
 		n_to_flush = len(self.lb_args_queue)
@@ -321,7 +322,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		"""Approx actual objective with our belief."""
 		norm_penalty = self.advertisement_cost(a)
 		kwargs['retnow'] = True
-		latency_benefit,u = self.latency_benefit_fn(a,**kwargs)
+		latency_benefit,u = self.latency_benefit_fn(a, **kwargs)
 		resilience_benefit = self.resilience_benefit_fn(a)
 		# if kwargs.get('verb'):
 		# 	print("We believe: NP: {}, LB: {}".format(norm_penalty,latency_benefit))
@@ -654,7 +655,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.sigmoid_k = 5.0 # heavisside gradient parameter
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
-		max_support = self.n_popp * self.n_prefixes
+		max_support = 500#self.n_popp * self.n_prefixes
 		self.gradient_support_settings = {
 			'calc_every': 20,
 			'support_size': np.minimum(self.n_popp * self.n_prefixes,max_support), # setting this value to size(a) turns it off
@@ -1126,7 +1127,7 @@ def main():
 	try:
 		np.random.seed(31413)
 
-		dpsize = 'decent'
+		dpsize = 'med'
 		deployment = get_random_deployment(dpsize)
 
 

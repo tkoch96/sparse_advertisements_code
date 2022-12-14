@@ -321,14 +321,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
 	def check_for_commands(self):
-		# print("checking for commands in worker {}".format(self.worker_i))
+		print("checking for commands in worker {}".format(self.worker_i))
 		try:
 			msg = self.main_socket.recv()
+			print("Received message in worker with length : {}".format(len(msg)))
 		except zmq.error.Again:
 			return
 		msg = pickle.loads(msg)
 		cmd, data = msg
-		# print("received command {} in worker {}".format(cmd, self.worker_i))
+		print("received command {} in worker {}".format(cmd, self.worker_i))
 		if cmd == 'calc_lb':
 			ret = []
 			for (args,kwargs) in data:
@@ -364,7 +365,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def run(self):
 		while not self.stop:
 			self.check_for_commands()
-			time.sleep(.1)
+			time.sleep(.01)
 
 if __name__ == "__main__":
 	worker_i = int(sys.argv[1])
