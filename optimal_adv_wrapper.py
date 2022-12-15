@@ -63,6 +63,9 @@ class Optimal_Adv_Wrapper:
 	def send_receive_workers(self, msg):
 		return self.worker_manager.send_receive_workers(msg)
 
+	def send_receive_worker(self, worker_i, msg):
+		return self.worker_manager.send_receive_worker(worker_i, msg)
+
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
 		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
@@ -73,6 +76,11 @@ class Optimal_Adv_Wrapper:
 		except AttributeError:
 			# not initialized yet
 			pass
+
+	def clear_new_measurement_caches(self):
+		self.calc_cache.clear_new_measurement_caches()
+		msg = pickle.dumps(['reset_new_meas_cache',()])
+		self.send_receive_workers(msg)
 
 	def get_cache(self):
 		return self.calc_cache.get_cache()
@@ -93,9 +101,12 @@ class Optimal_Adv_Wrapper:
 
 	def update_deployment(self, deployment):
 		self.deployment = deployment
-		self.ugs = list(deployment['ug_perfs'])
+		self.ugs = list(deployment['ugs'])
 		self.n_ug = len(self.ugs)
+		self.whole_deployment_ugs = deployment['whole_deployment_ugs']
+		self.whole_deployment_n_ug = len(self.whole_deployment_ugs)
 		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
+		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
 		self.ug_perfs = deployment['ug_perfs']
 		# Shape of the variables
 		self.popps = list(set(deployment['popps']))
@@ -120,9 +131,13 @@ class Optimal_Adv_Wrapper:
 			for ug in self.ugs}
 
 		self.ug_to_vol = deployment['ug_to_vol']
+		self.whole_deployment_ug_to_vol = deployment['whole_deployment_ug_to_vol']
 		self.ug_vols = np.zeros(self.n_ug)
+		self.whole_deployment_ug_vols = np.zeros(self.whole_deployment_n_ug)
 		for ug, v in self.ug_to_vol.items():
 			self.ug_vols[self.ug_to_ind[ug]] = v
+		for ug, v in self.whole_deployment_ug_to_vol.items():
+			self.whole_deployment_ug_vols[self.whole_deployment_ug_to_ind[ug]] = v
 		all_vols = list(self.ug_to_vol.values())
 		self.vol_x = np.linspace(min(all_vols),max(all_vols))
 
@@ -146,6 +161,22 @@ class Optimal_Adv_Wrapper:
 			for popp in self.ug_perfs[self.ugs[ui]]:
 				if popp == 'anycast': continue
 				self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
+
+		try:
+			n_workers = self.get_n_workers()
+			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
+			for worker in range(n_workers):
+				if len(subdeployments[worker]['ugs']) == 0: continue
+				## It would be annoying to make the code work for cases in which a processor focuses on one user
+				assert len(subdeployments[worker]['ugs']) >= 1
+				# send worker startup information
+				self.worker_to_deployments[worker] = subdeployments[worker]
+				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
+				self.send_receive_worker(worker, msg)
+		except AttributeError:
+			# not initialized yet
+			pass
+
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
 
@@ -158,7 +189,7 @@ class Optimal_Adv_Wrapper:
 		"""
 		self.measured_latencies = np.zeros((self.n_popp, len(self.ugs)))
 		self.measured_latency_benefits = np.zeros((self.n_popp, len(self.ugs)))
-		total_vol = np.sum(self.ug_vols)
+		total_vol = np.sum(self.whole_deployment_ug_vols)
 		for ug in self.ugs:
 			ugi = self.ug_to_ind[ug]
 			for popp in self.popps:
@@ -317,7 +348,7 @@ class Optimal_Adv_Wrapper:
 			pass
 
 		## Reset benefit calculations cache since we now have more info
-		self.calc_cache.clear_new_measurement_caches()
+		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
 

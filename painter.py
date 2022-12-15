@@ -63,6 +63,12 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 			self.advs = advs
 
+		print(self.advs)
+		exit(0)
+		### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
+		painter_budget = self.n_prefixes - 1
+		for pref_i in range(painter_budget):
+			pass
 	def painter_v4(self, **kwargs):
 		# print("Solving for Painter v4 solution")
 

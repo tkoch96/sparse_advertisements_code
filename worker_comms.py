@@ -14,7 +14,7 @@ class Worker_Manager:
 
 	def get_n_workers(self):
 		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return multiprocessing.cpu_count() // 2
+		return 4#multiprocessing.cpu_count() // 2
 
 	def start_workers(self):
 		# self.worker_to_uis = {}
@@ -27,8 +27,7 @@ class Worker_Manager:
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
 			assert len(subdeployments[worker]['ugs']) >= 1
-
-			call("../congestion_analysis/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
+			call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
 			# send worker startup information
 			args = [subdeployments[worker]]
 			self.worker_to_deployments[worker] = subdeployments[worker]
@@ -78,3 +77,14 @@ class Worker_Manager:
 			if len(rets) == n_workers:
 				break
 		return rets
+
+	def send_receive_worker(self, worker_i, msg):
+		self.worker_sockets[worker_i].send(msg)
+		while True:
+			try:
+				ret = pickle.loads(self.worker_sockets[worker].recv())
+				break
+			except: # Timeout, must be stll calculating
+				time.sleep(.1)
+				pass
+		return ret

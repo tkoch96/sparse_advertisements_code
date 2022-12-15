@@ -28,7 +28,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Latency benefit is -1 * mean latency, so latency benefits must lie in this region
 		# TODO : what is the right granularity?
-		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=1000)
+		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=LBX_DENSITY)
 
 		self.stop = False
 		self.calc_cache = Calc_Cache()
@@ -50,38 +50,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		msg_decoded = pickle.loads(init_msg)
 		_, data = msg_decoded
 		return data
-
-	# def update_deployment(self, deployment):
-	# 	self.ugs = list(deployment['ug_perfs'])
-	# 	self.n_ug = len(self.ugs)
-	# 	self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
-	# 	self.popps = list(set(deployment['popps']))
-	# 	self.n_popp = len(get_difference(self.popps,['anycast']))
-	# 	self.n_prefixes = np.maximum(2,self.n_popp // 3)
-	# 	self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
-	# 	self.metro_loc = deployment['metro_loc']
-	# 	self.pop_to_loc = deployment['pop_to_loc']
-	# 	self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
-	# 	self.ug_perfs = deployment['ug_perfs']
-
-	# 	self.ug_to_vol = deployment['ug_to_vol']
-	# 	self.ug_vols = np.zeros(self.n_ug)
-	# 	for ug, v in self.ug_to_vol.items():
-	# 		self.ug_vols[self.ug_to_ind[ug]] = v
-	# 	all_vols = list(self.ug_to_vol.values())
-	# 	self.vol_x = np.linspace(min(all_vols),max(all_vols))
-
-	# 	self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
-	# 	self.link_capacities_arr = np.zeros(self.n_popp)
-	# 	for poppi, cap in self.link_capacities.items():
-	# 		self.link_capacities_arr[poppi] = cap
-
-	# 	self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
-	# 	for ui in range(self.n_ug):
-	# 		for popp in self.ug_perfs[self.ugs[ui]]:
-	# 			if popp == 'anycast': continue
-	# 			self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
-	# 	self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
@@ -245,9 +213,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 	ax[1].plot(p_vol_this_ingress)
 			# 	plt.show()
 
-		# if kwargs.get('verb'):
-		# 	print("PLF: {}".format(p_link_fails))
-		
 		## holds P(latency benefit) for each user
 		px = np.zeros((len(lbx), self.n_ug))
 
@@ -296,8 +261,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		px = px / (np.sum(px,axis=0) + 1e-8)
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		psumx = sum_pdf_new(px)
-		# print(px)
-		# print(psumx);exit(0)
 		### pmf of benefits is now xsumx with probabilities psumx
 		xsumx = self.lbx * self.n_ug # possible average benefits across users
 
@@ -318,18 +281,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+		
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
 	def check_for_commands(self):
-		print("checking for commands in worker {}".format(self.worker_i))
+		# print("checking for commands in worker {}".format(self.worker_i))
 		try:
 			msg = self.main_socket.recv()
-			print("Received message in worker with length : {}".format(len(msg)))
+			# print("Received message in worker with length : {}".format(len(msg)))
 		except zmq.error.Again:
 			return
 		msg = pickle.loads(msg)
 		cmd, data = msg
-		print("received command {} in worker {}".format(cmd, self.worker_i))
+		# print("received command {} in worker {}".format(cmd, self.worker_i))
 		if cmd == 'calc_lb':
 			ret = []
 			for (args,kwargs) in data:

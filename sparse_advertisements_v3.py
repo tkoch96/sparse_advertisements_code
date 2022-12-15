@@ -141,10 +141,13 @@ def get_random_deployment(problem_size):
 	sig = mu / 10
 	link_capacities = {popp: mu + sig * np.random.normal() for popp in popps}
 	print("----Done Creating Random Deployment-----")
+	ugs = list(ug_to_vol)
 	return {
-		'ugs': list(ug_to_vol),
+		'ugs': ugs,
 		'ug_perfs': ug_perfs,
 		'ug_to_vol': ug_to_vol,
+		'whole_deployment_ugs': ugs,
+		'whole_deployment_ug_to_vol': ug_to_vol,
 		'link_capacities': link_capacities,
 		'ingress_priorities': ingress_priorities,
 		'popps': popps,
@@ -237,33 +240,72 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def flush_latency_benefit_queue(self):
 		msg = pickle.dumps(['calc_lb', self.lb_args_queue])
-		print("Sending message to workers with length : {}".format(len(msg)))
+		# print("Sending message to workers with length : {}".format(len(msg)))
 		rets = self.send_receive_workers(msg)
+		n_workers = len(rets) 
 		### combine pdf rets across sub-deployments
 		n_to_flush = len(self.lb_args_queue)
 		ret_to_call = [None for _ in range(n_to_flush)]
 		pdfs = [[None for _ in range(self.get_n_workers())] for _ in range(n_to_flush)]
+
+		min_val, max_val = np.inf*np.ones(n_to_flush), -1*np.inf*np.ones(n_to_flush)
+		vals_by_worker = {}
 		for worker_i,ret in enumerate(rets.values()): # n workers times
+			vals_by_worker[worker_i] = {}
 			for adv_ret_i in range(n_to_flush): # n calls times
 				lbret = ret[adv_ret_i]
-				## TODO -- update cache?
+				# need to (a) convert each pdf to be the same x array
+				# (b) get cumulativer vals array as individual vals * n_rets
 				mean, (vals,pdf) = lbret
 				pdfs[adv_ret_i][worker_i] = pdf
+				min_val[adv_ret_i] = np.minimum(vals[0], min_val[adv_ret_i])
+				max_val[adv_ret_i] = np.maximum(vals[-1], max_val[adv_ret_i])
+				vals_by_worker[worker_i][adv_ret_i] = (vals[0], vals[-1])
+
+		### Convert all pdfs to be at the same scale
+		lbx = np.zeros((n_to_flush, LBX_DENSITY))
+		inds = np.arange(LBX_DENSITY)
+		for adv_ret_i in range(n_to_flush):
+			new_max, new_min = max_val[adv_ret_i], min_val[adv_ret_i]
+			lbx[adv_ret_i,:] = np.linspace(new_min, new_max, LBX_DENSITY)
+			for worker_i in range(n_workers):
+				rescaled_pdf = np.zeros(pdfs[adv_ret_i][worker_i].shape)
+				old_min, old_max = vals_by_worker[worker_i][adv_ret_i]
+				remap_arr = (old_min + inds * (old_max - old_min) / LBX_DENSITY - new_min) * LBX_DENSITY / (new_max - new_min)
+				remap_arr = np.round(remap_arr).astype(np.int32)
+				for lbx_i in range(LBX_DENSITY):
+					rescaled_pdf[remap_arr[lbx_i]] += pdfs[adv_ret_i][worker_i][lbx_i] 
+				pdfs[adv_ret_i][worker_i] = rescaled_pdf
+
+
+		# total benefit is sum aross all benefits
+		lbx = lbx * n_workers
+		
 		for adv_ret_i in range(n_to_flush):
 			## point density x number of cores
-			px = np.zeros((len(vals), len(pdfs[adv_ret_i])))
+			px = np.zeros((LBX_DENSITY, len(pdfs[adv_ret_i])))
 			for sdi in range(len(pdfs[adv_ret_i])):
 				px[:,sdi] = pdfs[adv_ret_i][sdi]
 			if px.shape[1] > 1:
-				px = sum_pdf_new(px) ## Do I need to care about user volume here?
-			mean = np.sum(px.flatten()*vals.flatten())
-			ret_to_call[adv_ret_i] = (mean, (vals.flatten(), px.flatten()))
+				px = sum_pdf_new(px)
+			mean = np.sum(px.flatten()*lbx[adv_ret_i,:].flatten())
+			ret_to_call[adv_ret_i] = (mean, (lbx[adv_ret_i,:].flatten(), px.flatten()))
+		
+		# if n_to_flush > 1:
+		# 	print(min_val[0])
+		# 	print(max_val[0])
+		# 	print([vals_by_worker[worker_i][0] for worker_i in range(n_workers)])
+		# 	for pdf in pdfs[0]:
+		# 		print(pdf)
+		# 		print(lbx[0,np.argmax(pdf)] / n_workers)
+		# 	print(ret_to_call[0])
+		# 	exit(0)
 		self.lb_args_queue = []
 		self.get_cache()
 		return ret_to_call
 
 	def latency_benefit(self, *args, **kwargs):
-		self.lb_args_queue.append((args,kwargs))
+		self.lb_args_queue.append((copy.deepcopy(args),copy.deepcopy(kwargs)))
 		if kwargs.get('retnow', False):
 			return self.flush_latency_benefit_queue()[0]
 
@@ -539,8 +581,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['sparse'].append(self.sparse_solution['latency_benefit'])
 			metrics['norm_penalties']['sparse'].append(self.sparse_solution['norm_penalty'])
 
-			
-
 			## Extremes
 			self.solve_extremes(verbose=verbose)
 			metrics['sparse_objective_vals']['maximal'].append(self.extreme['maximal_objective'])
@@ -549,7 +589,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['minimal'].append(self.get_ground_truth_latency_benefit(self.extreme['minimal_advertisement']))
 
 			### Add old objective values to see how differences in what we optimize shape optimality
-			for k,adv in zip(['sparse', 'painter', 'anyopt', 'minimal', 'maximal'], [sparse_adv, self.painter_solution['advertisement'],
+			for k,adv in zip(['sparse', 'painter', 'anyopt', 'minimal', 'maximal'], [self.sparse_solution['advertisement'], self.painter_solution['advertisement'],
 				self.anyopt_solution['advertisement'], self.extreme['minimal_advertisement'], self.extreme['maximal_advertisement']]):
 				metrics['painter_objective_vals'][k].append(self.painter_objective(adv))
 				metrics['anyopt_objective_vals'][k].append(self.anyopt_objective(adv))
@@ -569,7 +609,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			## Update to new random deployment
 			new_deployment = get_random_deployment(kwargs.get('deployment_size','small'))
 			self.update_deployment(new_deployment)
-			self.sas.update_deployment(new_deployment)
 			print(metrics['sparse_objective_vals'])
 		print(metrics)
 		pickle.dump(metrics, open('cache/method_comparison_metrics.pkl','wb'))
@@ -655,7 +694,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.sigmoid_k = 5.0 # heavisside gradient parameter
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
-		max_support = 500#self.n_popp * self.n_prefixes
+		max_support = self.n_popp * self.n_prefixes
 		self.gradient_support_settings = {
 			'calc_every': 20,
 			'support_size': np.minimum(self.n_popp * self.n_prefixes,max_support), # setting this value to size(a) turns it off
@@ -713,6 +752,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				calls.append(((a_i,a_j), 'ab'))
 			a_effective[a_i,a_j] = a_ij
 		all_lb_rets = self.flush_latency_benefit_queue()
+
 		for i, call_ind in enumerate(calls):
 			ind, before_then_after = call_ind
 			if before_then_after == 'ba':
@@ -722,7 +762,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
 			L_grad[ind] = self.heaviside_gradient(before, after, a[ind])
-
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			self.update_gradient_support(L_grad)
 
@@ -1115,8 +1154,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			self.t_per_iter = (time.time() - t_start) / self.iter
 
-			if self.iter % 10 == 0 and self.verbose:
-				print("Optimizing, iter: {}, t_per_iter : {}".format(self.iter, self.t_per_iter))
+			if self.iter % 1 == 0 and self.verbose:
+				print("Optimizing, iter: {}, t_per_iter : {}, GTO: {}".format(self.iter, self.t_per_iter, self.metrics['actual_nonconvex_objective'][-1]))
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}, {} path measures, O:{}".format(
@@ -1127,18 +1166,18 @@ def main():
 	try:
 		np.random.seed(31413)
 
-		dpsize = 'med'
+		dpsize = 'small'
 		deployment = get_random_deployment(dpsize)
 
 
-		# # Comparing different solutions
+		# ## Comparing different solutions
 		# lambduh = .1
 		# sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 		# 	lambduh=lambduh,with_capacity=False)
 		# wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		# wm.start_workers()
 		# sas.set_worker_manager(wm)
-		# sas.compare_different_solutions(deployment_size=dpsize,n_run=100)
+		# sas.compare_different_solutions(deployment_size=dpsize,n_run=5)
 		# exit(0)
 
 
