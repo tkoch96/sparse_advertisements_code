@@ -316,7 +316,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = "ACK"
 		elif cmd == 'init':
 			self.start_connection()
-			ret = 'ACk'
+			return
 		elif cmd == 'end':
 			self.stop = True
 			self.main_socket.close()

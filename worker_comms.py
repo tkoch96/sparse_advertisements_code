@@ -14,7 +14,7 @@ class Worker_Manager:
 
 	def get_n_workers(self):
 		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return 4#multiprocessing.cpu_count() // 2
+		return 1#multiprocessing.cpu_count() // 2
 
 	def start_workers(self):
 		# self.worker_to_uis = {}
@@ -27,21 +27,25 @@ class Worker_Manager:
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
 			assert len(subdeployments[worker]['ugs']) >= 1
-			call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
+			# call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
+			call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
 			# send worker startup information
 			args = [subdeployments[worker]]
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			kwargs = self.get_init_kwa()
 			self.worker_sockets[worker] = context.socket(zmq.REQ)
 			self.worker_sockets[worker].setsockopt(zmq.RCVTIMEO, 1000)
+			self.worker_sockets[worker].connect('tcp://localhost:{}'.format(BASE_SOCKET+worker))
+			msg = pickle.dumps(('init',(args,kwargs)))
+			self.worker_sockets[worker].send(msg)
 			while True:
-				self.worker_sockets[worker].connect('tcp://localhost:{}'.format(BASE_SOCKET+worker))
-				msg = pickle.dumps(('init',(args,kwargs)))
-				self.worker_sockets[worker].send(msg)
-				time.sleep(1)
-				msg = pickle.loads(self.worker_sockets[worker].recv())
-				if msg == 'ACK':
-					break
+				try:
+					msg = pickle.loads(self.worker_sockets[worker].recv())
+					if msg == 'ACK':
+						break
+				except:
+					time.sleep(.1)
+	
 
 	def stop_workers(self):
 		for worker, socket in self.worker_sockets.items():

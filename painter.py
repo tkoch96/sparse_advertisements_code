@@ -63,12 +63,18 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 			self.advs = advs
 
-		print(self.advs)
-		exit(0)
 		### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
 		painter_budget = self.n_prefixes - 1
+		advs_cp = copy.deepcopy(self.advs)
 		for pref_i in range(painter_budget):
-			pass
+			advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
+			## We can measure these objectives, since we've already measured all these advertisement configurations
+			if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp)) < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs)):
+				## go with this solution
+				self.advs = copy.deepcopy(advs_cp)
+			else:
+				break
+
 	def painter_v4(self, **kwargs):
 		# print("Solving for Painter v4 solution")
 
