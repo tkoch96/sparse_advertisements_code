@@ -174,9 +174,8 @@ class Optimal_Adv_Wrapper:
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
 		except AttributeError:
-			# not initialized yet
+			# not initialized yet, or a worker bee
 			pass
-
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
 

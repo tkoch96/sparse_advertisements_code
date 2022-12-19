@@ -472,7 +472,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			adv = self.init_advertisement()
 		else:
 			adv = init_adv
-	
 		self.sas.update_deployment(self.deployment)			
 		self.sas.set_worker_manager(self.get_worker_manager())
 		self.sas.solve(init_adv=adv)
@@ -1155,7 +1154,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			self.t_per_iter = (time.time() - t_start) / self.iter
 
-			if self.iter % 10 == 0 and self.verbose:
+			if self.iter % 50 == 0 and self.verbose:
 				print("Optimizing, iter: {}, t_per_iter : {}, GTO: {}".format(self.iter, self.t_per_iter, self.metrics['actual_nonconvex_objective'][-1]))
 
 		if self.verbose:
