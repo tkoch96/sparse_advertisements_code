@@ -27,8 +27,8 @@ class Worker_Manager:
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
 			assert len(subdeployments[worker]['ugs']) >= 1
-			# call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
-			call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True)
+			call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # VMs
+			# call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # home PC
 			# send worker startup information
 			args = [subdeployments[worker]]
 			self.worker_to_deployments[worker] = subdeployments[worker]
@@ -44,7 +44,7 @@ class Worker_Manager:
 					if msg == 'ACK':
 						break
 				except:
-					time.sleep(.1)
+					time.sleep(.5)
 	
 
 	def stop_workers(self):
@@ -86,7 +86,7 @@ class Worker_Manager:
 		self.worker_sockets[worker_i].send(msg)
 		while True:
 			try:
-				ret = pickle.loads(self.worker_sockets[worker].recv())
+				ret = pickle.loads(self.worker_sockets[worker_i].recv())
 				break
 			except: # Timeout, must be stll calculating
 				time.sleep(.1)

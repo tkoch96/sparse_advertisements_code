@@ -170,13 +170,12 @@ class Optimal_Adv_Wrapper:
 				## It would be annoying to make the code work for cases in which a processor focuses on one user
 				assert len(subdeployments[worker]['ugs']) >= 1
 				# send worker startup information
-				self.worker_to_deployments[worker] = subdeployments[worker]
+				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
 		except AttributeError:
-			# not initialized yet
+			# not initialized yet, or a worker bee
 			pass
-
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
 
