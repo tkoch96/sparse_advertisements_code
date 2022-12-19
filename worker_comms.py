@@ -86,7 +86,7 @@ class Worker_Manager:
 		self.worker_sockets[worker_i].send(msg)
 		while True:
 			try:
-				ret = pickle.loads(self.worker_sockets[worker].recv())
+				ret = pickle.loads(self.worker_sockets[worker_i].recv())
 				break
 			except: # Timeout, must be stll calculating
 				time.sleep(.1)

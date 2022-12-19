@@ -93,6 +93,7 @@ def err_adv(adv1,adv2):
 def do_eval_compare_explores():
 	N_SIM = 10
 	lambduh = .1
+	dpsize = 'really_friggin_small'
 	explores = ['other_bimodality','gmm','positive_benefit', 'entropy', 'bimodality']
 	hr_labs = ['other_bimodality','gmm',"Positive Benefit", "Entropy", "Bimodality"]
 	
@@ -108,9 +109,13 @@ def do_eval_compare_explores():
 			'obj': [],
 		}
 		for _i in range(N_SIM):
-			sae = Sparse_Advertisement_Eval(get_random_deployment('really_friggin_small'), 
-				lambduh=lambduh,verbose=False,with_capacity=False, explore=explore,n_prefixes=2)
-			ret = sae.compare_different_solutions(n_run=1,verbose=False)
+			deployment = get_random_deployment(dpsize)
+			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
+				lambduh=lambduh,with_capacity=False,explore=explore)
+			wm = Worker_Manager(sas.get_init_kwa(), deployment)
+			wm.start_workers()
+			sas.set_worker_manager(wm)
+			ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=False)
 			our_adv = sae.threshold_a(ret['advertisements']['sparse'][0])
 			metrics[explore_i]['obj'].append(ret['objectives']['sparse'][0])
 			metrics[explore_i]['n_advs'].append(sae.sas.path_measures)

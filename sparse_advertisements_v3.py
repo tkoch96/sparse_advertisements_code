@@ -472,11 +472,12 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			adv = self.init_advertisement()
 		else:
 			adv = init_adv
-			
+	
+		self.sas.update_deployment(self.deployment)			
 		self.sas.set_worker_manager(self.get_worker_manager())
 		self.sas.solve(init_adv=adv)
 		self.sas.make_plots()
-		
+
 		sparse_adv = threshold_a(self.sas.get_last_advertisement())
 		sparse_objective = self.measured_objective(sparse_adv)
 
@@ -496,11 +497,11 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		improves = np.array([perf['anycast'] - user_latencies[self.ug_to_ind[ug]] for \
 			ug,perf in self.deployment['ug_perfs_with_anycast'].items()])
 		mean_improve = np.sum(improves * self.ug_vols) / np.sum(self.ug_vols)
-		return mean_improve
+		return -1 * mean_improve
 
 	def anyopt_objective(self, a):
 		## Latency benefit
-		return self.get_ground_truth_latency_benefit(a)
+		return -1 * self.get_ground_truth_latency_benefit(a)
 
 	def solve_painter(self, **kwargs):
 		## Solve for the painter solution

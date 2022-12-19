@@ -107,7 +107,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				nmlp = len(most_likely_peers)
 				for mlp,_ in most_likely_peers:
 					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
-			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+			self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
 
 			# for ug in self.ugs:
 			# 	# perform a sort on these in particular
