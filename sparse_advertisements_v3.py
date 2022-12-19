@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance
+import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, warnings
 from subprocess import call, check_output
 np.setbufsize(262144*8)
 import scipy.stats
@@ -609,8 +609,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			## Update to new random deployment
 			new_deployment = get_random_deployment(kwargs.get('deployment_size','small'))
 			self.update_deployment(new_deployment)
-			print(metrics['sparse_objective_vals'])
-		print(metrics)
+			if verbose:
+				print(metrics['sparse_objective_vals'])
+		if verbose:
+			print(metrics)
 		pickle.dump(metrics, open('cache/method_comparison_metrics.pkl','wb'))
 		if verbose:
 			plt.rcParams["figure.figsize"] = (10,5)

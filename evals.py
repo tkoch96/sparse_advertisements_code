@@ -1,9 +1,7 @@
 from constants import *
+from helpers import *
 
 import pickle, numpy as np, matplotlib.pyplot as plt
-plt.rcParams.update({
-    "text.usetex": True
-})
 
 N_SIM = 50
 
@@ -91,61 +89,68 @@ def err_adv(adv1,adv2):
 
 
 def do_eval_compare_explores():
-	N_SIM = 10
-	lambduh = .1
-	dpsize = 'really_friggin_small'
-	explores = ['other_bimodality','gmm','positive_benefit', 'entropy', 'bimodality']
-	hr_labs = ['other_bimodality','gmm',"Positive Benefit", "Entropy", "Bimodality"]
-	
-	metrics = {}
-	metrics_fn = os.path.join(CACHE_DIR, 'compare_explores.pkl')
-	if os.path.exists(metrics_fn):
-		metrics = pickle.load(open(metrics_fn,'rb'))
+	for lambduh in [.01,.1]:
+		N_SIM = 40
+		lambduh = .1
+		dpsize = 'really_friggin_small'
+		explores = ['other_bimodality','gmm','positive_benefit', 'entropy', 'bimodality']
+		hr_labs = ['other_bimodality','gmm',"Positive Benefit", "Entropy", "Bimodality"]
+		
+		metrics = {}
+		metrics_fn = os.path.join(CACHE_DIR, 'compare_explores_{}_{}.pkl'.format(lambduh,dpsize))
+		if os.path.exists(metrics_fn):
+			metrics = pickle.load(open(metrics_fn,'rb'))
 
-	for explore_i, explore in enumerate(explores):
-		if explore_i in metrics: continue
-		metrics[explore_i] = {
-			'n_advs': [],
-			'obj': [],
-		}
-		for _i in range(N_SIM):
-			deployment = get_random_deployment(dpsize)
-			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
-				lambduh=lambduh,with_capacity=False,explore=explore)
-			wm = Worker_Manager(sas.get_init_kwa(), deployment)
-			wm.start_workers()
-			sas.set_worker_manager(wm)
-			ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=False)
-			our_adv = sae.threshold_a(ret['advertisements']['sparse'][0])
-			metrics[explore_i]['obj'].append(ret['objectives']['sparse'][0])
-			metrics[explore_i]['n_advs'].append(sae.sas.path_measures)
-	pickle.dump(metrics,open(metrics_fn,'wb'))
+		for explore_i, explore in enumerate(explores):
+			if explore_i in metrics: continue
+			metrics[explore_i] = {
+				'n_advs': [],
+				'obj': [],
+			}
+			for _i in range(N_SIM):
+				deployment = get_random_deployment(dpsize)
+				sas = Sparse_Advertisement_Eval(deployment, verbose=False,
+					lambduh=lambduh,with_capacity=False,explore=explore)
+				try:
+					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+					wm.start_workers()
+					sas.set_worker_manager(wm)
+					ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=False)
+				except:
+					import traceback
+					traceback.print_exc()
+				finally:
+					wm.stop_workers()
+				our_adv = threshold_a(ret['adv_solns']['sparse'][0])
+				metrics[explore_i]['obj'].append(ret['sparse_objective_vals']['sparse'][0])
+				metrics[explore_i]['n_advs'].append(ret['n_advs']['sparse'][0])
+		pickle.dump(metrics,open(metrics_fn,'wb'))
 
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	for i in metrics:
-		obj = metrics[i]['obj']
-		x,cdf_x = get_cdf_xy(obj)
-		ax.plot(x,cdf_x,c=cols[2*i+1],label=hr_labs[i].capitalize())
-	ax.legend()
-	ax.set_ylim([0,1.0])
-	ax.grid(True)
-	ax.set_xlabel("Objective Function Value")
-	ax.set_ylabel("CDF of Trials")
-	save_fig("compare_explores_objective.pdf")
+		plt.rcParams["figure.figsize"] = (10,5)
+		plt.rcParams.update({'font.size': 22})
+		f,ax=plt.subplots(1,1)
+		for i in metrics:
+			obj = metrics[i]['obj']
+			x,cdf_x = get_cdf_xy(obj)
+			ax.plot(x,cdf_x,c=cols[2*i+1],label=hr_labs[i].capitalize())
+		ax.legend()
+		ax.set_ylim([0,1.0])
+		ax.grid(True)
+		ax.set_xlabel("Objective Function Value")
+		ax.set_ylabel("CDF of Trials")
+		save_fig("compare_explores_objective_{}.pdf".format(lambduh))
 
-	plt.rcParams["figure.figsize"] = (10,5)
-	plt.rcParams.update({'font.size': 22})
-	f,ax=plt.subplots(1,1)
-	for i in metrics:
-		obj,n_adv = metrics[i]['obj'],metrics[i]['n_advs']
-		ax.scatter(obj,n_adv,c=cols[2*i+1],label=hr_labs[i].capitalize())
-	ax.legend()
-	ax.grid(True)
-	ax.set_xlabel("Objective Function")
-	ax.set_ylabel("Number of Advs")
-	save_fig("compare_explores_nadv_obj_scatter.pdf")
+		plt.rcParams["figure.figsize"] = (10,5)
+		plt.rcParams.update({'font.size': 22})
+		f,ax=plt.subplots(1,1)
+		for i in metrics:
+			obj,n_adv = metrics[i]['obj'],metrics[i]['n_advs']
+			ax.scatter(obj,n_adv,c=cols[2*i+1],label=hr_labs[i].capitalize())
+		ax.legend()
+		ax.grid(True)
+		ax.set_xlabel("Objective Function")
+		ax.set_ylabel("Number of Advs")
+		save_fig("compare_explores_nadv_obj_scatter_{}.pdf".format(lambduh))
 
 def do_eval_compare_initializations():
 	lambduh = .1

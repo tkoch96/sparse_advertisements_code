@@ -31,7 +31,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 				randomly_active = [self.provider_popps[ra] for ra in randomly_active]
 				randomly_active = np.array([self.popp_to_ind[ra] for ra in randomly_active])
 				random_adv[randomly_active, prefi] = 1
-			this_adv_obj = self.get_ground_truth_latency_benefit(random_adv)
+			this_adv_obj = self.measured_objective(random_adv)
 			if best_adv is None:
 				best_adv = random_adv
 				best_obj = this_adv_obj
@@ -55,7 +55,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 			# In practice we could parallelize this across prefixes
 			# but for now it's easier to implement this way (code reuse)
 			best_adv[self.popp_to_ind[popp],:] = 1
-			obj_after = self.get_ground_truth_latency_benefit(best_adv)
+			obj_after = self.measured_objective(best_adv)
 			if obj_after < best_obj:
 				keep_popp.append(popp)
 			best_adv[self.popp_to_ind[popp],:] = 0
