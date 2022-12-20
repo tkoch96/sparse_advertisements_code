@@ -448,7 +448,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		}
 
 	def solve_anyopt(self, **kwargs):
-		self.anyopt = Anyopt_Adv_Solver(self.deployment, lambduh=self.lambduh, gamma=self.gamma)
+		self.anyopt = Anyopt_Adv_Solver(self.deployment, lambduh=self.lambduh, gamma=self.gamma, n_prefixes=self.n_prefixes)
 		self.anyopt.set_worker_manager(self.get_worker_manager())
 		self.anyopt.solve()
 
@@ -506,15 +506,11 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		## Solve for the painter solution
 		# painter is an improvement over anycast, so it has one less prefix to work with
 		# and its assumed the first column will be anycast
-		ugperf_copy = copy.deepcopy(self.ug_perfs)
-		for ug in self.ug_perfs:
-			anycast_ingress = [popp for popp,priority in self.ground_truth_ingress_priorities[ug].items() \
-				if priority == 0][0]
-			ugperf_copy[ug]['anycast'] = ugperf_copy[ug][anycast_ingress]
-		self.deployment['ug_perfs_with_anycast'] = ugperf_copy
-		deployment = copy.copy(self.deployment)
-		deployment['ug_perfs'] = ugperf_copy
-		self.painter = Painter_Adv_Solver(deployment, lambduh=self.lambduh, gamma=self.gamma)
+		ugperfs_with_anycast = self.get_ug_perfs_with_anycast()
+		self.deployment['ug_perfs_with_anycast'] = ugperfs_with_anycast
+		deployment = copy.deepcopy(self.deployment)
+		deployment['ug_perfs'] = ugperfs_with_anycast
+		self.painter = Painter_Adv_Solver(deployment, lambduh=self.lambduh, gamma=self.gamma, n_prefixes=self.n_prefixes)
 		self.painter.set_worker_manager(self.get_worker_manager())
 
 		self.painter.painter_v5(cd=2000)
@@ -545,7 +541,8 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'objective_diffs': {k:[] for k in solution_types},
 			'latency_benefit_diffs': {k:[]for k in solution_types},
 			'n_advs': {k:[] for k in solution_types},
-			'adv_solns': {k:[] for k in solution_types}
+			'adv_solns': {k:[] for k in solution_types},
+			'max_benefits': [],
 		}
 		for i in range(kwargs.get('n_run', 50)):
 			if verbose:
@@ -605,6 +602,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 					metrics['sparse_objective_vals']['sparse'][-1])
 				metrics['latency_benefit_diffs'][k].append(metrics['latency_benefits'][k][-1] - \
 					metrics['latency_benefits']['sparse'][-1])
+
+			### Best latency for every user
+			max_benefit = self.get_max_painter_benefit()
+			metrics['max_benefits'].append(max_benefit)
 
 			## Update to new random deployment
 			new_deployment = get_random_deployment(kwargs.get('deployment_size','small'))

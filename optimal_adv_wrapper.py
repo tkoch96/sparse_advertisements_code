@@ -47,6 +47,7 @@ class Optimal_Adv_Wrapper:
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
+		self.n_prefixes = kwargs.get('n_prefixes')
 
 		self.calc_cache = Calc_Cache()
 		self.update_deployment(deployment)	
@@ -114,7 +115,8 @@ class Optimal_Adv_Wrapper:
 		self.provider_popps = deployment['provider_popps']
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
 		self.n_popp = len(get_difference(self.popps,['anycast']))
-		self.n_prefixes = np.maximum(2,self.n_popp // 3)
+		if self.n_prefixes is None:
+			self.n_prefixes = np.maximum(2,self.n_popp // 3)
 		self.n_providers = deployment['n_providers'] # number of provider ASes
 		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
 
@@ -214,6 +216,23 @@ class Optimal_Adv_Wrapper:
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
 		benefit = self.benefit_from_user_latencies(user_latencies)
 		return benefit
+
+	def get_ug_perfs_with_anycast(self):
+		ugperf_copy = copy.deepcopy(self.ug_perfs)
+		for ug in self.ug_perfs:
+			anycast_ingress = [popp for popp,priority in self.ground_truth_ingress_priorities[ug].items() \
+				if priority == 0][0]
+			ugperf_copy[ug]['anycast'] = ugperf_copy[ug][anycast_ingress]
+		return ugperf_copy
+
+	def get_max_painter_benefit(self):
+		max_improve_over_anycast = 0
+		ug_anycast_perfs = self.get_ug_perfs_with_anycast()
+		for ug in self.ugs:
+			best_user_latency = np.min(list(self.ug_perfs[ug].values()))
+			max_improve_over_anycast += (ug_anycast_perfs[ug]['anycast'] - best_user_latency) * self.ug_to_vol[ug]
+		max_improve_over_anycast = max_improve_over_anycast / np.sum(self.ug_vols)
+		return max_improve_over_anycast
 
 	def get_ground_truth_user_latencies(self, a, **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'

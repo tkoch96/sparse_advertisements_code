@@ -14,7 +14,7 @@ class Worker_Manager:
 
 	def get_n_workers(self):
 		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return 1#multiprocessing.cpu_count() // 2
+		return 8#multiprocessing.cpu_count() // 2
 
 	def start_workers(self):
 		# self.worker_to_uis = {}

@@ -91,7 +91,6 @@ def err_adv(adv1,adv2):
 def do_eval_compare_explores():
 	for lambduh in [.01,.1]:
 		N_SIM = 40
-		lambduh = .1
 		dpsize = 'really_friggin_small'
 		explores = ['other_bimodality','gmm','positive_benefit', 'entropy', 'bimodality']
 		hr_labs = ['other_bimodality','gmm',"Positive Benefit", "Entropy", "Bimodality"]
@@ -371,6 +370,53 @@ def do_eval_scale():
 	ax.set_ylabel("Number of Advertisements")
 	save_fig("scale_n_advs.pdf")
 
+def do_eval_improvement_over_budget():
+	dpsize = 'small'
+	metrics = {}
+	N_TO_SIM = 1
+	explore='bimodality'
+	lambduhs = [10,1,.1,.01,.001,.0001,.00001]
+	solution_types = ['sparse', 'anyopt', 'painter']
+	
+	wm = None
+		
+	try:
+		for lambduh in lambduhs:
+			metrics[lambduh] = {m: {st:[] for st in solution_types} for m in ['benefit','cost','max_benefit']}
+			for random_iter in range(N_TO_SIM):
+				deployment = get_random_deployment(dpsize)
+				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+					lambduh=lambduh,with_capacity=False,explore=explore,n_prefixes=len(deployment['popps']))
+				if wm is None:
+					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+					wm.start_workers()
+				sas.set_worker_manager(wm)
+				ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=False)
+				for st in solution_types:
+					metrics[lambduh]['benefit'][st].append(-1*ret['painter_objective_vals'][st][0])
+					metrics[lambduh]['cost'][st].append(ret['norm_penalties'][st][0])
+					metrics[lambduh]['max_benefit'][st].append(ret['max_benefits'][0])
+	except:
+		import traceback
+		traceback.print_exc()
+		exit(0)
+	finally:
+		wm.stop_workers()
+	print(metrics)
+	f,ax=plt.subplots(1,1)
+	for st in solution_types:
+		these_benefits = [np.median(np.array(metrics[lambduh]['benefit'][st]) * 100.0 \
+			/ np.array(metrics[lambduh]['max_benefit'][st])) for lambduh in lambduhs]
+		these_costs = [np.median(metrics[lambduh]['cost'][st]) for lambduh in lambduhs]
+		print(these_benefits)
+		print(these_costs)
+		ax.plot(these_costs, these_benefits,label=st)
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Cost")
+	ax.set_ylabel("Pct. Benefit")
+	save_fig("cost_vs_benefit.pdf")
+
 if __name__ == "__main__":
 	# all_args = []
 	# n_workers = multiprocessing.cpu_count() // 2
@@ -381,4 +427,5 @@ if __name__ == "__main__":
 	# all_rets = ppool.map(do_eval_compare_peer_value, all_args)
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
-	do_eval_compare_explores()
+	# do_eval_compare_explores()
+	do_eval_improvement_over_budget()
