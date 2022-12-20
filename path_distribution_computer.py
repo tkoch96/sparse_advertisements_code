@@ -58,6 +58,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		a = threshold_a(a.astype(np.int32))
 		if np.array_equal(a, remeasure_a): verb = True
 		a_log = a.astype(bool)
+
+
+
 		self.ingress_probabilities[:,:,:] = 0
 		mprocess = True#kwargs.get('multiprocess',False)
 		for pref_i in range(self.n_prefixes):
@@ -69,6 +72,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())]
 				continue
 			except KeyError:
+				try:
+					self.ingress_probabilities[:,pref_i,:] = self.this_time_ip_cache[tuple(a_log[:,pref_i].flatten())]
+					continue
+				except KeyError:
+					pass
 				pass
 			these_active_popps = np.expand_dims(a_log[:,pref_i],axis=1)
 			# active popps
@@ -107,7 +115,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				nmlp = len(most_likely_peers)
 				for mlp,_ in most_likely_peers:
 					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
-			self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+			self.this_time_ip_cache[tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
 
 			# for ug in self.ugs:
 			# 	# perform a sort on these in particular
@@ -280,7 +289,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			plt.show()
 
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
-		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
@@ -296,8 +305,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print("received command {} in worker {}".format(cmd, self.worker_i))
 		if cmd == 'calc_lb':
 			ret = []
+			self.this_time_ip_cache = {}
 			for (args,kwargs) in data:
 				ret.append(self.latency_benefit(*args, **kwargs))
+			del self.this_time_ip_cache
 		elif cmd == 'reset_new_meas_cache':
 			self.calc_cache.clear_new_measurement_caches()
 			ret = "ACK"
