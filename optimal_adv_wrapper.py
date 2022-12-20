@@ -1,4 +1,4 @@
-import numpy as np, time
+import numpy as np, time, tqdm
 np.setbufsize(262144*8)
 from constants import *
 from helpers import *
@@ -239,7 +239,7 @@ class Optimal_Adv_Wrapper:
 		user_latencies = NO_ROUTE_LATENCY * np.ones((len(self.ugs)))
 		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a)
 		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
-		for prefix_i in range(a.shape[1]):
+		for prefix_i in tqdm.tqdm(range(a.shape[1]),desc='calculating ground truth user latencies'):
 			for ugi,ug in enumerate(self.ugs):
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
 				if routed_ingress is None:
@@ -394,7 +394,10 @@ class Optimal_Adv_Wrapper:
 		cost_prefs = np.sum(has_pref) * c_peering
 		norm_penalty = cost_peerings + cost_prefs
 		latency_benefit = self.get_ground_truth_latency_benefit(a)
-		resilience_benefit = self.get_ground_truth_resilience_benefit(a)
+		if self.gamma > 0:
+			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
+		else:
+			resilience_beneift = 0
 
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
@@ -405,7 +408,10 @@ class Optimal_Adv_Wrapper:
 
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
-		resilience_benefit = self.get_ground_truth_resilience_benefit(a)
+		if self.gamma > 0:
+			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
+		else:
+			resilience_benefit = 0
 		# print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 

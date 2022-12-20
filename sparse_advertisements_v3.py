@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, warnings
+import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, warnings, tqdm
 from subprocess import call, check_output
 np.setbufsize(262144*8)
 import scipy.stats
@@ -156,6 +156,16 @@ def get_random_deployment(problem_size):
 		'n_providers': n_providers,
 		'provider_popps': provider_popps,
 	}
+
+
+DPSIZE = 'decent'
+PRINT_FREQUENCY = {
+	'really_friggin_small': 50,
+	'small': 5,
+	'decent': 1,
+	'med': 1,
+	'large': 1
+}[DPSIZE]
 
 def violates(ordering, bigger, smallers):
 	# ordering - list of ingresses
@@ -344,7 +354,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			obj_on = self.modeled_objective(a)
 			advs = {}
 			exclude = []
-			for i in range(self.n_popp):
+			for i in tqdm.tqdm(range(self.n_popp)):
 				a[i,:] = 0
 				if self.modeled_objective(a) < obj_on:
 					exclude.append(i)
@@ -733,7 +743,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	
 	def grad_latency_benefit(self, a):
 		L_grad = np.zeros(a.shape)
-		a_effective = threshold_a(a)
+		a_effective = threshold_a(a).astype(bool)
 
 		inds = self.gradient_support
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
@@ -745,12 +755,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			a_ij = a_effective[a_i,a_j] 
 			if not a_ij: # off
 				self.latency_benefit(a_effective)
-				a_effective[a_i,a_j] = 1
+				a_effective[a_i,a_j] = True
 				self.latency_benefit(a_effective)
 				calls.append(((a_i,a_j), 'ba'))
 			else: # on
 				self.latency_benefit(a_effective)
-				a_effective[a_i,a_j] = 0
+				a_effective[a_i,a_j] = False
 				self.latency_benefit(a_effective)
 				calls.append(((a_i,a_j), 'ab'))
 			a_effective[a_i,a_j] = a_ij
@@ -1116,7 +1126,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['advertisements'].append(copy.copy(advertisement))
 		while not self.stop:
 			# calculate gradients
-			# print("calcing grads")
+			print("calcing grads")
 			grads = self.gradient_fn(advertisement)
 			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
 			a_k = advertisement
@@ -1142,9 +1152,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			# Calculate, advertise & measure information about the prefix that would 
 			# give us the most new information
-			# print("finding max info")
+			print("finding max info")
 			maximally_informative_advertisement = self.solve_max_information(advertisement)
-			# print("measuring ingresses")
+			print("measuring ingresses")
 			if maximally_informative_advertisement is not None:
 				self.measure_ingresses(maximally_informative_advertisement)
 
@@ -1157,7 +1167,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			self.t_per_iter = (time.time() - t_start) / self.iter
 
-			if self.iter % 50 == 0 and self.verbose:
+			if self.iter % PRINT_FREQUENCY == 0 and self.verbose:
 				print("Optimizing, iter: {}, t_per_iter : {}, GTO: {}".format(self.iter, self.t_per_iter, self.metrics['actual_nonconvex_objective'][-1]))
 
 		if self.verbose:
@@ -1169,30 +1179,29 @@ def main():
 	try:
 		np.random.seed(31413)
 
-		dpsize = 'really_friggin_small'
-		deployment = get_random_deployment(dpsize)
+		deployment = get_random_deployment(DPSIZE)
 
 
-		## Comparing different solutions
-		lambduh = 1
-		sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-			lambduh=lambduh,with_capacity=False)
-		wm = Worker_Manager(sas.get_init_kwa(), deployment)
-		wm.start_workers()
-		sas.set_worker_manager(wm)
-		sas.compare_different_solutions(deployment_size=dpsize,n_run=5)
-		exit(0)
-
-
-		# ## Simple test
-		# lambduh = .01
-		# sas = Sparse_Advertisement_Solver(deployment, 
-		# 	lambduh=lambduh,verbose=True,with_capacity=False)
+		# ## Comparing different solutions
+		# lambduh = .001
+		# sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+		# 	lambduh=lambduh,with_capacity=False)
 		# wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		# wm.start_workers()
 		# sas.set_worker_manager(wm)
-		# sas.solve()
-		# sas.make_plots()
+		# sas.compare_different_solutions(deployment_size=DPSIZE,n_run=5)
+		# exit(0)
+
+
+		## Simple test
+		lambduh = .001
+		sas = Sparse_Advertisement_Solver(deployment, 
+			lambduh=lambduh,verbose=True,with_capacity=False)
+		wm = Worker_Manager(sas.get_init_kwa(), deployment)
+		wm.start_workers()
+		sas.set_worker_manager(wm)
+		sas.solve()
+		sas.make_plots()
 
 		# ## Capacity Test ( I think this works, but not positive )
 		# lambduh = .1
