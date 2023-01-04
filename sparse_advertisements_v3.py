@@ -268,7 +268,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 		# msg = pickle.dumps(['calc_lb', self.lb_args_queue])
 		msg = pickle.dumps(['calc_compressed_lb', self.compressed_lb_args_queue])
-		print("Sending message to workers with length : {}".format(len(msg)))
 		rets = self.send_receive_workers(msg)
 		n_workers = len(rets) 
 		### combine pdf rets across sub-deployments

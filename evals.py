@@ -370,9 +370,9 @@ def do_eval_scale():
 	ax.set_ylabel("Number of Advertisements")
 	save_fig("scale_n_advs.pdf")
 
-def do_eval_improvement_over_budget():
+def do_eval_improvement_over_budget_single_deployment():
 	np.random.seed(31414)
-	dpsize = 'small'
+	dpsize = 'really_friggin_small'
 	metrics = {}
 	N_TO_SIM = 1
 	explore='bimodality'
@@ -463,6 +463,96 @@ def do_eval_improvement_over_budget():
 	ax.set_ylabel("Pct. Benefit")
 	save_fig("cost_vs_benefit.pdf")
 
+def do_eval_improvement_over_budget_multi_deployment():
+	np.random.seed(31414)
+	dpsize = 'really_friggin_small'
+	metrics = {}
+	N_TO_SIM = 20
+	explore='bimodality'
+	lambduhs = list(reversed(np.logspace(-2,.3,num=10)))
+	solution_types = ['sparse', 'anyopt', 'painter']
+	
+	wm = None
+	
+	pcntles_of_interest = [70,90,95]
+	metrics_fn = os.path.join(CACHE_DIR, 'improvement_over_budget_multideployment_{}.pkl'.format(dpsize))
+	metrics = {'comparisons':{bt: {st: {p:[] for p in pcntles_of_interest} for st in solution_types} for bt in\
+		['sparse_benefit', 'painter_benefit']}}
+	if os.path.exists(metrics_fn):
+		metrics = pickle.load(open(metrics_fn,'rb'))
+	metrics['comparisons'] = {bt: {st: {p:[None for _ in range(N_TO_SIM)] for p in pcntles_of_interest} for st in solution_types} for bt in\
+		['sparse_benefit', 'painter_benefit']}
+
+	metric_keys = ['painter_benefit','cost','max_painter_benefit', 'sparse_benefit', 'max_sparse_benefit']
+
+
+
+	try:
+		for random_iter in range(N_TO_SIM):
+			print("-----Deployment number = {} -------".format(random_iter))
+			deployment = get_random_deployment(dpsize)
+			metrics[random_iter] = metrics.get(random_iter, {lambduh: {m: {st:None for st in solution_types} for \
+				m in metric_keys} for lambduh in lambduhs})
+			for lambduh in lambduhs:
+				if metrics[random_iter][lambduh]['sparse_benefit']['sparse'] is not None:
+					print("Already have metrics for {} {}, continuing".format(lambduh, random_iter))
+					continue
+				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+					lambduh=lambduh,with_capacity=False,explore=explore,n_prefixes=len(deployment['popps'])-1)
+				if wm is None:
+					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+					wm.start_workers()
+				sas.set_worker_manager(wm)
+				sas.update_deployment(deployment)
+				ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=True)
+				for st in solution_types:
+					metrics[random_iter][lambduh]['painter_benefit'][st] = -1*ret['painter_objective_vals'][st][0]
+					metrics[random_iter][lambduh]['cost'][st] = ret['norm_penalties'][st][0]
+					metrics[random_iter][lambduh]['max_painter_benefit'][st] = ret['max_painter_benefits'][0]
+					metrics[random_iter][lambduh]['sparse_benefit'][st] = ret['normalized_sparse_benefit'][st][0]
+					metrics[random_iter][lambduh]['max_sparse_benefit'][st] = ret['max_sparse_benefits'][0]
+				pickle.dump(metrics, open(metrics_fn,'wb'))
+			for st in solution_types:
+				for bt in ['sparse','painter']:
+					these_costs = [metrics[random_iter][lambduh]['cost'][st] for lambduh in lambduhs]
+					these_benefits = np.array([metrics[random_iter][lambduh]['{}_benefit'.format(bt)][st] * 100.0 \
+						/ metrics[random_iter][lambduh]['max_{}_benefit'.format(bt)][st] for lambduh in lambduhs])
+					
+					for p in pcntles_of_interest:
+						try:
+							metrics['comparisons']['{}_benefit'.format(bt)][st][p][random_iter] = \
+								these_costs[np.where(these_benefits >= p)[0][0]]
+						except IndexError:
+							pass
+			pickle.dump(metrics, open(metrics_fn,'wb'))
+	except:
+		import traceback
+		traceback.print_exc()
+		exit(0)
+	finally:
+		if wm is not None:
+			wm.stop_workers()
+	f,ax=plt.subplots(1,1)
+	## Do CDF of cost [method] / [sparse] for benefit p% 
+	# do for both sparse and painter benefits
+
+	for p in pcntles_of_interest:
+		for compare_method in ['painter', 'anyopt']:
+			for bt in ['painter', 'sparse']:
+				comps = []
+				these_costs = metrics['comparisons']['{}_benefit'.format(bt)]
+				for j in range(N_TO_SIM):
+					if these_costs[compare_method][p][j] != None and these_costs['sparse'][p][j] != None:
+						comps.append(these_costs[compare_method][p][j] / these_costs['sparse'][p][j])
+				if len(comps) > 1:
+					x,cdf_x = get_cdf_xy(comps)
+					ax.plot(x,cdf_x,label="{} {} {}".format(p,compare_method,bt))
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
+	ax.set_ylabel("CDF of Deployments")
+	save_fig("sparse_cost_savings_over_deployments_cdf.pdf")
+
 if __name__ == "__main__":
 	# all_args = []
 	# n_workers = multiprocessing.cpu_count() // 2
@@ -474,4 +564,4 @@ if __name__ == "__main__":
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
 	# do_eval_compare_explores()
-	do_eval_improvement_over_budget()
+	do_eval_improvement_over_budget_multi_deployment()

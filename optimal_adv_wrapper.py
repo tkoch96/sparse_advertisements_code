@@ -176,8 +176,14 @@ class Optimal_Adv_Wrapper:
 				assert len(subdeployments[worker]['ugs']) >= 1
 				# send worker startup information
 				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
+				
+				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
+				self.send_receive_worker(worker, msg)
+
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
+
+
 		except AttributeError:
 			# not initialized yet, or a worker bee
 			pass

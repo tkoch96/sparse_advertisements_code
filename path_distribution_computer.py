@@ -312,7 +312,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			print("Failed parsing message of length : {}".format(len(msg)))
 			pickle.dump(msg, open('error_{}_{}.pkl',format(int(time.time()), self.worker_i),'wb'))
 		cmd, data = msg
-		# print("received command {} in worker {}".format(cmd, self.worker_i))
+		print("received command {} in worker {}".format(cmd, self.worker_i))
 		if cmd == 'calc_lb':
 			ret = []
 			self.this_time_ip_cache = {}
@@ -347,6 +347,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			deployment = data
 			self.update_deployment(deployment)
 			ret = "ACK"
+		elif cmd == 'update_kwa':
+			new_kwa = data
+			if new_kwa.get('n_prefixes') is not None:
+				self.n_prefixes = new_kwa.get('n_prefixes')
+			if new_kwa.get('gamma') is not None:
+				self.gamma = new_kwa.get('gamma')
+			if new_kwa.get('with_capacity') is not None:
+				self.with_capacity = new_kwa.get('with_capacity')
+			ret = 'ACK'
 		elif cmd == 'reset_cache':
 			self.clear_caches()
 			ret = "ACK"
