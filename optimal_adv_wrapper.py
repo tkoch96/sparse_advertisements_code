@@ -41,6 +41,7 @@ class Optimal_Adv_Wrapper:
 	### Wrapper class for all solutions to finding optimal advertisements
 	def __init__(self, deployment, lambduh=1.0, verbose=True, gamma=0, **kwargs):
 		self.verbose = verbose
+		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
 		self.epsilon = .00005 # change in objective less than this -> stop
 		self.max_n_iter = 150 # maximum number of learning iterations
@@ -91,6 +92,8 @@ class Optimal_Adv_Wrapper:
 			'lambduh': self.lambduh, 
 			'gamma': self.gamma, 
 			'verbose': False,
+			'n_prefixes': self.n_prefixes,
+			'with_capacity': self.with_capacity,
 		}
 
 	def update_cache(self, new_cache):
@@ -234,12 +237,35 @@ class Optimal_Adv_Wrapper:
 		max_improve_over_anycast = max_improve_over_anycast / np.sum(self.ug_vols)
 		return max_improve_over_anycast
 
+	def get_max_overall_benefit(self):
+		## benefit is between MIN_LATENCY_FOR_EVERYONE and NO_ROUTE_FOR_EVERYONE
+		## scaled to be minimized is -1*NO_ROUTE_FOR_EVERYONE -> -1 * MIN_LATENCY_FOR_EVERYONE
+		## made positive is 0 -> -1 * (MIN_LATENCY_FOR_EVERYONE - NO_ROUTE_FOR_EVERYONE)
+
+		normalized_best_overall_benefit = 0
+		for ug in self.ugs:
+			best_user_latency = np.min(list(self.ug_perfs[ug].values()))
+			normalized_best_overall_benefit += (-1 * (best_user_latency - NO_ROUTE_LATENCY) * self.ug_to_vol[ug])
+		normalized_best_overall_benefit /= np.sum(self.ug_vols)
+		return normalized_best_overall_benefit
+
+	def get_normalized_benefit(self, a, **kwargs):
+		a_effective = threshold_a(a)
+		user_latencies = self.get_ground_truth_user_latencies(a_effective, **kwargs)
+		print([(ug,user_latencies[self.ug_to_ind[ug]]) for ug in self.ugs])
+		normalized_benefit = 0
+		for ug in self.ugs:
+			user_latency = user_latencies[self.ug_to_ind[ug]]
+			normalized_benefit += (-1 * (user_latency - NO_ROUTE_LATENCY) * self.ug_to_vol[ug])
+		normalized_benefit /= np.sum(self.ug_vols)
+		return normalized_benefit
+
 	def get_ground_truth_user_latencies(self, a, **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
 		user_latencies = NO_ROUTE_LATENCY * np.ones((len(self.ugs)))
 		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a)
 		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
-		for prefix_i in tqdm.tqdm(range(a.shape[1]),desc='calculating ground truth user latencies'):
+		for prefix_i in range(a.shape[1]):
 			for ugi,ug in enumerate(self.ugs):
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
 				if routed_ingress is None:
@@ -405,14 +431,14 @@ class Optimal_Adv_Wrapper:
 		## Approximate L0 norm with whatever approximation we're using
 		## Use actual latencies as if we were to really measure all the paths		
 		## (Here we actually execute the advertisement)
-
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
 		if self.gamma > 0:
 			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
 		else:
 			resilience_benefit = 0
-		# print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
+		if self.verbose:
+			print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
 

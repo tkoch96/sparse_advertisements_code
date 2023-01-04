@@ -74,9 +74,7 @@ class Worker_Manager:
 					try: # check for message from worker
 						rets[worker] = pickle.loads(self.worker_sockets[worker].recv())
 					except: # Timeout, must be stll calculating
-						if np.random.random() > .99:
-							print("received {} rets so far".format(len(rets)))
-						time.sleep(.2)
+						time.sleep(.02)
 						pass
 			if len(rets) == n_workers:
 				break

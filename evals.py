@@ -371,31 +371,72 @@ def do_eval_scale():
 	save_fig("scale_n_advs.pdf")
 
 def do_eval_improvement_over_budget():
+	np.random.seed(31414)
 	dpsize = 'small'
 	metrics = {}
 	N_TO_SIM = 1
 	explore='bimodality'
-	lambduhs = [10,1,.1,.01,.001,.0001,.00001]
+	# lambduhs = list(reversed(np.logspace(-2,1,num=20))) #RFS
+	lambduhs = list(reversed(np.logspace(-2,.3)))
 	solution_types = ['sparse', 'anyopt', 'painter']
 	
 	wm = None
-		
+	
+	metrics_fn = os.path.join(CACHE_DIR, 'improvement_over_budget_{}.pkl'.format(dpsize))
+	if os.path.exists(metrics_fn):
+		metrics = pickle.load(open(metrics_fn,'rb'))
+	deployment = get_random_deployment(dpsize)
+
+	# import pprint
+	# pp = pprint.PrettyPrinter(indent=2)
+	# pp.pprint(deployment)
+
+	metric_keys = ['painter_benefit','cost','max_painter_benefit', 'sparse_benefit', 'max_sparse_benefit']
+
 	try:
 		for lambduh in lambduhs:
-			metrics[lambduh] = {m: {st:[] for st in solution_types} for m in ['benefit','cost','max_benefit']}
+			print("-----LAMBDUH = {} -------".format(lambduh))
+			metrics[lambduh] = metrics.get(lambduh, {m: {st:[] for st in solution_types} for m in metric_keys})
 			for random_iter in range(N_TO_SIM):
-				deployment = get_random_deployment(dpsize)
+				try:
+					metrics[lambduh]['sparse_benefit']['sparse'][random_iter]
+					print("Already have metrics for {} {}, continuing".format(lambduh, random_iter))
+					continue
+				except:
+					pass
 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-					lambduh=lambduh,with_capacity=False,explore=explore,n_prefixes=len(deployment['popps']))
+					lambduh=lambduh,with_capacity=False,explore=explore,n_prefixes=len(deployment['popps'])-1)
 				if wm is None:
 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
 					wm.start_workers()
 				sas.set_worker_manager(wm)
-				ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=False)
+				sas.update_deployment(deployment)
+				ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=True)
 				for st in solution_types:
-					metrics[lambduh]['benefit'][st].append(-1*ret['painter_objective_vals'][st][0])
+					metrics[lambduh]['painter_benefit'][st].append(-1*ret['painter_objective_vals'][st][0])
 					metrics[lambduh]['cost'][st].append(ret['norm_penalties'][st][0])
-					metrics[lambduh]['max_benefit'][st].append(ret['max_benefits'][0])
+					metrics[lambduh]['max_painter_benefit'][st].append(ret['max_painter_benefits'][0])
+					metrics[lambduh]['sparse_benefit'][st].append(ret['normalized_sparse_benefit'][st][0])
+					metrics[lambduh]['max_sparse_benefit'][st].append(ret['max_sparse_benefits'][0])
+				pickle.dump(metrics, open(metrics_fn,'wb'))
+			f,ax=plt.subplots(1,1)
+			for st in solution_types:
+				these_costs = [np.median(metrics[lambduh]['cost'][st]) for lambduh in sorted(metrics)]
+				these_benefits = [np.median(np.array(metrics[lambduh]['painter_benefit'][st]) * 100.0 \
+					/ np.array(metrics[lambduh]['max_painter_benefit'][st])) for lambduh in sorted(metrics)]
+				print(these_benefits)
+				print(these_costs)
+				ax.scatter(these_costs, these_benefits,label=st + " PB",marker='x')
+
+				these_benefits = [np.median(np.array(metrics[lambduh]['sparse_benefit'][st]) * 100.0 \
+					/ np.array(metrics[lambduh]['max_sparse_benefit'][st])) for lambduh in sorted(metrics)]
+				ax.scatter(these_costs, these_benefits,label=st + " SB")
+
+			ax.legend()
+			ax.grid(True)
+			ax.set_xlabel("Cost")
+			ax.set_ylabel("Pct. Benefit")
+			save_fig("cost_vs_benefit.pdf")
 	except:
 		import traceback
 		traceback.print_exc()
@@ -405,12 +446,17 @@ def do_eval_improvement_over_budget():
 	print(metrics)
 	f,ax=plt.subplots(1,1)
 	for st in solution_types:
-		these_benefits = [np.median(np.array(metrics[lambduh]['benefit'][st]) * 100.0 \
-			/ np.array(metrics[lambduh]['max_benefit'][st])) for lambduh in lambduhs]
 		these_costs = [np.median(metrics[lambduh]['cost'][st]) for lambduh in lambduhs]
+		these_benefits = [np.median(np.array(metrics[lambduh]['painter_benefit'][st]) * 100.0 \
+			/ np.array(metrics[lambduh]['max_painter_benefit'][st])) for lambduh in lambduhs]
 		print(these_benefits)
 		print(these_costs)
-		ax.plot(these_costs, these_benefits,label=st)
+		ax.plot(these_costs, these_benefits,label=st + " PB")
+
+		these_benefits = [np.median(np.array(metrics[lambduh]['sparse_benefit'][st]) * 100.0 \
+			/ np.array(metrics[lambduh]['max_sparse_benefit'][st])) for lambduh in lambduhs]
+		ax.plot(these_costs, these_benefits,label=st + " SB")
+
 	ax.legend()
 	ax.grid(True)
 	ax.set_xlabel("Cost")
