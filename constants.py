@@ -9,7 +9,7 @@ MIN_LATENCY = 1
 MAX_LATENCY = 40
 NO_ROUTE_LATENCY = MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
-LBX_DENSITY = 1000 # number of points to discretize benefit into
+LBX_DENSITY = 5000 # number of points to discretize benefit into
 
 BASE_SOCKET = 31415
 
@@ -17,3 +17,16 @@ ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
+
+DPSIZE = 'small'
+PRINT_FREQUENCY = {
+	'really_friggin_small': 50,
+	'small': 5,
+	'decent': 1,
+	'med': 1,
+	'large': 1
+}[DPSIZE]
+
+N_WORKERS = {
+	'really_friggin_small': 2,
+}.get(DPSIZE, 8)

@@ -34,7 +34,7 @@ def polyphase_filt(data, filt, decimate_by):
     filtered_data = np.sum(new_filtered_data_streams, axis=0)
     return filtered_data
 
-def not_polyphase_filt(data, filt, decimate_by):
+def decimate_fftconv(data, filt, decimate_by):
     #### Implements fftconv and mean over bins by decimate_by
 
     if data.shape[0] % decimate_by != 0:
@@ -49,6 +49,26 @@ def not_polyphase_filt(data, filt, decimate_by):
             np.zeros((leftover, filtered_data_streams.shape[1]))], axis=0)
     filtered_data = filtered_data_streams.reshape((filtered_data_streams.shape[0]//decimate_by,
         decimate_by,filtered_data_streams.shape[1],1)).mean(-1).mean(1)
+
+    return filtered_data
+
+def clip_fftconv(data, filt, clip_by):
+    #### Implements fftconv and mean over bins by decimate_by
+
+    if data.shape[0] % clip_by != 0:
+        data = data[:(data.shape[0] - data.shape[0]%clip_by),:]
+    if filt.shape[0] % clip_by != 0:
+        filt = filt[:(filt.shape[0] - filt.shape[0]%clip_by),:]
+
+    filtered_data_streams = sg.fftconvolve(data, filt, axes=0)
+    if filtered_data_streams.shape[0] % clip_by != 0:
+        leftover = clip_by - (filtered_data_streams.shape[0] % clip_by)
+        filtered_data_streams = np.concatenate([filtered_data_streams, 
+            np.zeros((leftover, filtered_data_streams.shape[1]))], axis=0)
+    nr,nc = filtered_data_streams.shape
+    removing = filtered_data_streams[0:nr//clip_by,:]
+    filtered_data_streams[nr//clip_by,:] += np.sum(removing,axis=0)
+    filtered_data = filtered_data_streams[nr//clip_by:,:]
 
     return filtered_data
 
@@ -67,8 +87,10 @@ def sum_pdf_new(px):
         output[:,-1] = px[:,-1]
     ## approximates actual convolution, since we efficiently implement operations using polyphase filters
     # output[0:2*(l//2),0:nout] = polyphase_filt(px[:,:nout*2:2], px[:,1:nout*2:2], 2)
-    ## performs actual convolution, a bit slower
-    output[0:2*(l//2),0:nout] = not_polyphase_filt(px[:,:nout*2:2], px[:,1:nout*2:2], 2)
+    # ## performs actual convolution, a bit slower
+    # output[0:2*(l//2),0:nout] = decimate_fftconv(px[:,:nout*2:2], px[:,1:nout*2:2], 2)
+    ## performs clipping convolution, idea is really high benefits are pretty unlikely
+    output[0:2*(l//2),0:nout] = clip_fftconv(px[:,:nout*2:2], px[:,1:nout*2:2], 2)
     output = output.clip(0,np.inf)
     if output.shape[1] >= 2:
         output = sum_pdf_new(output)
@@ -107,4 +129,4 @@ if __name__ == "__main__":
     f,ax = plt.subplots(2)
     ax[0].plot(out_old)
     ax[1].plot(out_new)
-    plt.show()
+    plt.savefig('test.pdf')

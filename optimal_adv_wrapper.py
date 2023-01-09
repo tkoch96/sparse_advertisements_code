@@ -204,6 +204,9 @@ class Optimal_Adv_Wrapper:
 			ugi = self.ug_to_ind[ug]
 			for popp in self.popps:
 				popp_i = self.popp_to_ind[popp]
+				## benefit per user is -1 * latency * volume fraction
+				## we multiply by volume fraction so that later we can just calculate the sum and
+				## have that be the correct average benefit
 				self.measured_latencies[popp_i,ugi] = self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY)
 				weight = self.ug_vols[ugi] / total_vol
 				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
@@ -213,7 +216,6 @@ class Optimal_Adv_Wrapper:
 			(1, self.n_prefixes, 1))
 		self.measured_latency_benefits = np.tile(np.expand_dims(self.measured_latency_benefits, axis=1), 
 			(1, self.n_prefixes, 1))
-
 
 	def l1_norm(self, a):
 		return np.sum(np.abs(a).flatten())
@@ -265,6 +267,34 @@ class Optimal_Adv_Wrapper:
 			normalized_benefit += (-1 * (user_latency - NO_ROUTE_LATENCY) * self.ug_to_vol[ug])
 		normalized_benefit /= np.sum(self.ug_vols)
 		return normalized_benefit
+
+	def summarize_user_latencies(self, a):
+		### Summarizes which users are getting good latency and bad latency, peers that would benefit them
+
+		user_latencies = self.get_ground_truth_user_latencies(a)
+		cum_by_peer = {}
+		help_ug_by_peer = {}
+		for ug in self.ug_perfs:
+			these_perfs = list(sorted(self.ug_perfs[ug].items(), key = lambda el : el[1]))
+			best_peer, best_perf = these_perfs[0]
+			current_perf = user_latencies[self.ug_to_ind[ug]]
+			if best_perf < current_perf:
+				# print("UG {} would see {} ms improvement through {}".format(
+				# 	self.ug_to_ind[ug], current_perf - best_perf, self.popp_to_ind[best_peer]))
+				try:
+					cum_by_peer[self.popp_to_ind[best_peer]] += (current_perf - best_perf)
+					help_ug_by_peer[self.popp_to_ind[best_peer]].append(self.ug_to_ind[ug])
+				except KeyError:
+					cum_by_peer[self.popp_to_ind[best_peer]] = current_perf - best_perf
+					help_ug_by_peer[self.popp_to_ind[best_peer]] = [self.ug_to_ind[ug]]
+
+		sorted_cum_by_peer = list(sorted(cum_by_peer.items(), key = lambda el : -1 * el[1]))
+		print(sorted_cum_by_peer)
+		best_overall_peers = sorted_cum_by_peer[0:3]
+		for bop,diff in best_overall_peers:
+			print("{} -- {} ms, UGs {} would see corresponding lats {}".format(bop,diff,help_ug_by_peer[bop],
+				[self.ug_perfs[self.ugs[ui]][self.popps[bop]] for ui in help_ug_by_peer[bop]]))
+			print(self.recent_grads[bop,:])
 
 	def get_ground_truth_user_latencies(self, a, **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
