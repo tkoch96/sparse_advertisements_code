@@ -1,6 +1,10 @@
 import zmq, pickle, numpy as np, time, copy, multiprocessing
 from subprocess import call
 from helpers import *
+from constants import *
+
+## ~ half a second for debugging, .01s for real time
+SLEEP_PERIOD = .02
 
 class Worker_Manager:
 	def __init__(self, kwa_settings, deployment):
@@ -14,7 +18,7 @@ class Worker_Manager:
 
 	def get_n_workers(self):
 		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return 1#multiprocessing.cpu_count() // 2
+		return N_WORKERS#multiprocessing.cpu_count() // 2
 
 	def start_workers(self):
 		# self.worker_to_uis = {}
@@ -45,7 +49,6 @@ class Worker_Manager:
 						break
 				except:
 					time.sleep(.5)
-	
 
 	def stop_workers(self):
 		for worker, socket in self.worker_sockets.items():
@@ -72,9 +75,13 @@ class Worker_Manager:
 					rets[worker]
 				except KeyError:
 					try: # check for message from worker
-						rets[worker] = pickle.loads(self.worker_sockets[worker].recv())
+						this_ret = pickle.loads(self.worker_sockets[worker].recv())
+						if this_ret != "ERROR":
+							rets[worker] = this_ret
+						else:
+							self.worker_sockets[worker].send(msg)
 					except: # Timeout, must be stll calculating
-						time.sleep(.02)
+						time.sleep(SLEEP_PERIOD)
 						pass
 			if len(rets) == n_workers:
 				break
@@ -85,8 +92,11 @@ class Worker_Manager:
 		while True:
 			try:
 				ret = pickle.loads(self.worker_sockets[worker_i].recv())
-				break
+				if ret != "ERROR":
+					break
+				else:
+					self.worker_sockets[worker_i].send(msg)
 			except: # Timeout, must be stll calculating
-				time.sleep(.1)
+				time.sleep(SLEEP_PERIOD)
 				pass
 		return ret

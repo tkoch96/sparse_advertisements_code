@@ -158,16 +158,6 @@ def get_random_deployment(problem_size):
 		'provider_popps': provider_popps,
 	}
 
-
-DPSIZE = 'small'
-PRINT_FREQUENCY = {
-	'really_friggin_small': 50,
-	'small': 5,
-	'decent': 1,
-	'med': 1,
-	'large': 1
-}[DPSIZE]
-
 def violates(ordering, bigger, smallers):
 	# ordering - list of ingresses
 	# bigger - ingress that won
@@ -253,7 +243,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def compress_lb_args_queue(self):
 		### Idea: first adv is the base, rest are deltas from the base
 		### transmit the base and the deltas
-
+		print("L LBAQ: {}".format(len(self.lb_args_queue)))
 		base_args, base_kwa = self.lb_args_queue[0]
 		base_adv, = base_args
 		self.compressed_lb_args_queue = [(base_args, base_kwa)]
@@ -288,6 +278,9 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				max_val[adv_ret_i] = np.maximum(vals[-1], max_val[adv_ret_i])
 				vals_by_worker[worker_i][adv_ret_i] = (vals[0], vals[-1])
 
+				if adv_ret_i == 0:
+					print("Worker: {} mean: {}".format(worker_i, mean))
+
 		### Convert all pdfs to be at the same scale
 		lbx = np.zeros((n_to_flush, LBX_DENSITY))
 		inds = np.arange(LBX_DENSITY)
@@ -304,9 +297,10 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				rescaled_pdf[remap_arr[inds]] += pdfs[adv_ret_i][worker_i][inds]
 				pdfs[adv_ret_i][worker_i] = rescaled_pdf
 
-
-		# total benefit is sum aross all benefits
-		lbx = lbx * n_workers
+		### This is no longer true since we chop off the upper half each convolution
+		# # total benefit is sum aross all benefits
+		# # so x axis gets multiplied out by number of inputs (convolution doubles domain)
+		# lbx = lbx * n_workers
 		
 		for adv_ret_i in range(n_to_flush):
 			## point density x number of cores
@@ -317,7 +311,10 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				px = sum_pdf_new(px)
 			mean = np.sum(px.flatten()*lbx[adv_ret_i,:].flatten())
 			ret_to_call[adv_ret_i] = (mean, (lbx[adv_ret_i,:].flatten(), px.flatten()))
-		
+
+			if adv_ret_i == 0:
+				print("Overall mean: {}".format(mean))
+
 		# if n_to_flush > 1:
 		# 	print(min_val[0])
 		# 	print(max_val[0])
@@ -371,7 +368,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			obj_on = self.modeled_objective(a)
 			advs = {}
 			exclude = []
-			for i in tqdm.tqdm(range(self.n_popp)):
+			for i in range(self.n_popp):
 				a[i,:] = 0
 				if self.modeled_objective(a) < obj_on:
 					exclude.append(i)
@@ -381,7 +378,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			a[:,0] = .55
 			if len(exclude) > 0:
 				a[np.array(exclude),0] = .45
-			print("Done Initializing")
+			
 			return a
 
 		if mode == 'using_objective':
@@ -396,7 +393,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			obj_on = self.modeled_objective(a)
 			advs = {}
 			exclude = []
-			for i in tqdm.tqdm(range(self.n_popp)):
+			for i in range(self.n_popp):
 				a[i,:] = 0
 				if self.modeled_objective(a) < obj_on:
 					exclude.append(i)
@@ -422,12 +419,22 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def modeled_objective(self, a, **kwargs):
 		"""Approx actual objective with our belief."""
-		if self.verbose:
+		if kwargs.get('verb'):
 			print("Calculating modeled objective")
 		norm_penalty = self.advertisement_cost(a)
 		kwargs['retnow'] = True
-		latency_benefit,u = self.latency_benefit_fn(a, **kwargs)
+		latency_benefit, u = self.latency_benefit_fn(threshold_a(a), **kwargs)
+
+		benefits,probs = u
+		ex = np.average(benefits,weights=probs+1e-8)
+		exsq = np.average(np.power(benefits,2),weights=probs+1e-8)
+		var = exsq - np.power(ex,2)
+		std = np.sqrt(var)
+
 		resilience_benefit = self.resilience_benefit_fn(a)
+		if kwargs.get('verb'):
+			print("Believed: NP: {}, LB: {} ({} std dev), RB: {}".format(norm_penalty,
+				latency_benefit, std, resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 
 class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
@@ -758,7 +765,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
 		max_support = 200#self.n_popp * self.n_prefixes
 		self.gradient_support_settings = {
-			'calc_every': 20,
+			'calc_every': 5,
 			'support_size': np.minimum(self.n_popp * self.n_prefixes,max_support), # setting this value to size(a) turns it off
 		}
 
@@ -798,10 +805,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			# periodically calculate all gradients
 			inds = [(a_i,a_j) for a_i in range(a.shape[0]) for a_j in range(a.shape[1])]
+		dont_calc_inds = get_difference([(a_i,a_j) for a_i in range(a.shape[0]) for a_j in range(a.shape[1])], inds)
 		
 		calls = []
 		for a_i,a_j in inds:
-			a_ij = a_effective[a_i,a_j] 
+			a_ij = a_effective[a_i,a_j]
 			if not a_ij: # off
 				self.latency_benefit(a_effective)
 				a_effective[a_i,a_j] = True
@@ -823,8 +831,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
 			L_grad[ind] = self.heaviside_gradient(before, after, a[ind])
+			# if ind[0] == 8:
+			# 	print("{} {} {} {}".format(ind,before,after,L_grad[ind]))
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			self.update_gradient_support(L_grad)
+			self.last_full_grad = L_grad
+		else:
+			# Carry through these inds
+			for ind in dont_calc_inds:
+				L_grad[ind] = self.last_full_grad[ind]
 
 		return L_grad
 
@@ -914,6 +929,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		plt.rcParams.update({'font.size': 14})
 		f,ax = plt.subplots(5,2)
 
+		pickle.dump(self.metrics, open('metrics.pkl','wb'))
+
 		# General convergence metrics plot
 		all_as = np.array(self.metrics['advertisements'])
 		all_grads = np.array(self.metrics['grads'])
@@ -993,8 +1010,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.alpha = .0005
 		elif self.lambduh <= 1 and self.lambduh > .1:
 			self.alpha = .005
-		elif self.lambduh <= .1:
+		elif self.lambduh <= .1 and self.lambduh > .01:
 			self.alpha = .01
+		elif self.lambduh <= .01:
+			self.alpha = .1
 
 	def update_gradient_support(self, gradient):
 		gradient = np.abs(gradient)
@@ -1185,6 +1204,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if self.verbose:
 				print("calcing grads")
 			grads = self.gradient_fn(advertisement)
+			self.recent_grads = grads
 			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
 			a_k = advertisement
 			w_k = a_k - self.alpha * grads + self.beta * (a_k - a_km1)
@@ -1211,11 +1231,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if self.verbose:
 				print("finding max info {} ".format(time.time() - self.ts_loop))
 			maximally_informative_advertisement = self.solve_max_information(advertisement)
-			if self.verbose:
-				print("measuring ingresses {}".format(time.time() - self.ts_loop))
 			if maximally_informative_advertisement is not None:
+				if self.verbose:
+					print("measuring ingresses {}".format(time.time() - self.ts_loop))
 				self.measure_ingresses(maximally_informative_advertisement)
-
+			else:
+				if self.verbose:
+					print("No maximally informative advertisement to measure.")
 			# Check stopping conditions
 			self.stop_tracker(advertisement)
 			self.iter += 1
@@ -1223,7 +1245,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# Add to metrics
 			if self.verbose:
 				print("adding metrics {}".format(time.time() - self.ts_loop))
-			self.latency_benefit_fn(np.ones(advertisement.shape), retnow=True)
+			tmp = copy.copy(self.verbose)
+
+			# ## TODO -- why do I do this again?
+			# self.verbose = False
+			# self.latency_benefit_fn(np.ones(advertisement.shape), retnow=True)
+			# self.verbose = tmp
+
+			if self.verbose:
+				self.summarize_user_latencies(threshold_a(advertisement))
 
 			self.t_per_iter = (time.time() - t_start) / self.iter
 
@@ -1256,9 +1286,9 @@ def main():
 
 
 		## Simple test
-		lambduh = .1
+		lambduh = .0001
 		sas = Sparse_Advertisement_Solver(deployment, 
-			lambduh=lambduh,verbose=True,with_capacity=False)
+			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=len(deployment['popps'])-1)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
