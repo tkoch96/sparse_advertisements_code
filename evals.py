@@ -372,28 +372,26 @@ def do_eval_scale():
 
 def do_eval_improvement_over_budget_single_deployment():
 	np.random.seed(31414)
-	dpsize = 'small'
 	metrics = {}
 	N_TO_SIM = 1
 	explore='bimodality'
-	# lambduhs = list(reversed(np.logspace(-2,1,num=20))) #RFS
-	lambduhs = list(reversed(np.logspace(-2,.3)))
+	lambduhs = list(reversed(np.logspace(-2,.9,num=20))) #RFS
+	# lambduhs = list(reversed(np.logspace(-2,.3)))
 	solution_types = ['sparse', 'anyopt', 'painter']
 	
 	wm = None
 	
-	metrics_fn = os.path.join(CACHE_DIR, 'improvement_over_budget_{}.pkl'.format(dpsize))
+	metrics_fn = os.path.join(CACHE_DIR, 'improvement_over_budget_{}.pkl'.format(DPSIZE))
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
-	deployment = get_random_deployment(dpsize)
+	deployment = get_random_deployment(DPSIZE)
 
 	# import pprint
 	# pp = pprint.PrettyPrinter(indent=2)
 	# pp.pprint(deployment)
 
-	metric_keys = ['painter_benefit','cost','max_painter_benefit', 'sparse_benefit', 'max_sparse_benefit']
-
-	del metrics[lambduhs[-1]]
+	metric_keys = ['painter_benefit','cost','prefix_cost',
+		'max_painter_benefit', 'sparse_benefit', 'max_sparse_benefit']
 
 	try:
 		for lambduh in lambduhs:
@@ -413,10 +411,11 @@ def do_eval_improvement_over_budget_single_deployment():
 					wm.start_workers()
 				sas.set_worker_manager(wm)
 				sas.update_deployment(deployment)
-				ret = sas.compare_different_solutions(deployment_size=dpsize,n_run=1, verbose=True)
+				ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=True)
 				for st in solution_types:
 					metrics[lambduh]['painter_benefit'][st].append(-1*ret['painter_objective_vals'][st][0])
 					metrics[lambduh]['cost'][st].append(ret['norm_penalties'][st][0])
+					metrics[lambduh]['prefix_cost'][st].append(ret['prefix_cost'][st][0])
 					metrics[lambduh]['max_painter_benefit'][st].append(ret['max_painter_benefits'][0])
 					metrics[lambduh]['sparse_benefit'][st].append(ret['normalized_sparse_benefit'][st][0])
 					metrics[lambduh]['max_sparse_benefit'][st].append(ret['max_sparse_benefits'][0])

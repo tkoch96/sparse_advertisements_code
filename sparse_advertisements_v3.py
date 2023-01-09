@@ -243,7 +243,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def compress_lb_args_queue(self):
 		### Idea: first adv is the base, rest are deltas from the base
 		### transmit the base and the deltas
-		print("L LBAQ: {}".format(len(self.lb_args_queue)))
 		base_args, base_kwa = self.lb_args_queue[0]
 		base_adv, = base_args
 		self.compressed_lb_args_queue = [(base_args, base_kwa)]
@@ -520,6 +519,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'objective': anyopt_obj,
 			'advertisement': anyopt_adv,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(anyopt_adv),
+			'prefix_cost': self.prefix_cost(anyopt_adv),
 			'norm_penalty': self.advertisement_cost(anyopt_adv),
 			'n_advs': self.anyopt.path_measures,
 		}
@@ -545,6 +545,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'objective': sparse_objective,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(sparse_adv),
 			'norm_penalty': self.advertisement_cost(sparse_adv),
+			'prefix_cost': self.prefix_cost(sparse_adv),
 			'advertisement': sparse_adv,
 			'n_advs': self.sas.path_measures,
 		}
@@ -582,6 +583,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'objective': painter_obj,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(painter_adv),
 			'norm_penalty': self.advertisement_cost(painter_adv),
+			'prefix_cost': self.prefix_cost(painter_adv),
 			'advertisement': painter_adv,
 			'n_advs': self.painter.path_measures,
 		}
@@ -600,6 +602,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'normalized_sparse_benefit': {k:[] for k in solution_types},
 			'latency_benefits': {k: [] for k in solution_types},
 			'norm_penalties': {k: [] for k in solution_types},
+			'prefix_cost': {k: [] for k in solution_types},
 			'objective_diffs': {k:[] for k in solution_types},
 			'latency_benefit_diffs': {k:[]for k in solution_types},
 			'n_advs': {k:[] for k in solution_types},
@@ -620,6 +623,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['adv_solns']['anyopt'].append(self.anyopt_solution['advertisement'])
 			metrics['latency_benefits']['anyopt'].append(self.anyopt_solution['latency_benefit'])
 			metrics['norm_penalties']['anyopt'].append(self.anyopt_solution['norm_penalty'])
+			metrics['prefix_cost']['anyopt'].append(self.anyopt_solution['prefix_cost'])
 
 			## Painter
 			if verbose:
@@ -630,6 +634,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['adv_solns']['painter'].append(self.painter_solution['advertisement'])
 			metrics['latency_benefits']['painter'].append(self.painter_solution['latency_benefit'])
 			metrics['norm_penalties']['painter'].append(self.painter_solution['norm_penalty'])
+			metrics['prefix_cost']['painter'].append(self.painter_solution['prefix_cost'])
 
 			if verbose:
 				print("solving sparse")
@@ -640,6 +645,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['adv_solns']['sparse'].append(self.sparse_solution['advertisement'])
 			metrics['latency_benefits']['sparse'].append(self.sparse_solution['latency_benefit'])
 			metrics['norm_penalties']['sparse'].append(self.sparse_solution['norm_penalty'])
+			metrics['prefix_cost']['sparse'].append(self.sparse_solution['prefix_cost'])
 
 			## Extremes
 			self.solve_extremes(verbose=verbose)

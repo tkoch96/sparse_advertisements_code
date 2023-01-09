@@ -28,9 +28,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Latency benefit is -1 * mean latency, so latency benefits must lie in this region
 		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=LBX_DENSITY)
-		# divide by 2 since that's expected value, 
-		# divide by number of workers since thats the fraction of volume we see
-		self.lbx  = self.lbx / 2
+
+		## TODO -- dynamically adjust depending on current average latency users see
+		self.lbx  = self.lbx
 
 
 		self.stop = False
@@ -280,35 +280,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		### pmf of benefits is now xsumx with probabilities psumx
 		## lbx doesn't change, since we clip all intermediate steps
 		xsumx = self.lbx
-
-		plotit = (kwargs.get('plotit') == True) or np.sum(psumx) < .9 # Checks that this is a probability distribution
-		if plotit:
-			import matplotlib.pyplot as plt
-			# print(a)
-			# for _i in range(self.n_prefixes):
-			# 	print(benefits[:,_i,:])
-			# for _i in range(self.n_prefixes):
-			# 	print(p_mat[:,_i,:])
-			
-			print(np.sum(psumx))
-			plt.plot(xsumx * self.n_ug, psumx)
-			plt.xlabel("Benefit")
-			plt.ylabel("P(Benefit)")
-			plt.show()
-
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 
-		if verb:
-			print("MIN : {} -- MAX : {}".format(np.min(self.lbx), np.max(self.lbx)))
-			running_sum = 0
-			for ui in range(px.shape[1]):
-				ex = np.sum(self.lbx.flatten() * px[:,ui].flatten())
-				running_sum += ex
-				print("UI : {} -- E[X] : {}".format(ui, ex))
-			print(a)
-			print(all_pv)
-			print("Max B last user: {}".format(np.max([el[1] for el in all_pv])))
-			print("Total estimated: {}, actual value: {} ".format(running_sum,benefit))
+		# if verb:
+		# 	print("MIN : {} -- MAX : {}".format(np.min(self.lbx), np.max(self.lbx)))
+		# 	running_sum = 0
+		# 	for ui in range(px.shape[1]):
+		# 		ex = np.sum(self.lbx.flatten() * px[:,ui].flatten())
+		# 		running_sum += ex
+		# 		print("UI : {} -- E[X] : {}".format(ui, ex))
+		# 	print(a)
+		# 	print(all_pv)
+		# 	print("Max B last user: {}".format(np.max([el[1] for el in all_pv])))
+		# 	print("Total estimated: {}, actual value: {} ".format(running_sum,benefit))
 
 		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
@@ -345,17 +329,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			base_kwa['verb'] = True
 			ret.append(self.latency_benefit(base_adv,**base_kwa))
 			for diff, kwa in data[1:]:
-				verb = False
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
-					verb = ((ind[0] == 8) or verb)
-				verb = False
-				kwa['verb'] = verb
 				ret.append(self.latency_benefit(base_adv, **kwa))
-				if verb:
-					print("In worker bee, current state: {}".format(base_adv[ind]))
-					amt, (x,px) = ret[-1]
-					print("LB: {}".format(amt))
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
 			del self.this_time_ip_cache

@@ -220,6 +220,14 @@ class Optimal_Adv_Wrapper:
 	def l1_norm(self, a):
 		return np.sum(np.abs(a).flatten())
 
+	def prefix_cost(self, a):
+		c_pref = 1
+		has_pref = (np.sum(a,axis=0) > 0).astype(np.int32)
+		# cost for different prefs likely not different
+		cost_prefs = np.sum(has_pref) * c_pref
+
+		return cost_prefs
+
 	def get_ground_truth_latency_benefit(self, a, **kwargs):
 		### Measures actual latency benefit as if we were to advertise 'a'
 		a_effective = threshold_a(a)
@@ -444,16 +452,13 @@ class Optimal_Adv_Wrapper:
 		# Don't approximate the L0 norm with anything
 		# Use actual latencies as if we were to really measure all the paths		
 
-		c_pref = 1
 		c_peering = 1
-
 		has_peering = (np.sum(a,axis=1) > 0).astype(np.int32)
-		has_pref = (np.sum(a,axis=0) > 0).astype(np.int32)
-
 		# cost for different peerings may be different
 		cost_peerings = np.sum(np.dot(has_peering,c_peering*np.ones(has_peering.shape)))
+		
 		# cost for different prefs likely not different
-		cost_prefs = np.sum(has_pref) * c_peering
+		cost_prefs = self.prefix_cost(a)
 		norm_penalty = cost_peerings + cost_prefs
 		latency_benefit = self.get_ground_truth_latency_benefit(a)
 		if self.gamma > 0:
