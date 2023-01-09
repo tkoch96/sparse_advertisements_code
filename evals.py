@@ -467,7 +467,7 @@ def do_eval_improvement_over_budget_multi_deployment():
 	np.random.seed(31414)
 	dpsize = 'really_friggin_small'
 	metrics = {}
-	N_TO_SIM = 20
+	N_TO_SIM = 100
 	explore='bimodality'
 	lambduhs = list(reversed(np.logspace(-2,.3,num=10)))
 	solution_types = ['sparse', 'anyopt', 'painter']
@@ -480,6 +480,7 @@ def do_eval_improvement_over_budget_multi_deployment():
 		['sparse_benefit', 'painter_benefit']}}
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
+	N_TO_SIM = np.maximum(len(metrics) - 2, N_TO_SIM)
 	metrics['comparisons'] = {bt: {st: {p:[None for _ in range(N_TO_SIM)] for p in pcntles_of_interest} for st in solution_types} for bt in\
 		['sparse_benefit', 'painter_benefit']}
 
