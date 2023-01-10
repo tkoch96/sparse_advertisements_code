@@ -157,8 +157,10 @@ class Optimal_Adv_Wrapper:
 
 		## only sub-workers should spawn these arrays if they get too big
 		max_entries = 10000e6
+		# ijk'th entry of ingress probabilities is probability that user k ingresses over popp i for prefix j
 		if self.n_popp * self.n_prefixes * self.n_ug < max_entries:
 			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
+		# ijk'th entry of parent tracker indicates whether, for ug i, popp j getes beaten by popp k
 		if self.n_popp**2 * self.n_ug < max_entries*64: # more lenient since dtype is bool
 			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
 		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
@@ -446,7 +448,44 @@ class Optimal_Adv_Wrapper:
 		self.enforce_measured_prefs(routed_through_ingress, actives)
 		# print("Measuring : \n{}".format(a))
 		self.measured[tuple(a.flatten())] = None
-		
+
+	def get_naive_range(self, a):
+		overall_best = 0
+		overall_worst = 0
+		overall_average = 0
+
+		total_ug_vol = sum(list(self.ug_to_vol.values()))
+
+		print(a)
+		for ug, perfs in self.ug_perfs.items():
+			worst_case_perf = MAX_LATENCY
+			best_case_perf = MAX_LATENCY
+			has_perf = [self.popp_to_ind[popp] for popp in perfs]
+			for prefix_i in range(self.n_prefixes):
+				is_on = np.where(a[:,prefix_i])[0]
+				is_on_and_route = get_intersection(is_on, has_perf)
+				if len(is_on_and_route) > 0:
+					these_perfs = [perfs[self.popps[popp]] for popp in is_on_and_route]
+					print(these_perfs)
+					# at the best case, user gets routed to lowest latency "on" probe
+					best_case_perf = np.minimum(np.min(these_perfs), best_case_perf)
+					# at the worst case, every max hits and the user picks the best of those maxes
+					worst_case_perf = np.minimum(np.max(these_perfs), worst_case_perf)
+			print(worst_case_perf)
+			print(best_case_perf)
+			print('\n')
+
+			overall_best += (-1 * best_case_perf) * self.ug_to_vol[ug]
+			overall_worst += (-1 * worst_case_perf) * self.ug_to_vol[ug]
+			overall_average += (-1 * (best_case_perf + worst_case_perf) / 2) * self.ug_to_vol[ug]
+
+
+		return {
+			'best': best_case_perf / total_ug_vol,
+			'worst': worst_case_perf / total_ug_vol,
+			'avg': overall_average / total_ug_vol,
+		}
+			
 
 	def actual_nonconvex_objective(self, a):
 		# Don't approximate the L0 norm with anything

@@ -554,6 +554,73 @@ def do_eval_improvement_over_budget_multi_deployment():
 	ax.set_ylabel("CDF of Deployments")
 	save_fig("sparse_cost_savings_over_deployments_cdf.pdf")
 
+def do_eval_whatifs():
+	# for each deployment, solve problem
+	# fail each link and pop, for each user calc latency range and pdf, get ground truth latency
+	# look at some measure of the degree to which our model helps us get closer to ground truth latencies
+
+	np.random.seed(31414)
+	metrics = {}
+	N_TO_SIM = 5
+
+	lambduh = .1
+	
+	wm = None
+	
+	metrics_fn = os.path.join(CACHE_DIR, 'whatifs_{}.pkl'.format(DPSIZE))
+	metrics = {'popp_failures': {}}
+	if os.path.exists(metrics_fn):
+		metrics = pickle.load(open(metrics_fn,'rb'))
+
+	try:
+		for random_iter in range(N_TO_SIM):
+			print("-----Deployment number = {} -------".format(random_iter))
+			deployment = get_random_deployment(DPSIZE)
+			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
+				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE,n_prefixes=len(deployment['popps'])-1)
+			if wm is None:
+				wm = Worker_Manager(sas.get_init_kwa(), deployment)
+				wm.start_workers()
+			sas.set_worker_manager(wm)
+			sas.update_deployment(deployment)
+			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=False,
+				 dont_update_deployment=True)
+
+			adv = threshold_a(ret['adv_solns']['sparse'][0])
+			for popp in sas.popps:
+				adv_cpy = np.copy(adv)
+				adv_cpy[sas.popp_to_ind[popp]] = 0
+
+				avg_benefit, (x,pdf) = sas.latency_benefit_fn(adv_cpy, retnow=True)
+				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy)
+				naive_range = sas.get_naive_range(adv_cpy)
+
+				metrics['popp_failures'][popp] = {
+					'actual': actual_lb,
+					'expected': avg_benefit,
+					'range': naive_range
+				}
+			
+			print(metrics)
+			exit(0)
+			pickle.dump(metrics, open(metrics_fn,'wb'))
+	except:
+		import traceback
+		traceback.print_exc()
+		exit(0)
+	finally:
+		if wm is not None:
+			wm.stop_workers()
+	f,ax=plt.subplots(1,1)
+
+
+
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
+	ax.set_ylabel("CDF of Deployments")
+	save_fig("whatifs.pdf")
+
 if __name__ == "__main__":
 	# all_args = []
 	# n_workers = multiprocessing.cpu_count() // 2
@@ -565,4 +632,4 @@ if __name__ == "__main__":
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
 	# do_eval_compare_explores()
-	do_eval_improvement_over_budget_single_deployment()
+	do_eval_whatifs()

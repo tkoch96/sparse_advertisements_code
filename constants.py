@@ -29,4 +29,11 @@ PRINT_FREQUENCY = {
 
 N_WORKERS = {
 	'really_friggin_small': 1,
+	'decent': 4,
+	'med': 1,
+	'small': 8,
 }.get(DPSIZE, 8)
+
+
+
+DEFAULT_EXPLORE = 'bimodality'

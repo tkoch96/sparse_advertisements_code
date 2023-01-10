@@ -47,7 +47,7 @@ problem_params = {
 		'min_peerings_per_pop': 20,
 		'n_providers': 20,
 	},
-	'med': {
+	'med': { # goal of sorts, maybe more metro,asns 
 		'n_metro': 20,
 		'n_asn': 100,
 		'n_peer': 1500,
@@ -277,7 +277,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				max_val[adv_ret_i] = np.maximum(vals[-1], max_val[adv_ret_i])
 				vals_by_worker[worker_i][adv_ret_i] = (vals[0], vals[-1])
 
-				if adv_ret_i == 0:
+				if adv_ret_i == 0 and self.verbose:
 					print("Worker: {} mean: {}".format(worker_i, mean))
 
 		### Convert all pdfs to be at the same scale
@@ -311,7 +311,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			mean = np.sum(px.flatten()*lbx[adv_ret_i,:].flatten())
 			ret_to_call[adv_ret_i] = (mean, (lbx[adv_ret_i,:].flatten(), px.flatten()))
 
-			if adv_ret_i == 0:
+			if adv_ret_i == 0 and self.verbose:
 				print("Overall mean: {}".format(mean))
 
 		# if n_to_flush > 1:
@@ -418,7 +418,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def modeled_objective(self, a, **kwargs):
 		"""Approx actual objective with our belief."""
-		if kwargs.get('verb'):
+		if self.verbose:
 			print("Calculating modeled objective")
 		norm_penalty = self.advertisement_cost(a)
 		kwargs['retnow'] = True
@@ -431,7 +431,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		std = np.sqrt(var)
 
 		resilience_benefit = self.resilience_benefit_fn(a)
-		if kwargs.get('verb'):
+		if self.verbose:
 			print("Believed: NP: {}, LB: {} ({} std dev), RB: {}".format(norm_penalty,
 				latency_benefit, std, resilience_benefit))
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
@@ -681,9 +681,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			max_benefit = self.get_max_overall_benefit()
 			metrics['max_sparse_benefits'].append(max_benefit)
 
-			## Update to new random deployment
-			new_deployment = get_random_deployment(kwargs.get('deployment_size','small'))
-			self.update_deployment(new_deployment)
+			if not kwargs.get('dont_update_deployment', False):
+				## Update to new random deployment
+				new_deployment = get_random_deployment(kwargs.get('deployment_size','small'))
+				self.update_deployment(new_deployment)
 			if verbose:
 				print(metrics['sparse_objective_vals'])
 		pickle.dump(metrics, open('cache/method_comparison_metrics.pkl','wb'))
@@ -1250,15 +1251,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			# Add to metrics
 			if self.verbose:
-				print("adding metrics {}".format(time.time() - self.ts_loop))
-			tmp = copy.copy(self.verbose)
-
-			# ## TODO -- why do I do this again?
-			# self.verbose = False
-			# self.latency_benefit_fn(np.ones(advertisement.shape), retnow=True)
-			# self.verbose = tmp
-
-			if self.verbose:
 				self.summarize_user_latencies(threshold_a(advertisement))
 
 			self.t_per_iter = (time.time() - t_start) / self.iter
@@ -1266,6 +1258,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if self.iter % PRINT_FREQUENCY == 0 and self.verbose:
 				print("Optimizing, iter: {}, t_per_iter : {}, GTO: {}, RD: {}, RDE: {}".format(self.iter, self.t_per_iter, 
 					self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff))
+
+				if DPSIZE in ['decent', 'large']:
+					self.make_plots()
+
+			if self.iter == 10:
+				break
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}, {} path measures, O:{}, RD: {}, RDE: {}".format(
@@ -1294,7 +1292,7 @@ def main():
 		## Simple test
 		lambduh = .0001
 		sas = Sparse_Advertisement_Solver(deployment, 
-			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=len(deployment['popps'])-1)
+			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=10)#n_prefixes=len(deployment['popps'])-1)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
