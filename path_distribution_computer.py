@@ -308,7 +308,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		try:
 			msg = pickle.loads(msg)
 		except:
-			print("Failed parsing message of length : {}".format(len(msg)))
+			print("Failed parsing message of length : {}, sending back error message".format(len(msg)))
 			pickle.dump(msg, open('error_{}_{}.pkl'.format(int(time.time()), self.worker_i),'wb'))
 			self.main_socket.send(pickle.dumps("ERROR")) # should hopefully generate an error in the main thread
 			return 

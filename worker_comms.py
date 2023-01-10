@@ -79,8 +79,9 @@ class Worker_Manager:
 						if this_ret != "ERROR":
 							rets[worker] = this_ret
 						else:
+							print("Received error message from worker {}, sending again".format(worker))
 							self.worker_sockets[worker].send(msg)
-					except: # Timeout, must be stll calculating
+					except zmq.error.Again: # Timeout, must be stll calculating
 						time.sleep(SLEEP_PERIOD)
 						pass
 			if len(rets) == n_workers:
@@ -95,8 +96,9 @@ class Worker_Manager:
 				if ret != "ERROR":
 					break
 				else:
+					print("received error message from worker {}, sending again".format(worker_i))
 					self.worker_sockets[worker_i].send(msg)
-			except: # Timeout, must be stll calculating
+			except zmq.error.Again: # Timeout, must be stll calculating
 				time.sleep(SLEEP_PERIOD)
 				pass
 		return ret
