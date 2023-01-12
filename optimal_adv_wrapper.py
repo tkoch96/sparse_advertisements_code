@@ -456,7 +456,6 @@ class Optimal_Adv_Wrapper:
 
 		total_ug_vol = sum(list(self.ug_to_vol.values()))
 
-		print(a)
 		for ug, perfs in self.ug_perfs.items():
 			worst_case_perf = MAX_LATENCY
 			best_case_perf = MAX_LATENCY
@@ -466,23 +465,18 @@ class Optimal_Adv_Wrapper:
 				is_on_and_route = get_intersection(is_on, has_perf)
 				if len(is_on_and_route) > 0:
 					these_perfs = [perfs[self.popps[popp]] for popp in is_on_and_route]
-					print(these_perfs)
 					# at the best case, user gets routed to lowest latency "on" probe
 					best_case_perf = np.minimum(np.min(these_perfs), best_case_perf)
 					# at the worst case, every max hits and the user picks the best of those maxes
 					worst_case_perf = np.minimum(np.max(these_perfs), worst_case_perf)
-			print(worst_case_perf)
-			print(best_case_perf)
-			print('\n')
 
-			overall_best += (-1 * best_case_perf) * self.ug_to_vol[ug]
-			overall_worst += (-1 * worst_case_perf) * self.ug_to_vol[ug]
-			overall_average += (-1 * (best_case_perf + worst_case_perf) / 2) * self.ug_to_vol[ug]
-
+			overall_best += ((-1 * best_case_perf) * self.ug_to_vol[ug])
+			overall_worst += ((-1 * worst_case_perf) * self.ug_to_vol[ug])
+			overall_average += ((-1 * (best_case_perf + worst_case_perf) / 2) * self.ug_to_vol[ug])
 
 		return {
-			'best': best_case_perf / total_ug_vol,
-			'worst': worst_case_perf / total_ug_vol,
+			'best': overall_best / total_ug_vol,
+			'worst': overall_worst / total_ug_vol,
 			'avg': overall_average / total_ug_vol,
 		}
 			

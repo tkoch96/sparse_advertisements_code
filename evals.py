@@ -561,23 +561,29 @@ def do_eval_whatifs():
 
 	np.random.seed(31414)
 	metrics = {}
-	N_TO_SIM = 5
+	N_TO_SIM = 50
 
 	lambduh = .1
 	
 	wm = None
 	
 	metrics_fn = os.path.join(CACHE_DIR, 'whatifs_{}.pkl'.format(DPSIZE))
-	metrics = {'popp_failures': {}}
+	metrics = {'popp_failures': {i:{} for i in range(N_TO_SIM)}}
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
 
 	try:
 		for random_iter in range(N_TO_SIM):
+			try:
+				metrics['popp_failures'][random_iter]
+				continue
+			except KeyError:
+				pass
+			metrics['popp_failures'][random_iter] = {}
 			print("-----Deployment number = {} -------".format(random_iter))
 			deployment = get_random_deployment(DPSIZE)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
-				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE,n_prefixes=len(deployment['popps'])-1)
+				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE)
 			if wm is None:
 				wm = Worker_Manager(sas.get_init_kwa(), deployment)
 				wm.start_workers()
@@ -595,14 +601,13 @@ def do_eval_whatifs():
 				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy)
 				naive_range = sas.get_naive_range(adv_cpy)
 
-				metrics['popp_failures'][popp] = {
+				metrics['popp_failures'][random_iter][popp] = {
 					'actual': actual_lb,
 					'expected': avg_benefit,
 					'range': naive_range
 				}
-			
-			print(metrics)
-			exit(0)
+
+
 			pickle.dump(metrics, open(metrics_fn,'wb'))
 	except:
 		import traceback
@@ -614,10 +619,22 @@ def do_eval_whatifs():
 	f,ax=plt.subplots(1,1)
 
 
+	all_predicted = np.array([metrics['popp_failures'][ri][popp]['expected'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+	all_actual = np.array([metrics['popp_failures'][ri][popp]['actual'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+	all_avg = np.array([metrics['popp_failures'][ri][popp]['range']['avg'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+
+	x1,cdf_predicted_diffs = get_cdf_xy(all_predicted - all_actual)
+	x2,cdf_naive_diffs = get_cdf_xy(all_avg - all_actual)
+
+	ax.plot(x1,cdf_predicted_diffs,label="Our Prediction")
+	ax.plot(x2,cdf_naive_diffs,label="Average Prediction")
 
 	ax.legend()
 	ax.grid(True)
-	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
+	ax.set_xlabel("Difference Between Actual and Predicted (ms)")
 	ax.set_ylabel("CDF of Deployments")
 	save_fig("whatifs.pdf")
 
