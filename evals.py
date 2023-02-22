@@ -375,8 +375,8 @@ def do_eval_improvement_over_budget_single_deployment():
 	metrics = {}
 	N_TO_SIM = 1
 	explore='bimodality'
-	lambduhs = list(reversed(np.logspace(-2,.9,num=20))) #RFS
-	# lambduhs = list(reversed(np.logspace(-2,.3)))
+	# lambduhs = list(reversed(np.logspace(-2,.9,num=20))) #RFS
+	lambduhs = list(reversed(np.logspace(-2,.3)))
 	solution_types = ['sparse', 'anyopt', 'painter']
 	
 	wm = None
@@ -394,8 +394,8 @@ def do_eval_improvement_over_budget_single_deployment():
 		'max_painter_benefit', 'sparse_benefit', 'max_sparse_benefit']
 
 	try:
-		for lambduh in lambduhs:
-			print("-----LAMBDUH = {} -------".format(lambduh))
+		for li,lambduh in enumerate(lambduhs):
+			print("-----LAMBDUH = {} ({}th iter) -------".format(lambduh, li))
 			metrics[lambduh] = metrics.get(lambduh, {m: {st:[] for st in solution_types} for m in metric_keys})
 			for random_iter in range(N_TO_SIM):
 				try:
@@ -442,26 +442,26 @@ def do_eval_improvement_over_budget_single_deployment():
 	finally:
 		if wm is not None:
 			wm.stop_workers()
-	print(metrics)
-	f,ax=plt.subplots(1,1)
-	for st in solution_types:
-		these_costs = [np.median(metrics[lambduh]['cost'][st]) for lambduh in lambduhs]
-		these_benefits = [np.median(np.array(metrics[lambduh]['painter_benefit'][st]) * 100.0 \
-			/ np.array(metrics[lambduh]['max_painter_benefit'][st])) for lambduh in lambduhs]
-		print(st)
-		print(these_benefits)
-		print(these_costs)
-		ax.scatter(these_costs, these_benefits,label=st + " PB")
+	for cost_type in ['cost', 'prefix_cost']:
+		f,ax=plt.subplots(1,1)
+		for st in solution_types:
+			these_costs = [np.median(metrics[lambduh][cost_type][st]) for lambduh in lambduhs]
+			these_benefits = [np.median(np.array(metrics[lambduh]['painter_benefit'][st]) * 100.0 \
+				/ np.array(metrics[lambduh]['max_painter_benefit'][st])) for lambduh in lambduhs]
+			print(st)
+			print(these_benefits)
+			print(these_costs)
+			ax.scatter(these_costs, these_benefits,label=st + " PB")
 
-		these_benefits = [np.median(np.array(metrics[lambduh]['sparse_benefit'][st]) * 100.0 \
-			/ np.array(metrics[lambduh]['max_sparse_benefit'][st])) for lambduh in lambduhs]
-		ax.scatter(these_costs, these_benefits,label=st + " SB")
+			these_benefits = [np.median(np.array(metrics[lambduh]['sparse_benefit'][st]) * 100.0 \
+				/ np.array(metrics[lambduh]['max_sparse_benefit'][st])) for lambduh in lambduhs]
+			ax.scatter(these_costs, these_benefits,label=st + " SB")
 
-	ax.legend()
-	ax.grid(True)
-	ax.set_xlabel("Cost")
-	ax.set_ylabel("Pct. Benefit")
-	save_fig("cost_vs_benefit.pdf")
+		ax.legend()
+		ax.grid(True)
+		ax.set_xlabel(cost_type)
+		ax.set_ylabel("Pct. Benefit")
+		save_fig("{}_vs_benefit.pdf".format(cost_type))
 
 def do_eval_improvement_over_budget_multi_deployment():
 	np.random.seed(31414)
@@ -538,7 +538,7 @@ def do_eval_improvement_over_budget_multi_deployment():
 	# do for both sparse and painter benefits
 
 	for p in pcntles_of_interest:
-		for compare_method in ['painter', 'anyopt']:
+		for mt,compare_method in zip(['<','.'],['painter', 'anyopt']):
 			for bt in ['painter', 'sparse']:
 				comps = []
 				these_costs = metrics['comparisons']['{}_benefit'.format(bt)]
@@ -547,7 +547,7 @@ def do_eval_improvement_over_budget_multi_deployment():
 						comps.append(these_costs[compare_method][p][j] / these_costs['sparse'][p][j])
 				if len(comps) > 1:
 					x,cdf_x = get_cdf_xy(comps)
-					ax.plot(x,cdf_x,label="{} {} {}".format(p,compare_method,bt))
+					ax.plot(x,cdf_x,marker=mt,label="{} {} {}".format(p,compare_method,bt))
 	ax.legend()
 	ax.grid(True)
 	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
