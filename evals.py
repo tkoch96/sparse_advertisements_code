@@ -546,13 +546,97 @@ def do_eval_improvement_over_budget_multi_deployment():
 					if these_costs[compare_method][p][j] != None and these_costs['sparse'][p][j] != None:
 						comps.append(these_costs[compare_method][p][j] / these_costs['sparse'][p][j])
 				if len(comps) > 1:
-					x,cdf_x = get_cdf_xy(comps)
-					ax.plot(x,cdf_x,marker=mt,label="{} {} {}".format(p,compare_method,bt))
+					x,cdf_x = get_cdf_xy(comps,n_points=50)
+					ax.plot(x,cdf_x,marker=mt,markersize=3,label="{} {} {}".format(p,compare_method,bt))
 	ax.legend()
 	ax.grid(True)
 	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
 	ax.set_ylabel("CDF of Deployments")
 	save_fig("sparse_cost_savings_over_deployments_cdf.pdf")
+
+def do_eval_whatifs():
+	# for each deployment, solve problem
+	# fail each link and pop, for each user calc latency range and pdf, get ground truth latency
+	# look at some measure of the degree to which our model helps us get closer to ground truth latencies
+
+	np.random.seed(31414)
+	metrics = {}
+	N_TO_SIM = 50
+
+	lambduh = .1
+	
+	wm = None
+	
+	metrics_fn = os.path.join(CACHE_DIR, 'whatifs_{}.pkl'.format(DPSIZE))
+	metrics = {'popp_failures': {i:{} for i in range(N_TO_SIM)}}
+	if os.path.exists(metrics_fn):
+		metrics = pickle.load(open(metrics_fn,'rb'))
+
+	try:
+		for random_iter in range(N_TO_SIM):
+			try:
+				metrics['popp_failures'][random_iter]
+				continue
+			except KeyError:
+				pass
+			metrics['popp_failures'][random_iter] = {}
+			print("-----Deployment number = {} -------".format(random_iter))
+			deployment = get_random_deployment(DPSIZE)
+			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
+				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE)
+			if wm is None:
+				wm = Worker_Manager(sas.get_init_kwa(), deployment)
+				wm.start_workers()
+			sas.set_worker_manager(wm)
+			sas.update_deployment(deployment)
+			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=False,
+				 dont_update_deployment=True)
+
+			adv = threshold_a(ret['adv_solns']['sparse'][0])
+			for popp in sas.popps:
+				adv_cpy = np.copy(adv)
+				adv_cpy[sas.popp_to_ind[popp]] = 0
+
+				avg_benefit, (x,pdf) = sas.latency_benefit_fn(adv_cpy, retnow=True)
+				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy)
+				naive_range = sas.get_naive_range(adv_cpy)
+
+				metrics['popp_failures'][random_iter][popp] = {
+					'actual': actual_lb,
+					'expected': avg_benefit,
+					'range': naive_range
+				}
+
+
+			pickle.dump(metrics, open(metrics_fn,'wb'))
+	except:
+		import traceback
+		traceback.print_exc()
+		exit(0)
+	finally:
+		if wm is not None:
+			wm.stop_workers()
+	f,ax=plt.subplots(1,1)
+
+
+	all_predicted = np.array([metrics['popp_failures'][ri][popp]['expected'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+	all_actual = np.array([metrics['popp_failures'][ri][popp]['actual'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+	all_avg = np.array([metrics['popp_failures'][ri][popp]['range']['avg'] for ri in range(N_TO_SIM) for popp \
+		in metrics['popp_failures'][ri]])
+
+	x1,cdf_predicted_diffs = get_cdf_xy(all_predicted - all_actual)
+	x2,cdf_naive_diffs = get_cdf_xy(all_avg - all_actual)
+
+	ax.plot(x1,cdf_predicted_diffs,label="Our Prediction")
+	ax.plot(x2,cdf_naive_diffs,label="Average Prediction")
+
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Difference Between Actual and Predicted (ms)")
+	ax.set_ylabel("CDF of Deployments")
+	save_fig("whatifs.pdf")
 
 if __name__ == "__main__":
 	# all_args = []
@@ -565,4 +649,6 @@ if __name__ == "__main__":
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
 	# do_eval_compare_explores()
-	do_eval_improvement_over_budget_single_deployment()
+	do_eval_improvement_over_budget_multi_deployment()
+	exit(0)
+	do_eval_whatifs()

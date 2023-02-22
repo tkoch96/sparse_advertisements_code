@@ -1,10 +1,18 @@
-import zmq, pickle, numpy as np, time, copy, multiprocessing
+import zmq, pickle, numpy as np, time, copy, multiprocessing, os
 from subprocess import call
 from helpers import *
 from constants import *
 
 ## ~ half a second for debugging, .01s for real time
 SLEEP_PERIOD = .02
+
+paths = ["~/venv/bin/python", "/Users/tom/Documents/phd/research/ingress_opt/venv/bin/python"]
+PYTHON = None
+for path in paths:
+	if os.path.exists(path):
+		PYTHON = path
+		break
+assert PYTHON is not None
 
 class Worker_Manager:
 	def __init__(self, kwa_settings, deployment):
@@ -31,7 +39,7 @@ class Worker_Manager:
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
 			assert len(subdeployments[worker]['ugs']) >= 1
-			call("~/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # VMs
+			call("{} path_distribution_computer.py {} &".format(PYTHON, worker), shell=True) # VMs
 			# call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # home PC
 			# send worker startup information
 			args = [subdeployments[worker]]

@@ -59,36 +59,34 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	def get_ingress_probabilities_by_a_matmul(self, a, verb=False, **kwargs):
 		a = threshold_a(a.astype(np.int32))
-		if np.array_equal(a, remeasure_a): verb = True
+		# if np.array_equal(a, remeasure_a): verb = True
 		a_log = a.astype(bool)
 
 
 
 		self.ingress_probabilities[:,:,:] = 0
-		mprocess = True#kwargs.get('multiprocess',False)
 		for pref_i in range(self.n_prefixes):
+			tloga = tuple(a_log[:,pref_i].flatten())
 			##### WARNING -- if number of UGs and number of popps is the same, there could be ambiguity with the broadcasting
 			##### but the likelihood of that event is pretty small
 			if np.sum(a[:,pref_i]) == 0:
 				continue
 			try:
-				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())]
+				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tloga]
 				continue
 			except KeyError:
 				try:
-					self.ingress_probabilities[:,pref_i,:] = self.this_time_ip_cache[tuple(a_log[:,pref_i].flatten())]
+					for (i,k), prob in self.this_time_ip_cache[tloga].items():
+						# will need a more complicated caching mechanism if ever non-uniform
+						self.ingress_probabilities[i,pref_i,k] = 1.0/prob 
 					continue
 				except KeyError:
 					pass
-				pass
 			these_active_popps = np.expand_dims(a_log[:,pref_i],axis=1)
-			# active popps
-			tmp_arr = a_log[:,pref_i]
-			if mprocess:
-				active_parent_indicator = np.logical_and(tmp_arr, self.parent_tracker)
-			else: # Numba and multiprocess are not compatible
-				active_parent_indicator = large_logical_and(tmp_arr, self.parent_tracker)
-			# active_parent_indicator = np.logical_and(tmp_arr, self.parent_tracker)
+			# a[:,pref_i] is active popps
+			### This step takes the longest by far, but I can't figure out how to speed it up
+			### perhaps when popp gets large, it makes more sense to store a sparse representation of parent_tracker
+			active_parent_indicator = np.logical_and(a_log[:,pref_i], self.parent_tracker)
 			# holds ug,popps to delete since they get beaten
 			delete_popp_ug_indicator = np.logical_and(these_active_popps, np.any(active_parent_indicator, axis=2).T)
 			# UG has route and popp active
@@ -97,8 +95,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			valid_popp_ug_indicator = np.logical_and(active_popp_ug_indicator,np.logical_not(delete_popp_ug_indicator))
 			# now sort based on likelihood
 			sortf_arr = {ug:[] for ug in self.ugs}
-			active_inds = np.where(valid_popp_ug_indicator > 0)
-			for poppi,ugi in zip(active_inds[0],active_inds[1]):
+			for poppi,ugi in zip(*np.where(valid_popp_ug_indicator)):
 				ug = self.ugs[ugi]
 				popp = self.popps[poppi]
 				try:
@@ -109,40 +106,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						self.metro_loc[ug[0]]).km)
 					self.calc_cache.all_caches['distance'][poppi,ug] = d
 				sortf_arr[ug].append((poppi,d))
+			### Cache the entries that have non-zero probability
+			self.this_time_ip_cache[tloga] = {}
 			for ug,ds in sortf_arr.items():
 				if len(ds) == 0:
 					continue
 				ui = self.ug_to_ind[ug]
-				most_likely_peers = sorted(ds,key=lambda el : el[1])[0:5]
-
+				most_likely_peers = sorted(ds,key=lambda el : el[1])
+				### TODO -- possibly introduce actual likelihoods here
 				nmlp = len(most_likely_peers)
 				for mlp,_ in most_likely_peers:
 					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
+					### Cache the entries that have non-zero probability
+					self.this_time_ip_cache[tloga][mlp,ui] = nmlp
+			### This simple caching mechanism requires too much memory
 			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
-			self.this_time_ip_cache[tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
-
-			# for ug in self.ugs:
-			# 	# perform a sort on these in particular
-			# 	ui = self.ug_to_ind[ug]
-			# 	possible_peers = np.where(valid_popp_ug_indicator[:,ui] > 0)[0]
-			# 	if len(possible_peers) == 0: continue
-			# 	if verb and ui == 0:
-			# 		print(possible_peers)					
-			# 	most_likely_peers = self.get_n_most_likely_peers_justsort(ug, possible_peers)
-			# 	pi = np.zeros((self.n_popp))
-			# 	for mlp in most_likely_peers:
-			# 		pi[mlp] = 1 / len(most_likely_peers)
-			# 	#### TODO -- could incorporate pairwise information here
-			# 	# orderings = {}
-			# 	# n_combs = np.math.factorial(len(most_likely_peers))
-			# 	# for ordering in itertools.permutations(most_likely_peers, len(most_likely_peers)):
-			# 	# 	orderings[ordering] = 1 / n_combs # COULD incorporate priors here
-			# 	# tot_prob = 1.0
-			# 	# ## Calculate the marginal that each ingress wins
-			# 	# for ordering in orderings:
-			# 	# 	pi[ordering[0]] += orderings[ordering]
-			# 	# pi = pi / tot_prob
-			# 	self.ingress_probabilities[:,pref_i,ui] = pi
 
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
@@ -321,19 +299,27 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				ret.append(self.latency_benefit(*args, **kwargs))
 			del self.this_time_ip_cache
 		elif cmd == 'calc_compressed_lb':
+
+			ts = time.time()
+
 			ret = []
 			self.this_time_ip_cache = {}
 			base_args,base_kwa = data[0]
 			base_adv, = base_args
 			base_adv = base_adv.astype(bool)
-			base_kwa['verb'] = True
 			ret.append(self.latency_benefit(base_adv,**base_kwa))
+			i=0
 			for diff, kwa in data[1:]:
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
 				ret.append(self.latency_benefit(base_adv, **kwa))
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
+
+				i += 1
+				if i%100 == 0 and kwa.get('verb'):
+					print("worker {} : {} pct. done calcing grads, {} s per iter".format(self.worker_i, 
+					i * 100.0 /len(data), (time.time() - ts) / i))
 			del self.this_time_ip_cache
 
 		elif cmd == 'reset_new_meas_cache':
