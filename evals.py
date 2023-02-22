@@ -538,7 +538,7 @@ def do_eval_improvement_over_budget_multi_deployment():
 	# do for both sparse and painter benefits
 
 	for p in pcntles_of_interest:
-		for compare_method in ['painter', 'anyopt']:
+		for mt,compare_method in zip(['<','.'], ['painter', 'anyopt']):
 			for bt in ['painter', 'sparse']:
 				comps = []
 				these_costs = metrics['comparisons']['{}_benefit'.format(bt)]
@@ -546,8 +546,8 @@ def do_eval_improvement_over_budget_multi_deployment():
 					if these_costs[compare_method][p][j] != None and these_costs['sparse'][p][j] != None:
 						comps.append(these_costs[compare_method][p][j] / these_costs['sparse'][p][j])
 				if len(comps) > 1:
-					x,cdf_x = get_cdf_xy(comps)
-					ax.plot(x,cdf_x,label="{} {} {}".format(p,compare_method,bt))
+					x,cdf_x = get_cdf_xy(comps,n_points=50)
+					ax.plot(x,cdf_x,marker=mt,markersize=3,label="{} {} {}".format(p,compare_method,bt))
 	ax.legend()
 	ax.grid(True)
 	ax.set_xlabel("Method / Sparse Cost at Each Benefit Pile")
@@ -632,4 +632,6 @@ if __name__ == "__main__":
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
 	# do_eval_compare_explores()
+	do_eval_improvement_over_budget_multi_deployment()
+	exit(0)
 	do_eval_whatifs()
