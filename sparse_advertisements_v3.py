@@ -659,8 +659,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				self.anyopt_solution['advertisement'], self.extreme['minimal_advertisement'], self.extreme['maximal_advertisement']]):
 				metrics['painter_objective_vals'][k].append(self.painter_objective(adv))
 				metrics['anyopt_objective_vals'][k].append(self.anyopt_objective(adv))
-				print(k)
-				print(threshold_a(adv))
 				metrics['normalized_sparse_benefit'][k].append(self.get_normalized_benefit(adv))
 			if verbose:
 				print("Solving oracle")
