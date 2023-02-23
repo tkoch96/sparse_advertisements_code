@@ -133,6 +133,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			except KeyError:
 				pass
 
+		subset_ugs = False
+		which_ugs = kwargs.get('ugs', None)
+		if which_ugs is not None:
+			subset_ugs = True
+			which_ugs_this_worker = get_intersection(which_ugs, self.ugs)
+			if len(which_ugs_this_worker) == 0:
+				pdf = np.zeros(self.lbx.shape)
+				pdf[-1] = 1
+				return 0, (self.lbx.flatten(),pdf.flatten())
+			which_ugs_i = np.array([self.ug_to_ind[ug] for ug in which_ugs_this_worker])
+			all_workers_ugs_i = np.array([self.whole_deployment_ug_to_ind[ug] for ug in which_ugs])
+			all_workers_vol = sum([self.whole_deployment_ug_vols[ugi] for ugi in all_workers_ugs_i])
+
+			benefit_renorm = all_workers_vol / np.sum(self.whole_deployment_ug_vols)
+
 		## Dims are path, prefix, user
 		self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
 		p_mat = self.ingress_probabilities
@@ -248,18 +263,24 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for ui in reversed(range(self.n_ug)):
 			if np.sum(px[:,ui]) == 0:
 				# This user experiences no benefit with probability 1
+				# no benefit means no path, so it's actually just the most 
+				# negative benefit we can give
 				px[0,ui] = 1
+		px = px / (np.sum(px,axis=0) + 1e-8) # renorm
+		if subset_ugs:
+			px = px[:,which_ugs_i]
 
-
-		px = px / (np.sum(px,axis=0) + 1e-8)
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
-
 		psumx = sum_pdf_new(px)
 		### pmf of benefits is now xsumx with probabilities psumx
 		## lbx doesn't change, since we clip all intermediate steps
 		xsumx = self.lbx
+		if subset_ugs:
+			xsumx = xsumx / benefit_renorm ## fix normalization for subset of ugs
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 
+		if np.sum(psumx) < .5:
+			print("ERRRRRR : {}".format(np.sum(psumx)))
 		# if verb:
 		# 	print("MIN : {} -- MAX : {}".format(np.min(self.lbx), np.max(self.lbx)))
 		# 	running_sum = 0

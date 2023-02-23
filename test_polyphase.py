@@ -54,6 +54,8 @@ def decimate_fftconv(data, filt, decimate_by):
 
 def clip_fftconv(data, filt, clip_by):
     #### Implements fftconv and mean over bins by decimate_by
+    #### Clips upper "clip_by" portion of the array, accumulating the leftover probability
+    ### to that last bin
 
     if data.shape[0] % clip_by != 0:
         data = data[:(data.shape[0] - data.shape[0]%clip_by),:]
@@ -77,7 +79,8 @@ def sum_pdf_new(px):
     ## so px is n_bins x n_RVs
     ## output n_bins is n_bins
 
-
+    if px.shape[1] == 1:
+        return px
     l = px.shape[0]
     nout = px.shape[1]//2
     if px.shape[1] % 2 == 0:

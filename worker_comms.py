@@ -6,7 +6,7 @@ from constants import *
 ## ~ half a second for debugging, .01s for real time
 SLEEP_PERIOD = .02
 
-paths = ["~/venv/bin/python", "/Users/tom/Documents/phd/research/ingress_opt/venv/bin/python"]
+paths = ["/home/tom/venv/bin/python", "/Users/tom/Documents/phd/research/ingress_opt/venv/bin/python"]
 PYTHON = None
 for path in paths:
 	if os.path.exists(path):

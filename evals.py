@@ -561,7 +561,7 @@ def do_eval_whatifs():
 
 	np.random.seed(31414)
 	metrics = {}
-	N_TO_SIM = 50
+	N_TO_SIM = 1
 
 	lambduh = .1
 	
@@ -576,7 +576,8 @@ def do_eval_whatifs():
 		for random_iter in range(N_TO_SIM):
 			try:
 				metrics['popp_failures'][random_iter]
-				continue
+				if len(metrics['popp_failures'][random_iter]) > 0: 
+					continue
 			except KeyError:
 				pass
 			metrics['popp_failures'][random_iter] = {}
@@ -593,13 +594,19 @@ def do_eval_whatifs():
 				 dont_update_deployment=True)
 
 			adv = threshold_a(ret['adv_solns']['sparse'][0])
+
+			_, ug_catchments = sas.calculate_user_choice(adv)
 			for popp in sas.popps:
+				these_ugs = [ug for ug in sas.ugs if \
+					sas.popp_to_ind[popp] == ug_catchments[sas.ug_to_ind[ug]]]
+				if len(these_ugs) == 0: 
+					continue
 				adv_cpy = np.copy(adv)
 				adv_cpy[sas.popp_to_ind[popp]] = 0
 
-				avg_benefit, (x,pdf) = sas.latency_benefit_fn(adv_cpy, retnow=True)
-				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy)
-				naive_range = sas.get_naive_range(adv_cpy)
+				avg_benefit, (x,pdf) = sas.latency_benefit_fn(adv_cpy, retnow=True, ugs=these_ugs)
+				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy, ugs=these_ugs)
+				naive_range = sas.get_naive_range(adv_cpy, ugs=these_ugs)
 
 				metrics['popp_failures'][random_iter][popp] = {
 					'actual': actual_lb,
@@ -617,6 +624,7 @@ def do_eval_whatifs():
 		if wm is not None:
 			wm.stop_workers()
 	f,ax=plt.subplots(1,1)
+	print(metrics)
 
 
 	all_predicted = np.array([metrics['popp_failures'][ri][popp]['expected'] for ri in range(N_TO_SIM) for popp \
@@ -649,6 +657,4 @@ if __name__ == "__main__":
 	# do_eval_compare_peer_value((-1,))
 	# do_eval_compare_strategies()
 	# do_eval_compare_explores()
-	do_eval_improvement_over_budget_multi_deployment()
-	exit(0)
 	do_eval_whatifs()

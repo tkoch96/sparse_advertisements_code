@@ -235,7 +235,10 @@ class Optimal_Adv_Wrapper:
 		a_effective = threshold_a(a)
 		
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
-		benefit = self.benefit_from_user_latencies(user_latencies)
+
+		ugs = kwargs.get('ugs',self.ugs)
+
+		benefit = self.benefit_from_user_latencies(user_latencies,ugs)
 		return benefit
 
 	def get_ug_perfs_with_anycast(self):
@@ -308,19 +311,8 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_user_latencies(self, a, **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
-		user_latencies = NO_ROUTE_LATENCY * np.ones((len(self.ugs)))
-		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a)
-		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
-		for prefix_i in range(a.shape[1]):
-			for ugi,ug in enumerate(self.ugs):
-				routed_ingress = routed_through_ingress[prefix_i].get(ug)
-				if routed_ingress is None:
-					latency = NO_ROUTE_LATENCY
-				else:
-					latency = self.ug_perfs[ug][self.popps[routed_ingress]]
-				if latency < user_latencies[ugi]: 
-					ug_ingress_decisions[ugi] = routed_ingress
-					user_latencies[ugi] = latency
+		user_latencies, ug_ingress_decisions = self.calculate_user_choice(a)
+		
 		if self.with_capacity:
 			link_volumes = np.zeros(self.n_popp)
 			ingress_to_users = {}
@@ -342,11 +334,15 @@ class Optimal_Adv_Wrapper:
 		# 	print(user_latencies)
 		return user_latencies
 
-	def benefit_from_user_latencies(self, user_latencies):
+	def benefit_from_user_latencies(self, user_latencies, ugs):
 		# sum of the benefits, simple model for benefits is 1 / latency
+		# allow for calculation over a subset of UGs
 		user_benefits = -1 * user_latencies
 		# average user benefit -- important that this function is not affected by the number of user groups
-		return np.sum(user_benefits * self.ug_vols) / np.sum(self.ug_vols)
+		these_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
+		these_vols = np.array([self.ug_vols[these_inds] for ug in ugs])
+		these_benefits = user_benefits[these_inds]
+		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
 	def get_ground_truth_resilience_benefit(self, a):
 		benefit = 0
@@ -356,6 +352,24 @@ class Optimal_Adv_Wrapper:
 			benefit += self.get_ground_truth_latency_benefit(a * tmp)
 			tmp[self.popp_to_ind[popp],:] = 1
 		return benefit / len(self.popps)
+
+	def calculate_user_choice(self, a):
+		"""Calculates UG -> popp assuming they go to their best performing popp."""
+		user_latencies = NO_ROUTE_LATENCY * np.ones((len(self.ugs)))
+		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a)
+		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
+		for prefix_i in range(a.shape[1]):
+			for ugi,ug in enumerate(self.ugs):
+				routed_ingress = routed_through_ingress[prefix_i].get(ug)
+				if routed_ingress is None:
+					latency = NO_ROUTE_LATENCY
+				else:
+					latency = self.ug_perfs[ug][self.popps[routed_ingress]]
+				if latency < user_latencies[ugi]: 
+					ug_ingress_decisions[ugi] = routed_ingress
+					user_latencies[ugi] = latency
+		return user_latencies, ug_ingress_decisions
+
 
 	def calculate_ground_truth_ingress(self, a):
 		### Returns routed_through ingress -> prefix -> ug -> popp_i
@@ -449,14 +463,18 @@ class Optimal_Adv_Wrapper:
 		# print("Measuring : \n{}".format(a))
 		self.measured[tuple(a.flatten())] = None
 
-	def get_naive_range(self, a):
+	def get_naive_range(self, a, ugs=None):
 		overall_best = 0
 		overall_worst = 0
 		overall_average = 0
 
-		total_ug_vol = sum(list(self.ug_to_vol.values()))
+		if ugs is None:
+			ugs = list(self.ug_to_vol)
 
-		for ug, perfs in self.ug_perfs.items():
+		total_ug_vol = sum(list(self.ug_to_vol[ug] for ug in ugs))
+
+		for ug in ugs:
+			perfs = self.ug_perfs[ug]
 			worst_case_perf = MAX_LATENCY
 			best_case_perf = MAX_LATENCY
 			has_perf = [self.popp_to_ind[popp] for popp in perfs]
@@ -497,7 +515,7 @@ class Optimal_Adv_Wrapper:
 		if self.gamma > 0:
 			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
 		else:
-			resilience_beneift = 0
+			resilience_benefit = 0
 
 		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
 

@@ -240,20 +240,24 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		sorted_available_peers = sorted(available_peers, key = rank_f)
 		return sorted_available_peers[0:n]
 
-	def compress_lb_args_queue(self):
+	def compress_lb_args_queue(self, **kwargs):
 		### Idea: first adv is the base, rest are deltas from the base
 		### transmit the base and the deltas
+		ugs = kwargs.get('ugs', None)
 		base_args, base_kwa = self.lb_args_queue[0]
+		if ugs is not None:
+			base_kwa['ugs'] = ugs
 		base_adv, = base_args
 		self.compressed_lb_args_queue = [(base_args, base_kwa)]
 		for other_args, kwa in self.lb_args_queue[1:]:
 			other_adv, = other_args
+			if ugs is not None:
+				kwa['ugs'] = ugs
 			self.compressed_lb_args_queue.append((np.where(base_adv!=other_adv), kwa))
 
+	def flush_latency_benefit_queue(self, **kwargs):
 
-	def flush_latency_benefit_queue(self):
-
-		self.compress_lb_args_queue()
+		self.compress_lb_args_queue(**kwargs)
 
 		# msg = pickle.dumps(['calc_lb', self.lb_args_queue])
 		msg = pickle.dumps(['calc_compressed_lb', self.compressed_lb_args_queue])
@@ -270,7 +274,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			for adv_ret_i in range(n_to_flush): # n calls times
 				lbret = ret[adv_ret_i]
 				# need to (a) convert each pdf to be the same x array
-				# (b) get cumulativer vals array as individual vals * n_rets
+				# (b) get cumulative vals array as individual vals * n_rets
 				mean, (vals,pdf) = lbret
 				pdfs[adv_ret_i][worker_i] = pdf
 				min_val[adv_ret_i] = np.minimum(vals[0], min_val[adv_ret_i])
@@ -285,16 +289,25 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		inds = np.arange(LBX_DENSITY)
 		for adv_ret_i in range(n_to_flush):
 			new_max, new_min = max_val[adv_ret_i], min_val[adv_ret_i]
+
 			lbx[adv_ret_i,:] = np.linspace(new_min, new_max, LBX_DENSITY)
 			for worker_i in range(n_workers):
 				rescaled_pdf = np.zeros(pdfs[adv_ret_i][worker_i].shape)
 				old_min, old_max = vals_by_worker[worker_i][adv_ret_i]
 				remap_arr = (old_min + inds * (old_max - old_min) / LBX_DENSITY - new_min) * LBX_DENSITY / (new_max - new_min)
-				remap_arr = np.round(remap_arr).astype(np.int32)
-				# for lbx_i in range(LBX_DENSITY):
-				# 	rescaled_pdf[remap_arr[lbx_i]] += pdfs[adv_ret_i][worker_i][lbx_i] 
-				rescaled_pdf[remap_arr[inds]] += pdfs[adv_ret_i][worker_i][inds]
+				remap_arr = np.round(remap_arr).astype(np.int32).clip(0,LBX_DENSITY-1)
+				if new_min < -1000:
+					print(old_min)
+					print(old_max)
+					print(new_min)
+					print(new_max)
+					print(np.where(pdfs[adv_ret_i][worker_i] > .01))
+				for ind in np.where(pdfs[adv_ret_i][worker_i] > 0)[0]:
+					rescaled_pdf[remap_arr[ind]] += pdfs[adv_ret_i][worker_i][ind]
 				pdfs[adv_ret_i][worker_i] = rescaled_pdf
+				if new_min < -1000:
+					print(np.where(rescaled_pdf > .01))
+					print("\n")
 
 		### This is no longer true since we chop off the upper half each convolution
 		# # total benefit is sum aross all benefits
@@ -306,14 +319,18 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			px = np.zeros((LBX_DENSITY, len(pdfs[adv_ret_i])))
 			for sdi in range(len(pdfs[adv_ret_i])):
 				px[:,sdi] = pdfs[adv_ret_i][sdi]
+			if lbx[adv_ret_i,0] < -1000:
+				print(np.where(px>.01))
 			if px.shape[1] > 1:
 				px = sum_pdf_new(px)
 			mean = np.sum(px.flatten()*lbx[adv_ret_i,:].flatten())
+			if lbx[adv_ret_i,0] < -1000:
+				print(np.where(px>.01))
+				print(mean)
 			ret_to_call[adv_ret_i] = (mean, (lbx[adv_ret_i,:].flatten(), px.flatten()))
 
 			if adv_ret_i == 0 and self.verbose:
 				print("Overall mean: {}".format(mean))
-
 		# if n_to_flush > 1:
 		# 	print(min_val[0])
 		# 	print(max_val[0])
@@ -330,7 +347,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def latency_benefit(self, *args, **kwargs):
 		self.lb_args_queue.append((copy.deepcopy(args),copy.deepcopy(kwargs)))
 		if kwargs.get('retnow', False):
-			return self.flush_latency_benefit_queue()[0]
+			return self.flush_latency_benefit_queue(**kwargs)[0]
 
 	def resilience_benefit(self, a):
 		"""1 / n_popp * sum over peers of E(benefit when that peer is knocked out)."""
@@ -1260,7 +1277,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				if DPSIZE in ['decent', 'large']:
 					self.make_plots()
 
-			if self.iter == 10:
+			if self.iter == 1:
 				break
 
 		if self.verbose:
