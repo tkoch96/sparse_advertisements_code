@@ -3,6 +3,36 @@ import scipy.signal as sg
 from scipy.ndimage import gaussian_filter1d as gfilt
 
 
+def rescale_pdf(x, px, renorm):
+    ### Rescales (x,px) to be from x[0] / renorm -> x[-1] / renorm
+    ### but we truncate them to retain the same spacing as in x
+    ### i.e., we focus in on the region with probability, which we assume
+    ### to be much smaller than x[0] -> x[-1]
+    n_out = len(px)
+    delta = x[1] - x[0]
+    n_needed = np.maximum(n_out,int(np.ceil(n_out / renorm)))
+    rescaled_full_x = x[0] / renorm + delta * np.arange(n_needed)
+
+    full_rescaled_px = np.zeros(n_needed)
+    prob_concentration = np.where(px>0.0001)[0]
+    for ind in prob_concentration:
+        full_rescaled_px[int(ind/renorm)] += px[ind]
+
+    prob_concentration = np.where(full_rescaled_px>0)[0]
+    minx,maxx = prob_concentration[0], prob_concentration[-1]+1
+    if maxx-minx < n_out:
+        minx = np.maximum(maxx-n_out,0)
+        if maxx-minx < n_out:
+            maxx = minx + n_out
+    elif maxx-minx > n_out:
+        minx = maxx - n_out
+    rescaled_px = full_rescaled_px[minx:maxx]
+    if minx > 0:
+        rescaled_px[0] += np.sum(full_rescaled_px[0:minx])
+    rescaled_x = rescaled_full_x[minx:maxx]
+
+    return rescaled_x, rescaled_px
+
 def polyphase_filt(data, filt, decimate_by):
     ### Implements fftconv + downsample with polyphase
 
@@ -74,10 +104,71 @@ def clip_fftconv(data, filt, clip_by):
 
     return filtered_data
 
+def fixed_point_fftconv(x1, data, x2, filt,**kwargs):
+    #### Implements fftconv and mean over bins
+    #### Finds output array of same size as inputs that contains most of the probability
+    #### returns filtered (summed) pmfs and associated x regions
+
+    clip_by = 2
+    if data.shape[0] % clip_by != 0:
+        data = data[:(data.shape[0] - data.shape[0]%clip_by),:]
+    if filt.shape[0] % clip_by != 0:
+        filt = filt[:(filt.shape[0] - filt.shape[0]%clip_by),:]
+
+    filtered_data_streams = sg.fftconvolve(data, filt, axes=0)
+    if filtered_data_streams.shape[0] % clip_by != 0:
+        leftover = clip_by - (filtered_data_streams.shape[0] % clip_by)
+        filtered_data_streams = np.concatenate([filtered_data_streams, 
+            np.zeros((leftover, filtered_data_streams.shape[1]))], axis=0)
+    nr,nc = filtered_data_streams.shape
+
+    prob_concentration = np.where(filtered_data_streams>.0001)
+    DEFAULT_VAL = 100000000
+    by_column_concentration = {i:{'min': DEFAULT_VAL, 'max': -DEFAULT_VAL} for i in range(filtered_data_streams.shape[1])}
+    for x,y in zip(*prob_concentration):
+        by_column_concentration[y]['min'] = np.minimum(x,by_column_concentration[y]['min'])
+        by_column_concentration[y]['max'] = np.maximum(x+1,by_column_concentration[y]['max'])
+
+    allowable_amt = data.shape[0]
+    new_filtered_data_streams = np.zeros(data.shape) # downsampled
+    x_mins = x1[0,:] + x2[0,:] # x return array
+    x_maxs = x1[-1,:] + x2[-1,:]
+    full_x = np.zeros(filtered_data_streams.shape)
+    for i in range(filtered_data_streams.shape[1]):
+        full_x[:-1,i] = np.linspace(x_mins[i], x_maxs[i], num=filtered_data_streams.shape[0]-1)
+    ret_x = np.zeros(data.shape)
+    for i in range(filtered_data_streams.shape[1]):
+        # Find ranges to keep
+        minx,maxx = by_column_concentration[i]['min'], by_column_concentration[i]['max']
+        total_range = maxx-minx
+        if total_range < allowable_amt:
+            leftover = allowable_amt - total_range
+            minx -= leftover
+            minx = np.maximum(0,minx)
+            total_range = maxx-minx
+            if total_range < allowable_amt:
+                leftover = allowable_amt - total_range
+                maxx += leftover
+        elif total_range > allowable_amt:
+            ## need to chop something off, chop off the negatives since those are less likely
+            minx = maxx - allowable_amt
+
+        # Chop off unused data
+        removing_lower = filtered_data_streams[0:minx,i]
+        removing_upper = filtered_data_streams[maxx:,i]
+        if removing_lower.shape[0] > 0:
+            filtered_data_streams[minx,i] += np.sum(removing_lower)
+        if removing_upper.shape[0] > 0:
+            filtered_data_streams[maxx,i] += np.sum(removing_upper)
+        new_filtered_data_streams[:,i] = filtered_data_streams[minx:maxx,i]
+        ret_x[:,i] = full_x[minx:maxx,i] 
+
+    return ret_x, new_filtered_data_streams
+
 def sum_pdf_new(px):
     ## Calculates pdf of sum of RVs, each column is a pdf of a RV
     ## so px is n_bins x n_RVs
-    ## output n_bins is n_bins
+    ## output n_bins, since we downsample by clipping
 
     if px.shape[1] == 1:
         return px
@@ -99,6 +190,32 @@ def sum_pdf_new(px):
         output = sum_pdf_new(output)
     return output / np.sum(output+1e-16,axis=0)
 
+def sum_pdf_fixed_point(x,px,**kwargs):
+    ## Calculates pdf of sum of RVs, each column is a pdf of a RV
+    ## so px is n_bins x n_RVs
+    ## output is summed pdf (length n_bins), associated x region
+    ## we compute x regions by focusing on region of pmf that has concentrated probability
+
+    if px.shape[1] == 1:
+        return x, px
+    l = px.shape[0]
+    nout = px.shape[1]//2
+    if px.shape[1] % 2 == 0:
+        out_x = np.zeros((l, nout))
+        out_px = np.zeros((l, nout))
+    else:
+        out_x = np.zeros((l, nout+1))
+        out_px = np.zeros((l, nout+1))
+        out_x[:,-1] = x[:,-1]
+        out_px[:,-1] = px[:,-1]
+    ### Perform convolution and update x region
+    out_x[0:2*(l//2),0:nout], out_px[0:2*(l//2),0:nout] = fixed_point_fftconv(x[:,:nout*2:2], px[:,:nout*2:2], 
+        x[:,1:nout*2:2], px[:,1:nout*2:2],**kwargs)
+    out_px = out_px.clip(0,np.inf)
+    if out_px.shape[1] >= 2:
+        out_x, out_px = sum_pdf_fixed_point(out_x, out_px,**kwargs)
+    return out_x, out_px / np.sum(out_px+1e-16,axis=0)
+
 def sum_pdf_old(px):
     l_post_pad = (px.shape[1] + 1) * px.shape[0]
     n_fft = px.shape[0] + l_post_pad
@@ -114,7 +231,37 @@ def sum_pdf_old(px):
         psumx_out[i] = np.sum(psumx[i*px.shape[1]:(i+1)*px.shape[1]])
     return psumx_out
 
-if __name__ == "__main__":
+
+def with_x_unit_test():
+    n_users = 2
+    n_bins = 10
+    x = np.zeros((n_bins,n_users))
+    min_x,max_x = -100,0
+    for i in range(n_users):
+        x[:,i] = np.linspace(min_x,max_x,num=n_bins)
+    x[:,0] *= 2
+    means = min_x+10+(max_x-min_x)*np.random.uniform(size=n_users)
+    print(means)
+    var=5
+    px = np.exp(-np.power((x - means),2) / (2 * np.power(var,2)))
+    px[:,-1] = 0
+    px[-1,-1] = 1
+    # px[-1,-2] = 1
+    # px[-1,-3] = 1
+    px = px / np.sum(px,axis=0)
+
+    print(x)
+    print(px)
+    out_x, out_px = sum_pdf_fixed_point(x, px, verbose=True)
+    print(out_x)
+    print(out_px)
+    for i in range(n_users):
+        plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
+    plt.plot(out_x, out_px,label='sum')
+    plt.legend()
+    plt.savefig('test.pdf')
+
+def old_unit_test():
     n_users = 1000
     n_bins = 100
     px = np.random.uniform(size=(n_bins,n_users))
@@ -133,3 +280,10 @@ if __name__ == "__main__":
     ax[0].plot(out_old)
     ax[1].plot(out_new)
     plt.savefig('test.pdf')
+
+
+if __name__ == "__main__":
+    np.random.seed(31415)
+    with_x_unit_test()
+
+

@@ -9,7 +9,7 @@ MIN_LATENCY = 1
 MAX_LATENCY = 40
 NO_ROUTE_LATENCY = MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
-LBX_DENSITY = 50000 # number of points to discretize benefit into
+LBX_DENSITY = 100 # number of points to discretize benefit into
 
 BASE_SOCKET = 31415
 

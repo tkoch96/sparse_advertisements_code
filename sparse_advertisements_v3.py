@@ -12,7 +12,6 @@ from helpers import *
 from constants import *
 from painter import Painter_Adv_Solver
 from anyopt import Anyopt_Adv_Solver
-from test_polyphase import sum_pdf_new
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from worker_comms import Worker_Manager
 
@@ -266,80 +265,48 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		### combine pdf rets across sub-deployments
 		n_to_flush = len(self.lb_args_queue)
 		ret_to_call = [None for _ in range(n_to_flush)]
-		pdfs = [[None for _ in range(self.get_n_workers())] for _ in range(n_to_flush)]
-		min_val, max_val = np.inf*np.ones(n_to_flush), -1*np.inf*np.ones(n_to_flush)
+		pdfs = np.zeros((n_to_flush, LBX_DENSITY, n_workers))
+		lbxs = np.zeros((n_to_flush, LBX_DENSITY, n_workers))
 		vals_by_worker = {}
 		for worker_i,ret in enumerate(rets.values()): # n workers times
 			vals_by_worker[worker_i] = {}
 			for adv_ret_i in range(n_to_flush): # n calls times
-				lbret = ret[adv_ret_i]
-				# need to (a) convert each pdf to be the same x array
-				# (b) get cumulative vals array as individual vals * n_rets
-				mean, (vals,pdf) = lbret
-				pdfs[adv_ret_i][worker_i] = pdf
-				min_val[adv_ret_i] = np.minimum(vals[0], min_val[adv_ret_i])
-				max_val[adv_ret_i] = np.maximum(vals[-1], max_val[adv_ret_i])
-				vals_by_worker[worker_i][adv_ret_i] = (vals[0], vals[-1])
-
-				if adv_ret_i == 0 and self.verbose:
-					print("Worker: {} mean: {}".format(worker_i, mean))
+				mean, (vals,pdf) = ret[adv_ret_i]
+				lbxs[adv_ret_i, :, worker_i] = vals
+				pdfs[adv_ret_i, :, worker_i] = pdf
 
 		### Convert all pdfs to be at the same scale
-		lbx = np.zeros((n_to_flush, LBX_DENSITY))
 		inds = np.arange(LBX_DENSITY)
 		for adv_ret_i in range(n_to_flush):
-			new_max, new_min = max_val[adv_ret_i], min_val[adv_ret_i]
-
-			lbx[adv_ret_i,:] = np.linspace(new_min, new_max, LBX_DENSITY)
+			new_max, new_min = np.max(lbxs[adv_ret_i,:,:].flatten()), np.min(lbxs[adv_ret_i,:,:].flatten())
 			for worker_i in range(n_workers):
-				rescaled_pdf = np.zeros(pdfs[adv_ret_i][worker_i].shape)
-				old_min, old_max = vals_by_worker[worker_i][adv_ret_i]
+				old_min, old_max = lbxs[adv_ret_i,0,worker_i],lbxs[adv_ret_i,-1,worker_i]
+				if old_min == new_min and old_max == new_max:
+					continue
+				rescaled_pdf = np.zeros(pdfs[adv_ret_i,:,worker_i].shape)
 				remap_arr = (old_min + inds * (old_max - old_min) / LBX_DENSITY - new_min) * LBX_DENSITY / (new_max - new_min)
 				remap_arr = np.round(remap_arr).astype(np.int32).clip(0,LBX_DENSITY-1)
-				if new_min < -1000:
-					print(old_min)
-					print(old_max)
-					print(new_min)
-					print(new_max)
-					print(np.where(pdfs[adv_ret_i][worker_i] > .01))
-				for ind in np.where(pdfs[adv_ret_i][worker_i] > 0)[0]:
-					rescaled_pdf[remap_arr[ind]] += pdfs[adv_ret_i][worker_i][ind]
-				pdfs[adv_ret_i][worker_i] = rescaled_pdf
-				if new_min < -1000:
-					print(np.where(rescaled_pdf > .01))
-					print("\n")
+				for ind in np.where(pdfs[adv_ret_i,:,worker_i] > 0)[0]:
+					rescaled_pdf[remap_arr[ind]] += pdfs[adv_ret_i,ind,worker_i]
+				lbxs[adv_ret_i,:,worker_i] = np.linspace(new_min, new_max, LBX_DENSITY)
+				pdfs[adv_ret_i,:,worker_i] = rescaled_pdf
 
-		### This is no longer true since we chop off the upper half each convolution
-		# # total benefit is sum aross all benefits
-		# # so x axis gets multiplied out by number of inputs (convolution doubles domain)
-		# lbx = lbx * n_workers
-		
 		for adv_ret_i in range(n_to_flush):
 			## point density x number of cores
-			px = np.zeros((LBX_DENSITY, len(pdfs[adv_ret_i])))
-			for sdi in range(len(pdfs[adv_ret_i])):
-				px[:,sdi] = pdfs[adv_ret_i][sdi]
-			if lbx[adv_ret_i,0] < -1000:
-				print(np.where(px>.01))
-			if px.shape[1] > 1:
-				px = sum_pdf_new(px)
-			mean = np.sum(px.flatten()*lbx[adv_ret_i,:].flatten())
-			if lbx[adv_ret_i,0] < -1000:
-				print(np.where(px>.01))
-				print(mean)
-			ret_to_call[adv_ret_i] = (mean, (lbx[adv_ret_i,:].flatten(), px.flatten()))
+			if n_workers > 1:
+				x,px = self.pdf_sum_function(lbxs[adv_ret_i,...],pdfs[adv_ret_i,...],**kwargs)
+			else:
+				x,px = lbxs[adv_ret_i,:,0], pdfs[adv_ret_i,:,0]
+			mean = np.sum(px.flatten()*x.flatten())
+			ret_to_call[adv_ret_i] = (mean, (x.flatten(), px.flatten()))
 
-			if adv_ret_i == 0 and self.verbose:
-				print("Overall mean: {}".format(mean))
-		# if n_to_flush > 1:
-		# 	print(min_val[0])
-		# 	print(max_val[0])
-		# 	print([vals_by_worker[worker_i][0] for worker_i in range(n_workers)])
-		# 	for pdf in pdfs[0]:
-		# 		print(pdf)
-		# 		print(lbx[0,np.argmax(pdf)] / n_workers)
-		# 	print(ret_to_call[0])
-		# 	exit(0)
+			if kwargs.get('verbose'):
+				for _z,_x,_y in zip(*(np.where(pdfs>.01))):
+					print("{},{}-> {},{}".format(_x,_y,lbxs[adv_ret_i,_x,_y],pdfs[_z,_x,_y]))
+				for _x,_y in zip(*(np.where(px>.01))):
+					print("{},{}-> {},{}".format(_x,_y,x[_x],px[_x,_y]))
+				exit(0)
+
 		self.lb_args_queue = []
 		self.get_cache()
 		return ret_to_call
@@ -1277,7 +1244,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				if DPSIZE in ['decent', 'large']:
 					self.make_plots()
 
-			if self.iter == 1:
+			if self.iter == 10:
 				break
 
 		if self.verbose:

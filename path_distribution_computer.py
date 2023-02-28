@@ -3,8 +3,8 @@ np.setbufsize(262144*8)
 
 from constants import *
 from helpers import *
-from test_polyphase import sum_pdf_new
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
+from test_polyphase import rescale_pdf
 
 
 remeasure_a = None
@@ -12,6 +12,7 @@ try:
 	remeasure_a = pickle.load(open('remeasure_a.pkl','rb'))
 except:
 	pass
+
 
 #### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
 @nb.njit(fastmath=True,parallel=True)
@@ -26,11 +27,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calculate_user_latency_by_peer()
 		self.with_capacity = kwargs.get('with_capacity', False)
 
-		## Latency benefit is -1 * mean latency, so latency benefits must lie in this region
-		self.lbx = np.linspace(-1*MAX_LATENCY, 0,num=LBX_DENSITY)
-
-		## TODO -- dynamically adjust depending on current average latency users see
-		self.lbx  = self.lbx
+		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
+		## divided by their contribution to the total volume (i.e., multiplied by a weight)
+		## important that every worker has the same lbx
+		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
+		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
+		self.lbx = np.linspace(-1*MAX_LATENCY * max_vol / total_deployment_volume, 0,num=LBX_DENSITY)
+		self.big_lbx = np.zeros((LBX_DENSITY, len(self.whole_deployment_ugs)))
+		for i in range(len(self.whole_deployment_ugs)):
+			self.big_lbx[:,i] = copy.copy(self.lbx)
 
 
 		self.stop = False
@@ -133,28 +138,33 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			except KeyError:
 				pass
 
+		## Dims are path, prefix, user
+		self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
+		p_mat = self.ingress_probabilities
+		p_mat = p_mat / (np.sum(p_mat,axis=0) + 1e-8)
+		benefits = self.measured_latency_benefits
+		lbx = self.lbx
+
+
 		subset_ugs = False
 		which_ugs = kwargs.get('ugs', None)
 		if which_ugs is not None:
 			subset_ugs = True
 			which_ugs_this_worker = get_intersection(which_ugs, self.ugs)
 			if len(which_ugs_this_worker) == 0:
-				pdf = np.zeros(self.lbx.shape)
+				pdf = np.zeros(lbx.shape)
 				pdf[-1] = 1
-				return 0, (self.lbx.flatten(),pdf.flatten())
+				return 0, (lbx.flatten(),pdf.flatten())
 			which_ugs_i = np.array([self.ug_to_ind[ug] for ug in which_ugs_this_worker])
 			all_workers_ugs_i = np.array([self.whole_deployment_ug_to_ind[ug] for ug in which_ugs])
-			all_workers_vol = sum([self.whole_deployment_ug_vols[ugi] for ugi in all_workers_ugs_i])
+			all_workers_vol = sum(self.whole_deployment_ug_vols[all_workers_ugs_i])
 
 			benefit_renorm = all_workers_vol / np.sum(self.whole_deployment_ug_vols)
 
-		## Dims are path, prefix, user
-		self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
-		p_mat = self.ingress_probabilities
-		p_mat = p_mat / (np.sum(p_mat,axis=0) + 1e-8)
-		benefits = self.measured_latency_benefits
+			lbx = lbx / benefit_renorm
+			benefits = benefits / benefit_renorm
+			self.big_lbx = self.big_lbx / benefit_renorm
 
-		lbx = self.lbx
 
 		p_link_fails = np.zeros(self.n_popp)
 		if self.with_capacity:
@@ -209,7 +219,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				for ui in np.where(np.sum(ug_prob_vols_this_ingress,axis=0)==0):
 					ug_prob_vols_this_ingress[0,ui] = 1
 
-				p_vol_this_ingress = sum_pdf_new(ug_prob_vols_this_ingress).flatten()
+				p_vol_this_ingress = self.pdf_sum_function(ug_prob_vols_this_ingress).flatten()
 				p_link_fails[ingress_i] = np.sum(p_vol_this_ingress[self.vol_x * self.n_ug > self.link_capacities[ingress_i]])
 			
 			# if kwargs.get('verb'):
@@ -271,27 +281,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			px = px[:,which_ugs_i]
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
-		psumx = sum_pdf_new(px)
-		### pmf of benefits is now xsumx with probabilities psumx
-		## lbx doesn't change, since we clip all intermediate steps
-		xsumx = self.lbx
-		if subset_ugs:
-			xsumx = xsumx / benefit_renorm ## fix normalization for subset of ugs
+		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
+		# if subset_ugs: ## reweight to account for the fact that we're not looking at all volume
+		# 	print("pre renorm {} {} {} {}".format(xsumx[0],xsumx[-1],np.where(psumx), benefit_renorm))
+		# 	xsumx, psumx = rescale_pdf(xsumx.flatten(), psumx.flatten(), benefit_renorm)
+		# 	print("post renorm {} {} {}".format(xsumx[0],xsumx[-1],np.where(psumx)))
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
+
 
 		if np.sum(psumx) < .5:
 			print("ERRRRRR : {}".format(np.sum(psumx)))
-		# if verb:
-		# 	print("MIN : {} -- MAX : {}".format(np.min(self.lbx), np.max(self.lbx)))
-		# 	running_sum = 0
-		# 	for ui in range(px.shape[1]):
-		# 		ex = np.sum(self.lbx.flatten() * px[:,ui].flatten())
-		# 		running_sum += ex
-		# 		print("UI : {} -- E[X] : {}".format(ui, ex))
-		# 	print(a)
-		# 	print(all_pv)
-		# 	print("Max B last user: {}".format(np.max([el[1] for el in all_pv])))
-		# 	print("Total estimated: {}, actual value: {} ".format(running_sum,benefit))
+
+		if subset_ugs: # reset vars
+			lbx = lbx * benefit_renorm
+			benefits = benefits * benefit_renorm
+			self.big_lbx = self.big_lbx * benefit_renorm
 
 		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		

@@ -559,6 +559,9 @@ def do_eval_whatifs():
 	# fail each link and pop, for each user calc latency range and pdf, get ground truth latency
 	# look at some measure of the degree to which our model helps us get closer to ground truth latencies
 
+	# only mildly interesting because a reader wouldn't really care that we can predict latency, only that we can 
+	# do useful things with that prediction
+
 	np.random.seed(31414)
 	metrics = {}
 	N_TO_SIM = 1
@@ -608,12 +611,13 @@ def do_eval_whatifs():
 				actual_lb = sas.get_ground_truth_latency_benefit(adv_cpy, ugs=these_ugs)
 				naive_range = sas.get_naive_range(adv_cpy, ugs=these_ugs)
 
-				metrics['popp_failures'][random_iter][popp] = {
+				these_metrics = {
 					'actual': actual_lb,
 					'expected': avg_benefit,
-					'range': naive_range
+					'range': naive_range,
+					'avg': naive_range['avg'],
 				}
-
+				metrics['popp_failures'][random_iter][popp] = these_metrics
 
 			pickle.dump(metrics, open(metrics_fn,'wb'))
 	except:
@@ -631,7 +635,7 @@ def do_eval_whatifs():
 		in metrics['popp_failures'][ri]])
 	all_actual = np.array([metrics['popp_failures'][ri][popp]['actual'] for ri in range(N_TO_SIM) for popp \
 		in metrics['popp_failures'][ri]])
-	all_avg = np.array([metrics['popp_failures'][ri][popp]['range']['avg'] for ri in range(N_TO_SIM) for popp \
+	all_avg = np.array([metrics['popp_failures'][ri][popp]['avg'] for ri in range(N_TO_SIM) for popp \
 		in metrics['popp_failures'][ri]])
 
 	x1,cdf_predicted_diffs = get_cdf_xy(all_predicted - all_actual)

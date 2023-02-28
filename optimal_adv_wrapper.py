@@ -2,6 +2,7 @@ import numpy as np, time, tqdm
 np.setbufsize(262144*8)
 from constants import *
 from helpers import *
+from test_polyphase import *
 from worker_comms import Worker_Manager
 
 
@@ -49,6 +50,8 @@ class Optimal_Adv_Wrapper:
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
 		self.n_prefixes = kwargs.get('n_prefixes')
+
+		self.pdf_sum_function = sum_pdf_fixed_point
 
 		self.calc_cache = Calc_Cache()
 		self.update_deployment(deployment)	
