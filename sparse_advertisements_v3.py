@@ -176,7 +176,7 @@ def violates(ordering, bigger, smallers):
 
 class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def __init__(self, *args, init={'type':'using_objective'}, explore='bimodality',
-			resilience_benefit=False, **kwargs):
+			using_resilience_benefit=False, **kwargs):
 		super().__init__(*args, **kwargs)
 		# (hyper-) parameters
 		self.iter = 0
@@ -191,8 +191,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		self.gradient_fn = self.gradients
 		## Whether to incorporate resilience into the objective function
 		# (Note if gamma = 0, this won't matter anyway)
-		self.resilience_benefit = resilience_benefit
-		if resilience_benefit:
+		self.using_resilience_benefit = using_resilience_benefit
+		if using_resilience_benefit:
 			assert self.gamma > 0
 			self.resilience_benefit_fn = self.resilience_benefit
 			self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
@@ -217,7 +217,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			'verbose': False,
 			'init': self.initialization,
 			'explore': self.explore,
-			'resilience_benefit': self.resilience_benefit,
+			'using_resilience_benefit': self.using_resilience_benefit,
 			'n_prefixes': self.n_prefixes,
 		}
 
@@ -323,7 +323,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		tmp = np.ones(a.shape)
 		for peer in self.popps:
 			tmp[self.popp_to_ind[peer],:] = 0
-			benefit += self.latency_benefit_fn(a * tmp, retnow=True)
+			b, _ = self.latency_benefit_fn(a * tmp, retnow=True)
+			benefit += b
 			tmp[self.popp_to_ind[peer],:] = 1
 		return benefit / self.n_popp
 
@@ -548,6 +549,29 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		## Latency benefit
 		return -1 * self.get_ground_truth_latency_benefit(a)
 
+	def solve_one_per_pop(self, **kwargs):
+		# Solve for the one per pop solution
+		ugperfs_with_anycast = self.get_ug_perfs_with_anycast()
+		self.deployment['ug_perfs_with_anycast'] = ugperfs_with_anycast
+		deployment = copy.deepcopy(self.deployment)
+		deployment['ug_perfs'] = ugperfs_with_anycast
+		self.one_per_pop = Painter_Adv_Solver(deployment, **self.get_init_kwa())
+		self.one_per_pop.set_worker_manager(self.get_worker_manager())
+
+		self.one_per_pop.one_per_pop()
+		one_per_pop_adv = self.one_per_pop.painter_advs_to_sparse_advs(self.one_per_pop.advs)
+		one_per_pop_obj = self.measured_objective(one_per_pop_adv)
+		self.one_per_pop_solution = {
+			'objective': one_per_pop_obj,
+			'latency_benefit':  self.get_ground_truth_latency_benefit(one_per_pop_adv),
+			'norm_penalty': self.advertisement_cost(one_per_pop_adv),
+			'prefix_cost': self.prefix_cost(one_per_pop_adv),
+			'advertisement': one_per_pop_adv,
+			'n_advs': 1,
+		}
+
+		self.clear_caches()
+
 	def solve_painter(self, **kwargs):
 		## Solve for the painter solution
 		# painter is an improvement over anycast, so it has one less prefix to work with
@@ -578,7 +602,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		verbose = kwargs.get('verbose', True)
 		init_adv = kwargs.get('init_adv')
 		
-		solution_types = ['sparse', 'painter','anyopt', 'maximal', 'minimal','oracle']
+		solution_types = ['sparse', 'painter','anyopt', 'one_per_pop', 'maximal', 'minimal','oracle']
 		metrics = {
 			'sparse_objective_vals': {k:[] for k in solution_types},
 			'painter_objective_vals': {k:[] for k in solution_types},
@@ -608,6 +632,17 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['anyopt'].append(self.anyopt_solution['latency_benefit'])
 			metrics['norm_penalties']['anyopt'].append(self.anyopt_solution['norm_penalty'])
 			metrics['prefix_cost']['anyopt'].append(self.anyopt_solution['prefix_cost'])
+
+			## One per PoP
+			if verbose:
+				print("solving one per pop")
+			self.solve_one_per_pop(**kwargs)
+			metrics['sparse_objective_vals']['one_per_pop'].append(self.one_per_pop_solution['objective'])
+			metrics['n_advs']['one_per_pop'].append(self.one_per_pop_solution['n_advs'])
+			metrics['adv_solns']['one_per_pop'].append(self.one_per_pop_solution['advertisement'])
+			metrics['latency_benefits']['one_per_pop'].append(self.one_per_pop_solution['latency_benefit'])
+			metrics['norm_penalties']['one_per_pop'].append(self.one_per_pop_solution['norm_penalty'])
+			metrics['prefix_cost']['one_per_pop'].append(self.one_per_pop_solution['prefix_cost'])			
 
 			## Painter
 			if verbose:
@@ -669,7 +704,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				self.update_deployment(new_deployment)
 			if verbose:
 				print(metrics['sparse_objective_vals'])
-		pickle.dump(metrics, open('cache/method_comparison_metrics.pkl','wb'))
+		pickle.dump(metrics, open(os.path.join(CACHE_DIR, 'method_comparison_metrics.pkl'),'wb'))
 		if verbose:
 			plt.rcParams["figure.figsize"] = (10,5)
 			plt.rcParams.update({'font.size': 22})
@@ -691,7 +726,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			plt.rcParams["figure.figsize"] = (10,15)
 			plt.rcParams.update({'font.size': 22}) 
 			f,ax = plt.subplots(3,1)  
-			for i, alg in enumerate(['sparse', 'painter', 'anyopt']):
+			for i, alg in enumerate(['sparse', 'painter', 'anyopt', 'one_per_pop']):
 				base_arr = np.array(metrics['{}_objective_vals'.format(alg)][alg])
 				for k in solution_types:
 					if k == alg or k == 'oracle': continue
@@ -820,8 +855,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
 			L_grad[ind] = self.heaviside_gradient(before, after, a[ind])
-			# if ind[0] == 8:
-			# 	print("{} {} {} {}".format(ind,before,after,L_grad[ind]))
 		if self.iter % self.gradient_support_settings['calc_every'] == 0:
 			self.update_gradient_support(L_grad)
 			self.last_full_grad = L_grad
@@ -838,6 +871,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# gradient of L is calculated via a continuous approximation
 		L_grad = self.grad_latency_benefit(a)
 		res_grad = self.gradients_resilience_benefit_fn(a)
+		print(res_grad)
 		if add_metrics:
 			self.metrics['l_benefit_grads'].append(L_grad)
 			self.metrics['res_benefit_grads'].append(self.gamma * res_grad)
@@ -886,26 +920,34 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				grad = self.heaviside_gradient(res_off, res_on, np.max(a[self.popp_to_ind[popp], :]))
 				grad_rb[self.popp_to_ind[popp],:] = grad
 		else:
-			# More heuristic, faster way of calculating resilience
-			a_effective = threshold_a(a)
-			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, len(self.user_networks)))
-			for ug in range(len(self.user_networks)):
-				for pref_i in range(self.n_prefixes):
-					possible_ingresses = get_intersection(self.ingress_priority_inds[ug], 
-						np.where(a_effective[:,pref_i])[0])
-					pi = np.zeros((self.n_popp))
-					for ordering, p in self.orderings[self.ug_to_ind[ug]].items():
-						sub_order = [o for o in ordering if o in possible_ingresses]
-						if sub_order != []:
-							pi[sub_order[0]] += p
-					self.ingress_probabilities[:,pref_i,ug] = pi / np.sum(pi + 1e-8)
-			reachabilities_by_user = (np.sum(self.ingress_probabilities,axis=1) > 1e-5).astype(np.int32)
+			# Faster, more heuristic way of calculating resilience
+			### need to somehow model the effect of
+			## if this is off, and that other thing dies, you're fucked
+			## 1 idea is to turn something random off
+			## then turn popp on/off, eventually you'll hit the jackpot
+			a_effective = threshold_a(a).astype(bool)
+			tmp_a = copy.copy(a_effective)
 			grad_rb = np.zeros(a.shape)
-			for popp_i in range(self.n_popp):
-				for ug in self.ugs:
-					if popp_i in self.ingress_priority_inds[ug] and \
-						np.sum(reachabilities_by_user[:,self.ug_to_ind[ug]]) <= 2:
-						grad_rb[popp_i,:] += 1 - 1/(1 + np.exp(-5 * np.max(a[popp_i,:])))
+			calls = []
+			rand_prefs = np.random.randint(0,high=self.n_prefixes,size=self.n_popps)
+			for poppi,popp in enumerate(self.popps):
+				tmp_a[self.popp_to_ind[popp],:] = False
+				self.latency_benefit(tmp_a)
+				a_ij = a_effective[self.popp_to_ind[popp],rand_prefs[poppi]]
+				a_effective[self.popp_to_ind[popp],rand_prefs[poppi]] = True
+				self.latency_benefit(a_effective)
+				a_effective[self.popp_to_ind[popp],rand_prefs[poppi]] = a_ij
+				calls.append(popp)
+			all_lb_rets = self.flush_latency_benefit_queue()
+			print(a_effective)
+			for i, call_popp in enumerate(calls):
+				before,_ = all_lb_rets[2*i]
+				after, _ = all_lb_rets[2*i+1]
+				print("popp {} B{} A{} pref {}".format(call_popp,before,after,rand_prefs[i]))
+
+				grad_rb[self.popp_to_ind[call_popp],:] = self.heaviside_gradient(
+						before, after, np.max(a[self.popp_to_ind[popp], :]))
+
 		return grad_rb
 
 	def impose_advertisement_constraint(self, a):
@@ -918,7 +960,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		plt.rcParams.update({'font.size': 14})
 		f,ax = plt.subplots(5,2)
 
-		pickle.dump(self.metrics, open('metrics.pkl','wb'))
+		pickle.dump(self.metrics, open(os.path.join(CACHE_DIR, 'metrics.pkl'),'wb'))
 
 		# General convergence metrics plot
 		all_as = np.array(self.metrics['advertisements'])
@@ -1147,7 +1189,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'verbose': False,
 			'init': self.initialization,
 			'explore': self.explore,
-			'resilience_benefit': self.resilience_benefit,
+			'using_resilience_benefit': self.using_resilience_benefit,
 			'n_prefixes': self.n_prefixes,
 		}
 
@@ -1244,7 +1286,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				if DPSIZE in ['decent', 'large']:
 					self.make_plots()
 
-			if self.iter == 10:
+			if self.iter == 20:
 				break
 
 		if self.verbose:
@@ -1273,8 +1315,10 @@ def main():
 
 		## Simple test
 		lambduh = .0001
+		gamma = 1.0
 		sas = Sparse_Advertisement_Solver(deployment, 
-			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=10)#n_prefixes=len(deployment['popps'])-1)
+			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=10,
+			using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)

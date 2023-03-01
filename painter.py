@@ -5,6 +5,47 @@ from optimal_adv_wrapper import Optimal_Adv_Wrapper
 def vol_to_val(vol):
 	return np.log10(vol + 1)
 
+def reduce_to_score(improvements_vols, skip_log=False):
+	# score is ~ sum( log(weight) * improvement_in_ms )
+	improvements_vols = np.array(improvements_vols)
+	if not skip_log: # speedup
+		improvements_vols[:,1] = vol_to_val(improvements_vols[:,1])
+	return np.sum(np.prod(improvements_vols,axis=1))
+
+def calc_improvements_by_pop_peer(ug_perfs, ug_to_vol, being_adved, **kwargs):
+	# returns popp -> UG -> improvement
+	improvements_by_pop_peer = {}
+	ug_decisions = {}
+	for ug in ug_perfs:
+		vol = ug_to_vol[ug]
+		# get best performing ingress
+		reachable = get_intersection(being_adved, ug_perfs[ug])
+		best_adved_i = np.argmin(np.array([ug_perfs[ug][u] for u in reachable]))
+		best_adved = reachable[best_adved_i]
+		ug_decisions[ug] = best_adved
+		# not being adved
+		for u in get_difference(ug_perfs[ug], being_adved):
+			diff = ug_perfs[ug][best_adved] - ug_perfs[ug][u]
+			pop,peer = u
+			try:
+				improvements_by_pop_peer[pop,peer]
+			except KeyError:
+				improvements_by_pop_peer[pop,peer] = {}
+			improvements_by_pop_peer[pop,peer][ug] = (np.maximum(diff,0),vol)
+	return improvements_by_pop_peer, ug_decisions
+
+def calc_improvements(improvements_by_pop_peer, **kwargs):
+	# returns improvements by popp, averaged over UGs
+	improvements = {}
+	for poppeer in improvements_by_pop_peer:
+		these_improvements = {k:v[0] for k,v in improvements_by_pop_peer[poppeer].items()}
+		these_vols = {k:v[1] for k,v in improvements_by_pop_peer[poppeer].items()}
+		weighted_improvements = [(these_improvements[k], these_vols[k]) for k in these_improvements]
+		score = reduce_to_score(weighted_improvements)
+		improvements[poppeer] = score
+	return improvements
+
+
 class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args,**kwargs)
@@ -44,6 +85,49 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
 
+	def _get_new_improvements(self, being_adved, **kwargs):
+		improvements, ug_decisions = calc_improvements_by_pop_peer(self.ug_perfs, self.ug_to_vol,
+			being_adved, **kwargs)
+		improvements_average = calc_improvements(improvements, **kwargs)
+		return improvements, improvements_average, ug_decisions
+
+	def one_per_pop(self, **kwargs):
+		### Doesn't use actual hybridcast performance
+		all_advs = []
+		advs = {}
+		self.budget = self.n_prefixes - 1
+		_, improvements, _ = self._get_new_improvements(['anycast'], **kwargs)
+		def to_by_pop(improvs):
+			by_pop = {}
+			for k,v in improvs.items():
+				try:
+					by_pop[k[0]].append(v)
+				except KeyError:
+					by_pop[k[0]] = [v]
+			for pop,v in by_pop.items():
+				by_pop[pop] = np.mean(np.array(v))
+			return by_pop
+
+		pops = self.pops
+		advs_by_pfxi = {}
+		ret_advs_obj = {}
+		for prefix_i in range(self.budget):
+			advs_by_pfxi[prefix_i + 1] = {}
+			# pick pop that will maximize average improvement
+			if pops != []: # no more pops
+				_, improvements, _ = self._get_new_improvements(['anycast'] + all_advs, **kwargs)
+				improvements_by_pop = to_by_pop(improvements)
+				best_pop = pops[np.argmax(np.array([improvements_by_pop[k] for k in pops]))]
+				corresponding_pop_peers = list([k for k in self.popps if k[0] == best_pop])
+				advs_by_pfxi[prefix_i + 1] = corresponding_pop_peers
+				all_advs += corresponding_pop_peers
+				pops = get_difference(pops, [best_pop])
+							
+			ret_advs_obj[prefix_i + 1] = {}
+			for pfx, popps in advs_by_pfxi.items():
+				ret_advs_obj[prefix_i + 1][pfx] = copy.copy(popps)
+		self.advs = ret_advs_obj
+
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
 		advs = self.painter_v4(**kwargs)
@@ -67,7 +151,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		painter_budget = self.n_prefixes - 1
 		advs_cp = copy.deepcopy(self.advs)
 		for pref_i in range(painter_budget):
-			if len(advs_cp[painter_budget][self.n_prefixes - pref_i -1]) == 0:
+			if len(advs_cp[painter_budget][self.n_prefixes - pref_i - 1]) == 0:
 				# if PAINTER decided not to allocate any here, it obviously won't matter
 				continue
 			advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
@@ -93,7 +177,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		for ug in self.ug_perfs:
 			for u in list(self.ug_perfs[ug]):
 				if u == 'anycast': continue
-				if u[1] in ['hybridcast','regional']: del self.ug_perfs[ug][u]
 			if self.ug_perfs[ug] == {}: to_del.append(ug)
 		for ug in to_del: del self.ug_perfs[ug]
 		self.calc_popp_to_ug()
@@ -224,7 +307,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				print("Looping over {} ug".format(len(ug_to_loop_i)))
 				print([all_ug[i] for i in ug_to_loop_i])
 			for ug_i in get_difference(ug_to_loop_i, ug_i_to_not_consider): # looping over ug indices
-			# for ug_i in ug_to_loop_i: # looping over ug indices
 				ug = all_ug[ug_i]
 				## TO CALC avg(perf with new peer,pfx) - avg(perf without) for each peer
 				# Current performance at current prefix
@@ -354,3 +436,5 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				ret_advs_obj[prefix_i + 1][pfx + 1] = copy.copy(popps)
 
 		return ret_advs_obj
+
+

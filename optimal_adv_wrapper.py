@@ -117,12 +117,14 @@ class Optimal_Adv_Wrapper:
 		self.ug_perfs = deployment['ug_perfs']
 		# Shape of the variables
 		self.popps = list(set(deployment['popps']))
+		self.n_popps = len(self.popps)
+		self.pops = list(set([u[0] for u in self.popps]))
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
 		self.provider_popps = deployment['provider_popps']
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
 		self.n_popp = len(get_difference(self.popps,['anycast']))
 		if self.n_prefixes is None:
-			self.n_prefixes = np.maximum(2,self.n_popp // 3)
+			self.n_prefixes = np.maximum(3,self.n_popp // 3)
 		self.n_providers = deployment['n_providers'] # number of provider ASes
 		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
 
