@@ -13,7 +13,7 @@ def popp_failure_latency_comparisons():
 
 	np.random.seed(31414)
 	metrics = {}
-	N_TO_SIM = 1
+	N_TO_SIM = 10
 
 	lambduh = .1
 	
@@ -36,9 +36,10 @@ def popp_failure_latency_comparisons():
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
+			n_prefixes = int(len(deployment['popps'])/1.2)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
-				using_resilience_benefit=True, gamma=.1)
+				using_resilience_benefit=True, gamma=.1,n_prefixes=n_prefixes)
 			if wm is None:
 				wm = Worker_Manager(sas.get_init_kwa(), deployment)
 				wm.start_workers()
@@ -70,7 +71,7 @@ def popp_failure_latency_comparisons():
 						
 						actual_ingress = sas.popps[ug_catchments[sas.ug_to_ind[ug]]]
 						actual_perf = sas.ug_perfs[ug][actual_ingress]
-						if solution == 'sparse' and best_perf + 10 < actual_perf:
+						if solution == 'sparse' and best_perf + 5 < actual_perf:
 							print("UG {} popp {} ({}) actual {} best {}".format(
 								ug,popp,sas.popp_to_ind[popp],actual_perf, best_perf))
 							for k,v in sas.ug_perfs[ug].items():

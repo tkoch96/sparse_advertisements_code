@@ -907,11 +907,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return cost_grad + l_grad
 
 	def gradients_resilience_benefit(self, a):
+		### Positive resilience benefit gradient means turning a popp
+		## on will increase resilience
 		if False:
 			# Better, slower way of calculating resilience
 			tmp_a = copy.copy(a)
 			grad_rb = np.zeros(a.shape)
-			for popp in self.popps:
+			for popp in self.popps: # O(n_popps^2)
 				tmp_a[self.popp_to_ind[popp],:] = 0
 				res_off = self.resilience_benefit(tmp_a)
 				tmp_a[self.popp_to_ind[popp],:] = 1
@@ -923,30 +925,58 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# Faster, more heuristic way of calculating resilience
 			### need to somehow model the effect of
 			## if this is off, and that other thing dies, you're fucked
-			## 1 idea is to turn something random off
-			## then turn popp on/off, eventually you'll hit the jackpot
+			## 1 idea is to kill a popp or 2 randomly, twiddle a random (prefix,popp) pair and see what happens
 			a_effective = threshold_a(a).astype(bool)
-			tmp_a = copy.copy(a_effective)
 			grad_rb = np.zeros(a.shape)
 			calls = []
-			rand_prefs = np.random.randint(0,high=self.n_prefixes,size=self.n_popps)
+			n_each_popp = 10
+
+
+			## so its like get current latency benefit
+			lb_default,_ = self.latency_benefit(a_effective, retnow=True)
+
+			## turn the popp under consideration on
+			## turn a random popp,prefix that was previously on, off
+			## notice LB(now) - LB default (a) to get a comparison to how useful it is on
+			## turn the popp under consideration off
+			## notice LB(now) - LB default (b) to measure how bad it would be if this popp failed
+
+			## if (b) is much more negative than (a), we should encourage resilience
+
+			## to encourage resilience we do heavisside(b,a)
+
+			active_popp_prefixes = list(zip(*np.where(a_effective)))
+			if len(active_popp_prefixes) == 0: return grad_rb
+			random_kill_choices = np.random.choice(np.arange(len(active_popp_prefixes)),size=(self.n_popps, n_each_popp))
+			random_prefix_choices = np.random.randint(low=0,high=self.n_prefixes,size=self.n_popps)
+
 			for poppi,popp in enumerate(self.popps):
-				tmp_a[self.popp_to_ind[popp],:] = False
-				self.latency_benefit(tmp_a)
-				a_ij = a_effective[self.popp_to_ind[popp],rand_prefs[poppi]]
-				a_effective[self.popp_to_ind[popp],rand_prefs[poppi]] = True
-				self.latency_benefit(a_effective)
-				a_effective[self.popp_to_ind[popp],rand_prefs[poppi]] = a_ij
+				rand_outer_prefix = random_prefix_choices[poppi]
+				for rand_kill_i in range(n_each_popp):
+					tmp_a = copy.copy(a_effective)
+					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
+					rand_popp,rand_pref = active_popp_prefixes[random_kill_choices[poppi,rand_kill_i]]
+					tmp_a[rand_popp,rand_pref] = False # Also kill this random popp, prefix pair
+					self.latency_benefit(tmp_a)
+					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
+					self.latency_benefit(tmp_a)
 				calls.append(popp)
 			all_lb_rets = self.flush_latency_benefit_queue()
-			print(a_effective)
-			for i, call_popp in enumerate(calls):
-				before,_ = all_lb_rets[2*i]
-				after, _ = all_lb_rets[2*i+1]
-				print("popp {} B{} A{} pref {}".format(call_popp,before,after,rand_prefs[i]))
 
-				grad_rb[self.popp_to_ind[call_popp],:] = self.heaviside_gradient(
-						before, after, np.max(a[self.popp_to_ind[popp], :]))
+			## why isn't popp 1,4 being identifeid as resilient
+			for i, call_popp in enumerate(calls):
+				for j in range(n_each_popp):
+					ind = 2*(i*n_each_popp + j)
+					before,_ = all_lb_rets[ind] # popp under consideration on
+					after, _ = all_lb_rets[ind+1] # popp under consideration off
+
+					delta_a = before - lb_default
+					delta_b = after - lb_default
+
+					this_grad = self.heaviside_gradient(
+						delta_b, delta_a, a[self.popp_to_ind[call_popp],random_prefix_choices[i]])
+					print("popp {} delta_b {} delta_a {}, grad: {}".format(call_popp,delta_b,delta_a,this_grad))
+					grad_rb[self.popp_to_ind[call_popp],random_prefix_choices[i]] += this_grad
 
 		return grad_rb
 
