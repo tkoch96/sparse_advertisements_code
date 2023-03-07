@@ -226,7 +226,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		self.metrics = {}
 		for k in ['actual_nonconvex_objective', 'advertisements', 'effective_objectives', 
 			'pseudo_objectives', 'grads', 'cost_grads', 'l_benefit_grads', 'res_benefit_grads',
-			'path_likelihoods', 'EL_difference']:
+			'path_likelihoods', 'EL_difference', 'resilience_benefit', 'latency_benefit']:
 			self.metrics[k] = []
 
 	def gradients(self, *args, **kwargs):
@@ -871,7 +871,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# gradient of L is calculated via a continuous approximation
 		L_grad = self.grad_latency_benefit(a)
 		res_grad = self.gradients_resilience_benefit_fn(a)
-		print(res_grad)
 		if add_metrics:
 			self.metrics['l_benefit_grads'].append(L_grad)
 			self.metrics['res_benefit_grads'].append(self.gamma * res_grad)
@@ -911,6 +910,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		## on will increase resilience
 		if False:
 			# Better, slower way of calculating resilience
+			# possibly not super correct though? might want to average over prefixes
+			# kind of unclear
 			tmp_a = copy.copy(a)
 			grad_rb = np.zeros(a.shape)
 			for popp in self.popps: # O(n_popps^2)
@@ -925,11 +926,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# Faster, more heuristic way of calculating resilience
 			### need to somehow model the effect of
 			## if this is off, and that other thing dies, you're fucked
+			## i.e., resilience means encouraging turning on popp,prefixes that will "save the day"
+			## when something gets overloaded
 			## 1 idea is to kill a popp or 2 randomly, twiddle a random (prefix,popp) pair and see what happens
+			
+			#### PROBLEM: resilience is a popp x popp problem, so rare for a uniform sample to hit it right
+			#### Q is, how can we sample this space intelligently?
+
 			a_effective = threshold_a(a).astype(bool)
 			grad_rb = np.zeros(a.shape)
 			calls = []
-			n_each_popp = 10
+			n_kills_each_popp = 5
+			rand_prefs_each_popp = 3
 
 
 			## so its like get current latency benefit
@@ -945,38 +953,77 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			## to encourage resilience we do heavisside(b,a)
 
-			active_popp_prefixes = list(zip(*np.where(a_effective)))
-			if len(active_popp_prefixes) == 0: return grad_rb
-			random_kill_choices = np.random.choice(np.arange(len(active_popp_prefixes)),size=(self.n_popps, n_each_popp))
-			random_prefix_choices = np.random.randint(low=0,high=self.n_prefixes,size=self.n_popps)
+			random_prefix_choices = np.random.randint(low=0,high=self.n_prefixes,
+				size=(self.n_popps, rand_prefs_each_popp))
+			rand_kills = []
+			# pairing popps with popps
+			# popp -> users -> benefit
+			# but also users -> popps
+			# support (popp1 -> popp2) is sum_over_users( potential backup popp1 can provide to popp2 for that user)
+			# backup is ~ how good that option is compared to user's other options
+			# lots of backup for very good relative option
+
+			self.popp_support = np.zeros((self.n_popps, self.n_popps))
+			for popp1 in self.popps:
+				popp1i = self.popp_to_ind[popp1]
+				for popp2 in self.popps:
+					if popp1 == popp2: continue
+					for ug in self.ug_perfs:
+						try:
+							# support popp2 provides to popp1
+							# if popp1 fails, popp2 should be really close to the latency
+							if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
+								backup = 1
+							else:
+								backup = np.minimum(1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]), 1)
+						except KeyError:
+							continue
+						popp2i = self.popp_to_ind[popp2]
+						self.popp_support[popp1i,popp2i] += backup
+			# print(np.round(self.popp_support,2))
+			self.popp_support += .001
+			self.popp_sample_probs = (self.popp_support.T / np.sum(self.popp_support, axis=1)).T
+			# print(np.round(self.popp_sample_probs,2))
 
 			for poppi,popp in enumerate(self.popps):
-				rand_outer_prefix = random_prefix_choices[poppi]
-				for rand_kill_i in range(n_each_popp):
-					tmp_a = copy.copy(a_effective)
-					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
-					rand_popp,rand_pref = active_popp_prefixes[random_kill_choices[poppi,rand_kill_i]]
-					tmp_a[rand_popp,rand_pref] = False # Also kill this random popp, prefix pair
-					self.latency_benefit(tmp_a)
-					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
-					self.latency_benefit(tmp_a)
+				for rand_pref_i in range(rand_prefs_each_popp):
+					rand_outer_prefix = random_prefix_choices[poppi, rand_pref_i]
+					this_popp_random_kills = np.random.choice(np.arange(self.n_popp) ,
+						 replace=False, size=n_kills_each_popp,p=self.popp_sample_probs[poppi,:])
+					for rand_kill_i in range(n_kills_each_popp):
+						tmp_a = copy.copy(a_effective)
+						tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
+						rand_popp = this_popp_random_kills[rand_kill_i]
+						# tmp_a[rand_popp,rand_pref] = False # Also kill this random popp, prefix pair
+						rand_kills.append(rand_popp)
+						tmp_a[rand_popp,:] = False # Also kill this random popp
+						self.latency_benefit(tmp_a)
+						tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
+						self.latency_benefit(tmp_a)
 				calls.append(popp)
 			all_lb_rets = self.flush_latency_benefit_queue()
 
-			## why isn't popp 1,4 being identifeid as resilient
+			## why isn't popp 1,4 (2) being identifeid as resilient when killing 1,0 (8)
+			ind = 0 
 			for i, call_popp in enumerate(calls):
-				for j in range(n_each_popp):
-					ind = 2*(i*n_each_popp + j)
-					before,_ = all_lb_rets[ind] # popp under consideration on
-					after, _ = all_lb_rets[ind+1] # popp under consideration off
+				for k in range(rand_prefs_each_popp):
+					rand_outer_prefix = random_prefix_choices[i, k]
+					for j in range(n_kills_each_popp):
+						before,_ = all_lb_rets[ind] # popp under consideration on
+						after, _ = all_lb_rets[ind+1] # popp under consideration off
 
-					delta_a = before - lb_default
-					delta_b = after - lb_default
+						delta_a = before - lb_default
+						delta_b = after - lb_default
 
-					this_grad = self.heaviside_gradient(
-						delta_b, delta_a, a[self.popp_to_ind[call_popp],random_prefix_choices[i]])
-					print("popp {} delta_b {} delta_a {}, grad: {}".format(call_popp,delta_b,delta_a,this_grad))
-					grad_rb[self.popp_to_ind[call_popp],random_prefix_choices[i]] += this_grad
+						this_grad = self.heaviside_gradient(
+							delta_b, delta_a, a[self.popp_to_ind[call_popp],rand_outer_prefix])
+						# print("identifying resilience of entry {} ({}),{}, killing {} ({})".format(
+						# 	call_popp, self.popp_to_ind[call_popp], rand_outer_prefix,
+						# 	rand_kills[ind//2], self.popps[rand_kills[ind//2]]))
+						# print("delta_b {} delta_a {}, grad: {}".format(delta_b,delta_a,this_grad))
+						grad_rb[self.popp_to_ind[call_popp],rand_outer_prefix] += this_grad
+
+						ind += 2
 
 		return grad_rb
 
@@ -1028,12 +1075,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_objectives = self.metrics['actual_nonconvex_objective']
 		all_pseudo_objectives = self.metrics['pseudo_objectives']
 		all_effective_ojectives = self.metrics['effective_objectives']
+		all_resilience_benefits = self.metrics['resilience_benefit']
+		all_latency_benefits = self.metrics['latency_benefit']
 		ax[1,1].plot(all_pseudo_objectives)
 		ax[1,1].set_ylabel("Believed Objective")
 		ax[0,1].plot(all_objectives)
 		ax[0,1].set_ylabel("GT Objective")
 		ax[2,1].plot(all_effective_ojectives)
 		ax[2,1].set_ylabel("GT Effective Objective")
+		ax[3,1].plot(all_resilience_benefits)
+		ax[3,1].set_ylabel("Res Ben")
+		ax[4,1].plot(all_latency_benefits)
+		ax[4,1].set_ylabel("Lat Ben")
 
 		save_fig('convergence_over_iterations.pdf')
 		return
@@ -1205,6 +1258,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		self.metrics['effective_objectives'].append(self.measured_objective(copy.copy(threshold_a(advertisement))))
+		self.metrics['resilience_benefit'].append(self.resilience_benefit(advertisement))
+		self.metrics['latency_benefit'].append(self.latency_benefit_fn(advertisement,retnow=True)[0])
 
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.current_pseudo_objective - self.last_objective)
 		self.rolling_delta_eff = (1 - delta_eff_alpha) * self.rolling_delta_eff + \
@@ -1316,7 +1371,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				if DPSIZE in ['decent', 'large']:
 					self.make_plots()
 
-			if self.iter == 20:
+			print(self.iter)
+			if self.iter == 40:
 				break
 
 		if self.verbose:

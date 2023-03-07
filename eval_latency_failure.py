@@ -39,7 +39,7 @@ def popp_failure_latency_comparisons():
 			n_prefixes = int(len(deployment['popps'])/1.2)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
-				using_resilience_benefit=True, gamma=.1,n_prefixes=n_prefixes)
+				using_resilience_benefit=True, gamma=1.5,n_prefixes=n_prefixes)
 			if wm is None:
 				wm = Worker_Manager(sas.get_init_kwa(), deployment)
 				wm.start_workers()
@@ -48,9 +48,12 @@ def popp_failure_latency_comparisons():
 			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=False,
 				 dont_update_deployment=True)
 
+			adv = sas.sas.get_last_advertisement()
+			print("sparse {}".format(np.round(adv,2)))
+
 			for solution in soln_types:
-				adv = threshold_a(ret['adv_solns'][solution][0])
-				print("{} {} ".format(solution,adv))
+				adv = ret['adv_solns'][solution][0]
+				print("{} {} ".format(solution,np.round(adv,2)))
 
 				_, ug_catchments = sas.calculate_user_choice(adv)
 				for popp in sas.popps:
@@ -71,7 +74,7 @@ def popp_failure_latency_comparisons():
 						
 						actual_ingress = sas.popps[ug_catchments[sas.ug_to_ind[ug]]]
 						actual_perf = sas.ug_perfs[ug][actual_ingress]
-						if solution == 'sparse' and best_perf + 5 < actual_perf:
+						if solution == 'sparse' and best_perf + 2 < actual_perf:
 							print("UG {} popp {} ({}) actual {} best {}".format(
 								ug,popp,sas.popp_to_ind[popp],actual_perf, best_perf))
 							for k,v in sas.ug_perfs[ug].items():
