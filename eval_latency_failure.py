@@ -11,11 +11,13 @@ def popp_failure_latency_comparisons():
 	# goal is to hopefully demonstrate that we're better on these simulated topologies
 	# so that we can be confident we'll find resilient strategies in the wild
 
-	np.random.seed(31414)
+	np.random.seed(31413)
 	metrics = {}
-	N_TO_SIM = 10
+	N_TO_SIM = 1
 
 	lambduh = .1
+
+	# can I simulate the problem by toning down the number of allowable things significantly
 	
 	wm = None
 	
@@ -36,7 +38,7 @@ def popp_failure_latency_comparisons():
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
-			n_prefixes = int(len(deployment['popps'])/1.2)
+			n_prefixes = np.minimum(20,int(len(deployment['popps'])/2))
 			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=1.5,n_prefixes=n_prefixes)

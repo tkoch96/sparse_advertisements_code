@@ -40,6 +40,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		self.stop = False
 		self.calc_cache = Calc_Cache()
+		self.this_time_ip_cache = {}
 		print('started in worker {}'.format(self.worker_i))
 		self.run()
 
@@ -138,6 +139,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			except KeyError:
 				pass
 
+		timers = {
+			'capacity': 0,
+			'probs': 0,
+			'benefit': 0,
+			'convolution': 0,
+			'start': time.time()
+		}
+
 		## Dims are path, prefix, user
 		self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
 		p_mat = self.ingress_probabilities
@@ -145,6 +154,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		benefits = self.measured_latency_benefits
 		lbx = self.lbx
 
+
+		timers['probs'] = time.time() - timers['start']
 
 		subset_ugs = False
 		which_ugs = kwargs.get('ugs', None)
@@ -229,6 +240,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 	ax[0].plot(ug_prob_vols_this_ingress)
 			# 	ax[1].plot(p_vol_this_ingress)
 			# 	plt.show()
+		timers['capacity'] = time.time() - timers['start']
 
 		## holds P(latency benefit) for each user
 		px = np.zeros((len(lbx), self.n_ug))
@@ -247,6 +259,34 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				px[lbx_i, ui] += p * (1 -  plf)
 				px[0, ui] += p * plf
 			else:
+				## Check to see if it's a trivial calculation
+				found_trivial = False
+				min_by_pref, max_by_pref = NO_ROUTE_LATENCY*np.ones(self.n_prefixes), -NO_ROUTE_LATENCY*np.ones(self.n_prefixes)
+				prefs = []
+				for pref_j, lb, p, plf in all_pv:
+					min_by_pref[pref_j] = np.minimum(min_by_pref[pref_j],lb)
+					max_by_pref[pref_j] = np.maximum(max_by_pref[pref_j],lb)
+					prefs.append(pref_j)
+				for pref_j in set(prefs):
+					if min_by_pref[pref_j] >= np.max(np.delete(max_by_pref, pref_j)):
+						### singleton benefit at this benefit
+						lb = max_by_pref[pref_j]
+						lbx_i = np.where(lb - lbx <= 0)[0][0]
+						px[lbx_i, ui] = 1.0
+						found_trivial = True
+						# print("{} {} {}".format(min_by_pref,max_by_pref,pref_j))
+						# exit(0)
+						break
+				if found_trivial: 
+					continue
+				# else:
+				# 	if np.random.random() > .999:
+				# 		print(min_by_pref)
+				# 		print(max_by_pref)
+				# 		print("\n")
+				# 		if np.random.random() > .999:exit(0)
+
+
 				all_pv = sorted(all_pv,key=lambda el : el[1])
 				running_probs = np.zeros((self.n_prefixes))
 				running_probs[all_pv[0][0]] = all_pv[0][2]
@@ -279,6 +319,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		px = px / (np.sum(px,axis=0) + 1e-8) # renorm
 		if subset_ugs:
 			px = px[:,which_ugs_i]
+		timers['benefit'] = time.time() - timers['start']
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
@@ -296,8 +337,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			lbx = lbx * benefit_renorm
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
+		timers['convolution'] = time.time() - timers['start']
+		print(timers)
 
-		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
@@ -326,9 +369,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		elif cmd == 'calc_compressed_lb':
 
 			ts = time.time()
-
 			ret = []
-			self.this_time_ip_cache = {}
+			# self.this_time_ip_cache = {}
 			base_args,base_kwa = data[0]
 			base_adv, = base_args
 			base_adv = base_adv.astype(bool)
@@ -342,13 +384,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					base_adv[ind] = not base_adv[ind]
 
 				i += 1
+				kwa['verb'] = True
 				if i%100 == 0 and kwa.get('verb'):
 					print("worker {} : {} pct. done calcing grads, {} s per iter".format(self.worker_i, 
 					i * 100.0 /len(data), (time.time() - ts) / i))
-			del self.this_time_ip_cache
+			# del self.this_time_ip_cache
 
 		elif cmd == 'reset_new_meas_cache':
 			self.calc_cache.clear_new_measurement_caches()
+			self.this_time_ip_cache = {}
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
 			parents_on = data
@@ -359,6 +403,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		elif cmd == 'update_deployment':
 			deployment = data
 			self.update_deployment(deployment)
+			self.this_time_ip_cache = {}
 			ret = "ACK"
 		elif cmd == 'update_kwa':
 			new_kwa = data
@@ -371,6 +416,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = 'ACK'
 		elif cmd == 'reset_cache':
 			self.clear_caches()
+			self.this_time_ip_cache = {}
 			ret = "ACK"
 		elif cmd == 'init':
 			self.start_connection()

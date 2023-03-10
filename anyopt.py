@@ -8,7 +8,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args,**kwargs)
 
-		self.n_montecarlo = 1000
+		self.n_montecarlo = 10#1000
 
 	def solve(self):
 		## First, anyopt learns all the pairwise preferences from every client to every transit

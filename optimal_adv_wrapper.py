@@ -375,7 +375,6 @@ class Optimal_Adv_Wrapper:
 					user_latencies[ugi] = latency
 		return user_latencies, ug_ingress_decisions
 
-
 	def calculate_ground_truth_ingress(self, a):
 		### Returns routed_through ingress -> prefix -> ug -> popp_i
 		## and actives prefix -> [active popp indices]

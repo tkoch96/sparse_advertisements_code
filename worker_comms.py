@@ -25,8 +25,7 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		# return np.minimum(32, multiprocessing.cpu_count() // 2)
-		return N_WORKERS#multiprocessing.cpu_count() // 2
+		return N_WORKERS
 
 	def start_workers(self):
 		# self.worker_to_uis = {}
@@ -38,6 +37,7 @@ class Worker_Manager:
 		for worker in range(n_workers):
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
+			print("Launching working {}".format(worker))
 			assert len(subdeployments[worker]['ugs']) >= 1
 			call("{} path_distribution_computer.py {} &".format(PYTHON, worker), shell=True) # VMs
 			# call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # home PC
