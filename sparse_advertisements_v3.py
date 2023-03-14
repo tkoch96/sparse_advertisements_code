@@ -961,9 +961,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			total_n_grad_calc = self.n_popps * self.n_prefixes
 			
 			pct_explore = 20 # pct of gradient calculation budget dedicated to exploring
-			N_KILLS_EACH_POPP = int(total_n_grad_calc * pct_explore/100 / self.n_popps)
+			N_KILLS_FOR_POPPS = int(total_n_grad_calc * pct_explore/100)
 			# number of gradient calcs that re-calc previously high gradients
-			N_REMEASURE = total_n_grad_calc - N_KILLS_EACH_POPP * self.n_popps
+			N_REMEASURE = total_n_grad_calc - N_KILLS_FOR_POPPS
 
 			try:
 				best_from_last_time = sorted(self.last_calls_results.items(), key = lambda el : 
@@ -985,7 +985,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				pass
 
 			N_REMEASURE = len(calls)
-			N_KILLS_EACH_POPP = (total_n_grad_calc - N_REMEASURE) // self.n_popps
+			N_KILLS_FOR_POPPS = total_n_grad_calc - N_REMEASURE
 
 			## turn the popp under consideration on
 			## turn a random popp,prefix that was previously on, off
@@ -997,8 +997,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			## to encourage resilience we do heavisside(b,a)
 
+			rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
+				size=N_KILLS_FOR_POPPS)
 			random_prefix_choices = np.random.randint(low=0,high=self.n_prefixes,
-				size=(self.n_popps, N_KILLS_EACH_POPP))
+				size=N_KILLS_FOR_POPPS)
 			# pairing popps with popps
 			# popp -> users -> benefit
 			# but also users -> popps
@@ -1031,21 +1033,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.popp_sample_probs = (self.popp_support.T / np.sum(self.popp_support, axis=1)).T
 			# print(np.round(self.popp_sample_probs,2))
 
-			## maybe should have a percent of popp1,popp2,prefix tuples that we sample because they 
-			## gave good gradients before, and then a percent 
-			for poppi,popp in enumerate(self.popps):
-				this_popp_random_kills = np.random.choice(np.arange(self.n_popp) ,
-					 replace=True, size=N_KILLS_EACH_POPP,p=self.popp_sample_probs[poppi,:])
-				for rand_kill_i in range(N_KILLS_EACH_POPP):
-					rand_outer_prefix = random_prefix_choices[poppi, rand_kill_i]
-					tmp_a = copy.copy(a_effective)
-					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
-					rand_popp = this_popp_random_kills[rand_kill_i]
-					tmp_a[rand_popp,:] = False # Also kill this random popp
-					self.latency_benefit(tmp_a)
-					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
-					self.latency_benefit(tmp_a)
-					calls.append((popp, rand_popp,rand_outer_prefix))
+			for poppi, rand_outer_prefix in zip(rand_popp_choices,random_prefix_choices):
+				popp = self.popps[poppi]
+				this_popp_random_kill = np.random.choice(np.arange(self.n_popp) ,
+					 p=self.popp_sample_probs[poppi,:])
+				tmp_a = copy.copy(a_effective)
+				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
+				rand_popp = self.popps[this_popp_random_kill]
+				tmp_a[rand_popp,:] = False # Also kill this random popp
+				self.latency_benefit(tmp_a)
+				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
+				self.latency_benefit(tmp_a)
+				calls.append((popp, rand_popp, rand_outer_prefix))
 			
 
 
