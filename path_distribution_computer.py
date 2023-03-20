@@ -1,6 +1,8 @@
 import numpy as np, numba as nb, pickle, copy, zmq, time
 np.setbufsize(262144*8)
-
+np.random.seed(31414)
+import random
+random.seed(31415)
 from constants import *
 from helpers import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
@@ -61,14 +63,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		return data
 
 	def clear_caches(self):
+		self.this_time_ip_cache = {}
 		self.calc_cache.clear_all_caches()
 
 	def get_ingress_probabilities_by_a_matmul(self, a, verb=False, **kwargs):
 		a = threshold_a(a.astype(np.int32))
-		# if np.array_equal(a, remeasure_a): verb = True
+		if tuple(a.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+			verb = True
+			print("\n\nREMEASURING\n\n")
 		a_log = a.astype(bool)
-
-
 
 		self.ingress_probabilities[:,:,:] = 0
 		for pref_i in range(self.n_prefixes):
@@ -84,6 +87,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				try:
 					for (i,k), prob in self.this_time_ip_cache[tloga].items():
 						# will need a more complicated caching mechanism if ever non-uniform
+						if verb:
+							print("Using cached value for UI : {}".format(k))
 						self.ingress_probabilities[i,pref_i,k] = 1.0/prob 
 					continue
 				except KeyError:
@@ -118,6 +123,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if len(ds) == 0:
 					continue
 				ui = self.ug_to_ind[ug]
+				if ui == 191:
+					print("sorted array for {}".format(ui))
+					print(np.where(a[:,pref_i]))
+					print("{} {}".format(pref_i,sortf_arr[ug]))
 				most_likely_peers = sorted(ds,key=lambda el : el[1])
 				### TODO -- possibly introduce actual likelihoods here
 				nmlp = len(most_likely_peers)
@@ -131,13 +140,27 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
 			benefits across all users."""
+
+
+		#### SUPER WEIRDNESS -- getting remeasure error, but the a_effective I'm printing out changes beetween calls
+		### The pickle object does NOT change between calls
+		### so maybe the way flatten works is random?
+		### or there's some disconnect between the two processes
+
 		a_effective = threshold_a(a)
 		verb = kwargs.get('verb')
+		# print(tuple(a_effective.astype(bool).flatten()))
+		# print(tuple(remeasure_a.astype(bool).flatten()))
+		if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+			verb = True
+			print("\n\n\nREMEASURING\n\n\n")
 		if not kwargs.get('plotit') and not verb:
 			try:
-				return self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
+				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
+				return ret
 			except KeyError:
 				pass
+
 
 		timers = {
 			'capacity': 0,
@@ -316,6 +339,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# no benefit means no path, so it's actually just the most 
 				# negative benefit we can give
 				px[0,ui] = 1
+			# elif np.max(px[:,ui]) < .99:
+			if ui == 191:
+				all_pv_i = np.where(p_mat[:,:,ui])
+				print("{} {}".format(ui,np.where(px[:,ui] > .01)))
+				print(all_pv_i)
+				if np.max(px[:,ui]) < .9:
+					if kwargs.get('killit'):exit(0)
+				# for popp in self.ug_perfs[self.ugs[ui]]:
+					# print("{} -- {}".format(popp,self.popp_to_ind[popp]))
 		px = px / (np.sum(px,axis=0) + 1e-8) # renorm
 		if subset_ugs:
 			px = px[:,which_ugs_i]
@@ -332,15 +364,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		if np.sum(psumx) < .5:
 			print("ERRRRRR : {}".format(np.sum(psumx)))
+			exit(0)
 
 		if subset_ugs: # reset vars
 			lbx = lbx * benefit_renorm
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
 		timers['convolution'] = time.time() - timers['start']
-		print(timers)
+		# print(timers)
 
-		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
@@ -388,11 +421,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if i%100 == 0 and kwa.get('verb'):
 					print("worker {} : {} pct. done calcing grads, {} s per iter".format(self.worker_i, 
 					i * 100.0 /len(data), (time.time() - ts) / i))
+
 			# del self.this_time_ip_cache
 
 		elif cmd == 'reset_new_meas_cache':
 			self.calc_cache.clear_new_measurement_caches()
-			self.this_time_ip_cache = {}
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
 			parents_on = data
@@ -416,7 +449,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = 'ACK'
 		elif cmd == 'reset_cache':
 			self.clear_caches()
-			self.this_time_ip_cache = {}
 			ret = "ACK"
 		elif cmd == 'init':
 			self.start_connection()

@@ -14,6 +14,9 @@ except:
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+def ip32_to_24(ip):
+	return ".".join(ip.split(".")[0:3]) + ".0"
+
 def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 	### Create a bunch of sub-deployment objects, each with a subset of UGs
 	ugs = deployment['ugs']

@@ -2,6 +2,9 @@ import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geo
 from subprocess import call, check_output
 np.setbufsize(262144*8)
 np.set_printoptions(precision=2)
+np.random.seed(31414)
+import random
+random.seed(31415)
 import scipy.stats
 import sys
 # from sklearn.mixture import GaussianMixture
@@ -15,149 +18,8 @@ from anyopt import Anyopt_Adv_Solver
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from worker_comms import Worker_Manager
 
-problem_params = {
-	'really_friggin_small': {
-		'n_metro': 5,
-		'n_asn': 3,
-		'n_peer': 20,
-		'n_pop': 2, 
-		'max_popp_per_ug': 4, 
-		'max_peerings_per_pop': 10,
-		'min_peerings_per_pop': 4,
-		'n_providers': 2,
-	},
-	'small': {
-		'n_metro': 15,
-		'n_asn': 15,
-		'n_peer': 100,
-		'n_pop': 3, 
-		'max_popp_per_ug': 10, 
-		'max_peerings_per_pop': 30,
-		'min_peerings_per_pop': 5,
-		'n_providers': 15,
-	},
-	'decent': {
-		'n_metro': 200,
-		'n_asn': 20,
-		'n_peer': 100,
-		'n_pop': 10, 
-		'max_popp_per_ug': 20, 
-		'max_peerings_per_pop': 40,
-		'min_peerings_per_pop': 20,
-		'n_providers': 20,
-	},
-	'med': { # goal of sorts, maybe more metro,asns 
-		'n_metro': 20,
-		'n_asn': 100,
-		'n_peer': 1500,
-		'n_pop': 30, 
-		'max_popp_per_ug': 30, 
-		'max_peerings_per_pop': 70,
-		'min_peerings_per_pop': 20,
-		'n_providers': 25,
-	},
-	'large': {
-		'n_metro': 40,
-		'n_asn': 100,
-		'n_peer': 4100,
-		'n_pop': 100,
-		'max_popp_per_ug': 30,
-		'max_peerings_per_pop': 300,
-		'min_peerings_per_pop': 30,
-		'n_providers': 30,
-	},
-}
+from deployment_setup import *
 
-def get_random_deployment(problem_size):
-	#### Extensions / todos: 
-	### make users probabilistically have valid popps by distance
-	### we may want popps to be transit providers depending on the pop, randomly
-	### ug perfs should not be nonsensical based on distance
-
-	print("----Creating Random Deployment-----")
-	sizes = problem_params[problem_size]
-
-	### Probably update this to be a slightly more interesting model later
-	random_latency = lambda : np.random.uniform(MIN_LATENCY, MAX_LATENCY)
-	random_transit_provider_latency = lambda : np.random.uniform(MIN_LATENCY*1.3, MAX_LATENCY)
-
-	# testing ideas for learning over time
-	pops = np.arange(0,sizes['n_pop'])
-	def random_loc():
-		return (np.random.uniform(-30,30), np.random.uniform(-20,20))
-	pop_to_loc = {pop:random_loc() for pop in pops}
-	metros = np.arange(0,sizes['n_metro'])
-	metro_loc = {metro:random_loc() for metro in metros}
-	asns = np.arange(sizes['n_asn'])
-	# ug_to_vol = {(metro,asn): np.power(2,np.random.uniform(1,10)) for metro in metros for asn in asns}
-	# ug_to_vol = {(metro,asn): np.random.uniform(1,100) for metro in metros for asn in asns}
-	ug_to_vol = {(metro,asn): 1 for metro in metros for asn in asns}
-	ug_perfs = {ug: {} for ug in ug_to_vol}
-	peers = np.arange(0,sizes['n_peer'])
-	popps = []
-	n_providers = sizes['n_providers']
-	for pop in pops:
-		some_peers = np.random.choice(peers, size=np.random.randint(sizes['min_peerings_per_pop'],
-			sizes['max_peerings_per_pop']),replace=False)
-		provs = [p for p in some_peers if p < n_providers]
-		if len(provs) == 0: # ensure at least one provider per pop
-			some_peers = np.append(some_peers, [np.random.randint(n_providers)])
-		for peer in some_peers:
-			popps.append((pop,peer))
-	provider_popps = [popp for popp in popps if popp[1] < n_providers]
-	for ug in ug_to_vol:
-		some_popps = np.random.choice(np.arange(len(popps)), size=np.random.randint(3,
-			sizes['max_popp_per_ug']), replace=False)
-		for popp in some_popps:
-			ug_perfs[ug][popps[popp]] = random_latency()
-		for popp in provider_popps:
-			# All UGs have routes through deployment providers
-			# Assume for now that relationships don't depend on the PoP
-			# also assume these performances are probably worse
-			ug_perfs[ug][popp] = random_transit_provider_latency()
-	## Simulate random ingress priorities for each UG
-	ingress_priorities = {}
-	for ug in ug_perfs:
-		ingress_priorities[ug] = {}
-		these_peerings = list(get_difference(list(ug_perfs[ug]), ['anycast']))
-		ranked_peerings_by_dist = sorted(these_peerings, key = lambda el : geopy.distance.geodesic(
-			pop_to_loc[el[0]], metro_loc[ug[0]]).km)
-		priorities = {pi:i for i,pi in enumerate(ranked_peerings_by_dist)}
-		## randomly flip some priorities
-		for pi in list(priorities):
-			if np.random.random() < .01:
-				other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
-				tmp = copy.copy(priorities[pi])
-				priorities[pi] = copy.copy(priorities[other_pi])
-				priorities[other_pi] = tmp
-
-		for popp,priority in priorities.items():
-			ingress_priorities[ug][popp] = priority
-
-	## Simulate random link capacities
-	# links should maybe hold ~ N * max user volume
-	max_user_volume = max(list(ug_to_vol.values()))
-	mu = len(ug_perfs)/3*max_user_volume
-	sig = mu / 10
-	link_capacities = {popp: mu + sig * np.random.normal() for popp in popps}
-	ugs = list(ug_to_vol)
-	print("----Done Creating Random Deployment-----")
-	print("Deployment has {} users, {} popps, {} pops".format(
-		len(ugs), len(popps), len(pop_to_loc)))
-	return {
-		'ugs': ugs,
-		'ug_perfs': ug_perfs,
-		'ug_to_vol': ug_to_vol,
-		'whole_deployment_ugs': ugs,
-		'whole_deployment_ug_to_vol': ug_to_vol,
-		'link_capacities': link_capacities,
-		'ingress_priorities': ingress_priorities,
-		'popps': popps,
-		'metro_loc': metro_loc,
-		'pop_to_loc': pop_to_loc,
-		'n_providers': n_providers,
-		'provider_popps': provider_popps,
-	}
 
 def violates(ordering, bigger, smallers):
 	# ordering - list of ingresses
@@ -252,6 +114,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		self.compressed_lb_args_queue = [(base_args, base_kwa)]
 		for other_args, kwa in self.lb_args_queue[1:]:
 			other_adv, = other_args
+			kwa['killit'] = self.killit
 			if ugs is not None:
 				kwa['ugs'] = ugs
 			self.compressed_lb_args_queue.append((np.where(base_adv!=other_adv), kwa))
@@ -394,7 +257,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			if len(exclude) > 0:
 				a[np.array(exclude),1] = .45
 			## then just generally very little on otherwise
-			prob_on = np.minimum((MAX_LATENCY - MIN_LATENCY ) / 2 / (self.lambduh * self.n_popp * (self.n_prefixes - 2)), .02)
+			prob_on = np.minimum((MAX_LATENCY - MIN_LATENCY ) / 2 / (self.lambduh * self.n_popp * (self.n_prefixes - 2)), .05)
 			is_on = np.random.random(size=(self.n_popp, self.n_prefixes)) < prob_on
 			is_on[:,0:2] = False
 			a[is_on] = .55
@@ -976,7 +839,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						continue
 					tmp_a = copy.copy(a_effective)
 					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
-					tmp_a[rand_popp,:] = False # Also kill this random popp
+					tmp_a[self.popp_to_ind[rand_popp],:] = False # Also kill this random popp
 					self.latency_benefit(tmp_a)
 					tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
 					self.latency_benefit(tmp_a)
@@ -1023,13 +886,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 								backup = 1
 							else:
 								# should multiply this by probability of user using this ingress anyway
-								backup = 1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1])
+								backup = np.minimum(1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]+.00001),1)
 						except KeyError:
 							continue
 						popp2i = self.popp_to_ind[popp2]
 						self.popp_support[popp1i,popp2i] += backup
 
-			self.popp_support += .000001
+			self.popp_support += .0001
 			self.popp_sample_probs = (self.popp_support.T / np.sum(self.popp_support, axis=1)).T
 			# print(np.round(self.popp_sample_probs,2))
 
@@ -1040,7 +903,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				tmp_a = copy.copy(a_effective)
 				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
 				rand_popp = self.popps[this_popp_random_kill]
-				tmp_a[rand_popp,:] = False # Also kill this random popp
+				tmp_a[this_popp_random_kill,:] = False # Also kill this random popp
 				self.latency_benefit(tmp_a)
 				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
 				self.latency_benefit(tmp_a)
@@ -1073,7 +936,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				ind += 2
 
-		return grad_rb
+		return grad_rb.clip(-1,1)
 
 	def impose_advertisement_constraint(self, a):
 		"""The convex constraint 0 <= a_ij <= 1 has the simple solution to clip."""
@@ -1250,13 +1113,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		t_start = time.time()
 		while True:
 			all_inds = [(i,j) for i in range(self.n_popp) for j in range(self.n_prefixes)]
-			perms = list(itertools.permutations(all_inds, n_flips))
+			perms = sorted(list(itertools.permutations(all_inds, n_flips)))
 			np.random.shuffle(perms)
 			perms = perms[0:self.gradient_support_settings['support_size']]
 			for flips in perms:
 				for flip in flips:
 					a[flip] = 1 - a[flip]
-				self.latency_benefit(a)
+				self.latency_benefit_fn(a)
 				for flip in flips:
 					a[flip] = 1 - a[flip]
 			all_lb_rets = self.flush_latency_benefit_queue()
@@ -1283,8 +1146,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						print("Re-measuring {}".format(a))
 						pickle.dump(a,open('remeasure_a.pkl','wb'))
 						print('woops')
+						print(np.where(self.parent_tracker[7,:,:]))
 						_,u = self.latency_benefit_fn(a, plotit=True,retnow=True)
 						print("This flips had value: {}".format(value_func(u)))
+						print(u)
 						exit(0)
 					return a
 			n_flips += 1
@@ -1327,6 +1192,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		}
 
 	def solve(self, init_adv=None):
+		self.killit = False
 		self.clear_caches()
 		self.set_alpha()
 		self.measured = {}
@@ -1431,9 +1297,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 def main():
 	try:
-		np.random.seed(31414)
 
-		deployment = get_random_deployment(DPSIZE)
+		# deployment = get_random_deployment(DPSIZE)
 
 
 		# ## Comparing different solutions
@@ -1447,17 +1312,32 @@ def main():
 		# exit(0)
 
 
-		## Simple test
+		# ## Simple test
+		# lambduh = .0001
+		# gamma = 1.0
+		# sas = Sparse_Advertisement_Solver(deployment, 
+		# 	lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=20,
+		# 	using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
+		# wm = Worker_Manager(sas.get_init_kwa(), deployment)
+		# wm.start_workers()
+		# sas.set_worker_manager(wm)
+		# sas.solve()
+		# sas.make_plots()
+
+		### With VULTR measurements test
+		deployment = load_actual_deployment()
 		lambduh = .0001
 		gamma = 1.0
 		sas = Sparse_Advertisement_Solver(deployment, 
-			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=20,
-			using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
+			lambduh=lambduh,verbose=False,with_capacity=False,n_prefixes=3,
+			using_resilience_benefit=False, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
 		sas.solve()
 		sas.make_plots()
+		print(threshold_a(sas.get_last_advertisement()))
+
 
 		# ## Capacity Test ( I think this works, but not positive )
 		# lambduh = .1
