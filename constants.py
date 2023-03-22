@@ -6,21 +6,22 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 	'lightsteelblue']
 
 MIN_LATENCY = 1
-MAX_LATENCY = 10
-NO_ROUTE_LATENCY = 2*MAX_LATENCY
+MAX_LATENCY = 300
+NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
-LBX_DENSITY = 20 # number of points to discretize benefit into
+LBX_DENSITY = MAX_LATENCY # number of points to discretize benefit into
 
-BASE_SOCKET = 31420
+BASE_SOCKET = 31427
 
 ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-DPSIZE = 'really_friggin_small'
+DPSIZE = 'actual'
 PRINT_FREQUENCY = {
 	'really_friggin_small': 5,
+	'actual': 10,
 	'small': 5,
 	'decent': 1,
 	'med': 1,
@@ -29,6 +30,7 @@ PRINT_FREQUENCY = {
 
 N_WORKERS = {
 	'really_friggin_small': 1,
+	'actual': 2,
 	'small': 8,
 	'decent': 4,
 	'med': 1,

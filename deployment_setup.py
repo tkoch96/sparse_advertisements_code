@@ -1,95 +1,265 @@
 from constants import *
 from helpers import *
 
-def get_random_ingress_priorities(ug_perfs, pop_to_loc, metro_loc):
+def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_loc):
 	## Simulate random ingress priorities for each UG
 	ingress_priorities = {}
 	for ug in ug_perfs:
 		ingress_priorities[ug] = {}
-		these_peerings = list(get_difference(list(ug_perfs[ug]), ['anycast']))
-		ranked_peerings_by_dist = sorted(these_peerings, key = lambda el : geopy.distance.geodesic(
-			pop_to_loc[el[0]], metro_loc[ug[0]]).km)
-		priorities = {pi:i for i,pi in enumerate(ranked_peerings_by_dist)}
-		## randomly flip some priorities
-		if len(priorities) > 1:
-			for pi in list(priorities):
-				if np.random.random() < .01:
-					other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
-					tmp = copy.copy(priorities[pi])
-					priorities[pi] = copy.copy(priorities[other_pi])
-					priorities[other_pi] = tmp
+		## approximate the anycast interface by getting the one with closest latency
+		popps = list(ug_perfs[ug])
+		perfs = np.array([ug_perfs[ug][popp] for popp in popps])
+		## anycast is the most favored ingress
+		probably_anycast = popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
+		priorities = {probably_anycast:0}
+
+		other_peerings = list(get_difference(list(ug_perfs[ug]), probably_anycast))
+		if len(other_peerings) > 0:
+			ranked_peerings_by_dist = sorted(other_peerings, key = lambda el : geopy.distance.geodesic(
+				pop_to_loc[el[0]], metro_loc[ug[0]]).km)
+			for i,pi in enumerate(ranked_peerings_by_dist):
+				priorities[pi] = i + 1
+			## randomly flip some priorities
+			if len(priorities) > 1:
+				for pi in list(priorities):
+					if np.random.random() < .01:
+						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
+						tmp = copy.copy(priorities[pi])
+						priorities[pi] = copy.copy(priorities[other_pi])
+						priorities[other_pi] = tmp
 
 		for popp,priority in priorities.items():
 			ingress_priorities[ug][popp] = priority
 	return ingress_priorities
 
-def load_actual_deployment():
-	# CACHE_DIR = '/home/ubuntu/peering_measurements/cache'
-	CACHE_DIR = 'cache'
-	considering_pops = ['miami','atlanta']
-	provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
-	provider_popps = []
-	for row in open(provider_fn, 'r'):
-		pop,peer = row.strip().split(',')
-		if pop not in considering_pops:
-			continue
-		provider_popps.append((pop,peer))
-	CACHE_DIR = 'cache'
+def cluster_actual_users():
+	anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=['miami','atlanta'])
+
+	### Form a matrix of all latencies
+	ugs = sorted(list(ug_perfs))
+	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
+
+	ug_to_ind = {ug:i for i,ug in enumerate(ugs)}
+	popp_to_ind = {popp:i for i, popp in enumerate(popps)}
+
+
+	IGNORE_LAT = 10*NO_ROUTE_LATENCY
+
+	latencies_mat = IGNORE_LAT * np.ones((len(ugs), len(popps)))
+	for ug, perfs in ug_perfs.items():
+		for popp,lat in perfs.items():
+			latencies_mat[ug_to_ind[ug],popp_to_ind[popp]] = lat
+
+	from sklearn.cluster import Birch
+	### threshold would probably be tuned by whatever gets me an appropriate number of clusters
+	brc = Birch(threshold=10,n_clusters=None)
+	labels = brc.fit_predict(latencies_mat)
+
+	examples_by_label = {}
+	for i in range(len((labels))):
+		lab = labels[i]
+		try:
+			examples_by_label[lab].append(ugs[i])
+		except KeyError:
+			examples_by_label[lab] = [ugs[i]]
+	all_labs = sorted(list(examples_by_label))
+	np.random.shuffle(all_labs)
+	for lab in all_labs:
+		if len(examples_by_label[lab]) == 1: continue
+		print("Lab {}, ugs: ".format(lab))
+		for ug in examples_by_label[lab]:
+			print("{} -- {}".format(ug,ug_perfs[ug]))
+		print("\n\n")
+		if np.random.random() > .95:break
+
+	clustered_ug_perfs = {}
+	ug_id = 0
+	for sc_center in brc.subcluster_centers_:
+		clustered_ug_perfs[ug_id] = {}
+		for i,perf in enumerate(sc_center):
+			if perf == IGNORE_LAT: continue
+			clustered_ug_perfs[ug_id][popps[i]] = perf
+		ug_id += 1
+
+	print("Reduced {} Ugs to {}".format(len(ug_perfs), len(clustered_ug_perfs)))
+
+	## todo incorporate this idea into the pipeline, need to add in all the ug -> centroid conversion
+
+	return clustered_ug_perfs, clustered_anycast_perfs
+
+def parse_lat(lat_str):
+	lat = float(lat_str) * 1000
+	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
+	return lat
+
+def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
 	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
+	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
+	pop_dists = {}
+	for i,popi in enumerate(considering_pops):
+		for j,popj in enumerate(considering_pops):
+			if j > i: continue
+			if j == i:
+				pop_dists[popi,popj] = 0
+				pop_dists[popj,popi] = 0
+			pop_dists[popi,popj] = geopy.distance.geodesic(pop_to_loc[popi],
+				pop_to_loc[popj]).km
+			pop_dists[popj,popi] = pop_dists[popi,popj]
 	ug_perfs = {}
-	n_allowed_popps = 30
-	tmppopps = {}
 	for row in open(lat_fn, 'r'):
+		# if np.random.random() > .01:
+		# 	continue
 		fields = row.strip().split(',')
 		if fields[2] not in considering_pops: continue
 		t,ip,pop,peer,lat = fields
-		try:
-			tmppopps[pop,peer]
-		except KeyError:
-			if len(tmppopps) >= n_allowed_popps:
-				continue
-			tmppopps[pop,peer] = None
 		lat = float(lat)*1000
 		lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
 		metro = 'tmp'
 		asn = ip32_to_24(ip)
 		ug = (metro,asn)
+
 		try:
-			ug_perfs[ug][pop,peer] = lat
+			ug_perfs[ug]
 		except KeyError:
-			ug_perfs[ug] = {(pop,peer): lat}
+			ug_perfs[ug] = {}
+		try:
+			ug_perfs[ug][pop,peer].append(lat)
+		except KeyError:
+			ug_perfs[ug][pop,peer] = [lat]
+	for ug in ug_perfs:
+		for popp, lats in ug_perfs[ug].items():
+			ug_perfs[ug][popp] = np.min(lats)
+	return {},ug_perfs
 
-	ugs = sorted(list(ug_perfs))
-	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
-	print(popps[-3:])
-	print("{} popps, {} ugs".format(len(popps), len(ugs)))
-	n_providers = len(set(peer for pop,peer in provider_popps if (pop,peer) in popps))
-	ug_to_vol = {ug:1 for ug in ugs}
-	link_capacities = {popp:len(ugs) for popp in popps}
+	anycast_latencies = {}
+	anycast_pop = {}
+	for row in open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
+		,'r'):
+		_,ip,lat,pop = row.strip().split(',')
+		if lat == '-1': continue
+		metro = 'tmp'
+		asn = ip32_to_24(ip)
+		ug = (metro,asn)
+		lat = parse_lat(lat)
+		try:
+			anycast_latencies[ug].append(lat)
+		except KeyError:
+			anycast_latencies[ug] = [lat]
+	for ug in anycast_latencies:
+		anycast_latencies[ug] = np.min(anycast_latencies[ug])
 
-	metros = list(set(metro for metro,asn in ugs))
-	metro_loc = {m:(np.random.random(),np.random.random()) for m in metros}
-	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
+	in_both = get_intersection(ug_perfs, anycast_latencies)
+	anycast_latencies = {ug:anycast_latencies[ug] for ug in in_both}
+	ug_perfs = {ug:ug_perfs[ug] for ug in in_both}
 
-	ingress_priorities = get_random_ingress_priorities(ug_perfs, pop_to_loc, metro_loc)
+	### delete any UGs for which latencies don't follow SOL rules
+	to_del = []
+	for ug in ug_perfs:
+		valid = True
+		perfs_by_pop = {}
+		for (pop,peer), lat in ug_perfs[ug].items():
+			try:
+				perfs_by_pop[pop] = np.minimum(perfs_by_pop[pop],lat)
+			except KeyError:
+				perfs_by_pop[pop] = lat
+		ug_pops = list(perfs_by_pop)
+		for popi in ug_pops:
+			for popj in ug_pops:
+				if perfs_by_pop[popi] + perfs_by_pop[popj] <= pop_dists[popi,popj] * .01:
+					# print("({}) {}: {} ms and {}: {} ms but pop dist is {} km".format(
+					# 	ug,popi,perfs_by_pop[popi],popj,perfs_by_pop[popj],pop_dists[popi,popj]))
+					valid = False
+					break
+			if not valid:
+				break
+		if not valid:
+			to_del.append(ug)
 
-	deployment = {
-		'ugs': ugs,
-		'ug_perfs': ug_perfs,
-		'ug_to_vol': ug_to_vol,
-		'whole_deployment_ugs': ugs,
-		'whole_deployment_ug_to_vol': ug_to_vol,
-		'link_capacities': link_capacities,
-		'ingress_priorities': ingress_priorities,
-		'popps': popps,
-		'metro_loc': metro_loc,
-		'pop_to_loc': pop_to_loc,
-		'n_providers': n_providers,
-		'provider_popps': provider_popps,
-	}
-	for k,v in deployment.items():
-		print("{} {} ".format(k,v))
-		print("\n")
+	for ug in to_del:
+		del ug_perfs[ug]
+
+	in_both = get_intersection(ug_perfs, anycast_latencies)
+	anycast_latencies = {ug:anycast_latencies[ug] for ug in in_both}
+	ug_perfs = {ug:ug_perfs[ug] for ug in in_both}
+
+	return anycast_latencies, ug_perfs
+
+def load_actual_deployment():
+	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache.pkl')
+	if not os.path.exists(deployment_cache_fn):
+		considering_pops = ['miami','atlanta']
+		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
+
+		anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
+
+		provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
+		provider_popps = []
+		for row in open(provider_fn, 'r'):
+			pop,peer = row.strip().split(',')
+			if pop not in considering_pops:
+				continue
+			provider_popps.append((pop,peer))
+
+		
+
+		#### limit to UGs for which we have an anycast measurement and for which there
+		#### is an improvement for not using anycast
+		to_del = []
+		for ug in in_both:
+			min_perf = np.min(list(ug_perfs[ug].values()))
+			if min_perf + 1 >= anycast_latencies[ug]:
+				# ignore 1 ms differences, noise
+				to_del.append(ug)
+		in_both = get_difference(in_both, to_del)
+		# np.random.shuffle(in_both)
+		# n_users_to_keep = 500
+		# in_both = in_both[0:n_users_to_keep]
+		anycast_latencies = {ug:anycast_latencies[ug] for ug in in_both}
+		ug_perfs = {ug:ug_perfs[ug] for ug in in_both}
+
+		######## DONE PARSING LATS
+
+		ugs = sorted(list(ug_perfs))
+		popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
+		print("{} popps, {} ugs".format(len(popps), len(ugs)))
+		provider_popps = get_intersection(provider_popps, popps)
+		n_providers = len(set(peer for pop,peer in provider_popps))
+		ug_to_vol = {ug:1 for ug in ugs}
+		link_capacities = {popp:len(ugs) for popp in popps}
+
+		metros = list(set(metro for metro,asn in ugs))
+		metro_loc = {m:(np.random.random(),np.random.random()) for m in metros}
+
+		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
+			pop_to_loc, metro_loc)
+
+		deployment = {
+			'ugs': ugs,
+			'ug_perfs': ug_perfs,
+			'ug_anycast_perfs': anycast_latencies,
+			'ug_to_vol': ug_to_vol,
+			'whole_deployment_ugs': ugs,
+			'whole_deployment_ug_to_vol': ug_to_vol,
+			'link_capacities': link_capacities,
+			'ingress_priorities': ingress_priorities,
+			'popps': popps,
+			'metro_loc': metro_loc,
+			'pop_to_loc': pop_to_loc,
+			'n_providers': n_providers,
+			'provider_popps': provider_popps,
+		}
+		pickle.dump(deployment, open(deployment_cache_fn,'wb'))
+
+	else:
+		deployment = pickle.load(open(deployment_cache_fn,'rb'))
+		ug_perfs = deployment['ug_perfs']
+		anycast_latencies = deployment['ug_anycast_perfs']
+		pop_to_loc = deployment['pop_to_loc']
+		metro_loc = deployment['metro_loc']
+		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
+			pop_to_loc, metro_loc)
+		deployment['ingress_priorities'] = ingress_priorities
+
 	return deployment
 
 problem_params = {
@@ -146,6 +316,12 @@ problem_params = {
 }
 
 def get_random_deployment(problem_size):
+	if problem_size == 'actual':
+		return load_actual_deployment()
+	else:
+		return get_random_deployment_by_size(problem_size)
+
+def get_random_deployment_by_size(problem_size):
 	#### Extensions / todos: 
 	### make users probabilistically have valid popps by distance
 	### we may want popps to be transit providers depending on the pop, randomly
@@ -219,4 +395,7 @@ def get_random_deployment(problem_size):
 		'n_providers': n_providers,
 		'provider_popps': provider_popps,
 	}
+
+if __name__ == "__main__":
+	cluster_actual_users()
 

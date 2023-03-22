@@ -74,7 +74,7 @@ class Optimal_Adv_Wrapper:
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
 		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
-			self.ug_perfs[self.ugs[ui]] if popp != 'anycast'} for ui in range(self.n_ug)}
+			self.ug_perfs[self.ugs[ui]]} for ui in range(self.n_ug)}
 		try:
 			msg = pickle.dumps(['reset_cache', ()])
 			self.send_receive_workers(msg)
@@ -84,8 +84,8 @@ class Optimal_Adv_Wrapper:
 
 	def clear_new_measurement_caches(self):
 		self.calc_cache.clear_new_measurement_caches()
-		msg = pickle.dumps(['reset_new_meas_cache',()])
 		self.this_time_ip_cache = {}
+		msg = pickle.dumps(['reset_new_meas_cache',()])
 		self.send_receive_workers(msg)
 
 	def get_cache(self):
@@ -116,6 +116,7 @@ class Optimal_Adv_Wrapper:
 		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
 		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
 		self.ug_perfs = deployment['ug_perfs']
+		self.ug_anycast_perfs = deployment['ug_anycast_perfs']
 		# Shape of the variables
 		self.popps = sorted(list(set(deployment['popps'])))
 		self.n_popps = len(self.popps)
@@ -123,7 +124,7 @@ class Optimal_Adv_Wrapper:
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
 		self.provider_popps = deployment['provider_popps']
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
-		self.n_popp = len(get_difference(self.popps,['anycast']))
+		self.n_popp = len(self.popps)
 		if self.n_prefixes is None:
 			self.n_prefixes = np.maximum(3,self.n_popp // 3)
 		self.n_providers = deployment['n_providers'] # number of provider ASes
@@ -138,7 +139,7 @@ class Optimal_Adv_Wrapper:
 			self.link_capacities_arr[poppi] = cap
 
 		self.ingress_priority_inds = {ug:{self.popp_to_ind[popp]: \
-			self.ground_truth_ingress_priorities[ug][popp] for popp in self.ug_perfs[ug] if popp != 'anycast'} \
+			self.ground_truth_ingress_priorities[ug][popp] for popp in self.ug_perfs[ug]} \
 			for ug in self.ugs}
 
 		self.ug_to_vol = deployment['ug_to_vol']
@@ -158,7 +159,6 @@ class Optimal_Adv_Wrapper:
 		self.popp_by_ug_indicator = np.zeros((self.n_popp, self.n_ug))
 		for ui in range(self.n_ug):
 			for popp in sorted(self.ug_perfs[self.ugs[ui]]):
-				if popp == 'anycast': continue
 				self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
 			# if len(self.ug_perfs[self.ugs[ui]]) > 1:
 			# 	for popp in self.ug_perfs[self.ugs[ui]]:
@@ -178,7 +178,6 @@ class Optimal_Adv_Wrapper:
 		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
 		for ui in range(self.n_ug):
 			for popp in self.ug_perfs[self.ugs[ui]]:
-				if popp == 'anycast': continue
 				self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
 
 		try:
@@ -249,24 +248,14 @@ class Optimal_Adv_Wrapper:
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
 
 		ugs = kwargs.get('ugs',self.ugs)
-
 		benefit = self.benefit_from_user_latencies(user_latencies,ugs)
 		return benefit
 
-	def get_ug_perfs_with_anycast(self):
-		ugperf_copy = copy.deepcopy(self.ug_perfs)
-		for ug in self.ug_perfs:
-			anycast_ingress = [popp for popp,priority in self.ground_truth_ingress_priorities[ug].items() \
-				if priority == 0][0]
-			ugperf_copy[ug]['anycast'] = ugperf_copy[ug][anycast_ingress]
-		return ugperf_copy
-
 	def get_max_painter_benefit(self):
 		max_improve_over_anycast = 0
-		ug_anycast_perfs = self.get_ug_perfs_with_anycast()
 		for ug in self.ugs:
 			best_user_latency = np.min(list(self.ug_perfs[ug].values()))
-			max_improve_over_anycast += (ug_anycast_perfs[ug]['anycast'] - best_user_latency) * self.ug_to_vol[ug]
+			max_improve_over_anycast += (self.ug_anycast_perfs[ug] - best_user_latency) * self.ug_to_vol[ug]
 		max_improve_over_anycast = max_improve_over_anycast / np.sum(self.ug_vols)
 		return max_improve_over_anycast
 
@@ -352,7 +341,7 @@ class Optimal_Adv_Wrapper:
 		user_benefits = -1 * user_latencies
 		# average user benefit -- important that this function is not affected by the number of user groups
 		these_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
-		these_vols = np.array([self.ug_vols[these_inds] for ug in ugs])
+		these_vols = self.ug_vols[these_inds]
 		these_benefits = user_benefits[these_inds]
 		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
@@ -407,10 +396,6 @@ class Optimal_Adv_Wrapper:
 			best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
 			for ui, bao in zip(range(self.n_ug), best_available_options):
 				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
-				if kwargs.get('verb'):
-					if ui == 191:
-						print("Prefix {}, UG {} routed through {}".format(prefix_i,ui,bao))
-						print(best_available_options)
 				this_routed_through_ingress[self.ugs[ui]] = bao
 			routed_through_ingress[prefix_i] = this_routed_through_ingress
 			self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
@@ -433,9 +418,6 @@ class Optimal_Adv_Wrapper:
 						beaten_ingress_obj = self.measured_prefs[ui].get(beaten_ingress)
 						beaten_ingress_obj.add_parent(routed_ingress_obj)
 						routed_ingress_obj.add_child(beaten_ingress_obj)
-						print("For UG {}, learning {} ({}) beats {} ({})".format(ui,
-							routed_ingress,self.popps[routed_ingress], beaten_ingress,
-							self.popps[beaten_ingress]))
 						self.parent_tracker[ui,beaten_ingress,routed_ingress] = True
 						try:
 							self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
@@ -469,7 +451,6 @@ class Optimal_Adv_Wrapper:
 		except KeyError:
 			pass
 
-		print("Measuring ingress {} ".format(threshold_a(a)))
 		## Reset benefit calculations cache since we now have more info
 		self.clear_new_measurement_caches()
 
@@ -479,10 +460,7 @@ class Optimal_Adv_Wrapper:
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a,verb=True)
 
 		self.enforce_measured_prefs(routed_through_ingress, actives)
-		# print("Measuring : \n{}".format(a))
 		self.measured[tuple(a.flatten())] = None
-
-		self.killit = True
 
 	def get_naive_range(self, a, ugs=None):
 		overall_best = 0

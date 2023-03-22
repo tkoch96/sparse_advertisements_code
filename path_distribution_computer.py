@@ -15,6 +15,8 @@ try:
 except:
 	pass
 
+USER_OF_INTEREST = None
+
 
 #### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
 @nb.njit(fastmath=True,parallel=True)
@@ -68,9 +70,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	def get_ingress_probabilities_by_a_matmul(self, a, verb=False, **kwargs):
 		a = threshold_a(a.astype(np.int32))
-		if tuple(a.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
-			verb = True
-			print("\n\nREMEASURING\n\n")
+		# if tuple(a.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+		# 	verb = True
+		# 	print("\n\nREMEASURING\n\n")
 		a_log = a.astype(bool)
 
 		self.ingress_probabilities[:,:,:] = 0
@@ -87,8 +89,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				try:
 					for (i,k), prob in self.this_time_ip_cache[tloga].items():
 						# will need a more complicated caching mechanism if ever non-uniform
-						if verb:
-							print("Using cached value for UI : {}".format(k))
 						self.ingress_probabilities[i,pref_i,k] = 1.0/prob 
 					continue
 				except KeyError:
@@ -123,10 +123,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if len(ds) == 0:
 					continue
 				ui = self.ug_to_ind[ug]
-				if ui == 191:
-					print("sorted array for {}".format(ui))
-					print(np.where(a[:,pref_i]))
-					print("{} {}".format(pref_i,sortf_arr[ug]))
 				most_likely_peers = sorted(ds,key=lambda el : el[1])
 				### TODO -- possibly introduce actual likelihoods here
 				nmlp = len(most_likely_peers)
@@ -151,9 +147,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		verb = kwargs.get('verb')
 		# print(tuple(a_effective.astype(bool).flatten()))
 		# print(tuple(remeasure_a.astype(bool).flatten()))
-		if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
-			verb = True
-			print("\n\n\nREMEASURING\n\n\n")
+		# if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+		# 	verb = True
+		# 	print("\n\n\nREMEASURING\n\n\n")
 		if not kwargs.get('plotit') and not verb:
 			try:
 				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
@@ -256,13 +252,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				p_vol_this_ingress = self.pdf_sum_function(ug_prob_vols_this_ingress).flatten()
 				p_link_fails[ingress_i] = np.sum(p_vol_this_ingress[self.vol_x * self.n_ug > self.link_capacities[ingress_i]])
 			
-			# if kwargs.get('verb'):
-			# 	import matplotlib.pyplot as plt
-			# 	f,ax = plt.subplots(2)
-			# 	ax[0].set_title("Ingress {}".format(ingress_i))
-			# 	ax[0].plot(ug_prob_vols_this_ingress)
-			# 	ax[1].plot(p_vol_this_ingress)
-			# 	plt.show()
 		timers['capacity'] = time.time() - timers['start']
 
 		## holds P(latency benefit) for each user
@@ -302,13 +291,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						break
 				if found_trivial: 
 					continue
-				# else:
-				# 	if np.random.random() > .999:
-				# 		print(min_by_pref)
-				# 		print(max_by_pref)
-				# 		print("\n")
-				# 		if np.random.random() > .999:exit(0)
-
 
 				all_pv = sorted(all_pv,key=lambda el : el[1])
 				running_probs = np.zeros((self.n_prefixes))
@@ -339,15 +321,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# no benefit means no path, so it's actually just the most 
 				# negative benefit we can give
 				px[0,ui] = 1
-			# elif np.max(px[:,ui]) < .99:
-			if ui == 191:
-				all_pv_i = np.where(p_mat[:,:,ui])
-				print("{} {}".format(ui,np.where(px[:,ui] > .01)))
-				print(all_pv_i)
-				if np.max(px[:,ui]) < .9:
-					if kwargs.get('killit'):exit(0)
-				# for popp in self.ug_perfs[self.ugs[ui]]:
-					# print("{} -- {}".format(popp,self.popp_to_ind[popp]))
 		px = px / (np.sum(px,axis=0) + 1e-8) # renorm
 		if subset_ugs:
 			px = px[:,which_ugs_i]
@@ -355,10 +328,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
-		# if subset_ugs: ## reweight to account for the fact that we're not looking at all volume
-		# 	print("pre renorm {} {} {} {}".format(xsumx[0],xsumx[-1],np.where(psumx), benefit_renorm))
-		# 	xsumx, psumx = rescale_pdf(xsumx.flatten(), psumx.flatten(), benefit_renorm)
-		# 	print("post renorm {} {} {}".format(xsumx[0],xsumx[-1],np.where(psumx)))
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 
 
@@ -373,7 +342,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		timers['convolution'] = time.time() - timers['start']
 		# print(timers)
 
-		# self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
@@ -403,7 +372,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 			ts = time.time()
 			ret = []
-			# self.this_time_ip_cache = {}
 			base_args,base_kwa = data[0]
 			base_adv, = base_args
 			base_adv = base_adv.astype(bool)
@@ -417,14 +385,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					base_adv[ind] = not base_adv[ind]
 
 				i += 1
-				kwa['verb'] = True
+				# kwa['verb'] = True
 				if i%100 == 0 and kwa.get('verb'):
-					print("worker {} : {} pct. done calcing grads, {} s per iter".format(self.worker_i, 
-					i * 100.0 /len(data), (time.time() - ts) / i))
-
-			# del self.this_time_ip_cache
+					print("worker {} : {} pct. done calcing latency benefits, {}ms per iter".format(self.worker_i, 
+						i * 100.0 /len(data), round(1000*(time.time() - ts) / i)))
 
 		elif cmd == 'reset_new_meas_cache':
+			self.this_time_ip_cache = {}
 			self.calc_cache.clear_new_measurement_caches()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':

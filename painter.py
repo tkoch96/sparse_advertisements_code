@@ -12,11 +12,13 @@ def reduce_to_score(improvements_vols, skip_log=False):
 		improvements_vols[:,1] = vol_to_val(improvements_vols[:,1])
 	return np.sum(np.prod(improvements_vols,axis=1))
 
-def calc_improvements_by_pop_peer(ug_perfs, ug_to_vol, being_adved, **kwargs):
+def calc_improvements_by_pop_peer(ug_perfs, ug_anycast_perfs, ug_to_vol, being_adved, **kwargs):
 	# returns popp -> UG -> improvement
 	improvements_by_pop_peer = {}
 	ug_decisions = {}
 	for ug in ug_perfs:
+		if 'anycast' in being_adved:
+			ug_perfs[ug]['anycast'] = ug_anycast_perfs[ug]
 		vol = ug_to_vol[ug]
 		# get best performing ingress
 		reachable = get_intersection(being_adved, ug_perfs[ug])
@@ -62,8 +64,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.popp_to_ug = {}
 		for ug in list(self.ug_perfs):
 			for popp in self.ug_perfs[ug]:
-				if popp == 'anycast': continue
-				if popp[1] in ['regional','hybricast']: continue
 				try:
 					self.popp_to_ug[popp].append(ug)
 				except KeyError:
@@ -86,8 +86,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
 
 	def _get_new_improvements(self, being_adved, **kwargs):
-		improvements, ug_decisions = calc_improvements_by_pop_peer(self.ug_perfs, self.ug_to_vol,
-			being_adved, **kwargs)
+		improvements, ug_decisions = calc_improvements_by_pop_peer(self.ug_perfs, self.ug_anycast_perfs,
+			self.ug_to_vol, being_adved, **kwargs)
 		improvements_average = calc_improvements(improvements, **kwargs)
 		return improvements, improvements_average, ug_decisions
 
@@ -175,8 +175,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		pop_to_metro_dist_cache = {}
 		to_del = []
 		for ug in self.ug_perfs:
-			for u in list(self.ug_perfs[ug]):
-				if u == 'anycast': continue
 			if self.ug_perfs[ug] == {}: to_del.append(ug)
 		for ug in to_del: del self.ug_perfs[ug]
 		self.calc_popp_to_ug()
@@ -249,12 +247,10 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.frozen_impv_by_popp = None
 
 		self.ug_using_pref = {i:-1 for i in range(len(all_ug))}
-		self.ug_current_perf = {ug:self.ug_perfs[ug]['anycast'] for ug in self.ug_perfs}
-		self.ug_best_perf = {ug: self.ug_perfs[ug]['anycast'] for ug in self.ug_perfs}
+		self.ug_current_perf = {ug:self.ug_anycast_perfs[ug] for ug in self.ug_perfs}
+		self.ug_best_perf = {ug: self.ug_anycast_perfs[ug] for ug in self.ug_perfs}
 		for ug in self.ug_perfs:
 			for u in self.ug_perfs[ug]:
-				if u == 'anycast': continue
-				if u[1] in ['regional','hybridcast']: continue
 				self.ug_best_perf[ug] = np.minimum(self.ug_best_perf[ug], self.ug_perfs[ug][u])
 		ug_i_to_not_consider = []
 
@@ -316,8 +312,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 					possible_latencies = np.array([self.ug_perfs[ug][u] for u in available_options])
 					old_perf = np.mean(possible_latencies)
 				else:
-					old_perf = self.ug_perfs[ug]['anycast']
-				old_perf = np.minimum(self.ug_perfs[ug]['anycast'], old_perf)
+					old_perf = self.ug_anycast_perfs[ug]
+				old_perf = np.minimum(self.ug_anycast_perfs[ug], old_perf)
 
 				if self.freeze_up_to > -1:
 					# performance from already-advertised prefixes
@@ -327,7 +323,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				ug_to_prefix_perfs[ug][pfxi] = old_perf
 
 				for popp in self.ug_perfs[ug]:
-					if popp == 'anycast': continue
 					if reuse_prefix:
 						# Calculate new average performance for this prefix
 						available_options = get_available_options_ug(ug, advs_by_pfx[pfxi] + [popp])
@@ -342,7 +337,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 						# the new prefixes performance would be ug_perfs -> ug -> popp
 						new_perf = self.ug_perfs[ug][popp]
 					# Latency is minimum of: anycast latency, perf at this prefix, perfs at all previous prefixes
-					new_perf = np.minimum(self.ug_perfs[ug]['anycast'], new_perf)
+					new_perf = np.minimum(self.ug_anycast_perfs[ug], new_perf)
 					if self.freeze_up_to > -1:
 						new_perf = np.minimum(np.min(ug_to_prefix_perfs[ug][0:self.freeze_up_to+1]), new_perf)
 
@@ -402,7 +397,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				for next_best_peer_i in ranked_peers: # search through peers to find one to add
 					# I don't know if this would ever happen, but just a sanity check
 					next_best_popp = all_popp[next_best_peer_i]
-					if next_best_popp == 'anycast': continue 
 					if self.improvement_scores[next_best_peer_i] > 0:
 						# necessary conditions
 						# (a) peer must (on average) add some benefit

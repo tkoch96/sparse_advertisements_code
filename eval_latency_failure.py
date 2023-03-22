@@ -23,10 +23,13 @@ def popp_failure_latency_comparisons():
 	
 	soln_types = ['sparse', 'one_per_pop', 'painter', 'anyopt']
 	metrics_fn = os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(DPSIZE))
-	metrics = {'popp_failures': {i:{k:[] for k in soln_types} for i in range(N_TO_SIM)}}
+	metrics = {
+		'popp_failures': {i:{k:[] for k in soln_types} for i in range(N_TO_SIM)},
+		'latencies': {i:{k:[] for k in soln_types} for i in range(N_TO_SIM)},
+		'best_latencies': {},
+	}
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
-
 	try:
 		for random_iter in range(N_TO_SIM):
 			try:
@@ -38,8 +41,9 @@ def popp_failure_latency_comparisons():
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
-			n_prefixes = np.minimum(20,int(len(deployment['popps'])/2))
-			sas = Sparse_Advertisement_Eval(deployment, verbose=False,
+
+			n_prefixes = 5
+			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=1.5,n_prefixes=n_prefixes)
 			if wm is None:
@@ -47,7 +51,7 @@ def popp_failure_latency_comparisons():
 				wm.start_workers()
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
-			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=False,
+			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=True,
 				 dont_update_deployment=True)
 
 			adv = sas.sas.get_last_advertisement()
@@ -57,7 +61,12 @@ def popp_failure_latency_comparisons():
 				adv = ret['adv_solns'][solution][0]
 				print("{} {} ".format(solution,np.round(adv,2)))
 
-				_, ug_catchments = sas.calculate_user_choice(adv)
+				user_latencies, ug_catchments = sas.calculate_user_choice(adv)
+				metrics['latencies'][random_iter][solution] = user_latencies
+				metrics['best_latencies'][random_iter] = np.zeros(user_latencies.shape)
+				for ug in sas.ugs:
+					metrics['best_latencies'][random_iter][sas.ug_to_ind[ug]] = np.min(
+						list(sas.ug_perfs[ug].values()))
 				for popp in sas.popps:
 					these_ugs = [ug for ug in sas.ugs if \
 						sas.popp_to_ind[popp] == ug_catchments[sas.ug_to_ind[ug]]]
@@ -68,14 +77,18 @@ def popp_failure_latency_comparisons():
 					## q: what is latency experienced for these ugs compared to optimal?
 					_, ug_catchments = sas.calculate_user_choice(adv_cpy)
 					for ug in these_ugs:
+						best_perf = np.min(list(sas.ug_perfs[ug].values()))
 						other_available = [sas.ug_perfs[ug][u] for u in sas.ug_perfs[ug] if u != popp]
 						if len(other_available) == 0:
 							best_perf = MAX_LATENCY
 						else:
 							best_perf = np.min(other_available)
-						
-						actual_ingress = sas.popps[ug_catchments[sas.ug_to_ind[ug]]]
-						actual_perf = sas.ug_perfs[ug][actual_ingress]
+						poppi = ug_catchments[sas.ug_to_ind[ug]]
+						if poppi is None:
+							actual_perf = NO_ROUTE_LATENCY
+						else:
+							actual_ingress = sas.popps[poppi]
+							actual_perf = sas.ug_perfs[ug][actual_ingress]
 						if solution == 'sparse' and best_perf + 2 < actual_perf:
 							print("UG {} popp {} ({}) actual {} best {}".format(
 								ug,popp,sas.popp_to_ind[popp],actual_perf, best_perf))
@@ -92,18 +105,30 @@ def popp_failure_latency_comparisons():
 	finally:
 		if wm is not None:
 			wm.stop_workers()
-	f,ax=plt.subplots(1,1)
-	print(metrics)
+	f,ax=plt.subplots(2,1)
 
 	for solution in soln_types:
 		all_differences = np.array([el for ri in range(N_TO_SIM) for el in metrics['popp_failures'][ri][solution] ])
 		x,cdf_x = get_cdf_xy(all_differences)
-		ax.plot(x,cdf_x,label=solution)
+		ax[0].plot(x,cdf_x,label=solution)
 
-	ax.legend()
-	ax.grid(True)
-	ax.set_xlabel("Best - Actual Latency (ms)")
-	ax.set_ylabel("CDF of UGs under Ingress Failures")
+		diffs = []
+		for random_iter in range(N_TO_SIM):
+			diffs = diffs + list(metrics['latencies'][random_iter][solution] - metrics['best_latencies'][random_iter])
+
+		x,cdf_x = get_cdf_xy(diffs)
+		ax[1].plot(x,cdf_x,label=solution)
+
+	ax[0].legend(fontsize=8)
+	ax[0].grid(True)
+	ax[0].set_xlabel("Best - Actual Latency (ms)")
+	ax[0].set_ylabel("CDF of UGs")
+
+	ax[1].legend(fontsize=8)
+	ax[1].grid(True)
+	ax[1].set_xlabel("Actual - Best Latency (ms)")
+	ax[1].set_ylabel("CDF of UGs")
+
 	save_fig("popp_latency_failure_comparison.pdf")
 
 if __name__ == "__main__":

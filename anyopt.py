@@ -1,4 +1,4 @@
-import numpy as np
+import numpy as np,time, tqdm
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from helpers import *
 
@@ -23,14 +23,15 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		choice_arr = list(range(self.n_provider_popps))
 
 		best_adv = None
-		for test_i in range(self.n_montecarlo):
-			random_adv = np.zeros((self.n_popp, self.n_prefixes))
-			for prefi in range(self.n_prefixes):
+		for test_i in tqdm.tqdm(range(self.n_montecarlo),desc="Measuring anyopt providers."):
+			random_adv = np.zeros((self.n_popp, self.n_prefixes-1))
+			for prefi in range(self.n_prefixes-1):
 				randomly_active = np.random.choice(choice_arr, 
 					size=np.random.randint(self.n_provider_popps)+1,replace=False)
 				randomly_active = [self.provider_popps[ra] for ra in randomly_active]
 				randomly_active = np.array([self.popp_to_ind[ra] for ra in randomly_active])
 				random_adv[randomly_active, prefi] = 1
+			random_adv = np.concatenate([np.ones((self.n_popp,1)), random_adv],axis=1)
 			this_adv_obj = self.measured_objective(random_adv)
 			if best_adv is None:
 				best_adv = random_adv
@@ -49,19 +50,25 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		## pairwise comparisons among transit, and then measuring each peer separately
 		self.path_measures = (int(np.log2(self.n_provider_popps))  + \
 			len(non_transit_popps)) // self.n_prefixes
+		popps_to_prefs = {}
 		while popp_i < len(non_transit_popps):
 			popp = non_transit_popps[popp_i]
+			popp_pref = 1+np.random.randint(self.n_prefixes-1)
+			popps_to_prefs[popp] = popp_pref
 			popp_i += 1
+			print("Anyopt assessing peers {} pct done".format(
+				popp_i*100.0/len(non_transit_popps)))
 			# In practice we could parallelize this across prefixes
 			# but for now it's easier to implement this way (code reuse)
-			best_adv[self.popp_to_ind[popp],:] = 1
+			best_adv[self.popp_to_ind[popp],popp_pref] = 1
 			obj_after = self.measured_objective(best_adv)
 			if obj_after < best_obj:
 				keep_popp.append(popp)
-			best_adv[self.popp_to_ind[popp],:] = 0
+			best_adv[self.popp_to_ind[popp],popp_pref] = 0
+
 		## "one - pass" method
 		for popp in keep_popp:
-			best_adv[self.popp_to_ind[popp],0] = 1
+			best_adv[self.popp_to_ind[popp],popps_to_prefs[popp]] = 1
 		self.obj = self.measured_objective(best_adv) # technically this is a measurement, uncounted
 
 		self.advs = best_adv
