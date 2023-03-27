@@ -32,7 +32,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 				randomly_active = np.array([self.popp_to_ind[ra] for ra in randomly_active])
 				random_adv[randomly_active, prefi] = 1
 			random_adv = np.concatenate([np.ones((self.n_popp,1)), random_adv],axis=1)
-			this_adv_obj = self.measured_objective(random_adv)
+			this_adv_obj = self.measured_objective(random_adv, use_resilience=False)
 			if best_adv is None:
 				best_adv = random_adv
 				best_obj = this_adv_obj
@@ -43,7 +43,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		self.stop = False
 		self.rolling_delta = 10
 		self.iter = 0
-		non_transit_popps = get_difference(self.popps, self.provider_popps)
+		non_transit_popps = list(get_difference(self.popps, self.provider_popps))
 		np.random.shuffle(non_transit_popps)
 		popp_i = 0
 		keep_popp = []
@@ -51,17 +51,15 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		self.path_measures = (int(np.log2(self.n_provider_popps))  + \
 			len(non_transit_popps)) // self.n_prefixes
 		popps_to_prefs = {}
-		while popp_i < len(non_transit_popps):
+		for popp_i, popp in tqdm.tqdm(enumerate(non_transit_popps),
+			desc="Anyopt assessing peers"):
 			popp = non_transit_popps[popp_i]
 			popp_pref = 1+np.random.randint(self.n_prefixes-1)
 			popps_to_prefs[popp] = popp_pref
-			popp_i += 1
-			print("Anyopt assessing peers {} pct done".format(
-				popp_i*100.0/len(non_transit_popps)))
 			# In practice we could parallelize this across prefixes
 			# but for now it's easier to implement this way (code reuse)
 			best_adv[self.popp_to_ind[popp],popp_pref] = 1
-			obj_after = self.measured_objective(best_adv)
+			obj_after = self.measured_objective(best_adv, use_resilience=False)
 			if obj_after < best_obj:
 				keep_popp.append(popp)
 			best_adv[self.popp_to_ind[popp],popp_pref] = 0
@@ -69,6 +67,9 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		## "one - pass" method
 		for popp in keep_popp:
 			best_adv[self.popp_to_ind[popp],popps_to_prefs[popp]] = 1
-		self.obj = self.measured_objective(best_adv) # technically this is a measurement, uncounted
+		self.obj = self.measured_objective(best_adv,
+			use_resilience=False) # technically this is a measurement, uncounted
 
 		self.advs = best_adv
+
+

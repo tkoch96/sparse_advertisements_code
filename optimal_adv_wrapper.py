@@ -348,19 +348,35 @@ class Optimal_Adv_Wrapper:
 	def get_ground_truth_resilience_benefit(self, a):
 		benefit = 0
 		tmp = np.ones(a.shape)
+		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a)
+		total_vol = np.sum(self.ug_vols)
 		for popp in self.popps:
+			these_ugs = [ug for ug in self.ugs if \
+				self.popp_to_ind[popp] == pre_ug_catchments[self.ug_to_ind[ug]]]
+			if len(these_ugs) == 0: 
+				continue
 			tmp[self.popp_to_ind[popp],:] = 0
-			benefit += self.get_ground_truth_latency_benefit(a * tmp)
-			tmp[self.popp_to_ind[popp],:] = 1
-		return benefit / len(self.popps)
+			user_latencies, ug_catchments = self.calculate_user_choice(a * tmp,
+				ugs=these_ugs)
 
-	def calculate_user_choice(self, a):
+			## benefit is user latency under failure - user latency under no failure
+			# I might want this to be compared to best possible, but oh well
+			these_inds = np.array([self.ug_to_ind[ug] for ug in these_ugs])
+			these_vols = self.ug_vols[these_inds]
+			benefit += np.sum((user_latencies - pre_user_latencies[these_inds]) *\
+				these_vols) / total_vol
+
+			tmp[self.popp_to_ind[popp],:] = 1
+		return benefit
+
+	def calculate_user_choice(self, a, **kwargs):
 		"""Calculates UG -> popp assuming they go to their best performing popp."""
-		user_latencies = NO_ROUTE_LATENCY * np.ones((len(self.ugs)))
-		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a)
+		ugs = kwargs.get('ugs', self.ugs)
+		user_latencies = NO_ROUTE_LATENCY * np.ones((len(ugs)))
+		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, ugs=ugs)
 		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
 		for prefix_i in range(a.shape[1]):
-			for ugi,ug in enumerate(self.ugs):
+			for ugi,ug in enumerate(kwargs.get('ugs', ugs)):
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
 				if routed_ingress is None:
 					latency = NO_ROUTE_LATENCY
@@ -378,12 +394,15 @@ class Optimal_Adv_Wrapper:
 		### Somewhat efficient implementation using matrix logic
 		routed_through_ingress = {} # prefix -> UG -> ingress index
 		actives = {} # prefix -> indices where we adv
+		ugs = kwargs.get('ugs', self.ugs)
+		ug_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
+		n_ug = len(ugs)
 		for prefix_i in range(self.n_prefixes):
-			try:
-				routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())]
-				continue
-			except KeyError:
-				pass
+			# try:
+			# 	routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())]
+			# 	continue
+			# except KeyError:
+			# 	pass
 			this_actives = np.where(a[:,prefix_i] == 1)[0]
 			actives[prefix_i] = this_actives
 			this_routed_through_ingress = {}
@@ -391,14 +410,14 @@ class Optimal_Adv_Wrapper:
 				routed_through_ingress[prefix_i] = this_routed_through_ingress
 				self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
 				continue
-			active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,self.n_ug))
-			active_popp_ug_indicator = self.popp_by_ug_indicator * active_popp_indicator
+			active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
+			active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
 			best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
-			for ui, bao in zip(range(self.n_ug), best_available_options):
+			for ui, bao in zip(range(n_ug), best_available_options):
 				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
-				this_routed_through_ingress[self.ugs[ui]] = bao
+				this_routed_through_ingress[ugs[ui]] = bao
 			routed_through_ingress[prefix_i] = this_routed_through_ingress
-			self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
+			# self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
 		return routed_through_ingress, actives
 
 	def enforce_measured_prefs(self, routed_through_ingress, actives):
@@ -524,7 +543,7 @@ class Optimal_Adv_Wrapper:
 		## (Here we actually execute the advertisement)
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
-		if self.gamma > 0:
+		if self.gamma > 0 and kwargs.get('use_resilience', True):
 			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
 		else:
 			resilience_benefit = 0

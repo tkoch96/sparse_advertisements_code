@@ -185,16 +185,17 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 		tmp = np.ones(a.shape)
 		self.latency_benefit_fn(a)
-		for peer in self.popps:
-			tmp[self.popp_to_ind[peer],:] = 0
+		for popp in self.popps:
+			tmp[self.popp_to_ind[popp],:] = 0
 			self.latency_benefit_fn(a * tmp)
-			tmp[self.popp_to_ind[peer],:] = 1
+			tmp[self.popp_to_ind[popp],:] = 1
 		rets = self.flush_latency_benefit_queue()
 		benefit = 0
 		base_b, _ = rets[0]
 		for b,_ in rets[1:]:
-			benefit += b
-		return base_b - benefit / self.n_popp
+			benefit += (base_b - b)
+
+		return benefit
 
 	def init_advertisement(self):
 		print("Initializing advertisement...")
@@ -686,14 +687,58 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		L_grad = np.zeros(a.shape)
 		a_effective = threshold_a(a).astype(bool)
 
-		inds = self.gradient_support
-		if self.iter % self.gradient_support_settings['calc_every'] == 0:
-			# periodically calculate all gradients
-			inds = [(a_i,a_j) for a_i in range(a.shape[0]) for a_j in range(a.shape[1])]
-		dont_calc_inds = get_difference([(a_i,a_j) for a_i in range(a.shape[0]) for a_j in range(a.shape[1])], inds)
+
+		total_n_grad_calc = self.gradient_support_settings['support_size']
 		
+		pct_explore = 20 # pct of gradient calculation budget dedicated to exploring
+		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
+		# number of gradient calcs that re-calc previously high gradients
+		N_REMEASURE = total_n_grad_calc - N_EXPLORE
+
 		calls = []
-		for a_i,a_j in inds:
+		try:
+			n_significant = sum(1 for el in self.last_lb_calls_results.values() if \
+				np.abs(el) > .05)
+			print("Last LB call, {} were significant".format(n_significant))
+			best_from_last_time = sorted(self.last_lb_calls_results.items(), key = lambda el : 
+				-1 * np.abs(el[1]))[0:N_REMEASURE]
+
+			for ind,val in best_from_last_time:
+				if (ind,'ba') in calls or (ind,'ab') in calls: 
+					continue
+				a_i,a_j = ind
+				a_ij = a_effective[a_i,a_j]
+				if not a_ij: # off
+					self.latency_benefit(a_effective)
+					a_effective[a_i,a_j] = True
+					self.latency_benefit(a_effective)
+					calls.append(((a_i,a_j), 'ba'))
+				else: # on
+					self.latency_benefit(a_effective)
+					a_effective[a_i,a_j] = False
+					self.latency_benefit(a_effective)
+					calls.append(((a_i,a_j), 'ab'))
+		except AttributeError: # there are no last calls on the first iteration
+			pass
+
+		N_REMEASURE = len(calls)
+		N_EXPLORE = total_n_grad_calc - N_REMEASURE
+
+		all_inds = [(a_i,a_j) for a_i in range(self.n_popps) for a_j in range(self.n_prefixes)]
+		already_in_calls = [ind for ind,_ in calls]
+		possible_choices = get_difference(all_inds, already_in_calls)
+		possible_choice_inds = np.arange(len(possible_choices))
+
+		N_EXPLORE = np.minimum(N_EXPLORE, len(possible_choices))
+		choice_probs = np.array([ADVERTISEMENT_THRESHOLD - np.abs(a[ind] - ADVERTISEMENT_THRESHOLD) + .001 \
+			for ind in possible_choices])
+		choice_probs = choice_probs / np.sum(choice_probs)
+		explore_inds = np.random.choice(possible_choice_inds, size=N_EXPLORE, 
+			replace=False, p = choice_probs)
+		explore_inds = [possible_choices[i] for i in explore_inds]
+
+		self.last_lb_calls_results = {}
+		for a_i,a_j in explore_inds:
 			a_ij = a_effective[a_i,a_j]
 			if not a_ij: # off
 				self.latency_benefit(a_effective)
@@ -715,17 +760,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			else:
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
-			L_grad[ind] = self.heaviside_gradient(before, after, a[ind])
+			this_grad = self.heaviside_gradient(before, after, a[ind])
+			self.last_lb_calls_results[ind] = this_grad
+			L_grad[ind] = this_grad
 		
 		L_grad = L_grad.clip(-1,1)
-
-		if self.iter % self.gradient_support_settings['calc_every'] == 0:
-			self.update_gradient_support(L_grad)
-			self.last_full_grad = L_grad
-		else:
-			# Carry through these inds
-			for ind in dont_calc_inds:
-				L_grad[ind] = self.last_full_grad[ind]
 
 		return L_grad
 
@@ -801,15 +840,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		total_n_grad_calc = self.gradient_support_settings['support_size']
 		
 		pct_explore = 20 # pct of gradient calculation budget dedicated to exploring
-		N_KILLS_FOR_POPPS = int(total_n_grad_calc * pct_explore/100)
+		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
 		# number of gradient calcs that re-calc previously high gradients
-		N_REMEASURE = total_n_grad_calc - N_KILLS_FOR_POPPS
+		N_REMEASURE = total_n_grad_calc - N_EXPLORE
 
 		try:
-			n_significant = sum(1 for el in self.last_calls_results.values() if \
+			n_significant = sum(1 for el in self.last_rb_calls_results.values() if \
 				np.abs(el) > .05)
-			print("Last call, {} were significant".format(n_significant))
-			best_from_last_time = sorted(self.last_calls_results.items(), key = lambda el : 
+			print("Last RB call, {} were significant".format(n_significant))
+			best_from_last_time = sorted(self.last_rb_calls_results.items(), key = lambda el : 
 				-1 * np.abs(el[1]))[0:N_REMEASURE]
 
 			for (popp,rand_popp,rand_outer_prefix),val in best_from_last_time:
@@ -829,7 +868,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			pass
 
 		N_REMEASURE = len(calls)
-		N_KILLS_FOR_POPPS = total_n_grad_calc - N_REMEASURE
+		N_EXPLORE = total_n_grad_calc - N_REMEASURE
 
 		## turn the popp under consideration on
 		## turn a random popp,prefix that was previously on, off
@@ -843,13 +882,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		# TODO : could bias towards popps that 'matter' more
 		rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
-			size=N_KILLS_FOR_POPPS) 
+			size=N_EXPLORE) 
 		 # associated prefix distribution should be biased towards prefixes that are far from 1 and 0
-		random_prefix_choices = np.zeros(N_KILLS_FOR_POPPS,dtype=np.int32)
+		random_prefix_choices = np.zeros(N_EXPLORE,dtype=np.int32)
 		choices = np.arange(self.n_prefixes)
 		### TODO -- reassess
-		for i in range(N_KILLS_FOR_POPPS):
-			prob_each_pref = .5 - np.abs(a[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .001
+		for i in range(N_EXPLORE):
+			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(a[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .001
 			prob_each_pref = prob_each_pref / np.sum(prob_each_pref)
 			prob_each_pref = np.ones(self.n_prefixes) / self.n_prefixes
 			random_prefix_choices[i] = int(np.random.choice(choices, p=prob_each_pref))
@@ -902,7 +941,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		all_lb_rets = self.flush_latency_benefit_queue()
 
-		self.last_calls_results = {}
+		self.last_rb_calls_results = {}
 		ind = 0
 		for call_popp, killed_popp, rand_outer_prefix in calls:
 			before,_ = all_lb_rets[ind] # popp under consideration on
@@ -913,7 +952,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			this_grad = self.heaviside_gradient(
 				delta_b, delta_a, a[self.popp_to_ind[call_popp],rand_outer_prefix])
-			self.last_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
+			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
 			# print("identifying resilience of entry {} ({}),pref {}, killing {} ({})".format(
 			# 	call_popp, self.popp_to_ind[call_popp], rand_outer_prefix,
 			# 	killed_popp, self.popps[killed_popp]))
@@ -1025,13 +1064,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.alpha = .01
 		elif self.lambduh <= .01:
 			self.alpha = .1
-
-	def update_gradient_support(self, gradient):
-		gradient = np.abs(gradient)
-		inds = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
-		sorted_inds = list(reversed(np.argsort([gradient[a_i,a_j] for a_i,a_j in inds])))
-		# Focus on the largest gradients
-		self.gradient_support = list([inds[i] for i in sorted_inds[0:self.gradient_support_settings['support_size']]])
 
 	def solve_max_information(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""

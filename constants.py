@@ -30,7 +30,7 @@ PRINT_FREQUENCY = {
 
 N_WORKERS = {
 	'really_friggin_small': 1,
-	'actual': 2,
+	'actual': 8,
 	'small': 8,
 	'decent': 4,
 	'med': 1,

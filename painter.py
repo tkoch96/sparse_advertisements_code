@@ -1,4 +1,4 @@
-import geopy.distance, numpy as np, copy
+import geopy.distance, numpy as np, copy, time
 from helpers import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
@@ -81,7 +81,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def stop_tracker(self, advs):
 		delta_alpha = .7
 		self.last_objective = self.obj
-		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs))
+		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
+			use_resilience=False)
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
 
@@ -131,13 +132,17 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
 		advs = self.painter_v4(**kwargs)
-		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs)) # technically this is a measurement, uncounted
+		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
+			use_resilience=False) # technically this is a measurement, uncounted
 		self.stop = False
 		self.rolling_delta = 10
 		self.iter = 0
 		self.path_measures = 0 
 		self.clear_caches()
+		ts = time.time()
 		while not self.stop:
+			print("Painter iteration {}, {}s per iter".format(self.iter,
+				(time.time() - ts) / (self.iter+1)))
 			## conduct measurement with this advertisement strategy
 			self.measure_ingresses(self.painter_advs_to_sparse_advs(advs))
 			## recalc painter decision with new information
@@ -156,7 +161,9 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				continue
 			advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
 			## We can measure these objectives, since we've already measured all these advertisement configurations
-			if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp)) < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs)):
+			if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp),
+				use_resilience=False) < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
+				use_resilience=False):
 				## go with this solution
 				self.advs = copy.deepcopy(advs_cp)
 			else:
