@@ -45,6 +45,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.stop = False
 		self.calc_cache = Calc_Cache()
 		self.this_time_ip_cache = {}
+
+		self.use_px_cache=False
+		self.init_user_px_cache()
 		print('started in worker {}'.format(self.worker_i))
 		self.run()
 
@@ -69,11 +72,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calc_cache.clear_all_caches()
 
 	def get_ingress_probabilities_by_a_matmul(self, a, verb=False, **kwargs):
-		a = threshold_a(a.astype(np.int32))
 		# if tuple(a.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
 		# 	verb = True
 		# 	print("\n\nREMEASURING\n\n")
-		a_log = a.astype(bool)
+		a_log = threshold_a(a).astype(bool)
 
 		self.ingress_probabilities[:,:,:] = 0
 		for pref_i in range(self.n_prefixes):
@@ -133,6 +135,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			### This simple caching mechanism requires too much memory
 			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
 
+	def init_user_px_cache(self):
+		self.user_px = np.zeros((len(self.lbx), self.n_ug))
+		if self.use_px_cache:
+			self.user_px_cache = {
+				'init_a': None,
+				'default_px': copy.copy(self.user_px),
+			}
+		else:
+			self.user_ip_cache = {
+				'init_ip': None,
+				'default_px': copy.copy(self.user_px),
+			}
+
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
 			benefits across all users."""
@@ -147,9 +162,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		verb = kwargs.get('verb')
 		# print(tuple(a_effective.astype(bool).flatten()))
 		# print(tuple(remeasure_a.astype(bool).flatten()))
-		# if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
-		# 	verb = True
-		# 	print("\n\n\nREMEASURING\n\n\n")
+		remeasure = False
+		if remeasure_a is not None:
+			if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+				remeasure = True
+				print("\n\n\nREMEASURING\n\n\n")
 		if not kwargs.get('plotit') and not verb:
 			try:
 				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
@@ -174,7 +191,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		lbx = self.lbx
 
 
-		timers['probs'] = time.time() - timers['start']
+		timers['probs'] = time.time()
 
 		subset_ugs = False
 		which_ugs = kwargs.get('ugs', None)
@@ -252,13 +269,55 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				p_vol_this_ingress = self.pdf_sum_function(ug_prob_vols_this_ingress).flatten()
 				p_link_fails[ingress_i] = np.sum(p_vol_this_ingress[self.vol_x * self.n_ug > self.link_capacities[ingress_i]])
 			
-		timers['capacity'] = time.time() - timers['start']
+		timers['capacity'] = time.time()
 
-		## holds P(latency benefit) for each user
-		px = np.zeros((len(lbx), self.n_ug))
 
 		all_pref_inds = np.arange(self.n_prefixes)
-		for ui in range(self.n_ug):
+
+		if self.use_px_cache:
+			# caching px by advertisement_effective
+			# loop over users for which something is different
+			if self.user_px_cache['init_a'] is not None:
+				# a further update could possibly somehow track which subset of ugs would be affected
+				# by any particular change, but details are unclear
+				delta_popps = {}
+				# print(np.where(self.user_px_cache['init_a'] != a_effective))
+				for poppi,prefi in zip(*np.where(self.user_px_cache['init_a'] != a_effective)):
+					delta_popps[poppi] = None
+				ug_inds_to_loop = {}
+				for poppi in delta_popps:
+					for ui in self.poppi_to_ui[poppi]: 
+						ug_inds_to_loop[ui] = None
+				ug_inds_to_loop = np.array(sorted(list(ug_inds_to_loop)))
+				self.user_px = copy.copy(self.user_px_cache['default_px'])
+			else:
+				ug_inds_to_loop = np.arange(self.n_ug)
+			if len(ug_inds_to_loop) > 0:
+				self.user_px[:,ug_inds_to_loop] = 0
+		else:
+			# caching px by ingress probabilities matrix
+			# loop over users for which something is different
+			ug_inds_to_loop = {}
+			if self.user_ip_cache['init_ip'] is not None:
+				for _,_,ui in zip(*np.where(self.user_ip_cache['init_ip'] != p_mat)):
+					ug_inds_to_loop[ui] = None
+				ug_inds_to_loop = np.array(sorted(list(ug_inds_to_loop)))
+				self.user_px = copy.copy(self.user_ip_cache['default_px'])
+			else:
+				ug_inds_to_loop = np.arange(self.n_ug)
+			if len(ug_inds_to_loop) > 0:
+				self.user_px[:,ug_inds_to_loop] = 0
+
+		# if np.random.random() > .95:
+		# 	print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
+		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
+
+		for ui in ug_inds_to_loop:
+			### Q: how can I cache px calcs for some (most) users, and just calc for updates?
+			## rough idea: calc some base px for some base a
+			## deltas to the base are popps that turn on and off
+			## deltas should be mapped to UGs who have paths to those popps
+
 			all_pv_i = np.where(p_mat[:,:,ui])
 			## combine benefit with bernoulli link failure
 			all_pv = [(j, benefits[bi,j,ui],p_mat[bi,j,ui], p_link_fails[bi]) for bi,j in zip(*all_pv_i)]
@@ -268,8 +327,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			elif len(all_pv) == 1:
 				_, lb, p, plf = all_pv[0]
 				lbx_i = np.where(lb - lbx <= 0)[0][0]
-				px[lbx_i, ui] += p * (1 -  plf)
-				px[0, ui] += p * plf
+				self.user_px[lbx_i, ui] += p * (1 -  plf)
+				self.user_px[0, ui] += p * plf
 			else:
 				## Check to see if it's a trivial calculation
 				found_trivial = False
@@ -284,7 +343,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						### singleton benefit at this benefit
 						lb = max_by_pref[pref_j]
 						lbx_i = np.where(lb - lbx <= 0)[0][0]
-						px[lbx_i, ui] = 1.0
+						self.user_px[lbx_i, ui] = 1.0
 						found_trivial = True
 						# print("{} {} {}".format(min_by_pref,max_by_pref,pref_j))
 						# exit(0)
@@ -313,18 +372,33 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					if max_prob == 0 : continue
 
 					lbx_i = np.where(lb - lbx <= 0)[0][0]
-					px[lbx_i, ui] += max_prob * (1 - plf)
-					px[0, ui] += max_prob * plf
-		for ui in reversed(range(self.n_ug)):
-			if np.sum(px[:,ui]) == 0:
+					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
+					self.user_px[0, ui] += max_prob * plf
+		for ui in ug_inds_to_loop:
+			if np.sum(self.user_px[:,ui]) == 0:
 				# This user experiences no benefit with probability 1
 				# no benefit means no path, so it's actually just the most 
 				# negative benefit we can give
-				px[0,ui] = 1
-		px = px / (np.sum(px,axis=0) + 1e-8) # renorm
+				self.user_px[0,ui] = 1
+		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
+		
+
+		## save calc cache for later if its not set
+		if self.use_px_cache:
+			if self.user_px_cache['init_a'] is None:
+				self.user_px_cache['init_a'] = a_effective
+				self.user_px_cache['default_px'] = copy.copy(self.user_px)
+		else:
+			if self.user_ip_cache['init_ip'] is None:
+				self.user_ip_cache['init_ip'] = p_mat
+				self.user_ip_cache['default_px'] = copy.copy(self.user_px)
+		
+
 		if subset_ugs:
-			px = px[:,which_ugs_i]
-		timers['benefit'] = time.time() - timers['start']
+			px = self.user_px[:,which_ugs_i]
+		else:
+			px = self.user_px
+		timers['benefit'] = time.time()
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
@@ -339,8 +413,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			lbx = lbx * benefit_renorm
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
-		timers['convolution'] = time.time() - timers['start']
-		# print(timers)
+		timers['convolution'] = time.time()
+		if np.random.random() > .995:
+			t_order = ['start','probs','capacity','benefit','convolution']
+			t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
+			time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],
+				int(t_deltas[i]*1000)) for i in range(len(t_order)-1))
+			print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
+				round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
+			print(time_str)
 
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
@@ -389,6 +470,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if i%100 == 0 and kwa.get('verb'):
 					print("worker {} : {} pct. done calcing latency benefits, {}ms per iter".format(self.worker_i, 
 						i * 100.0 /len(data), round(1000*(time.time() - ts) / i)))
+			if len(data)>10:
+				print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
+			self.init_user_px_cache()
 
 		elif cmd == 'reset_new_meas_cache':
 			self.this_time_ip_cache = {}

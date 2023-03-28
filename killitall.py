@@ -5,5 +5,9 @@ for pyt in ['python','Python']:
 	for row in out.split('\n'):
 		if "path_distribution_computer" in row:
 			print(row)
-			pnum = re.search("tom + (\d+) .+", row).group(1)
+			try:
+				pnum = re.search("tom + (\d+) .+", row).group(1)
+			except:
+				pnum = re.search("ubuntu + (\d+) .+", row).group(1)
+
 			call("kill -9 {}".format(pnum),shell=True)

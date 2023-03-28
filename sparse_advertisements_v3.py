@@ -18,6 +18,9 @@ from anyopt import Anyopt_Adv_Solver
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from worker_comms import Worker_Manager
 
+from sklearn.mixture import GaussianMixture
+from sklearn.exceptions import ConvergenceWarning
+
 from deployment_setup import *
 
 
@@ -223,7 +226,9 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			### so number of entries on should be (MAX_LATENCY - MIN_LATENCY) / 2 out of lambduh * n_popp * (n_pref - 2)
 			### max of .05
 
-			save_setting = copy.copy(self.using_resilience_benefit)
+			save_resilience_setting = copy.copy(self.using_resilience_benefit)
+			save_verb_setting = copy.copy(self.verbose)
+			self.verbose = False
 			self.using_resilience_benefit = False
 			a = np.ones((self.n_popp, self.n_prefixes))
 			obj_on = self.modeled_objective(a)
@@ -245,7 +250,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				if self.modeled_objective(a) < obj_on:
 					exclude.append(i)
 				a[i,:] = 1
-			self.using_resilience_benefit = save_setting
+			self.using_resilience_benefit = save_resilience_setting
 
 			# everything off, to start, with some jitter
 			a = .35 * np.ones((self.n_popp, self.n_prefixes)) + (.2 * (np.random.uniform(size=a.shape) - .5 ))
@@ -259,6 +264,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			is_on[:,0:2] = False
 			a[is_on] = .55
 			a += .02 * (np.random.uniform(size=a.shape) - .5)
+			self.verbose = save_verb_setting
 			print("Done Initializing")
 
 			return a
@@ -696,15 +702,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
 
 		calls = []
+		n_significant = 0
 		try:
-			n_significant = sum(1 for el in self.last_lb_calls_results.values() if \
-				np.abs(el) > .05)
-			print("Last LB call, {} were significant".format(n_significant))
 			best_from_last_time = sorted(self.last_lb_calls_results.items(), key = lambda el : 
 				-1 * np.abs(el[1]))[0:N_REMEASURE]
-
 			for ind,val in best_from_last_time:
 				if (ind,'ba') in calls or (ind,'ab') in calls: 
+					continue
+				if np.abs(val) < self.lambduh:
+					# if it's not important enough to warrant the cost, don't bother
+					continue
+				if np.abs(ADVERTISEMENT_THRESHOLD - a[ind]) > \
+					ADVERTISEMENT_THRESHOLD * 9 / 10: 
+					# advertismeent is almost completely on or completely off
 					continue
 				a_i,a_j = ind
 				a_ij = a_effective[a_i,a_j]
@@ -718,6 +728,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					a_effective[a_i,a_j] = False
 					self.latency_benefit(a_effective)
 					calls.append(((a_i,a_j), 'ab'))
+				n_significant += 1
+			print("Last LB call, {} were significant".format(n_significant))
 		except AttributeError: # there are no last calls on the first iteration
 			pass
 
@@ -751,6 +763,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.latency_benefit(a_effective)
 				calls.append(((a_i,a_j), 'ab'))
 			a_effective[a_i,a_j] = a_ij
+
 		all_lb_rets = self.flush_latency_benefit_queue()
 		for i, call_ind in enumerate(calls):
 			ind, before_then_after = call_ind
@@ -764,7 +777,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.last_lb_calls_results[ind] = this_grad
 			L_grad[ind] = this_grad
 		
-		L_grad = L_grad.clip(-1,1)
+		L_grad = L_grad.clip(-10,10)
 
 		return L_grad
 
@@ -786,7 +799,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.metrics['l_benefit_grads'].append(L_grad)
 			self.metrics['res_benefit_grads'].append(self.gamma * res_grad)
 			self.metrics['cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
-		return -1 * (L_grad + self.gamma * res_grad)
+		
+		net_grad = L_grad + self.gamma * res_grad
+
+		return -1 * net_grad
 
 	def gradients_sigmoid(self, a):
 		# LB Grad
@@ -815,7 +831,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		return cost_grad + l_grad
 
-	def gradients_resilience_benefit(self, a):
+	def gradients_resilience_benefit(self, advertisement):
 		### Positive resilience benefit gradient means turning a popp
 		## on will increase resilience
 			
@@ -830,8 +846,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		#### PROBLEM: resilience is a popp x popp problem, so rare for a uniform sample to hit it right
 		#### Q is, how can we sample this space intelligently?
 
-		grad_rb = np.zeros(a.shape)
-		a_effective = threshold_a(a).astype(bool)
+		grad_rb = np.zeros(advertisement.shape)
+		a_effective = threshold_a(advertisement).astype(bool)
 		calls = []
 
 		## get current latency benefit
@@ -845,17 +861,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
 
 		try:
-			n_significant = sum(1 for el in self.last_rb_calls_results.values() if \
-				np.abs(el) > .05)
-			print("Last RB call, {} were significant".format(n_significant))
 			best_from_last_time = sorted(self.last_rb_calls_results.items(), key = lambda el : 
 				-1 * np.abs(el[1]))[0:N_REMEASURE]
-
+			n_significant = 0
 			for (popp,rand_popp,rand_outer_prefix),val in best_from_last_time:
 				if (popp,rand_popp,rand_outer_prefix) in calls: 
 					continue
 				if self.gamma * np.abs(val) < self.lambduh:
 					# if it's not important enough to warrant the cost, don't bother
+					continue
+				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp],rand_outer_prefix]) > \
+					ADVERTISEMENT_THRESHOLD * 9 / 10: 
+					# advertismeent is almost completely on or completely off
 					continue
 				tmp_a = copy.copy(a_effective)
 				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
@@ -864,6 +881,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
 				self.latency_benefit(tmp_a)
 				calls.append((popp, rand_popp,rand_outer_prefix))
+				n_significant += 1
+			print("Last RB call, {} were significant".format(n_significant))
+
 		except AttributeError: # there are no last calls on the first iteration
 			pass
 
@@ -881,6 +901,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		## to encourage resilience we do heavisside(b,a)
 
 		# TODO : could bias towards popps that 'matter' more
+		ts=time.time()
+
 		rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
 			size=N_EXPLORE) 
 		 # associated prefix distribution should be biased towards prefixes that are far from 1 and 0
@@ -888,41 +910,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		choices = np.arange(self.n_prefixes)
 		### TODO -- reassess
 		for i in range(N_EXPLORE):
-			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(a[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .001
+			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(advertisement[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .001
 			prob_each_pref = prob_each_pref / np.sum(prob_each_pref)
 			prob_each_pref = np.ones(self.n_prefixes) / self.n_prefixes
 			random_prefix_choices[i] = int(np.random.choice(choices, p=prob_each_pref))
-		# pairing popps with popps
-		# popp -> users -> benefit
-		# but also users -> popps
-		# support (popp1 -> popp2) is sum_over_users( potential backup popp1 can provide to popp2 for that user)
-		# backup is ~ how good that option is compared to user's other options
-		# lots of backup for very good relative option
-		_, ug_catchments = self.calculate_user_choice(a_effective)
-		self.popp_support = np.zeros((self.n_popps, self.n_popps))
-		for popp1 in self.popps:
-			popp1i = self.popp_to_ind[popp1]
-			for popp2 in self.popps:
-				if popp1 == popp2: continue
-				for ug in self.ug_perfs:
-					if ug_catchments[self.ug_to_ind[ug]] != self.popp_to_ind[popp1]:
-						continue
-					try:
-						# support popp2 provides to popp1
-						# if popp1 fails, popp2 should be really close to the latency
-						if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
-							backup = 1
-						else:
-							# should multiply this by probability of user using this ingress anyway
-							backup = np.minimum(1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]+.00001),1)
-					except KeyError:
-						continue
-					popp2i = self.popp_to_ind[popp2]
-					self.popp_support[popp1i,popp2i] += backup
-
-		self.popp_support += .0001
-		self.popp_sample_probs = (self.popp_support.T / np.sum(self.popp_support, axis=1)).T
-		# print(np.round(self.popp_sample_probs,2))
 
 		for poppi, rand_outer_prefix in zip(rand_popp_choices,random_prefix_choices):
 			popp = self.popps[poppi]
@@ -936,8 +927,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False
 			self.latency_benefit(tmp_a)
 			calls.append((popp, rand_popp, rand_outer_prefix))
-		
-
 
 		all_lb_rets = self.flush_latency_benefit_queue()
 
@@ -951,17 +940,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			delta_b = after - lb_default
 
 			this_grad = self.heaviside_gradient(
-				delta_b, delta_a, a[self.popp_to_ind[call_popp],rand_outer_prefix])
+				delta_b, delta_a, advertisement[self.popp_to_ind[call_popp],rand_outer_prefix])
 			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
-			# print("identifying resilience of entry {} ({}),pref {}, killing {} ({})".format(
-			# 	call_popp, self.popp_to_ind[call_popp], rand_outer_prefix,
-			# 	killed_popp, self.popps[killed_popp]))
+			# print("RGRAD Entry {},{}, a value {}".format(self.popp_to_ind[call_popp],rand_outer_prefix,
+			# 	advertisement[self.popp_to_ind[call_popp],rand_outer_prefix]))
 			# print("delta_b {} delta_a {}, grad: {}".format(delta_b,delta_a,this_grad))
 			grad_rb[self.popp_to_ind[call_popp],rand_outer_prefix] += this_grad
 
 			ind += 2
 
-		return grad_rb.clip(-1,1)
+		grad_rb = grad_rb.clip(-10,10)
+
+		return grad_rb
 
 	def impose_advertisement_constraint(self, a):
 		"""The convex constraint 0 <= a_ij <= 1 has the simple solution to clip."""
@@ -1057,13 +1047,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	def set_alpha(self):
 		assert self.lambduh < 10
 		if self.lambduh < 10 and self.lambduh > 1:
-			self.alpha = .0005
+			self.alpha = .00005
 		elif self.lambduh <= 1 and self.lambduh > .1:
-			self.alpha = .005
+			self.alpha = .0005
 		elif self.lambduh <= .1 and self.lambduh > .01:
-			self.alpha = .01
+			self.alpha = .001
 		elif self.lambduh <= .01:
-			self.alpha = .1
+			self.alpha = .01
 
 	def solve_max_information(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""
@@ -1074,16 +1064,17 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		awful_benefit = -100000
 		# f,ax = plt.subplots(5)
 		# self.plti=0
-		def value_func(u):
+		def value_func(u,**kwargs):
 			benefits,probs = u
 			if len(probs) == 1:
 				return awful_benefit
-			if self.explore == 'positive_benefit':
+			explore = kwargs.get('force', self.explore)
+			if explore == 'positive_benefit':
 				if np.sum(probs[benefits>=current_benefit]) > .99: return awful_benefit
 				v = np.abs(np.sum(benefits[benefits>current_benefit] * probs[benefits>current_benefit]))
-			elif self.explore == 'entropy':
+			elif explore == 'entropy':
 				v = scipy.stats.entropy(probs+1e-8)
-			elif self.explore == 'bimodality':
+			elif explore == 'bimodality':
 				# discussion here https://digitalcommons.wayne.edu/cgi/viewcontent.cgi?article=1120&context=jmasm
 				benefits = benefits.flatten()
 				probs = probs.flatten()
@@ -1095,14 +1086,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				kurt = np.average(np.power((benefits - ex) / (std+1e-8) , 4), weights = probs+1e-8)
 				# maximizing v is maximizing bimodality
 				v = -1 * (kurt - np.power(skew,2))
-			elif self.explore == 'other_bimodality':
+			elif explore == 'other_bimodality':
 				negative_part = np.where(benefits <= current_benefit)[0]
 
 				positive_part = np.where(benefits > current_benefit)[0]
 				positive_mass = np.sum(probs[positive_part] * (benefits[positive_part] - current_benefit))
 				negative_mass = np.sum(probs[negative_part] * (current_benefit - benefits[negative_part]))
 				v = positive_mass * negative_mass
-			elif self.explore == 'gmm':
+			elif explore == 'gmm':
 				### idea is maximize distance between bimodal peaks
 				### we find bimodal peaks by fitting gmm
 				probs = np.array(probs).flatten()
@@ -1117,14 +1108,27 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				v = np.abs(np.diff(gm_means.flatten()))[0]
 				
 			return v
+		# if any of these gives a decent signal, measure that
+		ranked_explore_methodologies = ['bimodality', 'entropy', 'other_bimodality']
 
-		MIN_POTENTIAL_VALUE = {
-			'positive_benefit': .01,
-			'entropy': .01,
-			'bimodality': -5,
-			'other_bimodality': .01,
-			'gmm': 1.5,
-		}[self.explore]
+		try:
+			self.min_explore_value
+		except AttributeError:
+			# maybe not the best way?
+			x = np.linspace(-1*MAX_LATENCY,-1*MIN_LATENCY,num=LBX_DENSITY)
+			methods = ['positive_benefit','entropy','bimodality','other_bimodality','gmm']
+			max_min_vals = {m:-10000000 for m in methods}
+			for i in range(len(x)):
+				px = np.zeros(x.shape)
+				px[i] = 1.0
+				px = px + .0001*np.random.uniform(size=px.shape)
+				px = px/np.sum(px)
+				for method in methods:
+					max_min_vals[method] = np.maximum(value_func((x,px), force=method), max_min_vals[method])
+			self.min_explore_value = max_min_vals
+			print("Min explore values!")
+			print(self.min_explore_value)
+			print("\n")
 
 		n_flips = 1
 		max_time = 2 # seconds
@@ -1146,30 +1150,43 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				_,u = all_lb_rets[flipi]
 				uncertainties[flips] = u
 
-			potential_value_measure = {}
-			max_benefit = -1 * np.inf
-			best_flips = None
+			potential_value_measure = {m:{} for m in ranked_explore_methodologies}
+			max_benefit = {m:-1 * np.inf for m in ranked_explore_methodologies}
+			best_flips = {m: None for m in ranked_explore_methodologies}
 			for flips,u in uncertainties.items():
-				potential_value_measure[flips] = value_func(u)
-				if potential_value_measure[flips] >= max_benefit:
-					best_flips = flips
-					max_benefit = potential_value_measure[flips]
+				for m in ranked_explore_methodologies:
+					potential_value_measure[m][flips] = value_func(u, force=m)
+					if potential_value_measure[m][flips] >= max_benefit[m]:
+						best_flips[m] = flips
+						max_benefit[m] = potential_value_measure[m][flips]
 			# if max_benefit > awful_benefit:
 			# 	print("{} -- {} {}".format(self.explore, max_benefit, best_flips))
-			if best_flips is not None:
-				if potential_value_measure[best_flips] > MIN_POTENTIAL_VALUE:
-					for flip in best_flips:
-						a[flip] = 1 - a[flip]
-					if tuple(a.flatten()) in self.measured:
-						print("Re-measuring {}".format(a))
-						pickle.dump(a,open('remeasure_a.pkl','wb'))
-						print('woops')
-						print(np.where(self.parent_tracker[7,:,:]))
-						_,u = self.latency_benefit_fn(a, plotit=True,retnow=True)
-						print("This flips had value: {}".format(value_func(u)))
-						print(u)
-						exit(0)
-					return a
+			for m in ranked_explore_methodologies:
+				if best_flips[m] is not None:
+					print("Best explore value was {}".format(potential_value_measure[m][best_flips[m]]))
+					if potential_value_measure[m][best_flips[m]] > self.min_explore_value[m]:
+						for flip in best_flips[m]:
+							a[flip] = 1 - a[flip]
+						if tuple(a.flatten()) in self.measured:
+							print("Re-measuring {}".format(a))
+							print(potential_value_measure[m][best_flips[m]])
+							pickle.dump(a,open('remeasure_a.pkl','wb'))
+							print('woops')
+							print(np.where(self.parent_tracker[7,:,:]))
+							_,u = self.latency_benefit_fn(a, plotit=True,retnow=True)
+							print("This flips had value: {}".format(value_func(u)))
+							print(u)
+							exit(0)
+						return a
+					else:
+						tmpa = copy.copy(a)
+						for flip in best_flips[m]:
+							tmpa[flip] = 1 - tmpa[flip]
+						_,u = self.latency_benefit_fn(tmpa,retnow=True)
+						inds = np.where(u[1]>.01)[0]
+						print("explore methodology: {}".format(m))
+						for i in inds:
+							print("uniformative LB {} with prob {}".format(u[0][i], u[1][i]))
 			n_flips += 1
 			if n_flips == 2:
 				return None
@@ -1276,12 +1293,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# Calculate, advertise & measure information about the prefix that would 
 			# give us the most new information
 			if self.verbose:
-				print("finding max info {} ".format(time.time() - self.ts_loop))
+				tsmaxinfo = time.time()
 			maximally_informative_advertisement = self.solve_max_information(advertisement)
+			if self.verbose:
+				print("finding max info took {}s ".format(round(time.time() - tsmaxinfo,2)))
 			if maximally_informative_advertisement is not None:
-				if self.verbose:
-					print("measuring ingresses {}".format(time.time() - self.ts_loop))
 				self.measure_ingresses(maximally_informative_advertisement)
+				if self.verbose:
+					print("measured ingresses {}s".format(round(time.time() - self.ts_loop,2)))
 			else:
 				if self.verbose:
 					print("No maximally informative advertisement to measure.")
@@ -1296,19 +1315,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.t_per_iter = (time.time() - t_start) / self.iter
 
 			if self.iter % PRINT_FREQUENCY == 0 and self.verbose:
-				print("Optimizing, iter: {}, t_per_iter : {}, GTO: {}, RD: {}, RDE: {}".format(self.iter, self.t_per_iter, 
-					self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff))
+				print("Optimizing, iter: {}, t_per_iter : {}s, GTO: {}, RD: {}, RDE: {}, {} path measures".format(
+					self.iter, round(self.t_per_iter,2), 
+					self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff,
+					self.path_measures))
 
-				if DPSIZE in ['decent', 'large', 'actual']:
-					self.make_plots()
+				self.make_plots()
 
 			print(self.iter)
 			# if self.iter == 20:
 			# 	break
 
 		if self.verbose:
-			print("Stopped train loop on {}, t per iter: {}, {} path measures, O:{}, RD: {}, RDE: {}".format(
-				self.iter, self.t_per_iter, self.path_measures, 
+			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(
+				self.iter, round(self.t_per_iter,2), self.path_measures, 
 				self.current_pseudo_objective, self.rolling_delta, self.rolling_delta_eff))
 		self.metrics['t_per_iter'] = self.t_per_iter
 
@@ -1350,9 +1370,19 @@ def main():
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
-		sas.solve()
-		sas.make_plots()
-		print(threshold_a(sas.get_last_advertisement()))
+		# sas.solve()
+		# sas.make_plots()
+		# soln = threshold_a(sas.get_last_advertisement())
+		soln = np.zeros((sas.n_popps, sas.n_prefixes))
+		j=0
+		for row in open('tmp_soln.txt'):
+			row = row.strip().replace("[","").replace("]","").split(' ')
+			for i,el in enumerate(row):
+				soln[j,i] = float(el)
+			j+=1
+
+		from eval_latency_failure import plot_lats_from_adv
+		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
 
 
 		# ## Capacity Test ( I think this works, but not positive )

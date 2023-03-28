@@ -20,7 +20,7 @@ def threshold_a(a):
 
 DPSIZE = 'actual'
 PRINT_FREQUENCY = {
-	'really_friggin_small': 5,
+	'really_friggin_small': 50,
 	'actual': 10,
 	'small': 5,
 	'decent': 1,
@@ -31,7 +31,7 @@ PRINT_FREQUENCY = {
 N_WORKERS = {
 	'really_friggin_small': 1,
 	'actual': 8,
-	'small': 8,
+	'small': 4,
 	'decent': 4,
 	'med': 1,
 }.get(DPSIZE, 8)

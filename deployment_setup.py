@@ -42,11 +42,10 @@ def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_
 			ingress_priorities[ug][popp] = priority
 	return ingress_priorities
 
-def cluster_actual_users():
+def cluster_actual_users(**kwargs):
 	cluster_cache_fn = os.path.join(CACHE_DIR, 'clustered_perfs.pkl')
 	if not os.path.exists(cluster_cache_fn):
-		anycast_latencies, ug_perfs = load_actual_perfs()
-		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=['miami','atlanta','newyork'])
+		anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
 
 		### Form a matrix of all latencies
 		ugs = sorted(list(ug_perfs))
@@ -123,6 +122,7 @@ def parse_lat(lat_str):
 	return lat
 
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
+	print("Loading performances, only considering pops: {}".format(considering_pops))
 	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
 	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 	violate_sol = {}
@@ -142,7 +142,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
 	ug_perfs = {}
 
 	for row in tqdm.tqdm(open(lat_fn, 'r'), desc="Parsing per-ingress VULTR measurements."):
-		# if np.random.random() > .999999:break
+		# if np.random.random() > .9999999:break
 		fields = row.strip().split(',')
 		if fields[2] not in considering_pops: continue
 		t,ip,pop,peer,lat = fields
@@ -174,7 +174,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
 	anycast_pop = {}
 	for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
 		,'r'),desc="Parsing VULTR anycast latencies"):
-		# if np.random.random() > .999999:break
+		# if np.random.random() > .9999999:break
 		_,ip,lat,pop = row.strip().split(',')
 		if lat == '-1': continue
 		metro = 'tmp'
@@ -297,7 +297,7 @@ def load_actual_deployment():
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
-		ug_perfs, anycast_latencies = cluster_actual_users()
+		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]

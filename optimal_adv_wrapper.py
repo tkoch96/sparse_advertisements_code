@@ -122,6 +122,17 @@ class Optimal_Adv_Wrapper:
 		self.n_popps = len(self.popps)
 		self.pops = list(set([u[0] for u in self.popps]))
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
+
+		self.poppi_to_ui = {}
+		for ug in self.ug_perfs:
+			for popp in self.ug_perfs[ug]:
+				try:
+					self.poppi_to_ui[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
+				except KeyError:
+					self.poppi_to_ui[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
+		for poppi in get_difference(list(range(self.n_popps)), self.poppi_to_ui):
+			self.poppi_to_ui[poppi] = []
+
 		self.provider_popps = deployment['provider_popps']
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
 		self.n_popp = len(self.popps)
@@ -195,11 +206,30 @@ class Optimal_Adv_Wrapper:
 
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
-
-
 		except AttributeError:
 			# not initialized yet, or a worker bee
 			pass
+
+
+		### Resilience benefit backup pre-calcs
+		self.rb_backups = {}
+		for ug in self.ug_perfs:
+			for popp1 in self.ug_perfs[ug]:
+				for popp2 in self.ug_perfs[ug]:
+					if popp1 == popp2: continue
+					# support popp2 provides to popp1
+					# if popp1 fails, popp2 should be really close to the latency
+					if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
+						backup = 1
+					else:
+						# should multiply this by probability of user using this ingress anyway
+						backup = np.minimum(1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]+.00001),1)
+					try:
+						self.rb_backups[ug,popp1][popp2] = backup
+					except KeyError:
+						self.rb_backups[ug,popp1] = {popp2: backup}
+
+
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
 
@@ -345,10 +375,10 @@ class Optimal_Adv_Wrapper:
 		these_benefits = user_benefits[these_inds]
 		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
-	def get_ground_truth_resilience_benefit(self, a):
+	def get_ground_truth_resilience_benefit(self, a, **kwargs):
 		benefit = 0
 		tmp = np.ones(a.shape)
-		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a)
+		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a, **kwargs)
 		total_vol = np.sum(self.ug_vols)
 		for popp in self.popps:
 			these_ugs = [ug for ug in self.ugs if \
@@ -385,7 +415,38 @@ class Optimal_Adv_Wrapper:
 				if latency < user_latencies[ugi]: 
 					ug_ingress_decisions[ugi] = routed_ingress
 					user_latencies[ugi] = latency
+		if kwargs.get('get_ug_catchments', False):
+			self.update_ug_ingress_decisions(ug_ingress_decisions)
 		return user_latencies, ug_ingress_decisions
+
+	def update_ug_ingress_decisions(self, ug_catchments):
+		"""For updating variables that only change with ug catchments."""
+		# pairing popps with popps
+		# popp -> users -> benefit
+		# but also users -> popps
+		# support (popp1 -> popp2) is sum_over_users( potential backup popp1 can provide to popp2 for that user)
+		# backup is ~ how good that option is compared to user's other options
+		# lots of backup for very good relative option
+		self.ug_catchments = ug_catchments
+
+		poppi_to_ugi = {}
+		for ugi,poppi in self.ug_catchments.items():
+			try:
+				poppi_to_ugi[poppi].append(ugi)
+			except KeyError:
+				poppi_to_ugi[poppi] = [ugi]
+
+		self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
+		for popp1i in poppi_to_ugi:
+			popp1 = self.popps[popp1i]
+			for ugi in poppi_to_ugi[popp1i]:
+				ug = self.ugs[ugi]
+				for popp2,bck in self.rb_backups[ug,popp1].items():
+					popp2i = self.popp_to_ind[popp2]
+					self.rb_popp_support[popp1i,popp2i] += bck
+
+		self.rb_popp_support += .0001
+		self.popp_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T
 
 	def calculate_ground_truth_ingress(self, a, **kwargs):
 		### Returns routed_through ingress -> prefix -> ug -> popp_i
@@ -474,6 +535,7 @@ class Optimal_Adv_Wrapper:
 		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
+		self.calculate_user_choice(a,get_ug_catchments=True)
 
 		a = threshold_a(a)
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a,verb=True)
@@ -544,7 +606,7 @@ class Optimal_Adv_Wrapper:
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
 		if self.gamma > 0 and kwargs.get('use_resilience', True):
-			resilience_benefit = self.get_ground_truth_resilience_benefit(a)
+			resilience_benefit = self.get_ground_truth_resilience_benefit(a, **kwargs)
 		else:
 			resilience_benefit = 0
 		if self.verbose:
