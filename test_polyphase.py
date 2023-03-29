@@ -124,11 +124,18 @@ def fixed_point_fftconv(x1, data, x2, filt,**kwargs):
     nr,nc = filtered_data_streams.shape
 
     prob_concentration = np.where(filtered_data_streams>.0001)
+
     DEFAULT_VAL = 100000000
-    by_column_concentration = {i:{'min': DEFAULT_VAL, 'max': -DEFAULT_VAL} for i in range(filtered_data_streams.shape[1])}
+    by_column_concentration = {i:{'vals':[],'min': DEFAULT_VAL, 'max': -DEFAULT_VAL} for i in range(filtered_data_streams.shape[1])}
+
+    # for each user (y) find first and last index that user has a significant amount of probability
     for x,y in zip(*prob_concentration):
-        by_column_concentration[y]['min'] = np.minimum(x,by_column_concentration[y]['min'])
-        by_column_concentration[y]['max'] = np.maximum(x+1,by_column_concentration[y]['max'])
+        # by_column_concentration[y]['min'] = np.minimum(x,by_column_concentration[y]['min'])
+        # by_column_concentration[y]['max'] = np.maximum(x+1,by_column_concentration[y]['max'])
+        by_column_concentration[y]['vals'].append(x)
+    for y in by_column_concentration:
+        by_column_concentration[y]['min'] = np.min(by_column_concentration[y]['vals'])
+        by_column_concentration[y]['max'] = np.max(by_column_concentration[y]['vals'])+1
 
     allowable_amt = data.shape[0]
     new_filtered_data_streams = np.zeros(data.shape) # downsampled
@@ -138,6 +145,7 @@ def fixed_point_fftconv(x1, data, x2, filt,**kwargs):
     for i in range(filtered_data_streams.shape[1]):
         full_x[:-1,i] = np.linspace(x_mins[i], x_maxs[i], num=filtered_data_streams.shape[0]-1)
     ret_x = np.zeros(data.shape)
+
     for i in range(filtered_data_streams.shape[1]):
         # Find ranges to keep
         minx,maxx = by_column_concentration[i]['min'], by_column_concentration[i]['max']
@@ -215,6 +223,7 @@ def sum_pdf_fixed_point(x,px,**kwargs):
     out_px = out_px.clip(0,np.inf)
     if out_px.shape[1] >= 2:
         out_x, out_px = sum_pdf_fixed_point(out_x, out_px,**kwargs)
+        
     return out_x, out_px / np.sum(out_px+1e-16,axis=0)
 
 def sum_pdf_old(px):
@@ -233,8 +242,8 @@ def sum_pdf_old(px):
     return psumx_out
 
 
-def with_x_unit_test():
-    n_users = 800
+def with_x_unit_test(plot=False):
+    n_users = 8
     n_bins = 300
     x = np.zeros((n_bins,n_users))
     min_x,max_x = -1*MAX_LATENCY,0
@@ -251,13 +260,38 @@ def with_x_unit_test():
     px = px / np.sum(px,axis=0)
 
     out_x, out_px = sum_pdf_fixed_point(x, px, verbose=True)
-    # print(out_x)
-    # print(out_px)
-    # for i in range(n_users):
-    #     plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
-    # plt.plot(out_x, out_px,label='sum')
-    # plt.legend()
-    # plt.savefig('test.pdf')
+    if plot:
+        for i in range(n_users):
+            plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
+        plt.plot(out_x, out_px,label='sum')
+        plt.legend()
+        plt.savefig('test.pdf')
+
+def with_x_unit_test_realistic(plot=False):
+    n_users = 800
+    n_bins = LBX_DENSITY
+    x = np.zeros((n_bins,n_users))
+    min_x,max_x = -1*MAX_LATENCY,0
+    for i in range(n_users):
+        x[:,i] = np.linspace(min_x,max_x,num=n_bins)
+    x[:,0] *= 2
+
+    px = np.zeros((n_bins,n_users))
+    for i in range(n_users):
+        n_rand_peaks = np.random.randint(1,high=4)
+        rand_inds = np.random.randint(0,high=n_bins,size=n_rand_peaks)
+        probs = np.random.uniform(size=n_rand_peaks)
+        px[rand_inds,i] = probs
+
+    px = px / np.sum(px,axis=0)
+
+    out_x, out_px = sum_pdf_fixed_point(x, px, verbose=True)
+    if plot:
+        for i in range(n_users):
+            plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
+        plt.plot(out_x, out_px,label='sum')
+        plt.legend()
+        plt.savefig('test.pdf')
 
 def old_unit_test():
     n_users = 1000
@@ -284,8 +318,8 @@ if __name__ == "__main__":
     np.random.seed(31415)
     n_iter = 10
     ts = time.time()
-    for _ in range(n_iter):
-        with_x_unit_test()
+    for i in range(n_iter):
+        with_x_unit_test_realistic(plot=(i==n_iter-1))
     print("{} s per iter".format(round((time.time() - ts) / n_iter,2)))
 
 
