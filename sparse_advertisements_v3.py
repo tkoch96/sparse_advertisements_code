@@ -1134,10 +1134,39 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		max_time = 2 # seconds
 		t_start = time.time()
 		while True:
+			# dedicate some percent to exploring permutations specific to transit providers
+			pct_transit = 70 
+
 			all_inds = [(i,j) for i in range(self.n_popp) for j in range(self.n_prefixes)]
-			perms = sorted(list(itertools.permutations(all_inds, n_flips)))
-			np.random.shuffle(perms)
-			perms = perms[0:self.gradient_support_settings['support_size']]
+			all_perms = sorted(list(itertools.permutations(all_inds, n_flips)))
+			np.random.shuffle(all_perms)
+
+			max_n_transit = int(self.gradient_support_settings['support_size'] * pct_transit / 100)
+			max_n_nontransit = self.gradient_support_settings['support_size'] - max_n_transit
+			print(len(self.provider_popp_inds))
+
+			transit_perms, nontransit_perms = [], []
+			for perm in all_perms:
+				if any(poppi in self.provider_popp_inds for poppi,prefi in perm):
+					if len(transit_perms) < max_n_transit:
+						transit_perms.append(perm)
+				else:
+					if len(nontransit_perms) < max_n_nontransit:
+						nontransit_perms.append(perm)
+				if len(nontransit_perms) >= max_n_nontransit and len(transit_perms) >= max_n_transit:
+					break
+			perms = transit_perms + nontransit_perms
+			if len(perms) < self.gradient_support_settings['support_size']:
+				n_left = self.gradient_support_settings['support_size'] - len(perms)
+				not_in = get_difference(all_perms, perms)
+				n_left = np.minimum(len(not_in), n_left)
+				perms = perms + not_in[0:n_left]
+			print("Investigating {} possible perms, including {} transit and {} nontransit".format(
+				len(perms), len(transit_perms), len(nontransit_perms))) 
+			print(len(all_perms))
+			exit(0)
+
+
 			for flips in perms:
 				for flip in flips:
 					a[flip] = 1 - a[flip]
@@ -1163,7 +1192,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# 	print("{} -- {} {}".format(self.explore, max_benefit, best_flips))
 			for m in ranked_explore_methodologies:
 				if best_flips[m] is not None:
-					print("Best explore value was {}".format(potential_value_measure[m][best_flips[m]]))
+					print("Best explore value was {} for {}".format(potential_value_measure[m][best_flips[m]],m))
 					if potential_value_measure[m][best_flips[m]] > self.min_explore_value[m]:
 						for flip in best_flips[m]:
 							a[flip] = 1 - a[flip]
@@ -1370,16 +1399,9 @@ def main():
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
-		# sas.solve()
-		# sas.make_plots()
-		# soln = threshold_a(sas.get_last_advertisement())
-		soln = np.zeros((sas.n_popps, sas.n_prefixes))
-		j=0
-		for row in open('tmp_soln.txt'):
-			row = row.strip().replace("[","").replace("]","").split(' ')
-			for i,el in enumerate(row):
-				soln[j,i] = float(el)
-			j+=1
+		sas.solve()
+		sas.make_plots()
+		soln = threshold_a(sas.get_last_advertisement())
 
 		from eval_latency_failure import plot_lats_from_adv
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))

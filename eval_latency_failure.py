@@ -17,8 +17,6 @@ def popp_failure_latency_comparisons():
 
 	lambduh = .1
 
-	# can I simulate the problem by toning down the number of allowable things significantly
-	
 	wm = None
 	
 	soln_types = ['sparse', 'one_per_pop', 'painter', 'anyopt']

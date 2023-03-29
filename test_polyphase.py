@@ -1,5 +1,6 @@
 import numpy as np, matplotlib.pyplot as plt, time
 import scipy.signal as sg
+from constants import *
 from scipy.ndimage import gaussian_filter1d as gfilt
 
 
@@ -233,15 +234,14 @@ def sum_pdf_old(px):
 
 
 def with_x_unit_test():
-    n_users = 2
-    n_bins = 10
+    n_users = 800
+    n_bins = 300
     x = np.zeros((n_bins,n_users))
-    min_x,max_x = -100,0
+    min_x,max_x = -1*MAX_LATENCY,0
     for i in range(n_users):
         x[:,i] = np.linspace(min_x,max_x,num=n_bins)
     x[:,0] *= 2
     means = min_x+10+(max_x-min_x)*np.random.uniform(size=n_users)
-    print(means)
     var=5
     px = np.exp(-np.power((x - means),2) / (2 * np.power(var,2)))
     px[:,-1] = 0
@@ -250,16 +250,14 @@ def with_x_unit_test():
     # px[-1,-3] = 1
     px = px / np.sum(px,axis=0)
 
-    print(x)
-    print(px)
     out_x, out_px = sum_pdf_fixed_point(x, px, verbose=True)
-    print(out_x)
-    print(out_px)
-    for i in range(n_users):
-        plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
-    plt.plot(out_x, out_px,label='sum')
-    plt.legend()
-    plt.savefig('test.pdf')
+    # print(out_x)
+    # print(out_px)
+    # for i in range(n_users):
+    #     plt.plot(x[:,i],px[:,i],label='user {}'.format(i))
+    # plt.plot(out_x, out_px,label='sum')
+    # plt.legend()
+    # plt.savefig('test.pdf')
 
 def old_unit_test():
     n_users = 1000
@@ -284,6 +282,13 @@ def old_unit_test():
 
 if __name__ == "__main__":
     np.random.seed(31415)
-    with_x_unit_test()
+    n_iter = 10
+    ts = time.time()
+    for _ in range(n_iter):
+        with_x_unit_test()
+    print("{} s per iter".format(round((time.time() - ts) / n_iter,2)))
+
+
+
 
 

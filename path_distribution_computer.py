@@ -190,7 +190,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		benefits = self.measured_latency_benefits
 		lbx = self.lbx
 
-
 		timers['probs'] = time.time()
 
 		subset_ugs = False
@@ -272,8 +271,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		timers['capacity'] = time.time()
 
 
-		all_pref_inds = np.arange(self.n_prefixes)
-
 		if self.use_px_cache:
 			# caching px by advertisement_effective
 			# loop over users for which something is different
@@ -308,10 +305,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if len(ug_inds_to_loop) > 0:
 				self.user_px[:,ug_inds_to_loop] = 0
 
-		# if np.random.random() > .95:
-		# 	print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
-		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
-
+		all_pref_inds = np.arange(self.n_prefixes)
 		for ui in ug_inds_to_loop:
 			### Q: how can I cache px calcs for some (most) users, and just calc for updates?
 			## rough idea: calc some base px for some base a
@@ -414,7 +408,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
 		timers['convolution'] = time.time()
-		if np.random.random() > .995:
+		if np.random.random() > .5:
 			t_order = ['start','probs','capacity','benefit','convolution']
 			t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
 			time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],

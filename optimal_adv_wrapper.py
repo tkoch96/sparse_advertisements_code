@@ -139,6 +139,7 @@ class Optimal_Adv_Wrapper:
 		if self.n_prefixes is None:
 			self.n_prefixes = np.maximum(3,self.n_popp // 3)
 		self.n_providers = deployment['n_providers'] # number of provider ASes
+		self.provider_popp_inds = [self.popp_to_ind[popp] for popp in self.provider_popps]
 		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
 
 		self.metro_loc = deployment['metro_loc']
@@ -441,6 +442,11 @@ class Optimal_Adv_Wrapper:
 			popp1 = self.popps[popp1i]
 			for ugi in poppi_to_ugi[popp1i]:
 				ug = self.ugs[ugi]
+				try:
+					self.rb_backups[ug,popp1]
+				except KeyError:
+					# ug has no route, or ug has a route to only 1 popp 
+					continue
 				for popp2,bck in self.rb_backups[ug,popp1].items():
 					popp2i = self.popp_to_ind[popp2]
 					self.rb_popp_support[popp1i,popp2i] += bck
