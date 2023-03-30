@@ -379,23 +379,29 @@ class Optimal_Adv_Wrapper:
 	def get_ground_truth_resilience_benefit(self, a, **kwargs):
 		benefit = 0
 		tmp = np.ones(a.shape)
+		a = threshold_a(a)
 		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a, **kwargs)
 		total_vol = np.sum(self.ug_vols)
-		for popp in self.popps:
-			these_ugs = [ug for ug in self.ugs if \
-				self.popp_to_ind[popp] == pre_ug_catchments[self.ug_to_ind[ug]]]
+		for popp in self.popps: # wrong
+			these_uis = self.poppi_to_ui[self.popp_to_ind[popp]]
+			these_ugs = [self.ugs[ui] for ui in these_uis]
 			if len(these_ugs) == 0: 
 				continue
 			tmp[self.popp_to_ind[popp],:] = 0
-			user_latencies, ug_catchments = self.calculate_user_choice(a * tmp,
+
+			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
 				ugs=these_ugs)
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well
 			these_inds = np.array([self.ug_to_ind[ug] for ug in these_ugs])
 			these_vols = self.ug_vols[these_inds]
-			benefit += np.sum((user_latencies - pre_user_latencies[these_inds]) *\
-				these_vols) / total_vol
+			these_users_resilience = -1 * np.sum((user_latencies - pre_user_latencies[these_inds]) *\
+				these_vols) / total_vol #/ self.n_popps
+			benefit += these_users_resilience
+			# print("popp {}, users {} contribute {} resilience".format(self.popp_to_ind[popp],
+			# 	these_inds, these_users_resilience))
+			# print("{} vs {} before".format(user_latencies, pre_user_latencies[these_inds]))
 
 			tmp[self.popp_to_ind[popp],:] = 1
 		return benefit
@@ -403,6 +409,7 @@ class Optimal_Adv_Wrapper:
 	def calculate_user_choice(self, a, **kwargs):
 		"""Calculates UG -> popp assuming they go to their best performing popp."""
 		ugs = kwargs.get('ugs', self.ugs)
+		a = threshold_a(a)
 		user_latencies = NO_ROUTE_LATENCY * np.ones((len(ugs)))
 		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, ugs=ugs)
 		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
@@ -432,6 +439,7 @@ class Optimal_Adv_Wrapper:
 
 		poppi_to_ugi = {}
 		for ugi,poppi in self.ug_catchments.items():
+			if poppi is None: continue
 			try:
 				poppi_to_ugi[poppi].append(ugi)
 			except KeyError:
@@ -617,6 +625,12 @@ class Optimal_Adv_Wrapper:
 			resilience_benefit = 0
 		if self.verbose:
 			print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
-		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
+		
+		if self.gamma <= 1:
+			benefit = latency_benefit + self.gamma * resilience_benefit
+		else:
+			benefit = 1 / self.gamma * latency_benefit + resilience_benefit
+
+		return self.lambduh * norm_penalty - (benefit)
 
 

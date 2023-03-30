@@ -7,6 +7,7 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 
 MIN_LATENCY = 1
 MAX_LATENCY = 300
+GRAD_CLIP_VAL = 10
 NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 LBX_DENSITY = MAX_LATENCY # number of points to discretize benefit into
@@ -20,7 +21,7 @@ def threshold_a(a):
 
 DPSIZE = 'actual'
 PRINT_FREQUENCY = {
-	'really_friggin_small': 50,
+	'really_friggin_small': 10,
 	'actual': 3,
 	'small': 5,
 	'decent': 1,

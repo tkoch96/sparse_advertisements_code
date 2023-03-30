@@ -159,7 +159,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		### or there's some disconnect between the two processes
 
 		a_effective = threshold_a(a)
-		verb = kwargs.get('verb')
+		verb = kwargs.get('verbose_workers')
 		# print(tuple(a_effective.astype(bool).flatten()))
 		# print(tuple(remeasure_a.astype(bool).flatten()))
 		remeasure = False
@@ -397,6 +397,27 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
+		if verb:
+			by_user = {}
+			best_choice={}
+			best_vals = {}
+			for ui in range(self.n_ug):
+				all_pv_i = np.where(p_mat[:,:,ui])
+				all_lbs = [(bi,j,benefits[bi,j,ui],p_mat[bi,j,ui], p_link_fails[bi]) for bi,j in zip(*all_pv_i)]
+				best_choice[ui] = None
+				best_val = -100000
+				for poppi,prefi, b, prob, _ in all_lbs:
+					# print("UGI {} benefit {} on popp {} prefix {} with prob {}".format(ui,round(b,2),
+					# 	poppi,prefi,round(prob,2)))
+					if b > best_val:
+						best_val = b
+						best_choice[ui] = (poppi,prefi)
+				best_vals[ui] = best_val
+			for ui in sorted(best_choice):
+				print("UI {} chooses {} with benefit {}".format(ui,best_choice[ui], best_vals[ui]))
+			for entryi in np.where(psumx>.01)[0]:
+				print("Cumulative benefit {} with prob {}".format(round(xsumx.flatten()[entryi],2), round(psumx.flatten()[entryi],2)))
+			print("\n")
 
 
 		if np.sum(psumx) < .5:
@@ -453,6 +474,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret.append(self.latency_benefit(base_adv,**base_kwa))
 			i=0
 			for diff, kwa in data[1:]:
+				kwa['verbose_workers'] = base_kwa.get('verbose_workers',False) or kwa.get('verbose_workers',False)
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
 				ret.append(self.latency_benefit(base_adv, **kwa))

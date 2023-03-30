@@ -300,7 +300,8 @@ def load_actual_deployment():
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
-		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, n_users_per_peer=50)
+		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
+			n_users_per_peer=50)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
