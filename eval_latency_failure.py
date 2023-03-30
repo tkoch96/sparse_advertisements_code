@@ -13,7 +13,7 @@ def popp_failure_latency_comparisons():
 
 	np.random.seed(31413)
 	metrics = {}
-	N_TO_SIM = 3
+	N_TO_SIM = 1
 
 	lambduh = .1
 
@@ -44,7 +44,7 @@ def popp_failure_latency_comparisons():
 			deployment = get_random_deployment(DPSIZE)
 			metrics['deployment'][random_iter] = deployment
 
-			n_prefixes = 20
+			n_prefixes = 5
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=1.5,n_prefixes=n_prefixes)

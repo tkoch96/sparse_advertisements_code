@@ -43,7 +43,9 @@ def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_
 	return ingress_priorities
 
 def cluster_actual_users(**kwargs):
-	cluster_cache_fn = os.path.join(CACHE_DIR, 'clustered_perfs.pkl')
+	considering_pops = kwargs.get('considering_pops')
+	cpstr = "-".join(sorted(considering_pops))
+	cluster_cache_fn = os.path.join(CACHE_DIR, 'clustered_perfs_{}.pkl'.format(cpstr))
 	if not os.path.exists(cluster_cache_fn):
 		anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
 
@@ -121,7 +123,7 @@ def parse_lat(lat_str):
 	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
 	return lat
 
-def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
+def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("Loading performances, only considering pops: {}".format(considering_pops))
 	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
 	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
@@ -262,7 +264,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
 
 
 	### Randomly limit to max_n_ug per popp, unless the popp is a provider
-	max_n_ug = 200
+	max_n_ug = kwargs.get('n_users_per_peer', 200)
 	provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
 	provider_popps = []
 	for row in open(provider_fn, 'r'):
@@ -290,14 +292,15 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr'])):
 	return anycast_latencies, ug_perfs
 
 def load_actual_deployment():
-	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache.pkl')
+	# considering_pops = list(POP_TO_LOC['vultr'])
+	considering_pops = ['miami','tokyo', 'amsterdam']
+	cpstr = "-".join(sorted(considering_pops))
+	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
-		considering_pops = ['miami','atlanta', 'newyork', 'dallas', 'chicago', 'london']
-		# considering_pops = list(POP_TO_LOC['vultr'])
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
-		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops)
+		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, n_users_per_peer=50)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]

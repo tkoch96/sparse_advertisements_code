@@ -408,14 +408,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
 		timers['convolution'] = time.time()
-		if np.random.random() > .5:
-			t_order = ['start','probs','capacity','benefit','convolution']
-			t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
-			time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],
-				int(t_deltas[i]*1000)) for i in range(len(t_order)-1))
-			print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
-				round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
-			print(time_str)
+		# if np.random.random() > .995:
+		# 	t_order = ['start','probs','capacity','benefit','convolution']
+		# 	t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
+		# 	time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],
+		# 		int(t_deltas[i]*1000)) for i in range(len(t_order)-1))
+		# 	print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
+		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
+		# 	print(time_str)
 
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
@@ -464,8 +464,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if i%100 == 0 and kwa.get('verb'):
 					print("worker {} : {} pct. done calcing latency benefits, {}ms per iter".format(self.worker_i, 
 						i * 100.0 /len(data), round(1000*(time.time() - ts) / i)))
-			if len(data)>10:
-				print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
+			# if len(data)>10:
+			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
 			self.init_user_px_cache()
 
 		elif cmd == 'reset_new_meas_cache':
