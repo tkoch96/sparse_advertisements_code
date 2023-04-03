@@ -623,14 +623,17 @@ class Optimal_Adv_Wrapper:
 			resilience_benefit = self.get_ground_truth_resilience_benefit(a, **kwargs)
 		else:
 			resilience_benefit = 0
-		if self.verbose:
-			print("Actual: NP: {}, LB: {}, RB: {}".format(norm_penalty,latency_benefit,resilience_benefit))
-		
 		if self.gamma <= 1:
 			benefit = latency_benefit + self.gamma * resilience_benefit
 		else:
 			benefit = 1 / self.gamma * latency_benefit + resilience_benefit
 
-		return self.lambduh * norm_penalty - (benefit)
+		obj = self.lambduh * norm_penalty - benefit
+
+		if self.verbose:
+			print("Actual: NP: {}, LB: {}, RB: {}, Total: {}, Obj: {}".format(
+				norm_penalty,latency_benefit,resilience_benefit,benefit, obj))
+		
+		return obj
 
 

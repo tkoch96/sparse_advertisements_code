@@ -66,7 +66,7 @@ def cluster_actual_users(**kwargs):
 
 		from sklearn.cluster import Birch
 		### threshold would probably be tuned by whatever gets me an appropriate number of clusters
-		brc = Birch(threshold=20,n_clusters=None)
+		brc = Birch(threshold=1,n_clusters=None)
 		labels = brc.fit_predict(latencies_mat)
 
 		examples_by_label = {}
@@ -176,7 +176,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	anycast_pop = {}
 	for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
 		,'r'),desc="Parsing VULTR anycast latencies"):
-		# if np.random.random() > .9999999:break
+		# if np.random.random() > .999999:break
 		_,ip,lat,pop = row.strip().split(',')
 		if lat == '-1': continue
 		metro = 'tmp'
@@ -206,7 +206,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	### delete any UGs for which latencies don't follow SOL rules
 	to_del = []
-	changed =False
+	changed = False
 	for ug in tqdm.tqdm(ug_perfs,desc="Discarding UGs that violate SOL rules"):
 		try:
 			if violate_sol[ug]:
@@ -277,11 +277,40 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 		for popp in perfs:
 			if popp in provider_popps: continue
 			popp_to_ug[popp].append(ug)
+	n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
 	for popp,_ugs in popp_to_ug.items():
 		if popp in provider_popps: continue
-		if len(_ugs) <= max_n_ug: continue
-		np.random.shuffle(_ugs)
-		popp_to_ug[popp] = _ugs[0:max_n_ug]
+
+		### Favor users whose best popp is not a provider
+		peer_ugs, provider_ugs = [],[]
+		for _ug in _ugs:
+			these_popps = list(ug_perfs[_ug])
+			perfs = np.array([ug_perfs[_ug][_popp] for _popp in these_popps])
+			best_popp = these_popps[np.argmin(perfs)]
+			if best_popp in provider_popps:
+				provider_ugs.append(_ug)
+			else:
+				peer_ugs.append(_ug)
+		if len(peer_ugs) > 0:
+			np.random.shuffle(peer_ugs)
+		if len(provider_ugs) > 0:
+			np.random.shuffle(provider_ugs)
+
+		n_keeping_peer = np.minimum(len(peer_ugs), max_n_ug)
+		n_peer_was_best += n_keeping_peer
+		n_keeping_provider = np.minimum(max_n_ug - n_keeping_peer, len(provider_ugs))
+		n_provider_was_best += n_keeping_provider
+		n_keep = np.minimum(len(_ugs), max_n_ug)
+		n_total_users += n_keep
+
+		_ugs = peer_ugs + provider_ugs
+		popp_to_ug[popp] = _ugs[0:n_keep]
+
+	print("Out of {} UGs, {} ({} pct) peer was best, {} ({} pct) provider was best.".format(
+		n_total_users, n_peer_was_best, round(n_peer_was_best*100/n_total_users,2),
+		n_provider_was_best,round(n_provider_was_best*100/n_total_users,2)))
+
+
 	keep_ugs = list(set(ug for popp in popp_to_ug for ug in popp_to_ug[popp] if popp not in provider_popps))
 	ug_perfs = {ug:ug_perfs[ug] for ug in keep_ugs}
 
@@ -293,7 +322,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	considering_pops = ['miami','tokyo', 'amsterdam']
+	considering_pops = ['miami','tokyo', 'amsterdam','losangelas','newyork','atlanta','singapore','saopaulo']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
@@ -301,7 +330,7 @@ def load_actual_deployment():
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
-			n_users_per_peer=50)
+			n_users_per_peer=1000)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
@@ -434,6 +463,12 @@ def get_random_deployment_by_size(problem_size):
 
 	print("----Creating Random Deployment-----")
 	sizes = problem_params[problem_size]
+
+	if problem_size == 'really_friggin_small':
+		MIN_LATENCY = 1
+		MAX_LATENCY = 20
+	else:
+		from constants import MIN_LATENCY, MAX_LATENCY
 
 	### Probably update this to be a slightly more interesting model later
 	random_latency = lambda : np.random.uniform(MIN_LATENCY, MAX_LATENCY)

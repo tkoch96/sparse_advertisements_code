@@ -13,7 +13,7 @@ def popp_failure_latency_comparisons():
 
 	np.random.seed(31413)
 	metrics = {}
-	N_TO_SIM = 1
+	N_TO_SIM = 3
 
 	lambduh = .01
 
@@ -44,7 +44,7 @@ def popp_failure_latency_comparisons():
 			deployment = get_random_deployment(DPSIZE)
 			metrics['deployment'][random_iter] = deployment
 
-			n_prefixes = 8
+			n_prefixes = 20
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=False,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=1.5,n_prefixes=n_prefixes)
@@ -111,6 +111,22 @@ def popp_failure_latency_comparisons():
 			wm.stop_workers()
 	f,ax=plt.subplots(2,1)
 	f.set_size_inches(6,12)
+
+	for solution in soln_types:
+		print("Solution {}".format(solution))
+		for i in range(N_TO_SIM):
+			adv = metrics['adv'][i][solution]
+			deployment = metrics['deployment'][i]
+			popps = sorted(list(set(deployment['popps'])))
+			for pref in range(adv.shape[1]):
+				if np.sum(adv[:,pref]) == adv.shape[0]:
+					print("Prefix {} is anycast".format(pref))
+				else:
+					for poppi in np.where(adv[:,pref])[0]:
+						print("Prefix {} has {}".format(pref, popps[poppi]))
+				print("\n")
+			print("\n")
+			print("\n")
 
 	for solution in soln_types:
 		all_differences = np.array([el for ri in range(N_TO_SIM) for el in metrics['popp_failures'][ri][solution] ])
