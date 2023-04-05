@@ -44,8 +44,8 @@ class Optimal_Adv_Wrapper:
 		self.verbose = verbose
 		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
-		self.epsilon = .00005 # change in objective less than this -> stop
-		self.max_n_iter = 150 # maximum number of learning iterations
+		self.epsilon = .005 # change in objective less than this -> stop
+		self.max_n_iter = 300 # maximum number of learning iterations
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
@@ -163,7 +163,16 @@ class Optimal_Adv_Wrapper:
 		for ug, v in self.whole_deployment_ug_to_vol.items():
 			self.whole_deployment_ug_vols[self.whole_deployment_ug_to_ind[ug]] = v
 		all_vols = list(self.ug_to_vol.values())
-		self.vol_x = np.linspace(min(all_vols),max(all_vols))
+		self.vol_x = np.linspace(0, max(all_vols))
+		self.big_vol_x = np.zeros((len(self.vol_x), len(self.whole_deployment_ugs)))
+		for i in range(len(self.whole_deployment_ugs)):
+			self.big_vol_x[:,i] = copy.copy(self.vol_x)
+		self.ui_to_vol_i = {}
+		for ui in range(self.n_ug):
+			self.ui_to_vol_i[ui] = np.where(self.ug_to_vol[self.ugs[ui]] -\
+				self.vol_x <=0)[0][0]
+
+
 
 		# ingress,ug -> stores ~ how many times ingress wins for a ug
 		self.n_wins = {ug:{i:0 for i in range(self.n_popp)} for ug in self.ugs}
@@ -230,6 +239,10 @@ class Optimal_Adv_Wrapper:
 					except KeyError:
 						self.rb_backups[ug,popp1] = {popp2: backup}
 
+
+		#### TMP 
+		self.all_rb_calls_results = {poppi:[] for poppi in range(self.n_popps)}
+		self.all_lb_calls_results = []
 
 		self.clear_caches()
 		self.calculate_user_latency_by_peer()
@@ -338,8 +351,8 @@ class Optimal_Adv_Wrapper:
 		best_overall_peers = sorted_cum_by_peer[0:3]
 		for bop,diff in best_overall_peers:
 			print("{} -- {} ms, UGs {} would see corresponding lats {}".format(bop,diff,help_ug_by_peer[bop],
-				[self.ug_perfs[self.ugs[ui]][self.popps[bop]] for ui in help_ug_by_peer[bop]]))
-			print(self.recent_grads[bop,:])
+				[round(self.ug_perfs[self.ugs[ui]][self.popps[bop]],2) for ui in help_ug_by_peer[bop]]))
+			print([round(el,2) for el in self.recent_grads[bop,:]])
 
 	def get_ground_truth_user_latencies(self, a, **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
@@ -356,14 +369,14 @@ class Optimal_Adv_Wrapper:
 				except KeyError:
 					ingress_to_users[ingress_i] = [ugi]
 			cap_violations = link_volumes > self.link_capacities_arr
-			if kwargs.get('verb'):
+			if (kwargs.get('verb') or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
 				print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
 				print(np.where(cap_violations))
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
-		# if kwargs.get('verb'):
-		# 	print(user_latencies)
+		if kwargs.get('verb'):
+			print([round(el,2) for el in user_latencies])
 		return user_latencies
 
 	def benefit_from_user_latencies(self, user_latencies, ugs):
@@ -377,12 +390,13 @@ class Optimal_Adv_Wrapper:
 		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
 	def get_ground_truth_resilience_benefit(self, a, **kwargs):
+		#### NOTE -- this calculation does not factor in capacity, since that would take a long time
 		benefit = 0
 		tmp = np.ones(a.shape)
 		a = threshold_a(a)
 		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a, **kwargs)
 		total_vol = np.sum(self.ug_vols)
-		for popp in self.popps: # wrong
+		for popp in self.popps:
 			these_uis = self.poppi_to_ui[self.popp_to_ind[popp]]
 			these_ugs = [self.ugs[ui] for ui in these_uis]
 			if len(these_ugs) == 0: 
@@ -396,12 +410,19 @@ class Optimal_Adv_Wrapper:
 			# I might want this to be compared to best possible, but oh well
 			these_inds = np.array([self.ug_to_ind[ug] for ug in these_ugs])
 			these_vols = self.ug_vols[these_inds]
-			these_users_resilience = -1 * np.sum((user_latencies - pre_user_latencies[these_inds]) *\
+			# these_users_resilience = -1 * np.sum((user_latencies - pre_user_latencies[these_inds]) *\
+			# 	these_vols) / total_vol #/ self.n_popps
+			these_users_resilience = -1 * np.sum((user_latencies) *\
 				these_vols) / total_vol #/ self.n_popps
 			benefit += these_users_resilience
-			# print("popp {}, users {} contribute {} resilience".format(self.popp_to_ind[popp],
-			# 	these_inds, these_users_resilience))
-			# print("{} vs {} before".format(user_latencies, pre_user_latencies[these_inds]))
+
+			other_inds = np.array(get_difference(range(self.n_ug), these_inds))
+			if len(other_inds) > 0:
+				other_vols = self.ug_vols[other_inds]
+				other_users_resilience = -1 * np.sum(pre_user_latencies[other_inds] *\
+					other_vols) / total_vol
+				benefit += other_users_resilience
+
 
 			tmp[self.popp_to_ind[popp],:] = 1
 		return benefit
@@ -632,7 +653,8 @@ class Optimal_Adv_Wrapper:
 
 		if self.verbose:
 			print("Actual: NP: {}, LB: {}, RB: {}, Total: {}, Obj: {}".format(
-				norm_penalty,latency_benefit,resilience_benefit,benefit, obj))
+				round(norm_penalty,2),round(latency_benefit,2),
+				round(resilience_benefit,2),round(benefit,2), round(obj,2)))
 		
 		return obj
 

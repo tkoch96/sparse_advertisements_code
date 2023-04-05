@@ -15,7 +15,7 @@ def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_
 		probably_anycast = popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
 		priorities = {probably_anycast:0}
 
-		other_peerings = list(get_difference(list(ug_perfs[ug]), probably_anycast))
+		other_peerings = list(get_difference(list(ug_perfs[ug]), [probably_anycast]))
 		if len(other_peerings) > 0:
 			associated_dists = []
 			for op in other_peerings:
@@ -37,7 +37,6 @@ def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
 						priorities[other_pi] = tmp
-
 		for popp,priority in priorities.items():
 			ingress_priorities[ug][popp] = priority
 	return ingress_priorities
@@ -277,6 +276,15 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 		for popp in perfs:
 			if popp in provider_popps: continue
 			popp_to_ug[popp].append(ug)
+	
+	import matplotlib.pyplot as plt
+	x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
+	plt.plot(x,cdf_x)
+	plt.xlabel("Number of UGs per Ingress")
+	plt.ylabel("CDF of Ingresses")
+	plt.grid(True)
+	plt.savefig('figures/n_ugs_per_ingress.pdf')
+
 	n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
 	for popp,_ugs in popp_to_ug.items():
 		if popp in provider_popps: continue
@@ -323,6 +331,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
 	considering_pops = ['miami','tokyo', 'amsterdam','losangelas','newyork','atlanta','singapore','saopaulo']
+	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
@@ -330,7 +339,7 @@ def load_actual_deployment():
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
-			n_users_per_peer=1000)
+			n_users_per_peer=200)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
@@ -353,8 +362,33 @@ def load_actual_deployment():
 		print("{} popps, {} ugs".format(len(popps), len(ugs)))
 		provider_popps = get_intersection(provider_popps, popps)
 		n_providers = len(set(peer for pop,peer in provider_popps))
+		
+		## Set UG vols to balance non-provider expected volume
 		ug_to_vol = {ug:1 for ug in ugs}
-		link_capacities = {popp:len(ugs) for popp in popps}
+		non_provider_popps = get_difference(popps,provider_popps)
+		popp_to_ug = {popp:[] for popp in non_provider_popps}
+		for ug in ug_perfs:
+			for popp in ug_perfs[ug]:
+				if popp in provider_popps:
+					continue
+				popp_to_ug[popp].append(ug)
+		def calc_popp_vol(ugv):
+			popp_vol = {popp:sum(ugv[ug] for ug in popp_to_ug[popp]) for popp in popp_to_ug}
+			return popp_vol
+
+
+		last_r = 100000
+		while True:
+			popp_vols = calc_popp_vol(ug_to_vol)
+			all_vols = list([popp_vols[popp] for popp in non_provider_popps])
+			min_vol,max_vol = np.min(all_vols), np.max(all_vols)
+			this_r = max_vol / min_vol
+			if this_r > last_r or this_r < 1.1:
+				break
+			min_popp = non_provider_popps[np.argmin(all_vols)]
+			for ug in popp_to_ug[min_popp]:
+				ug_to_vol[ug] *= 1.2
+			last_r = copy.copy(this_r)
 
 		metros = list(set(metro for metro,asn in ugs))
 		metro_loc = {}
@@ -366,6 +400,14 @@ def load_actual_deployment():
 
 		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
 			pop_to_loc, metro_loc)
+		vol_anycast = {popp: 0 for popp in popps}
+		for ug in ingress_priorities:
+			for popp,pref in ingress_priorities[ug].items():
+				if pref == 0:
+					vol_anycast[popp] += ug_to_vol[ug]
+		link_capacities = {popp:None for popp in popps}
+		for popp,vol_anycast in vol_anycast.items():
+			link_capacities[popp] = len(ugs)//20 + vol_anycast * 1.5
 
 		deployment = {
 			'ugs': ugs,
@@ -390,16 +432,66 @@ def load_actual_deployment():
 		anycast_latencies = deployment['ug_anycast_perfs']
 		pop_to_loc = deployment['pop_to_loc']
 		metro_loc = deployment['metro_loc']
-		# ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
-		# 	pop_to_loc, metro_loc)
-		# deployment['ingress_priorities'] = ingress_priorities
+
+		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
+			pop_to_loc, metro_loc)
+		vol_best,vol_popp = {popp: 0 for popp in deployment['popps']}, {popp:0 for popp in deployment['popps']}
+		for ug in ug_perfs:
+			these_popps = list(ug_perfs[ug])
+			best_performer = these_popps[np.argmin([ug_perfs[ug][popp] for popp in these_popps])]
+			vol_best[best_performer] += deployment['ug_to_vol'][ug]
+			for popp in ug_perfs[ug]:
+				if popp in deployment['provider_popps']:
+					continue
+				vol_popp[popp] += deployment['ug_to_vol'][ug]
+
+		link_capacities = {popp:None for popp in deployment['popps']}
+		for popp,v in vol_best.items():
+			if popp not in deployment['provider_popps']:
+				link_capacities[popp] = np.maximum(len(deployment['ugs'])//20 + v * 1.5, vol_popp[popp])
+			else:
+				link_capacities[popp] = np.maximum(len(deployment['ugs'])//20 + v * 1.5,
+					3 * np.max(list(deployment['ug_to_vol'].values())))
+
+		deployment['ingress_priorities'] = ingress_priorities
+		deployment['link_capacities'] = link_capacities
+
+		popps = sorted(list(set(deployment['popps'])))
+		ug_perfs = deployment['ug_perfs']
+
+
+		n_has_path = {popp:0 for popp in popps}
+		for ug in ug_perfs:
+			for popp in ug_perfs[ug]:
+				n_has_path[popp] += 1
+		print(sorted(n_has_path.items(), key = lambda el : -1 * el[1]))
+
+		poi = [popps[poii] for poii in [13,31]]
+		avg_lats = {popp:[] for popp in poi}
+		same_with_provider = {popp:[] for popp in poi}
+		also_has_path = {popp:0 for popp in popps}
+		for ug in ug_perfs:
+			for _poi in poi:
+				try:
+					avg_lats[_poi].append(ug_perfs[ug][_poi])
+					for popp in ug_perfs[ug]:
+						if popp in deployment['provider_popps'] or popp == _poi: continue
+						also_has_path[popp] += 1
+					same_with_provider[_poi].append(ug_perfs[ug][('atlanta','3257')])
+				except KeyError:
+					pass
+		for _poi in avg_lats:
+			print("{} {}".format(_poi, np.median(avg_lats[_poi])))
+			print("{} {}".format(_poi, np.median(same_with_provider[_poi])))
+			print(link_capacities[_poi])
+		print(sorted(also_has_path.items(), key = lambda el : -1 * el[1]))
 
 	return deployment
 
 problem_params = {
 	'really_friggin_small': {
 		'n_metro': 5,
-		'n_asn': 3,
+		'n_asn': 15,
 		'n_peer': 20,
 		'n_pop': 2, 
 		'max_popp_per_ug': 4, 
@@ -509,16 +601,20 @@ def get_random_deployment_by_size(problem_size):
 			# also assume these performances are probably worse
 			ug_perfs[ug][popp] = random_transit_provider_latency()
 	ugs = list(ug_to_vol)
-	ug_anycast_perfs = {ug:1 for ug in ugs}
+	ug_anycast_perfs = {ug:np.random.choice(list(ug_perfs[ug].values())) for ug in ugs}
 	ingress_priorities = get_random_ingress_priorities(ug_perfs, ug_anycast_perfs,
 		pop_to_loc, metro_loc)
+	vol_anycast = {popp: 0 for popp in popps}
+	for ug in ingress_priorities:
+		for popp,pref in ingress_priorities[ug].items():
+			if pref == 0:
+				vol_anycast[popp] += ug_to_vol[ug]
+	link_capacities = {popp:None for popp in popps}
+	for popp,vol_anycast in vol_anycast.items():
+		link_capacities[popp] = 4 + vol_anycast * 1.7
 
 	## Simulate random link capacities
 	# links should maybe hold ~ N * max user volume
-	max_user_volume = max(list(ug_to_vol.values()))
-	mu = len(ug_perfs)/3*max_user_volume
-	sig = mu / 10
-	link_capacities = {popp: mu + sig * np.random.normal() for popp in popps}
 	print("----Done Creating Random Deployment-----")
 	print("Deployment has {} users, {} popps, {} pops".format(
 		len(ugs), len(popps), len(pop_to_loc)))

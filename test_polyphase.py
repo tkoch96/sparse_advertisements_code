@@ -127,7 +127,6 @@ def fixed_point_fftconv(x1, data, x2, filt,**kwargs):
 
     DEFAULT_VAL = 100000000
     by_column_concentration = {i:{'vals':[],'min': DEFAULT_VAL, 'max': -DEFAULT_VAL} for i in range(filtered_data_streams.shape[1])}
-
     # for each user (y) find first and last index that user has a significant amount of probability
     for x,y in zip(*prob_concentration):
         # by_column_concentration[y]['min'] = np.minimum(x,by_column_concentration[y]['min'])

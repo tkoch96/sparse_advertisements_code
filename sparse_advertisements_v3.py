@@ -2,9 +2,9 @@ import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geo
 from subprocess import call, check_output
 np.setbufsize(262144*8)
 np.set_printoptions(precision=2)
-np.random.seed(31414)
+np.random.seed(31415)
 import random
-random.seed(31415)
+random.seed(31416)
 import scipy.stats
 import sys
 # from sklearn.mixture import GaussianMixture
@@ -49,7 +49,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		self.iter = 0
 		self.initialization = init
 		self.explore = explore
-		self.stopping_condition = lambda el : el[0] > self.max_n_iter or el[1] < self.epsilon or np.abs(el[2]) < self.epsilon
+		self.stopping_condition = lambda el : el[0] > self.max_n_iter or (el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
 		## Whether to incorporate capacity into the objective function
 		self.with_capacity = kwargs.get('with_capacity', False)
 		### We might vary these functions depending on settings from time to time
@@ -212,9 +212,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		base_b, _ = rets[0]
 		poppi=0
 		for b,_ in rets[1:]:
-			this_resilience = (b - base_b) #/ self.n_popps
-			# print("poppi {}  users contribute modeled {} resilience".format(
-			# 	poppi,this_resilience))
+			# this_resilience = (b - base_b) #/ self.n_popps
+			this_resilience = b
 			benefit += this_resilience
 			poppi += 1
 
@@ -287,6 +286,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			self.verbose = save_verb_setting
 			print("Done Initializing")
 
+			self.clear_caches()
+
 			return a
 
 		else:
@@ -314,7 +315,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			print("Believed: NP: {}, LB: {} ({} std dev), RB: {}".format(norm_penalty,
 				latency_benefit, std, resilience_benefit))
 
-		gamma = self.get_gamma()
+		# gamma = self.get_gamma()
+		gamma = self.gamma
 		if gamma <= 1:
 			benefit = latency_benefit + gamma * resilience_benefit
 		else:
@@ -352,27 +354,45 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 	def solve_oracle(self,verbose=True):
 		# To get the oracle solution, try every possible combination of advertisements
 		# Not possible for problems that are too large
-		n_arr = self.n_popp * self.n_prefixes ### TODO -- only calculate up to a permutation?
+		n_arr = self.n_popp * self.n_prefixes
 		logn_possibilities = n_arr
-		if logn_possibilities >= np.log2(1e6):
-			print("Note -- too complex to get oracle solution. Skipping")
-			self.oracle = None
-			return
-		n_possibilities = 2**n_arr
-		a = np.zeros((n_arr,))
 		all_as = []
-		objs = np.zeros((n_possibilities,))
-		actual_objs = np.zeros((n_possibilities,))
-		for i in range(n_possibilities):
-			b = str(bin(i))[2:]
-			ib = "0" * (n_arr - len(b)) + b
-			for j,el in enumerate(ib):
-				a[j] = int(el) * 1.0
-			objs[i] = self.measured_objective(a.reshape((self.n_popp, self.n_prefixes)))
-			actual_objs[i] = self.actual_nonconvex_objective(a.reshape((self.n_popp,self.n_prefixes)))
-			all_as.append(copy.deepcopy(a))
+		
+		if logn_possibilities >= np.log2(1e6):
+			if DPSIZE != "really_friggin_small":
+				return
+			n_possibilities = int(1e2)
+			objs = np.zeros((n_possibilities,))
+			actual_objs = np.zeros((n_possibilities,))
+			print("Note -- too complex to get oracle solution. Randomly sampling a whole bunch to"\
+				" find the best")
+			vcpy = copy.copy(self.verbose)
+			self.verbose = False
 
-		# Approx
+			for i in range(n_possibilities):
+				a = np.random.randint(0,high=2,size=(self.n_popp,self.n_prefixes))
+				objs[i] = self.measured_objective(a)
+				actual_objs[i] = self.actual_nonconvex_objective(a)
+				all_as.append(copy.deepcopy(a))
+			self.verbose = vcpy
+		else:	
+			a = np.zeros((n_arr,))
+			objs = np.zeros((n_possibilities,))
+			actual_objs = np.zeros((n_possibilities,))
+
+			## for each prefix there are 2**n_popps possibilities
+			# all combinations of 2**n_popps choose n_prefs
+			# so 1 -> 2**n_popps C n_prefs, convert to binary representation
+			for i in range(n_possibilities):
+				b = str(bin(i))[2:]
+				ib = "0" * (n_arr - len(b)) + b
+				for j,el in enumerate(ib):
+					a[j] = int(el) * 1.0
+				objs[i] = self.measured_objective(a.reshape((self.n_popp, self.n_prefixes)))
+				actual_objs[i] = self.actual_nonconvex_objective(a.reshape((self.n_popp,self.n_prefixes)))
+				all_as.append(copy.deepcopy(a))
+
+		# Approx according to L1 norm
 		oracle_objective = np.min(objs)
 		approx_oracle_adv = all_as[np.argmin(objs)].reshape(self.n_popp, self.n_prefixes)
 
@@ -385,12 +405,16 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				round(oracle_objective,2), approx_oracle_adv,
 				round(actual_oracle_objective,2), l0_oracle_adv))
 
-		self.oracle = {
-			'approx_objective': oracle_objective,
-			'l0_objective': actual_oracle_objective,
-			'approx_advertisement': approx_oracle_adv,
-			'l0_advertisement': l0_oracle_adv,
+		self.oracle_solution = {
+			'objective': oracle_objective,
+			'advertisement': approx_oracle_adv,
+			'latency_benefit':  self.get_ground_truth_latency_benefit(approx_oracle_adv),
+			'prefix_cost': self.prefix_cost(approx_oracle_adv),
+			'norm_penalty': self.advertisement_cost(approx_oracle_adv),
+			'n_advs': 1,
 		}
+
+		return "ok"
 
 	def solve_anyopt(self, **kwargs):
 		self.anyopt = Anyopt_Adv_Solver(self.deployment, **self.get_init_kwa())
@@ -553,7 +577,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			if verbose:
 				print("solving sparse")
 			self.solve_sparse(**kwargs)
-
 			metrics['sparse_objective_vals']['sparse'].append(self.sparse_solution['objective'])
 			metrics['n_advs']['sparse'].append(self.sparse_solution['n_advs'])
 			metrics['adv_solns']['sparse'].append(self.sparse_solution['advertisement'])
@@ -568,16 +591,25 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['maximal'].append(self.get_ground_truth_latency_benefit(self.extreme['maximal_advertisement']))
 			metrics['latency_benefits']['minimal'].append(self.get_ground_truth_latency_benefit(self.extreme['minimal_advertisement']))
 
+			if verbose:
+				print("Solving oracle")
+			## oracle
+			if self.solve_oracle(verbose=verbose) is not None:
+				metrics['sparse_objective_vals']['oracle'].append(self.oracle_solution['objective'])
+				metrics['n_advs']['oracle'].append(self.oracle_solution['n_advs'])
+				metrics['adv_solns']['oracle'].append(self.oracle_solution['advertisement'])
+				metrics['latency_benefits']['oracle'].append(self.oracle_solution['latency_benefit'])
+				metrics['norm_penalties']['oracle'].append(self.oracle_solution['norm_penalty'])
+				metrics['prefix_cost']['oracle'].append(self.oracle_solution['prefix_cost'])
+
+
 			### Add old objective values to see how differences in what we optimize shape optimality
 			for k,adv in zip(['sparse', 'painter', 'anyopt', 'minimal', 'maximal'], [self.sparse_solution['advertisement'], self.painter_solution['advertisement'],
 				self.anyopt_solution['advertisement'], self.extreme['minimal_advertisement'], self.extreme['maximal_advertisement']]):
 				metrics['painter_objective_vals'][k].append(self.painter_objective(adv))
 				metrics['anyopt_objective_vals'][k].append(self.anyopt_objective(adv))
 				metrics['normalized_sparse_benefit'][k].append(self.get_normalized_benefit(adv))
-			if verbose:
-				print("Solving oracle")
-			## oracle
-			self.solve_oracle(verbose=verbose)
+			
 
 			for k in solution_types:
 				if k in ['sparse', 'oracle']: continue
@@ -682,15 +714,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.sigmoid_k = 5.0 # heavisside gradient parameter
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
-		max_support = 200#self.n_popp * self.n_prefixes
 		self.gradient_support_settings = {
-			'support_size': np.minimum(self.n_popp * self.n_prefixes,max_support), # setting this value to size(a) turns it off
+			'support_size': 200, # setting this value to size(a) turns it off
 		}
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
-			'really_friggin_small': 1,
-			'actual': 5,
+			'really_friggin_small': 5,
+			'actual': 15,
 		}.get(DPSIZE, 1)
 
 	def apply_prox_l1(self, w_k):
@@ -736,7 +767,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		n_significant = 0
 		try:
 			best_from_last_time = sorted(self.last_lb_calls_results.items(), key = lambda el : 
-				-1 * np.abs(el[1]))[0:N_REMEASURE]
+				-1 * np.abs(el[1]))
 			for ind,val in best_from_last_time:
 				if (ind,'ba') in calls or (ind,'ab') in calls: 
 					continue
@@ -744,7 +775,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - a[ind]) > \
-					ADVERTISEMENT_THRESHOLD * 9 / 10: 
+					ADVERTISEMENT_THRESHOLD * 7 / 10: 
 					# advertismeent is almost completely on or completely off
 					continue
 				a_i,a_j = ind
@@ -761,6 +792,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					calls.append(((a_i,a_j), 'ab'))
 				a_effective[a_i,a_j] = a_ij
 				n_significant += 1
+				if n_significant >= N_REMEASURE:
+					break
 			print("Last LB call, {} were significant".format(n_significant))
 		except AttributeError: # there are no last calls on the first iteration
 			pass
@@ -768,35 +801,37 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_REMEASURE = len(calls)
 		N_EXPLORE = total_n_grad_calc - N_REMEASURE
 
+		self.last_lb_calls_results = {}
+
 		all_inds = [(a_i,a_j) for a_i in range(self.n_popps) for a_j in range(self.n_prefixes)]
 		already_in_calls = [ind for ind,_ in calls]
 		possible_choices = get_difference(all_inds, already_in_calls)
-		possible_choice_inds = np.arange(len(possible_choices))
+		if len(possible_choices) > 0:
+			possible_choice_inds = np.arange(len(possible_choices))
 
-		N_EXPLORE = np.minimum(N_EXPLORE, len(possible_choices))
-		choice_probs = np.array([ADVERTISEMENT_THRESHOLD - np.abs(a[ind] - ADVERTISEMENT_THRESHOLD) + .001 \
-			for ind in possible_choices])
-		choice_probs = choice_probs / np.sum(choice_probs)
-		explore_inds = np.random.choice(possible_choice_inds, size=N_EXPLORE, 
-			replace=False, p = choice_probs)
-		explore_inds = [possible_choices[i] for i in explore_inds]
+			N_EXPLORE = np.minimum(N_EXPLORE, len(possible_choices))
+			choice_probs = np.array([ADVERTISEMENT_THRESHOLD - np.abs(a[ind] - ADVERTISEMENT_THRESHOLD) + .01 \
+				for ind in possible_choices])
+			choice_probs = choice_probs / np.sum(choice_probs)
+			explore_inds = np.random.choice(possible_choice_inds, size=N_EXPLORE, 
+				replace=False, p = choice_probs)
+			explore_inds = [possible_choices[i] for i in explore_inds]
 
-		self.last_lb_calls_results = {}
-		for ind in explore_inds:
-			if (ind,'ba') in calls or (ind,'ab') in calls: 
-				continue
-			a_ij = a_effective[ind]
-			if not a_ij: # off
-				self.latency_benefit(a_effective)
-				a_effective[ind] = True
-				self.latency_benefit(a_effective)
-				calls.append((ind, 'ba'))
-			else: # on
-				self.latency_benefit(a_effective)
-				a_effective[ind] = False
-				self.latency_benefit(a_effective)
-				calls.append((ind, 'ab'))
-			a_effective[ind] = a_ij
+			for ind in explore_inds:
+				if (ind,'ba') in calls or (ind,'ab') in calls: 
+					continue
+				a_ij = a_effective[ind]
+				if not a_ij: # off
+					self.latency_benefit(a_effective)
+					a_effective[ind] = True
+					self.latency_benefit(a_effective)
+					calls.append((ind, 'ba'))
+				else: # on
+					self.latency_benefit(a_effective)
+					a_effective[ind] = False
+					self.latency_benefit(a_effective)
+					calls.append((ind, 'ab'))
+				a_effective[ind] = a_ij
 
 		all_lb_rets = self.flush_latency_benefit_queue()
 		for i, call_ind in enumerate(calls):
@@ -814,6 +849,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		
 
 		L_grad = L_grad.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
+
+		self.all_lb_calls_results.append(L_grad)
 
 		return L_grad
 
@@ -833,7 +870,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print("Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
 		
 		gamma = self.get_gamma()
-		if gamma <= 1:
+		# gamma specifies a tradeoff between LB and RB, so shouldn't really be > 1
+		# to encourage stability
+		if gamma <= 1: 
 			net_grad = L_grad + gamma * res_grad
 			if add_metrics:
 				self.metrics['l_benefit_grads'].append(L_grad)
@@ -881,7 +920,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		gamma = self.get_gamma()
 		try:
 			best_from_last_time = sorted(self.last_rb_calls_results.items(), key = lambda el : 
-				-1 * np.abs(el[1]))[0:N_REMEASURE]
+				-1 * np.abs(el[1]))
 			n_significant = 0
 			for (popp,rand_popp,rand_outer_prefix),val in best_from_last_time:
 				if (popp,rand_popp,rand_outer_prefix) in calls: 
@@ -890,7 +929,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp],rand_outer_prefix]) > \
-					ADVERTISEMENT_THRESHOLD * 9 / 10: 
+					ADVERTISEMENT_THRESHOLD * 7 / 10: 
 					# advertismeent is almost completely on or completely off
 					continue
 
@@ -915,6 +954,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				calls.append((popp, rand_popp, rand_outer_prefix))
 
 				n_significant += 1
+				if n_significant >= N_REMEASURE:
+					break
 			print("Last RB call, {} were significant".format(n_significant))
 
 		except AttributeError: # there are no last calls on the first iteration
@@ -929,12 +970,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
 			size=N_EXPLORE) 
-		 # associated prefix distribution should be biased towards prefixes that are far from 1 and 0
+		# associated prefix distribution should be biased towards prefixes that are far from 1 and 0
 		random_prefix_choices = np.zeros(N_EXPLORE,dtype=np.int32)
 		choices = np.arange(self.n_prefixes)
 		### TODO -- reassess
 		for i in range(N_EXPLORE):
-			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(advertisement[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .001
+			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(advertisement[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .1
 			prob_each_pref = prob_each_pref / np.sum(prob_each_pref)
 			prob_each_pref = np.ones(self.n_prefixes) / self.n_prefixes
 			random_prefix_choices[i] = int(np.random.choice(choices, p=prob_each_pref))
@@ -985,8 +1026,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			this_grad = self.heaviside_gradient(
 				before_heavisside, after_heavisside, 
-				advertisement[self.popp_to_ind[call_popp],rand_outer_prefix])
+				advertisement[poppi,rand_outer_prefix])
 			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
+
+			self.all_rb_calls_results[self.popp_to_ind[killed_popp]].append((self.iter,poppi, rand_outer_prefix, this_grad))
 
 			# if np.abs(this_grad) > 5:
 
@@ -1012,7 +1055,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		plt.rcParams.update({'font.size': 14})
 		f,ax = plt.subplots(7,2)
 
-		pickle.dump(self.metrics, open(os.path.join(CACHE_DIR, 'metrics.pkl'),'wb'))
+		soln = self.get_last_advertisement()
+		from eval_latency_failure import plot_lats_from_adv
+		plot_lats_from_adv(self, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
+
 
 		# General convergence metrics plot
 		all_as = np.array(self.metrics['advertisements'])
@@ -1095,7 +1141,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def get_gamma(self):
 		### Idea is to increase gamma to our desired value as we become more confident about adjacent strategies
-		uncertainty_factor = np.maximum(1,self.uncertainty_factor**2)
+		uncertainty_factor = np.maximum(1,np.abs(self.uncertainty_factor))
 		return self.gamma / uncertainty_factor
 
 	def solve_max_information(self, current_advertisement):
@@ -1105,7 +1151,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		a = np.copy(threshold_a(current_advertisement))
 		current_benefit,_ = self.latency_benefit_fn(a, retnow=True)
 		awful_benefit = -1000000
-		uncertainty_alpha = .1
+		uncertainty_alpha = .05
 		# f,ax = plt.subplots(5)
 		# self.plti=0
 
@@ -1328,8 +1374,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							exit(0)
 						print("Best flips was: {}".format(best_flips[m]))
 
+						try:
+							self.typical_high_uncertainty
+						except AttributeError:
+							self.typical_high_uncertainty = get_range(u) / 2
+
 						if 'RB' in uncertainties[best_flips[m]]['label']:
-							uncertainty_measure = 1 + get_range(u) * (value_func(u,setting_up=True,force=m) - self.min_explore_value[m])
+							uncertainty_measure = 1 + 10/self.typical_high_uncertainty*get_range(u) * (value_func(u,setting_up=True,force=m) - self.min_explore_value[m])
 							self.uncertainty_factor = (1 - uncertainty_alpha) * \
 								self.uncertainty_factor + uncertainty_alpha * uncertainty_measure
 						else:
@@ -1369,7 +1420,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement))
 		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement))
 
-		self.current_pseudo_objective = self.modeled_objective(advertisement,verb=True)
+		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True)
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		self.metrics['effective_objectives'].append(self.measured_objective(copy.copy(threshold_a(advertisement))))
@@ -1378,18 +1429,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		lb_model = self.latency_benefit_fn(advertisement,retnow=True)
 		self.metrics['latency_benefit'].append(lb_model[0])
 
-
-
-		# if np.abs(self.metrics['gt_resilience_benefit'][-1] - lb_model[0]) > 5:
-		# 	x,px = lb_model[1]
-		# 	plt.plot(x,px)
-		# 	plt.show()
-
+		### Notify workers of new training iteration
+		for worker, worker_socket in self.worker_manager.worker_sockets.items():
+			msg = pickle.dumps(('increment_iter', "meep"))
+			worker_socket.send(msg)
+			worker_socket.recv()
 
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.current_pseudo_objective - self.last_objective)
 		self.rolling_delta_eff = (1 - delta_eff_alpha) * self.rolling_delta_eff + \
 			delta_eff_alpha * np.abs(self.current_effective_objective - self.last_effective_objective)
-		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff])
+		adv_delta = np.max(np.abs((advertisement - self.last_advertisement).flatten()))
+		self.rolling_adv_delta = (1 - delta_alpha) * self.rolling_adv_delta + delta_alpha * adv_delta
+		print("RAD: {}".format(self.rolling_adv_delta))
+		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
 
 	def get_init_kwa(self):
 		return {
@@ -1434,12 +1486,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.last_effective_objective = self.current_effective_objective
 		self.rolling_delta = 10
 		self.rolling_delta_eff = 10
+		self.rolling_adv_delta = 10
+		self.rolling_adv_eps = .01
 
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		self.metrics['actual_nonconvex_objective'].append(self.current_objective)
 		self.metrics['effective_objectives'].append(self.measured_objective(threshold_a(advertisement)))
 		self.metrics['advertisements'].append(copy.copy(advertisement))
 		while not self.stop:
+
+			if self.verbose:
+				print("\n\n")
+				print("LEARNING ITERATION : {}".format(self.iter))
+				print("\n\n")
+
 			self.ts_loop = time.time()
 			# calculate gradients
 			if self.verbose:
@@ -1454,6 +1514,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			else:
 				advertisement = w_k
 			a_km1 = a_k
+			self.last_advertisement = a_km1
 
 			# another constraint we may want is 0 <= a_ij <= 1
 			# the solution is just clipping to be in the set
@@ -1503,8 +1564,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			print(self.iter)
-			print("\n\n")
 			# if self.iter == 2:
 			# 	break
 
@@ -1544,18 +1603,18 @@ def main():
 		# sas.make_plots()
 
 		### With VULTR measurements test
-		lambduh = .0001
-		gamma = 2.0
+		lambduh = .01
+		gamma = 10.0
 		n_prefixes = np.maximum(4,len(deployment['popps'])//4)
 		sas = Sparse_Advertisement_Solver(deployment, 
-			lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=n_prefixes,
+			lambduh=lambduh,verbose=True,with_capacity=True,n_prefixes=n_prefixes,
 			using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
 		sas.solve()
 		sas.make_plots()
-		soln = threshold_a(sas.get_last_advertisement())
+		soln = sas.get_last_advertisement()
 
 		from eval_latency_failure import plot_lats_from_adv
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
