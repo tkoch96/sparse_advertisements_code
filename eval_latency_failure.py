@@ -1,7 +1,7 @@
 from constants import *
 from helpers import *
 
-import pickle, numpy as np, matplotlib.pyplot as plt
+import pickle, numpy as np, matplotlib.pyplot as plt, copy
 from sparse_advertisements_v3 import *
 
 def popp_failure_latency_comparisons():
@@ -48,7 +48,7 @@ def popp_failure_latency_comparisons():
 			print(deployment['link_capacities'])
 			metrics['deployment'][random_iter] = deployment
 
-			n_prefixes = np.maximum(4,len(deployment['popps'])//4)
+			n_prefixes = np.maximum(4,len(deployment['popps'])//10)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
@@ -167,15 +167,22 @@ def popp_failure_latency_comparisons():
 	ax[0].grid(True)
 	ax[0].set_xlabel("Best - Actual Latency Under Failure (ms)")
 	ax[0].set_ylabel("CDF of UGs")
+	ax[0].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
+	ax[0].set_xlim([-50,0])
 
 	ax[1].legend(fontsize=8)
 	ax[1].grid(True)
 	ax[1].set_xlabel("Best - Actual Latency (ms)")
 	ax[1].set_ylabel("CDF of UGs")
+	ax[1].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
+	ax[1].set_xlim([-50,0])
 
 	save_fig("popp_latency_failure_comparison_{}.pdf".format(DPSIZE))
 
 def plot_lats_from_adv(sas, advertisement, fn):
+	verb_copy = copy.copy(sas.verbose)
+	sas.verbose = False
+
 	f,ax=plt.subplots(2,1)
 	f.set_size_inches(6,12)
 
@@ -206,7 +213,7 @@ def plot_lats_from_adv(sas, advertisement, fn):
 			adv_cpy[sas.popp_to_ind[popp]] = 0
 			## q: what is latency experienced for these ugs compared to optimal?
 			_, ug_catchments = sas.calculate_user_choice(adv_cpy)
-			user_latencies = sas.get_ground_truth_user_latencies(adv_cpy, overloadverb=True)
+			user_latencies = sas.get_ground_truth_user_latencies(adv_cpy)
 
 			## Look at users whose catchment has changed
 			these_ugs = [ug for ug in sas.ugs if \
@@ -229,17 +236,17 @@ def plot_lats_from_adv(sas, advertisement, fn):
 				if actual_perf == NO_ROUTE_LATENCY:
 					inundated = True
 				metrics['popp_failures'].append((best_perf - actual_perf, ug_vols[ug]))
-			if inundated:
-				recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
-				these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
-					call[0] == recent_iter]
-				print("{} recent grad calls".format(len(these_rb_calls)))
-				recent_rb = these_rb_calls[-30:]
-				recent_lb = sas.all_lb_calls_results[-1]
-				recent_rb = [(i,poppi,prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2)) for i,poppi,prefi,rbgrad in 
-					recent_rb]
-				print("Popp {} inundated, recent resilience gradient calls were : {}".format(
-					popp, recent_rb))
+			# if inundated and DPSIZE == 'really_friggin_small':
+			# 	recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
+			# 	these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
+			# 		call[0] == recent_iter]
+			# 	print("{} recent grad calls".format(len(these_rb_calls)))
+			# 	recent_rb = these_rb_calls[-30:]
+			# 	recent_lb = sas.all_lb_calls_results[-1]
+			# 	recent_rb = [(i,poppi,prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2)) for i,poppi,prefi,rbgrad in 
+			# 		recent_rb]
+			# 	print("Popp {} inundated, recent resilience gradient calls were : {}".format(
+			# 		popp, recent_rb))
 
 
 		all_differences = metrics['popp_failures']
@@ -250,7 +257,6 @@ def plot_lats_from_adv(sas, advertisement, fn):
 		x,cdf_x = get_cdf_xy(list(zip(diffs, ug_vols_arr)), weighted=True)
 		ax[1].plot(x,cdf_x, label=labs[i])
 
-
 		metrics['adv'] = advertisement
 
 		if i == 0:
@@ -260,13 +266,16 @@ def plot_lats_from_adv(sas, advertisement, fn):
 	ax[0].grid(True)
 	ax[0].set_xlabel("Best - Actual Latency Under Failure (ms)")
 	ax[0].set_ylabel("CDF of UGs")
+	ax[0].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 
 	ax[1].legend(fontsize=8)
 	ax[1].grid(True)
 	ax[1].set_xlabel("Best - Actual Latency Normally (ms)")
 	ax[1].set_ylabel("CDF of UGs")
+	ax[1].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 
 	save_fig(fn)
+	sas.verbose = verb_copy
 
 if __name__ == "__main__":
 	popp_failure_latency_comparisons()

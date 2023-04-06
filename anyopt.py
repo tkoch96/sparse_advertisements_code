@@ -1,4 +1,4 @@
-import numpy as np,time, tqdm
+import numpy as np,time, tqdm, copy
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from helpers import *
 
@@ -8,7 +8,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args,**kwargs)
 
-		self.n_montecarlo = 10#1000
+		self.n_montecarlo = 100#1000
 
 	def solve(self):
 		## First, anyopt learns all the pairwise preferences from every client to every transit
@@ -20,6 +20,10 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 
 		# assume apriori that we predict provider catchments with 100% confidence,
 		# since anyopt has a methodology that works pretty well
+		
+		save_verb = copy.copy(self.verbose)
+		self.verbose = False
+
 		choice_arr = list(range(self.n_provider_popps))
 
 		best_adv = None
@@ -72,4 +76,6 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 
 		self.advs = best_adv
 
+
+		self.verbose = save_verb
 

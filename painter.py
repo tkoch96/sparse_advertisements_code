@@ -3,7 +3,8 @@ from helpers import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
 def vol_to_val(vol):
-	return np.log10(vol + 1)
+	# return np.log10(vol + 1)
+	return vol
 
 def reduce_to_score(improvements_vols, skip_log=False):
 	# score is ~ sum( log(weight) * improvement_in_ms )
@@ -132,6 +133,10 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
 		advs = self.painter_v4(**kwargs)
+		
+		save_verb = copy.copy(self.verbose)
+		self.verbose = False
+
 		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
 			use_resilience=False) # technically this is a measurement, uncounted
 		self.stop = False
@@ -168,6 +173,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				self.advs = copy.deepcopy(advs_cp)
 			else:
 				break
+		self.verbose = save_verb
 
 	def painter_v4(self, **kwargs):
 		# print("Solving for Painter v4 solution")
@@ -253,7 +259,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		# Stores improvements each ug would see on a brand new prefix
 		self.frozen_impv_by_popp = None
 
-		self.ug_using_pref = {i:-1 for i in range(len(all_ug))}
 		self.ug_current_perf = {ug:self.ug_anycast_perfs[ug] for ug in self.ug_perfs}
 		self.ug_best_perf = {ug: self.ug_anycast_perfs[ug] for ug in self.ug_perfs}
 		for ug in self.ug_perfs:

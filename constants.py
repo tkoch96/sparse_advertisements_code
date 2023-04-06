@@ -37,10 +37,11 @@ N_WORKERS = {
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)
+RESILIENCE_DIFFICULTY = 'hard'
 
 
 
-DEFAULT_EXPLORE = 'bimodality'
+DEFAULT_EXPLORE = 'entropy'
 
 
 POP_TO_LOC = {

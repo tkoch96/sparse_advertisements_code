@@ -44,7 +44,7 @@ class Optimal_Adv_Wrapper:
 		self.verbose = verbose
 		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
-		self.epsilon = .005 # change in objective less than this -> stop
+		self.epsilon = .05 # change in objective less than this -> stop
 		self.max_n_iter = 300 # maximum number of learning iterations
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
@@ -145,6 +145,16 @@ class Optimal_Adv_Wrapper:
 		self.metro_loc = deployment['metro_loc']
 		self.pop_to_loc = deployment['pop_to_loc']
 		self.link_capacities_by_popp = deployment['link_capacities']
+
+		try:
+			n_workers = self.get_n_workers()
+		except AttributeError:
+			### Worker thread, need to divide capacities by the number of workers
+			### where appropriate
+			for popp, cap in self.link_capacities_by_popp.items():
+				if popp in self.provider_popps:
+					self.link_capacities_by_popp[popp] = cap / N_WORKERS
+
 		self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
 		self.link_capacities_arr = np.zeros(self.n_popp)
 		for poppi, cap in self.link_capacities.items():
@@ -369,13 +379,15 @@ class Optimal_Adv_Wrapper:
 				except KeyError:
 					ingress_to_users[ingress_i] = [ugi]
 			cap_violations = link_volumes > self.link_capacities_arr
-			if (kwargs.get('verb') or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
+			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
 				print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
 				print(np.where(cap_violations))
+				for poppi in np.where(cap_violations)[0]:
+					print("PoPP {} inundated".format(self.popps[poppi]))
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
-		if kwargs.get('verb'):
+		if self.verbose and len(np.where(cap_violations)[0]) > 0:
 			print([round(el,2) for el in user_latencies])
 		return user_latencies
 

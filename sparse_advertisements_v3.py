@@ -18,6 +18,8 @@ from anyopt import Anyopt_Adv_Solver
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from worker_comms import Worker_Manager
 
+from eval_latency_failure import plot_lats_from_adv
+
 from sklearn.mixture import GaussianMixture
 from sklearn.exceptions import ConvergenceWarning
 
@@ -550,6 +552,9 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['anyopt'].append(self.anyopt_solution['latency_benefit'])
 			metrics['norm_penalties']['anyopt'].append(self.anyopt_solution['norm_penalty'])
 			metrics['prefix_cost']['anyopt'].append(self.anyopt_solution['prefix_cost'])
+			if self.verbose:
+				soln = metrics['adv_solns']['anyopt'][-1]
+				plot_lats_from_adv(self, soln, 'anyopt-vs-anycast-{}.pdf'.format(DPSIZE))
 
 			## One per PoP
 			if verbose:
@@ -560,7 +565,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['adv_solns']['one_per_pop'].append(self.one_per_pop_solution['advertisement'])
 			metrics['latency_benefits']['one_per_pop'].append(self.one_per_pop_solution['latency_benefit'])
 			metrics['norm_penalties']['one_per_pop'].append(self.one_per_pop_solution['norm_penalty'])
-			metrics['prefix_cost']['one_per_pop'].append(self.one_per_pop_solution['prefix_cost'])			
+			metrics['prefix_cost']['one_per_pop'].append(self.one_per_pop_solution['prefix_cost'])
+			if self.verbose:
+				soln = metrics['adv_solns']['one_per_pop'][-1]
+				plot_lats_from_adv(self, soln, 'oneperpop-vs-anycast-{}.pdf'.format(DPSIZE))		
 
 			## Painter
 			if verbose:
@@ -572,6 +580,9 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['painter'].append(self.painter_solution['latency_benefit'])
 			metrics['norm_penalties']['painter'].append(self.painter_solution['norm_penalty'])
 			metrics['prefix_cost']['painter'].append(self.painter_solution['prefix_cost'])
+			if self.verbose:
+				soln = metrics['adv_solns']['painter'][-1]
+				plot_lats_from_adv(self, soln, 'painter-vs-anycast-{}.pdf'.format(DPSIZE))
 
 			## Sparse
 			if verbose:
@@ -1057,7 +1068,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		soln = self.get_last_advertisement()
 		from eval_latency_failure import plot_lats_from_adv
-		plot_lats_from_adv(self, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
+		plot_lats_from_adv(self, soln, 'sparse-vs-anycast-{}-{}.pdf'.format(DPSIZE,self.iter))
 
 
 		# General convergence metrics plot
@@ -1378,6 +1389,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							self.typical_high_uncertainty
 						except AttributeError:
 							self.typical_high_uncertainty = get_range(u) / 2
+							print("Typical High Uncertainty is {}".format(self.typical_high_uncertainty))
 
 						if 'RB' in uncertainties[best_flips[m]]['label']:
 							uncertainty_measure = 1 + 10/self.typical_high_uncertainty*get_range(u) * (value_func(u,setting_up=True,force=m) - self.min_explore_value[m])

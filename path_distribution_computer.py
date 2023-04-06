@@ -46,12 +46,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calc_cache = Calc_Cache()
 		self.this_time_ip_cache = {}
 
-
 		self.init_user_px_cache()
 
 		self.iter = 0
-
-
 		print('started in worker {}'.format(self.worker_i))
 		self.run()
 
@@ -76,9 +73,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	def get_limited_cap_latency_multiplier(self):
 		power = 1.03
-		if np.random.random() > .999:
-			print("Iter: {} LCLM : {}".format(self.iter,
-				np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER))
 		return np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER
 
 	def clear_caches(self):
@@ -318,6 +312,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if old_p != new_p:
 					recalc_popps[ingress_i] = None
 				self.p_link_fails[ingress_i] = new_p
+			
+
+
 			# if verb:
 			# 	for ingress_i in np.where(self.p_link_fails)[0]:
 			# 		print("Ingress {} fails with probability {}".format(ingress_i,

@@ -2,18 +2,33 @@ import tqdm, numpy as np
 from constants import *
 from helpers import *
 
-def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_loc):
+def get_random_ingress_priorities(deployment):
 	## Simulate random ingress priorities for each UG
+	ug_perfs = deployment['ug_perfs']
+	ug_anycast_perfs = deployment['ug_anycast_perfs']
+	pop_to_loc = deployment['pop_to_loc']
+	metro_loc = deployment['metro_loc']
+	provider_popps = deployment['provider_popps']
+
+
 	ingress_priorities = {}
 	dist_cache = {}
 	for ug in tqdm.tqdm(ug_perfs,desc="Assigning ingress priorities randomly."):
 		ingress_priorities[ug] = {}
 		## approximate the anycast interface by getting the one with closest latency
 		popps = list(ug_perfs[ug])
-		perfs = np.array([ug_perfs[ug][popp] for popp in popps])
-		## anycast is the most favored ingress
-		probably_anycast = popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
-		priorities = {probably_anycast:0}
+
+		non_provider_popps = get_difference(popps, provider_popps)
+		if len(non_provider_popps) > 0:
+			perfs = np.array([ug_perfs[ug][popp] for popp in non_provider_popps])
+			## anycast is the most favored peer
+			probably_anycast = non_provider_popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
+			priorities = {probably_anycast:0}
+		else:
+			perfs = np.array([ug_perfs[ug][popp] for popp in popps])
+			## anycast is the most favored ingress
+			probably_anycast = popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
+			priorities = {probably_anycast:0}
 
 		other_peerings = list(get_difference(list(ug_perfs[ug]), [probably_anycast]))
 		if len(other_peerings) > 0:
@@ -30,16 +45,107 @@ def get_random_ingress_priorities(ug_perfs, ug_anycast_perfs, pop_to_loc, metro_
 			for i,(_,pi) in enumerate(ranked_peerings_by_dist):
 				priorities[pi] = i + 1
 			## randomly flip some priorities
+			## could add in the 'preferred provider' model, where a user just always goes with the same provider
+			## unless it can't
 			if len(priorities) > 1:
 				for pi in list(priorities):
-					if np.random.random() < .01:
+					if np.random.random() < .001:
 						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
 						priorities[other_pi] = tmp
+						# print("Randomly flipping {}, popp {} and {}".format(ug,pi,other_pi))
+
 		for popp,priority in priorities.items():
 			ingress_priorities[ug][popp] = priority
+
 	return ingress_priorities
+
+def get_link_capacities(deployment):
+
+	# controls backup volume we have, therefore how hard the resilience
+	# problem is to solve
+	EASYNESS_MULT = { 
+		'easy': 1,
+		'medium': .5,
+		'hard': .25,
+	}[RESILIENCE_DIFFICULTY]
+
+	popps = deployment['popps']
+	ug_perfs = deployment['ug_perfs']
+	ug_to_vol = deployment['ug_to_vol']
+	provider_popps = deployment['provider_popps']
+	ugs = deployment['ugs']
+
+	# vol best is the client volume per popp if everyone went to their lowest latency link
+	# vol popp is reachable volume for a popp
+
+	vol_best,vol_popp = {popp: 0 for popp in popps}, {popp:0 for popp in get_difference(popps,provider_popps)}
+	for ug in ug_perfs:
+		these_popps = list(ug_perfs[ug])
+		best_performer = these_popps[np.argmin([ug_perfs[ug][popp] for popp in these_popps])]
+		vol_best[best_performer] += deployment['ug_to_vol'][ug]
+		for popp in ug_perfs[ug]:
+			if popp in provider_popps:
+				continue
+			vol_popp[popp] += deployment['ug_to_vol'][ug]
+
+	## Maximum volume a peer should be expected to handle
+	max_peer_volume = np.max(list([v for popp,v in vol_best.items() if popp not in provider_popps]))
+	## Typical volume we would expect to flow over transit
+	# proportional to transit providers fairly sharing all of user load
+	baseline_transit_volume = EASYNESS_MULT * sum(list(ug_to_vol.values())) / len(provider_popps)
+
+	link_capacities = {}
+	for popp,v in vol_best.items():
+		if popp not in provider_popps:
+			## Set capacity roughly as the amount of client traffic you'd expect to receive
+			link_capacities[popp] = vol_popp[popp] # kind of easy
+		else:
+			## Set capacity as some baseline + resilience
+			## resilience should be proportional to max peer volume
+			link_capacities[popp] = baseline_transit_volume + max_peer_volume
+
+	### Sanity check to make sure the problem isn't ill-posed, make sure default
+	# deployment has sufficient capacity
+	anycast_vol_mapping = {}
+	ips = deployment['ingress_priorities']
+	for ug in ips:
+		most_favored = [popp for popp in ips[ug] if ips[ug][popp] == 0][0]
+		if most_favored == ('amsterdam','1299'):
+			print(ug)
+			print(ips[ug])
+		try:
+			anycast_vol_mapping[most_favored] += ug_to_vol[ug]
+		except KeyError:
+			anycast_vol_mapping[most_favored] = ug_to_vol[ug]
+	for mf in anycast_vol_mapping:
+		if anycast_vol_mapping[mf] > link_capacities[mf]:
+			print("popp {} will be inundated {} vs {}".format(mf,anycast_vol_mapping[mf], link_capacities[mf]))
+			exit(0)
+	####
+
+	if True:
+		import matplotlib.pyplot as plt
+		f,ax=plt.subplots(2,1)
+		f.set_size_inches(6,12)
+		
+		x,cdf_x = get_cdf_xy(list(vol_best.values()))
+		ax[0].semilogx(x,cdf_x,label='Best PoPP Volume')
+		x,cdf_x = get_cdf_xy(list(vol_popp.values()))
+		ax[0].semilogx(x,cdf_x,label="Reachable PoPP Volume")
+		x,cdf_x = get_cdf_xy(list(ug_to_vol.values()))
+		ax[0].semilogx(x,cdf_x,label="User Volumes")
+		x,cdf_x = get_cdf_xy(list(link_capacities.values()))
+		ax[0].semilogx(x,cdf_x,label="All Link Caps")
+		ax[0].legend()
+		ax[0].set_xlabel('Volume')
+		ax[0].set_ylabel("CDF of Users or PoPPs")
+		ax[0].grid(True)
+
+	
+		plt.savefig("figures/link_capacity_summary.pdf")
+	return link_capacities
 
 def cluster_actual_users(**kwargs):
 	considering_pops = kwargs.get('considering_pops')
@@ -330,7 +436,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	considering_pops = ['miami','tokyo', 'amsterdam','losangelas','newyork','atlanta','singapore','saopaulo']
+	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
 	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
@@ -339,7 +445,7 @@ def load_actual_deployment():
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
-			n_users_per_peer=200)
+			n_users_per_peer=300)
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
@@ -378,17 +484,42 @@ def load_actual_deployment():
 
 
 		last_r = 100000
-		while True:
+		max_n_iter = 10000
+		end = False
+		_iter = 0
+		while not end:
+			## Tries to increase low-volume ingress expected volume by inflating user volumes
+			## I.e., attempts to deal with low target counts in certain ingresses
 			popp_vols = calc_popp_vol(ug_to_vol)
 			all_vols = list([popp_vols[popp] for popp in non_provider_popps])
-			min_vol,max_vol = np.min(all_vols), np.max(all_vols)
+
+			ranked_vols = np.argsort(all_vols)
+			min_popp,max_popp = non_provider_popps[ranked_vols[0]],non_provider_popps[ranked_vols[-1]]
+			curr_min_ind = 1
+			while len(get_difference(popp_to_ug[min_popp], popp_to_ug[max_popp])) == 0:
+				min_popp = non_provider_popps[ranked_vols[curr_min_ind]]
+				curr_min_ind += 1
+				if min_popp == max_popp:
+					end = True
+
+			min_vol,max_vol = popp_vols[min_popp],popp_vols[max_popp]
+			
 			this_r = max_vol / min_vol
-			if this_r > last_r or this_r < 1.1:
-				break
-			min_popp = non_provider_popps[np.argmin(all_vols)]
+			if this_r < 1.1:
+				end = True
 			for ug in popp_to_ug[min_popp]:
-				ug_to_vol[ug] *= 1.2
+				if ug in popp_to_ug[max_popp]: continue
+				# print("multiplying {}".format(ug))
+				ug_to_vol[ug] = ug_to_vol[ug] * 1.2
+			
+			if _iter == max_n_iter:
+				break
 			last_r = copy.copy(this_r)
+			_iter += 1
+		# Normalize
+		max_vol = np.max(list(ug_to_vol.values()))
+		for ug in ug_to_vol:
+			ug_to_vol[ug] = ug_to_vol[ug] / max_vol
 
 		metros = list(set(metro for metro,asn in ugs))
 		metro_loc = {}
@@ -398,17 +529,6 @@ def load_actual_deployment():
 			closest_popp = ug_popps[np.argmin([ug_perfs[ug][popp] for popp in ug_popps])]
 			metro_loc[metro] = pop_to_loc[closest_popp[0]]
 
-		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
-			pop_to_loc, metro_loc)
-		vol_anycast = {popp: 0 for popp in popps}
-		for ug in ingress_priorities:
-			for popp,pref in ingress_priorities[ug].items():
-				if pref == 0:
-					vol_anycast[popp] += ug_to_vol[ug]
-		link_capacities = {popp:None for popp in popps}
-		for popp,vol_anycast in vol_anycast.items():
-			link_capacities[popp] = len(ugs)//20 + vol_anycast * 1.5
-
 		deployment = {
 			'ugs': ugs,
 			'ug_perfs': ug_perfs,
@@ -416,14 +536,19 @@ def load_actual_deployment():
 			'ug_to_vol': ug_to_vol,
 			'whole_deployment_ugs': ugs,
 			'whole_deployment_ug_to_vol': ug_to_vol,
-			'link_capacities': link_capacities,
-			'ingress_priorities': ingress_priorities,
 			'popps': popps,
 			'metro_loc': metro_loc,
 			'pop_to_loc': pop_to_loc,
 			'n_providers': n_providers,
 			'provider_popps': provider_popps,
 		}
+
+		ingress_priorities = get_random_ingress_priorities(deployment)
+		deployment['ingress_priorities'] = ingress_priorities
+
+		link_capacities = get_link_capacities(deployment)
+		deployment['link_capacities'] = link_capacities
+
 		pickle.dump(deployment, open(deployment_cache_fn,'wb'))
 
 	else:
@@ -433,58 +558,11 @@ def load_actual_deployment():
 		pop_to_loc = deployment['pop_to_loc']
 		metro_loc = deployment['metro_loc']
 
-		ingress_priorities = get_random_ingress_priorities(ug_perfs, anycast_latencies,
-			pop_to_loc, metro_loc)
-		vol_best,vol_popp = {popp: 0 for popp in deployment['popps']}, {popp:0 for popp in deployment['popps']}
-		for ug in ug_perfs:
-			these_popps = list(ug_perfs[ug])
-			best_performer = these_popps[np.argmin([ug_perfs[ug][popp] for popp in these_popps])]
-			vol_best[best_performer] += deployment['ug_to_vol'][ug]
-			for popp in ug_perfs[ug]:
-				if popp in deployment['provider_popps']:
-					continue
-				vol_popp[popp] += deployment['ug_to_vol'][ug]
-
-		link_capacities = {popp:None for popp in deployment['popps']}
-		for popp,v in vol_best.items():
-			if popp not in deployment['provider_popps']:
-				link_capacities[popp] = np.maximum(len(deployment['ugs'])//20 + v * 1.5, vol_popp[popp])
-			else:
-				link_capacities[popp] = np.maximum(len(deployment['ugs'])//20 + v * 1.5,
-					3 * np.max(list(deployment['ug_to_vol'].values())))
-
+		ingress_priorities = get_random_ingress_priorities(deployment)
 		deployment['ingress_priorities'] = ingress_priorities
+
+		link_capacities = get_link_capacities(deployment)
 		deployment['link_capacities'] = link_capacities
-
-		popps = sorted(list(set(deployment['popps'])))
-		ug_perfs = deployment['ug_perfs']
-
-
-		n_has_path = {popp:0 for popp in popps}
-		for ug in ug_perfs:
-			for popp in ug_perfs[ug]:
-				n_has_path[popp] += 1
-		print(sorted(n_has_path.items(), key = lambda el : -1 * el[1]))
-
-		poi = [popps[poii] for poii in [13,31]]
-		avg_lats = {popp:[] for popp in poi}
-		same_with_provider = {popp:[] for popp in poi}
-		also_has_path = {popp:0 for popp in popps}
-		for ug in ug_perfs:
-			for _poi in poi:
-				try:
-					avg_lats[_poi].append(ug_perfs[ug][_poi])
-					for popp in ug_perfs[ug]:
-						if popp in deployment['provider_popps'] or popp == _poi: continue
-						also_has_path[popp] += 1
-					same_with_provider[_poi].append(ug_perfs[ug][('atlanta','3257')])
-				except KeyError:
-					pass
-		for _poi in avg_lats:
-			print("{} {}".format(_poi, np.median(avg_lats[_poi])))
-			print("{} {}".format(_poi, np.median(same_with_provider[_poi])))
-			print(link_capacities[_poi])
-		print(sorted(also_has_path.items(), key = lambda el : -1 * el[1]))
 
 	return deployment
 
@@ -602,37 +680,28 @@ def get_random_deployment_by_size(problem_size):
 			ug_perfs[ug][popp] = random_transit_provider_latency()
 	ugs = list(ug_to_vol)
 	ug_anycast_perfs = {ug:np.random.choice(list(ug_perfs[ug].values())) for ug in ugs}
-	ingress_priorities = get_random_ingress_priorities(ug_perfs, ug_anycast_perfs,
-		pop_to_loc, metro_loc)
-	vol_anycast = {popp: 0 for popp in popps}
-	for ug in ingress_priorities:
-		for popp,pref in ingress_priorities[ug].items():
-			if pref == 0:
-				vol_anycast[popp] += ug_to_vol[ug]
-	link_capacities = {popp:None for popp in popps}
-	for popp,vol_anycast in vol_anycast.items():
-		link_capacities[popp] = 4 + vol_anycast * 1.7
-
-	## Simulate random link capacities
-	# links should maybe hold ~ N * max user volume
-	print("----Done Creating Random Deployment-----")
-	print("Deployment has {} users, {} popps, {} pops".format(
-		len(ugs), len(popps), len(pop_to_loc)))
-	return {
+	
+	deployment = {
 		'ugs': ugs,
 		'ug_perfs': ug_perfs,
 		'ug_to_vol': ug_to_vol,
 		'ug_anycast_perfs': ug_anycast_perfs,
 		'whole_deployment_ugs': ugs,
 		'whole_deployment_ug_to_vol': ug_to_vol,
-		'link_capacities': link_capacities,
-		'ingress_priorities': ingress_priorities,
 		'popps': popps,
 		'metro_loc': metro_loc,
 		'pop_to_loc': pop_to_loc,
 		'n_providers': n_providers,
 		'provider_popps': provider_popps,
 	}
+	deployment['ingress_priorities'] = get_random_ingress_priorities(deployment)
+	deployment['link_capacities'] = get_link_capacities(deployment)
+
+	print("----Done Creating Random Deployment-----")
+	print("Deployment has {} users, {} popps, {} pops".format(
+		len(ugs), len(popps), len(pop_to_loc)))
+
+	return deployment
 
 if __name__ == "__main__":
 	load_actual_deployment()
