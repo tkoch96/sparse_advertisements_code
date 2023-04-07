@@ -4,17 +4,32 @@ from helpers import *
 import pickle, numpy as np, matplotlib.pyplot as plt, copy
 from sparse_advertisements_v3 import *
 
+def adv_summary(popps,adv):
+	adv = threshold_a(adv)
+	print("\n")
+	print("\n")
+	print(adv)
+	for pref in range(adv.shape[1]):
+		if np.sum(adv[:,pref]) == adv.shape[0]:
+			print("Prefix {} is anycast".format(pref))
+		else:
+			for poppi in np.where(adv[:,pref])[0]:
+				print("Prefix {} has {}".format(pref, popps[poppi]))
+		print("\n")
+	print("\n")
+	print("\n")
+
+
+
 def popp_failure_latency_comparisons():
 	# for each deployment, get different advertisement strategies
 	# look at latency under popp and link failures compared to optimal
-
-	# goal is to hopefully demonstrate that we're better on these simulated topologies
-	# so that we can be confident we'll find resilient strategies in the wild
+	# sparse should be simultaneously better in both normal and failure scenarios
 
 	np.random.seed(31413)
 	metrics = {}
 	N_TO_SIM = 1
-	gamma = 10
+	gamma = 2
 	capacity = True
 
 	lambduh = .01
@@ -133,15 +148,7 @@ def popp_failure_latency_comparisons():
 			deployment = metrics['deployment'][i]
 			popps = sorted(list(set(deployment['popps'])))
 			try:
-				for pref in range(adv.shape[1]):
-					if np.sum(adv[:,pref]) == adv.shape[0]:
-						print("Prefix {} is anycast".format(pref))
-					else:
-						for poppi in np.where(adv[:,pref])[0]:
-							print("Prefix {} has {}".format(pref, popps[poppi]))
-					print("\n")
-				print("\n")
-				print("\n")
+				adv_summary(popps,adv)
 			except:
 				continue
 
@@ -195,6 +202,7 @@ def plot_lats_from_adv(sas, advertisement, fn):
 		metrics = {}
 		if i ==0:
 			adv = threshold_a(advertisement)
+			print("Current adv: {}".format(adv_summary(sas.popps, advertisement)))
 		else: # anycast
 			adv = np.zeros(advertisement.shape)
 			adv[:,0] = 1
@@ -213,7 +221,8 @@ def plot_lats_from_adv(sas, advertisement, fn):
 			adv_cpy[sas.popp_to_ind[popp]] = 0
 			## q: what is latency experienced for these ugs compared to optimal?
 			_, ug_catchments = sas.calculate_user_choice(adv_cpy)
-			user_latencies = sas.get_ground_truth_user_latencies(adv_cpy)
+			user_latencies = sas.get_ground_truth_user_latencies(adv_cpy,
+				overloadverb=(i==0), failing=popp)
 
 			## Look at users whose catchment has changed
 			these_ugs = [ug for ug in sas.ugs if \
@@ -236,17 +245,19 @@ def plot_lats_from_adv(sas, advertisement, fn):
 				if actual_perf == NO_ROUTE_LATENCY:
 					inundated = True
 				metrics['popp_failures'].append((best_perf - actual_perf, ug_vols[ug]))
-			# if inundated and DPSIZE == 'really_friggin_small':
-			# 	recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
-			# 	these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
-			# 		call[0] == recent_iter]
-			# 	print("{} recent grad calls".format(len(these_rb_calls)))
-			# 	recent_rb = these_rb_calls[-30:]
-			# 	recent_lb = sas.all_lb_calls_results[-1]
-			# 	recent_rb = [(i,poppi,prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2)) for i,poppi,prefi,rbgrad in 
-			# 		recent_rb]
-			# 	print("Popp {} inundated, recent resilience gradient calls were : {}".format(
-			# 		popp, recent_rb))
+			if inundated and i==0:
+				recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
+				these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
+					call[0] == recent_iter]
+				print("{} recent grad calls".format(len(these_rb_calls)))
+				recent_rb = these_rb_calls[-30:]
+				recent_lb = sas.all_lb_calls_results[-1]
+				# iter poppi popp prefix rbgrad lbgrad
+				recent_rb = [(i,poppi,sas.popps[poppi],prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2),
+					advertisement[poppi,prefi]) for i,poppi,prefi,rbgrad in 
+					recent_rb]
+				print("Popp {} fail causes inundation, recent resilience gradient calls were : {}".format(
+					popp, recent_rb))
 
 
 		all_differences = metrics['popp_failures']

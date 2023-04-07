@@ -43,7 +43,7 @@ class Worker_Manager:
 			call("{} path_distribution_computer.py {} &".format(PYTHON, worker), shell=True) # VMs
 			# call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # home PC
 			# send worker startup information
-			args = [subdeployments[worker]]
+			args = [copy.deepcopy(subdeployments[worker])]
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			kwargs = self.get_init_kwa()
 			self.worker_sockets[worker] = context.socket(zmq.REQ)

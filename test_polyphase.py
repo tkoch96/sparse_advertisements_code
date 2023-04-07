@@ -196,7 +196,9 @@ def sum_pdf_new(px):
     output = output.clip(0,np.inf)
     if output.shape[1] >= 2:
         output = sum_pdf_new(output)
-    return output / np.sum(output+1e-16,axis=0)
+    norm_out = output / np.sum(output+1e-16,axis=0)
+    norm_out = round(norm_out,4)
+    return norm_out
 
 def sum_pdf_fixed_point(x,px,**kwargs):
     ## Calculates pdf of sum of RVs, each column is a pdf of a RV
@@ -223,7 +225,9 @@ def sum_pdf_fixed_point(x,px,**kwargs):
     if out_px.shape[1] >= 2:
         out_x, out_px = sum_pdf_fixed_point(out_x, out_px,**kwargs)
         
-    return out_x, out_px / np.sum(out_px+1e-16,axis=0)
+    norm_px = out_px / np.sum(out_px+1e-16,axis=0)
+    norm_px = np.round(norm_px,4)
+    return out_x, norm_px
 
 def sum_pdf_old(px):
     l_post_pad = (px.shape[1] + 1) * px.shape[0]

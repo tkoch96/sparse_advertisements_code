@@ -39,7 +39,9 @@ def get_random_ingress_priorities(deployment):
 				except KeyError:
 					d = geopy.distance.geodesic(
 						pop_to_loc[op[0]], metro_loc[ug[0]]).km
+					# add noise to break ties
 					dist_cache[pop_to_loc[op[0]], metro_loc[ug[0]]] = d
+				d += .01 *np.random.uniform()
 				associated_dists.append(d)
 			ranked_peerings_by_dist = sorted(zip(associated_dists,other_peerings), key = lambda el : el[0])
 			for i,(_,pi) in enumerate(ranked_peerings_by_dist):
@@ -49,7 +51,7 @@ def get_random_ingress_priorities(deployment):
 			## unless it can't
 			if len(priorities) > 1:
 				for pi in list(priorities):
-					if np.random.random() < .001:
+					if np.random.random() < .01:
 						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
@@ -81,6 +83,7 @@ def get_link_capacities(deployment):
 	# vol popp is reachable volume for a popp
 
 	vol_best,vol_popp = {popp: 0 for popp in popps}, {popp:0 for popp in get_difference(popps,provider_popps)}
+	popp_to_ug = {}
 	for ug in ug_perfs:
 		these_popps = list(ug_perfs[ug])
 		best_performer = these_popps[np.argmin([ug_perfs[ug][popp] for popp in these_popps])]
@@ -89,6 +92,10 @@ def get_link_capacities(deployment):
 			if popp in provider_popps:
 				continue
 			vol_popp[popp] += deployment['ug_to_vol'][ug]
+			try:
+				popp_to_ug[popp].append(ug)
+			except KeyError:
+				popp_to_ug[popp] = [ug]
 
 	## Maximum volume a peer should be expected to handle
 	max_peer_volume = np.max(list([v for popp,v in vol_best.items() if popp not in provider_popps]))
@@ -124,6 +131,26 @@ def get_link_capacities(deployment):
 			print("popp {} will be inundated {} vs {}".format(mf,anycast_vol_mapping[mf], link_capacities[mf]))
 			exit(0)
 	####
+
+	# poi = ('miami','4230')
+	# next_bests = {}
+	# ingress_priorities = deployment['ingress_priorities']
+	# print("Popp of interest: {}, LC: {}, vol popp {}, vol best {}".format(
+	# 	poi, link_capacities[poi], vol_popp[poi], vol_best[poi]))
+	# print(np.unique([ug_to_vol[ug] for ug in popp_to_ug[poi]], return_counts=True))
+	# for ug in popp_to_ug[poi]:
+	# 	ranked_prefs = sorted(ingress_priorities[ug].items(), key = lambda el : el[1])
+	# 	print("UG {} ({}), perfs {}, so would likely dip to {}".format(
+	# 		ug,round(ug_to_vol[ug]), ranked_prefs, ranked_prefs[1][0]))
+	# 	try:
+	# 		next_bests[ranked_prefs[1][0]] += ug_to_vol[ug]
+	# 	except KeyError:
+	# 		next_bests[ranked_prefs[1][0]] = ug_to_vol[ug]
+	# print(next_bests)
+
+	# for prov in provider_popps:
+	# 	print("Provider popp {}, LC: {}".format(prov,link_capacities[prov]))
+	# exit(0)
 
 	if True:
 		import matplotlib.pyplot as plt
@@ -436,8 +463,8 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
-	# considering_pops = ['miami', 'atlanta']
+	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
@@ -446,6 +473,11 @@ def load_actual_deployment():
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
 			n_users_per_peer=300)
+
+		## add sub-ms latency noise to arbitrarily break ties
+		for ug in ug_perfs:
+			for popp,lat in ug_perfs[ug].items():
+				ug_perfs[ug][popp] = lat + .1 * np.random.uniform()
 
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
@@ -464,6 +496,7 @@ def load_actual_deployment():
 			provider_popps.append((pop,peer))
 
 		ugs = sorted(list(ug_perfs))
+		np.random.shuffle(ugs)
 		popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 		print("{} popps, {} ugs".format(len(popps), len(ugs)))
 		provider_popps = get_intersection(provider_popps, popps)
@@ -484,7 +517,7 @@ def load_actual_deployment():
 
 
 		last_r = 100000
-		max_n_iter = 10000
+		max_n_iter = 1000
 		end = False
 		_iter = 0
 		while not end:
@@ -514,8 +547,13 @@ def load_actual_deployment():
 			
 			if _iter == max_n_iter:
 				break
+				
+			if _iter > 10 and last_r <= this_r:
+				break
+
 			last_r = copy.copy(this_r)
 			_iter += 1
+
 		# Normalize
 		max_vol = np.max(list(ug_to_vol.values()))
 		for ug in ug_to_vol:

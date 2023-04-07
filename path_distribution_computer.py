@@ -36,7 +36,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		## important that every worker has the same lbx
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
-		self.lbx = np.linspace(-1*MAX_LATENCY * max_vol / total_deployment_volume, 0,num=LBX_DENSITY)
+
+		min_lbx = -1 * NO_ROUTE_LATENCY * 10 * max_vol / total_deployment_volume
+		max_lbx = 0
+
+		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
 		self.big_lbx = np.zeros((LBX_DENSITY, len(self.whole_deployment_ugs)))
 		for i in range(len(self.whole_deployment_ugs)):
 			self.big_lbx[:,i] = copy.copy(self.lbx)
@@ -147,11 +151,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.user_px = np.zeros((len(self.lbx), self.n_ug))
 		self.ingress_px = np.zeros((self.n_popp, self.n_ug))
 		self.p_link_fails = np.zeros(self.n_popp)
+		self.link_failure_severities = np.zeros(self.n_popp)
 		self.user_ip_cache = {
 			'init_ip': None,
 			'default_px': copy.copy(self.user_px),
 			'ingress_px': copy.copy(self.ingress_px),
 			'p_link_fails': copy.copy(self.p_link_fails),
+			'link_failure_severities': copy.copy(self.link_failure_severities),
 		}
 
 	def latency_benefit(self, a, **kwargs):
@@ -163,16 +169,25 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print(tuple(a_effective.astype(bool).flatten()))
 		# print(tuple(remeasure_a.astype(bool).flatten()))
 		remeasure = False
-		if remeasure_a is not None:
-			if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
-				remeasure = True
-				print("\n\n\nREMEASURING\n\n\n")
+		if verb:
+			try:
+				remeasure_a = pickle.load(open('remeasure_a.pkl','rb'))
+				if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
+					remeasure = True
+					print("\n\n\nREMEASURING\n\n\n")
+			except:
+				pass
+
+		
 		if not kwargs.get('plotit') and not verb:
 			try:
 				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
 				return ret
 			except KeyError:
 				pass
+
+		USER_OF_INTEREST = None
+		WORKER_OF_INTEREST = None
 
 
 		timers = {
@@ -227,18 +242,23 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if self.with_capacity:
 				self.ingress_px = copy.copy(self.user_ip_cache['default_ingress_px'])
 				self.p_link_fails = copy.copy(self.user_ip_cache['p_link_fails'])
+				self.link_failure_severities = copy.copy(self.user_ip_cache['link_failure_severities'])
 		else:
 			ug_inds_to_loop = np.arange(self.n_ug)
+		changed_popps = {} # notes popps for which I need to recompute p link fails
 		if len(ug_inds_to_loop) > 0:
 			if self.with_capacity:
+				tmp = copy.copy(self.ingress_px)
 				self.ingress_px[:,ug_inds_to_loop] = 0
+				for poppi,_ in zip(*np.where(tmp != self.ingress_px)):
+					changed_popps[poppi] = None
+
 
 		if self.with_capacity:
 			## holds P(ingress) for each user
 			vol_x = self.vol_x
 
 			all_pref_inds = np.arange(self.n_prefixes)
-			changed_popps = {} # notes popps for which I need to recompute p link fails
 			recalc_popps = {} # tracks popps with new p link failure probability
 			for ui in ug_inds_to_loop:
 				all_pv_i = np.where(p_mat[:,:,ui])
@@ -250,6 +270,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if len(all_pv) == 1:
 					_, _, p, poppi = all_pv[0]
 					self.ingress_px[poppi, ui] += p
+					changed_popps[poppi] = None 
 				else:
 					all_pv = sorted(all_pv,key=lambda el : el[1])
 					running_probs = np.zeros((self.n_prefixes))
@@ -271,7 +292,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						if max_prob == 0 : continue
 
 						self.ingress_px[poppi, ui] += max_prob
-						changed_popps[poppi] = None
+						changed_popps[poppi] = None 
 			timers['capacity_1'] = time.time()
 			# if verb:
 			# 	for poppi, ui in zip(*np.where(self.ingress_px)):
@@ -285,10 +306,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				definitely_here = 0
 				for ui in ug_prob_vols_this_ingress_i:
 					# Model user as bernoulli on this ingress
-					if self.ingress_px[ingress_i, ui] == 1:
+					if self.ingress_px[ingress_i, ui] >= .99:
 						definitely_here += self.ug_vols[ui]
+						continue
 					include_in_px.append(ui)
 				n_nontrivial_ugs = len(include_in_px)
+				severity = 0
 				if n_nontrivial_ugs > 0:
 					ug_prob_vols_this_ingress = np.zeros((len(self.vol_x), n_nontrivial_ugs))
 					tmpind = 0
@@ -301,24 +324,67 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						ug_prob_vols_this_ingress)
 					x_vol_this_ingress = x_vol_this_ingress.flatten()
 					p_vol_this_ingress = p_vol_this_ingress.flatten()
-				x_vol_this_ingress += definitely_here
-
+					x_vol_this_ingress += definitely_here
+					new_p = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
+					if new_p > 0:
+						severity = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]] * \
+							x_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
+				else:
+					x_vol_this_ingress = definitely_here
+					p_vol_this_ingress = 1
+					new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
+					if new_p > 0:
+						severity = x_vol_this_ingress - self.link_capacities[ingress_i]
 				## Doesn't this negate my ability to split across UGs???? ughghghghghg
 				# will probably have to do main -> compute prob -> return -> combine prob -> compress -> send to workers
 				# ~or~ pretend every link is 1/n_workers capacity and shuffle users
 				# ~or~ group all users with similar reachabilities in the same worker
 				old_p = self.p_link_fails[ingress_i]
-				new_p = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
 				if old_p != new_p:
 					recalc_popps[ingress_i] = None
 				self.p_link_fails[ingress_i] = new_p
-			
+				self.link_failure_severities[ingress_i] = severity
+
+			if verb:
+				for ingress_i in np.where(self.p_link_fails)[0]:
+					self.print("{} Ingress {} ({}) fails with probability {}, users {}".format(self.worker_i,ingress_i, self.popps[ingress_i],
+					 self.p_link_fails[ingress_i], np.where(self.ingress_px[ingress_i,:] > .1)[0]))
+					self.print(np.where(self.ingress_px[ingress_i,:]))
+					whole_deployment_uis = [self.whole_deployment_ug_to_ind[self.ugs[ui]] for ui in np.where(self.ingress_px[ingress_i,:])[0]]
+					self.print("whole deployment uis {} ".format(whole_deployment_uis))
+					self.print("severity is {}".format(self.link_failure_severities[ingress_i]))
+					
+					ug_prob_vols_this_ingress_i = np.where(self.ingress_px[ingress_i,:] > .1)[0]
+					include_in_px = []
+					definitely_here = 0
+					for ui in ug_prob_vols_this_ingress_i:
+						# Model user as bernoulli on this ingress
+						if self.ingress_px[ingress_i, ui] >= .99:
+							definitely_here += self.ug_vols[ui]
+							continue
+						include_in_px.append(ui)
+					n_nontrivial_ugs = len(include_in_px)
+					if n_nontrivial_ugs > 0:
+						ug_prob_vols_this_ingress = np.zeros((len(self.vol_x), n_nontrivial_ugs))
+						tmpind = 0
+
+						for ui in include_in_px:
+							ug_prob_vols_this_ingress[self.ui_to_vol_i[ui], tmpind] = self.ingress_px[ingress_i, ui]
+							ug_prob_vols_this_ingress[0, tmpind] = 1 - self.ingress_px[ingress_i, ui]
+							tmpind += 1
+						x_vol_this_ingress, p_vol_this_ingress = self.pdf_sum_function(self.big_vol_x[:,0:n_nontrivial_ugs],
+							ug_prob_vols_this_ingress)
+						x_vol_this_ingress = x_vol_this_ingress.flatten()
+						p_vol_this_ingress = p_vol_this_ingress.flatten()
+						x_vol_this_ingress += definitely_here
+					else:
+						x_vol_this_ingress = definitely_here
+						p_vol_this_ingress = 1
+						new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
 
 
-			# if verb:
-			# 	for ingress_i in np.where(self.p_link_fails)[0]:
-			# 		print("Ingress {} fails with probability {}".format(ingress_i,
-			# 		 self.p_link_fails[ingress_i]))
+					self.print("Ingress capacity is {} while users contribute {}, prob {}".format(self.link_capacities[ingress_i],
+						x_vol_this_ingress,p_vol_this_ingress))
 
 		
 			timers['capacity_2'] = time.time()
@@ -333,6 +399,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if len(ug_inds_to_loop) > 0:
 			self.user_px[:,ug_inds_to_loop] = 0
 
+		
+
 		timers['capacity_4'] = time.time()
 
 		lb_multiplier_link_failure = self.get_limited_cap_latency_multiplier()
@@ -341,42 +409,45 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for ui in ug_inds_to_loop:
 			all_pv_i = np.where(p_mat[:,:,ui])
 			## combine benefit with bernoulli link failure
-			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi]) \
+			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
+				self.link_failure_severities[poppi]) \
 				for poppi,prefj in zip(*all_pv_i)]
+			if ui == USER_OF_INTEREST and self.worker_i == WORKER_OF_INTEREST and verb and remeasure:
+				self.print(all_pv)
 			if len(all_pv) == 0:
 				# this user has no paths
 				continue
 			elif len(all_pv) == 1:
-				_, lb, p, plf = all_pv[0]
+				_, lb, p, plf, lfs = all_pv[0]
 				lbx_i = np.where(lb - lbx <= 0)[0][0]
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
-					lb_failure = lb * lb_multiplier_link_failure
+					lb_failure = lb * lb_multiplier_link_failure * (1 + lfs)
 					limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
 					self.user_px[limited_cap_lbxi, ui] += p * plf
 			else:
 				## Check to see if it's a trivial calculation
-				found_trivial = False
-				min_by_pref, max_by_pref = NO_ROUTE_LATENCY*np.ones(self.n_prefixes), -NO_ROUTE_LATENCY*np.ones(self.n_prefixes)
-				prefs = []
-				for pref_j, lb, p, plf in all_pv:
-					min_by_pref[pref_j] = np.minimum(min_by_pref[pref_j],lb)
-					max_by_pref[pref_j] = np.maximum(max_by_pref[pref_j],lb)
-					prefs.append(pref_j)
-				for pref_j in set(prefs):
-					if min_by_pref[pref_j] >= np.max(np.delete(max_by_pref, pref_j)):
-						### singleton benefit at this benefit
-						lb = max_by_pref[pref_j]
-						lbx_i = np.where(lb - lbx <= 0)[0][0]
-						if plf > 0:
-							lb_failure = lb * lb_multiplier_link_failure
-							limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
-							self.user_px[limited_cap_lbxi, ui] += plf
-						self.user_px[lbx_i, ui] += 1.0 - plf
-						found_trivial = True
-						break
-				if found_trivial: 
-					continue
+				# found_trivial = False
+				# min_by_pref, max_by_pref = NO_ROUTE_LATENCY*np.ones(self.n_prefixes), -NO_ROUTE_LATENCY*np.ones(self.n_prefixes)
+				# prefs = []
+				# for pref_j, lb, p, plf, lfs in all_pv:
+				# 	min_by_pref[pref_j] = np.minimum(min_by_pref[pref_j],lb)
+				# 	max_by_pref[pref_j] = np.maximum(max_by_pref[pref_j],lb)
+				# 	prefs.append(pref_j)
+				# for pref_j in set(prefs):
+				# 	if min_by_pref[pref_j] >= np.max(np.delete(max_by_pref, pref_j)):
+				# 		### singleton benefit at this benefit
+				# 		lb = max_by_pref[pref_j]
+				# 		lbx_i = np.where(lb - lbx <= 0)[0][0]
+				# 		if plf > 0:
+				# 			lb_failure = lb * lb_multiplier_link_failure * (1 + lfs)
+				# 			limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
+				# 			self.user_px[limited_cap_lbxi, ui] += plf
+				# 		self.user_px[lbx_i, ui] += 1.0 - plf
+				# 		found_trivial = True
+				# 		break
+				# if found_trivial: 
+				# 	continue
 
 				all_pv = sorted(all_pv,key=lambda el : el[1])
 				running_probs = np.zeros((self.n_prefixes))
@@ -387,7 +458,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					running_probs[pref_j] = 1 
 
 				for i in range(1,len(all_pv)):
-					pref_j, lb, p, plf = all_pv[i]
+					pref_j, lb, p, plf, lfs = all_pv[i]
 
 					# calculate prob(max latency benefit)
 					# we calculate this iteratively, from the smallest to the largest value
@@ -401,9 +472,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					lbx_i = np.where(lb - lbx <= 0)[0][0]
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
-						lb_failure = lb * lb_multiplier_link_failure
+						lb_failure = lb * lb_multiplier_link_failure * ( 1 + lfs )
 						limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
 						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
+
+
+		if remeasure and verb and self.worker_i == WORKER_OF_INTEREST:
+			self.print(ug_inds_to_loop)
+			for bi,ui in zip(*np.where(self.user_px)):
+				p = self.user_px[bi,ui]
+				if p < .99 and p > .001:
+					self.print("UI {} experiences benefit index {} with prob {}".format(ui,bi,p))
+
 
 		for ui in ug_inds_to_loop:
 			if np.sum(self.user_px[:,ui]) == 0:
@@ -421,6 +501,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if self.with_capacity:
 				self.user_ip_cache['default_ingress_px'] = copy.copy(self.ingress_px)
 				self.user_ip_cache['p_link_fails'] = copy.copy(self.p_link_fails)
+				self.user_ip_cache['link_failure_severities'] = copy.copy(self.link_failure_severities)
 
 		if subset_ugs:
 			px = self.user_px[:,which_ugs_i]
@@ -454,6 +535,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
+
+	def print(self, s):
+		print("Worker {} -- {}".format(self.worker_i, s))
 
 	def check_for_commands(self):
 		# print("checking for commands in worker {}".format(self.worker_i))

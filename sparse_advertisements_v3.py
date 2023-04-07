@@ -18,7 +18,10 @@ from anyopt import Anyopt_Adv_Solver
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from worker_comms import Worker_Manager
 
-from eval_latency_failure import plot_lats_from_adv
+try:
+	from eval_latency_failure import plot_lats_from_adv
+except ImportError:
+	pass
 
 from sklearn.mixture import GaussianMixture
 from sklearn.exceptions import ConvergenceWarning
@@ -96,7 +99,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		for k in ['actual_nonconvex_objective', 'advertisements', 'effective_objectives', 
 			'pseudo_objectives', 'grads', 'cost_grads', 'l_benefit_grads', 'res_benefit_grads',
 			'path_likelihoods', 'EL_difference', 'resilience_benefit', 'latency_benefit',
-			'gt_latency_benefit','gt_resilience_benefit', 'effective_gammas']:
+			'gt_latency_benefit','gt_resilience_benefit', 'effective_gammas', 'link_utilizations']:
 			self.metrics[k] = []
 
 	def gradients(self, *args, **kwargs):
@@ -191,7 +194,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def latency_benefit(self, *args, **kwargs):
 		self.lb_args_queue.append((copy.deepcopy(args),copy.deepcopy(kwargs)))
-		if kwargs.get('retnow', False):
+		if kwargs.get('retnow', False): # we want an immediate calculation
 			return self.flush_latency_benefit_queue(**kwargs)[0]
 
 	def get_gamma(self):
@@ -202,14 +205,17 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
 		tmp = np.ones(a.shape)
-		self.latency_benefit_fn(a, **kwargs)
+		cpkwargs = copy.deepcopy(kwargs)
+		cpkwargs['retnow'] = False
+		self.latency_benefit_fn(a, **cpkwargs)
 		for popp in self.popps:
 			# we don't know for sure where users are going
 			# so we have to compute over all users
 			tmp[self.popp_to_ind[popp],:] = 0
-			self.latency_benefit_fn(a * tmp, **kwargs)
+			self.latency_benefit_fn(a * tmp, **cpkwargs)
 			tmp[self.popp_to_ind[popp],:] = 1
 		rets = self.flush_latency_benefit_queue()
+
 		benefit = 0
 		base_b, _ = rets[0]
 		poppi=0
@@ -304,7 +310,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		latency_benefit, u = self.latency_benefit_fn(threshold_a(a), **kwargs)
 
 		if self.using_resilience_benefit:
-			resilience_benefit = self.resilience_benefit_fn(a)
+			resilience_benefit = self.resilience_benefit_fn(a, **kwargs)
 		else:
 			resilience_benefit = 0
 
@@ -726,13 +732,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
 		self.gradient_support_settings = {
-			'support_size': 200, # setting this value to size(a) turns it off
+			'support_size': 500, # setting this value to size(a) turns it off
 		}
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
 			'really_friggin_small': 5,
-			'actual': 15,
+			'actual': 5,
 		}.get(DPSIZE, 1)
 
 	def apply_prox_l1(self, w_k):
@@ -924,7 +930,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		total_n_grad_calc = self.gradient_support_settings['support_size']
 		
-		pct_explore = 20 # pct of gradient calculation budget dedicated to exploring
+		pct_explore = 60 # pct of gradient calculation budget dedicated to exploring
 		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
 		# number of gradient calcs that re-calc previously high gradients
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
@@ -993,8 +999,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		for poppi, rand_outer_prefix in zip(rand_popp_choices,random_prefix_choices):
 			popp = self.popps[poppi] # popp ij testing gradient is poppi,rand_outer_prefix
+
+			# random kill popp
 			this_popp_random_kill = np.random.choice(np.arange(self.n_popp),
-				 p=self.popp_sample_probs[poppi,:]) # random kill popp
+				 p=self.popp_sample_probs[poppi,:]) 
 			rand_popp = self.popps[this_popp_random_kill]
 			if (popp, rand_popp, rand_outer_prefix) in calls: continue
 			
@@ -1048,7 +1056,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# 		advertisement[self.popp_to_ind[call_popp],rand_outer_prefix]))
 			# 	print("before_heavisside {} after_heavisside {}, grad: {}".format(
 			# 		before_heavisside,after_heavisside,this_grad))
-			grad_rb[poppi,rand_outer_prefix] += this_grad
+			grad_rb[poppi,rand_outer_prefix] += this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]]
 
 			ind += 3
 
@@ -1062,9 +1070,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return a
 
 	def make_plots(self, *args, **kwargs):
-		plt.rcParams["figure.figsize"] = (10,17)
+		plt.rcParams["figure.figsize"] = (10,20)
 		plt.rcParams.update({'font.size': 14})
-		f,ax = plt.subplots(7,2)
+		f,ax = plt.subplots(8,2)
 
 		soln = self.get_last_advertisement()
 		from eval_latency_failure import plot_lats_from_adv
@@ -1129,6 +1137,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		ax[6,0].plot(all_gammas)
 		ax[6,0].set_ylabel("Effective Gamma")
 
+		try:
+			all_link_utilizations = np.array(self.metrics['link_utilizations'])
+			print(all_link_utilizations.shape)
+			for poppi in range(self.n_popps):
+				ax[7,0].plot(all_link_utilizations[:,poppi])
+			ax[7,0].set_ylabel("Link Utilizations")
+		except:
+			pass
+
 		save_fig('convergence_over_iterations.pdf')
 		plt.clf()
 		plt.close()
@@ -1162,7 +1179,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		a = np.copy(threshold_a(current_advertisement))
 		current_benefit,_ = self.latency_benefit_fn(a, retnow=True)
 		awful_benefit = -1000000
-		uncertainty_alpha = .05
+		uncertainty_alpha = .25
 		# f,ax = plt.subplots(5)
 		# self.plti=0
 
@@ -1370,16 +1387,16 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							a[flip] = 1 - a[flip]
 						_,u = self.latency_benefit_fn(a, retnow=True)
 						inds = np.where(u[1]>.01)[0]
-						print("explore methodology best flips: {}".format(m))
-						for i in inds:
-							print("LB {} with prob {}".format(round(u[0][i],2), round(u[1][i],2)))
+						# print("explore methodology best flips: {}".format(m))
+						# for i in inds:
+						# 	print("LB {} with prob {}".format(round(u[0][i],2), round(u[1][i],2)))
 						if tuple(a.flatten()) in self.measured:
 							print("Re-measuring {}".format(a))
 							print(potential_value_measure[m][best_flips[m]])
 							pickle.dump(a,open('remeasure_a.pkl','wb'))
 							print('woops')
 							print(np.where(self.parent_tracker[7,:,:]))
-							_,u = self.latency_benefit_fn(a, plotit=True,retnow=True)
+							_,u = self.latency_benefit_fn(a, verbose_workers=True,retnow=True)
 							print("This flips had value: {}".format(value_func(u,force=m)))
 							print(u)
 							exit(0)
@@ -1430,7 +1447,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['effective_gammas'].append(self.get_gamma())
 		self.metrics['actual_nonconvex_objective'].append(self.measured_objective(advertisement, verb=True))
 		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement))
-		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement))
+		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
+			store_metrics=True))
 
 		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True)
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
@@ -1628,7 +1646,6 @@ def main():
 		sas.make_plots()
 		soln = sas.get_last_advertisement()
 
-		from eval_latency_failure import plot_lats_from_adv
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
 
 

@@ -7,11 +7,12 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 
 MIN_LATENCY = 1
 MAX_LATENCY = 300
-LIMITED_CAP_LATENCY_MULTIPLIER = 4
+LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
 GRAD_CLIP_VAL = 10
 NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
-LBX_DENSITY = MAX_LATENCY # number of points to discretize benefit into
+# LBX_DENSITY = MAX_LATENCY # number of points to discretize benefit into
+LBX_DENSITY = int(NO_ROUTE_LATENCY)
 
 BASE_SOCKET = 31427
 
@@ -37,7 +38,7 @@ N_WORKERS = {
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)
-RESILIENCE_DIFFICULTY = 'hard'
+RESILIENCE_DIFFICULTY = 'medium'
 
 
 

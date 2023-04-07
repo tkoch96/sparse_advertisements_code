@@ -109,7 +109,7 @@ class Optimal_Adv_Wrapper:
 
 	def update_deployment(self, deployment):
 		self.deployment = deployment
-		self.ugs = sorted(list(deployment['ugs']))
+		self.ugs = deployment['ugs']
 		self.n_ug = len(self.ugs)
 		self.whole_deployment_ugs = deployment['whole_deployment_ugs']
 		self.whole_deployment_n_ug = len(self.whole_deployment_ugs)
@@ -147,15 +147,16 @@ class Optimal_Adv_Wrapper:
 		self.link_capacities_by_popp = deployment['link_capacities']
 
 		try:
-			n_workers = self.get_n_workers()
-		except AttributeError:
+			self.worker_i
 			### Worker thread, need to divide capacities by the number of workers
 			### where appropriate
 			for popp, cap in self.link_capacities_by_popp.items():
 				if popp in self.provider_popps:
 					self.link_capacities_by_popp[popp] = cap / N_WORKERS
+		except AttributeError:
+			pass
 
-		self.link_capacities = {self.popp_to_ind[popp]: deployment['link_capacities'][popp] for popp in self.popps}
+		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
 		self.link_capacities_arr = np.zeros(self.n_popp)
 		for poppi, cap in self.link_capacities.items():
 			self.link_capacities_arr[poppi] = cap
@@ -243,7 +244,17 @@ class Optimal_Adv_Wrapper:
 						backup = 1
 					else:
 						# should multiply this by probability of user using this ingress anyway
-						backup = np.minimum(1/(self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]+.00001),1)
+						delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
+						if delta > 50:
+							backup = .01
+						elif delta > 30:
+							backup = .1
+						elif delta > 10:
+							backup = .3
+						elif delta > 5:
+							backup = .5
+						else:
+							backup = 1
 					try:
 						self.rb_backups[ug,popp1][popp2] = backup
 					except KeyError:
@@ -379,16 +390,25 @@ class Optimal_Adv_Wrapper:
 				except KeyError:
 					ingress_to_users[ingress_i] = [ugi]
 			cap_violations = link_volumes > self.link_capacities_arr
+
+			if kwargs.get('store_metrics'):
+				self.metrics['link_utilizations'].append(link_volumes / self.link_capacities_arr)
+			# poppi = self.popp_to_ind[('atlanta','3257')]
+			# print("PoPP {} ({}) summary".format(self.popps[poppi], poppi))
+			# print("Users {} using this ingress".format(ingress_to_users.get(poppi)))
+
 			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
-				print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
-				print(np.where(cap_violations))
+				# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
 				for poppi in np.where(cap_violations)[0]:
-					print("PoPP {} inundated".format(self.popps[poppi]))
+					print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
+						kwargs.get('failing'), 
+						link_volumes[poppi] - self.link_capacities_arr[poppi]))
+					print("Users {} now using this ingress".format(ingress_to_users[poppi]))
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
-		if self.verbose and len(np.where(cap_violations)[0]) > 0:
-			print([round(el,2) for el in user_latencies])
+		# if self.verbose and len(np.where(cap_violations)[0]) > 0:
+		# 	print([round(el,2) for el in user_latencies])
 		return user_latencies
 
 	def benefit_from_user_latencies(self, user_latencies, ugs):
@@ -416,7 +436,7 @@ class Optimal_Adv_Wrapper:
 			tmp[self.popp_to_ind[popp],:] = 0
 
 			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-				ugs=these_ugs)
+				ugs=these_ugs, failing=popp)
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well
