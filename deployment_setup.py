@@ -69,8 +69,8 @@ def get_link_capacities(deployment):
 	# problem is to solve
 	EASYNESS_MULT = { 
 		'easy': 1,
-		'medium': .5,
-		'hard': .25,
+		'medium': 1.5,
+		'hard': .1,
 	}[RESILIENCE_DIFFICULTY]
 
 	popps = deployment['popps']
@@ -111,7 +111,7 @@ def get_link_capacities(deployment):
 		else:
 			## Set capacity as some baseline + resilience
 			## resilience should be proportional to max peer volume
-			link_capacities[popp] = baseline_transit_volume + max_peer_volume
+			link_capacities[popp] = baseline_transit_volume
 
 	### Sanity check to make sure the problem isn't ill-posed, make sure default
 	# deployment has sufficient capacity
@@ -138,15 +138,17 @@ def get_link_capacities(deployment):
 	# print("Popp of interest: {}, LC: {}, vol popp {}, vol best {}".format(
 	# 	poi, link_capacities[poi], vol_popp[poi], vol_best[poi]))
 	# print(np.unique([ug_to_vol[ug] for ug in popp_to_ug[poi]], return_counts=True))
-	# for ug in popp_to_ug[poi]:
-	# 	ranked_prefs = sorted(ingress_priorities[ug].items(), key = lambda el : el[1])
-	# 	print("UG {} ({}), perfs {}, so would likely dip to {}".format(
-	# 		ug,round(ug_to_vol[ug]), ranked_prefs, ranked_prefs[1][0]))
-	# 	try:
-	# 		next_bests[ranked_prefs[1][0]] += ug_to_vol[ug]
-	# 	except KeyError:
-	# 		next_bests[ranked_prefs[1][0]] = ug_to_vol[ug]
-	# print(next_bests)
+	# # for ug in popp_to_ug[poi]:
+	# # 	ranked_prefs = sorted(ingress_priorities[ug].items(), key = lambda el : el[1])
+	# # 	if len(ranked_prefs) == 1:
+	# # 		continue
+	# # 	print("UG {} ({}), perfs {}, so would likely dip to {}".format(
+	# # 		ug,round(ug_to_vol[ug]), ranked_prefs, ranked_prefs[1][0]))
+	# # 	try:
+	# # 		next_bests[ranked_prefs[1][0]] += ug_to_vol[ug]
+	# # 	except KeyError:
+	# # 		next_bests[ranked_prefs[1][0]] = ug_to_vol[ug]
+	# # print(next_bests)
 
 	# for prov in provider_popps:
 	# 	print("Provider popp {}, LC: {}".format(prov,link_capacities[prov]))
@@ -463,8 +465,8 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
-	considering_pops = ['miami', 'atlanta']
+	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):

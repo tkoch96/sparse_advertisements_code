@@ -245,19 +245,19 @@ def plot_lats_from_adv(sas, advertisement, fn):
 				if actual_perf == NO_ROUTE_LATENCY:
 					inundated = True
 				metrics['popp_failures'].append((best_perf - actual_perf, ug_vols[ug]))
-			if inundated and i==0:
-				recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
-				these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
-					call[0] == recent_iter]
-				print("{} recent grad calls".format(len(these_rb_calls)))
-				recent_rb = these_rb_calls[-30:]
-				recent_lb = sas.all_lb_calls_results[-1]
-				# iter poppi popp prefix rbgrad lbgrad
-				recent_rb = [(i,poppi,sas.popps[poppi],prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2),
-					advertisement[poppi,prefi]) for i,poppi,prefi,rbgrad in 
-					recent_rb]
-				print("Popp {} fail causes inundation, recent resilience gradient calls were : {}".format(
-					popp, recent_rb))
+			# if inundated and i==0:
+			# 	recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
+			# 	these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
+			# 		call[0] == recent_iter]
+			# 	print("{} recent grad calls".format(len(these_rb_calls)))
+			# 	recent_rb = these_rb_calls[-30:]
+			# 	recent_lb = sas.all_lb_calls_results[-1]
+			# 	# iter poppi popp prefix rbgrad lbgrad
+			# 	recent_rb = [(i,poppi,sas.popps[poppi],prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2),
+			# 		advertisement[poppi,prefi]) for i,poppi,prefi,rbgrad in 
+			# 		recent_rb]
+			# 	print("Popp {} fail causes inundation, recent resilience gradient calls were : {}".format(
+			# 		popp, recent_rb))
 
 
 		all_differences = metrics['popp_failures']
