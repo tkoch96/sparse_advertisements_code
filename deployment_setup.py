@@ -69,7 +69,7 @@ def get_link_capacities(deployment):
 	# problem is to solve
 	EASYNESS_MULT = { 
 		'easy': 1,
-		'medium': 1.5,
+		'medium': 2,
 		'hard': .1,
 	}[RESILIENCE_DIFFICULTY]
 
@@ -174,6 +174,8 @@ def get_link_capacities(deployment):
 
 	
 		plt.savefig("figures/link_capacity_summary.pdf")
+		plt.clf()
+		plt.close()
 	return link_capacities
 
 def cluster_actual_users(**kwargs):
@@ -465,8 +467,8 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
-	# considering_pops = ['miami', 'atlanta']
+	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
@@ -701,7 +703,7 @@ def get_random_deployment_by_size(problem_size):
 	n_providers = sizes['n_providers']
 	for pop in pops:
 		some_peers = np.random.choice(peers, size=np.random.randint(sizes['min_peerings_per_pop'],
-			sizes['max_peerings_per_pop']),replace=False)
+			sizes['max_peerings_per_pop']), replace=False)
 		provs = [p for p in some_peers if p < n_providers]
 		if len(provs) == 0: # ensure at least one provider per pop
 			some_peers = np.append(some_peers, [np.random.randint(n_providers)])

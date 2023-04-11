@@ -397,13 +397,13 @@ class Optimal_Adv_Wrapper:
 			# print("PoPP {} ({}) summary".format(self.popps[poppi], poppi))
 			# print("Users {} using this ingress".format(ingress_to_users.get(poppi)))
 
-			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
-				# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
-				for poppi in np.where(cap_violations)[0]:
-					print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
-						kwargs.get('failing'), 
-						link_volumes[poppi] - self.link_capacities_arr[poppi]))
-					print("Users {} now using this ingress".format(ingress_to_users[poppi]))
+			# if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
+			# 	# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
+			# 	for poppi in np.where(cap_violations)[0]:
+			# 		print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
+			# 			kwargs.get('failing'), 
+			# 			link_volumes[poppi] - self.link_capacities_arr[poppi]))
+			# 		print("Users {} now using this ingress".format(ingress_to_users[poppi]))
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY

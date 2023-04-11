@@ -26,6 +26,7 @@ def large_logical_and(arr1,arr2):
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def __init__(self, worker_i):
 		self.worker_i = worker_i
+		self.recent_lbx_history = []
 		args, kwargs = self.start_connection()
 		super().__init__(*args, **kwargs)
 		self.calculate_user_latency_by_peer()
@@ -37,7 +38,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
 
-		min_lbx = -1 * NO_ROUTE_LATENCY * 10 * max_vol / total_deployment_volume
+		min_lbx = -1 * NO_ROUTE_LATENCY * 2 * max_vol / total_deployment_volume
 		max_lbx = 0
 
 		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
@@ -55,6 +56,24 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter = 0
 		print('started in worker {}'.format(self.worker_i))
 		self.run()
+
+	def update_lbx(self):
+		## idea is to keep lbx centered in the region of interest
+		if len(self.recent_lbx_history) < 10000:
+			return
+		all_min_max = np.array(self.recent_lbx_history)
+		min_lbx = np.percentile(all_min_max[:,0], 1)
+		max_lbx = np.percentile(all_min_max[:,1], 99)
+		delta = max_lbx - min_lbx
+		wiggle = delta * .1
+		min_lbx = min_lbx - wiggle
+		max_lbx = np.minimum(0,max_lbx + wiggle)
+		print("New min: {}, new max: {}".format(min_lbx, max_lbx))
+		self.lbx = np.linspace(min_lbx, max_lbx, num=LBX_DENSITY)
+		self.big_lbx = np.zeros((LBX_DENSITY, len(self.whole_deployment_ugs)))
+		for i in range(len(self.whole_deployment_ugs)):
+			self.big_lbx[:,i] = copy.copy(self.lbx)
+		self.recent_lbx_history = []
 
 	def start_connection(self):
 		context = zmq.Context()
@@ -327,14 +346,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					x_vol_this_ingress += definitely_here
 					new_p = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
 					if new_p > 0:
-						severity = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]] * \
-							x_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
+						severity = np.sum(p_vol_this_ingress * x_vol_this_ingress)
 				else:
 					x_vol_this_ingress = definitely_here
 					p_vol_this_ingress = 1
 					new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
 					if new_p > 0:
-						severity = x_vol_this_ingress - self.link_capacities[ingress_i]
+						severity = x_vol_this_ingress
 				## Doesn't this negate my ability to split across UGs???? ughghghghghg
 				# will probably have to do main -> compute prob -> return -> combine prob -> compress -> send to workers
 				# ~or~ pretend every link is 1/n_workers capacity and shuffle users
@@ -406,6 +424,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		lb_multiplier_link_failure = self.get_limited_cap_latency_multiplier()
 
 		all_pref_inds = np.arange(self.n_prefixes)
+
+		min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
+
 		for ui in ug_inds_to_loop:
 			all_pv_i = np.where(p_mat[:,:,ui])
 			## combine benefit with bernoulli link failure
@@ -419,36 +440,25 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				continue
 			elif len(all_pv) == 1:
 				_, lb, p, plf, lfs = all_pv[0]
+
+				if lb > max_experienced_benefit:
+					max_experienced_benefit = lb
+				if lb < min_experienced_benefit:
+					min_experienced_benefit = lb
+
 				lbx_i = np.where(lb - lbx <= 0)[0][0]
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
-					lb_failure = lb * lb_multiplier_link_failure * (1 + lfs)
+					lb_failure = lb * lb_multiplier_link_failure * np.log2(1 + lfs)
+
+					if lb_failure > max_experienced_benefit:
+						max_experienced_benefit = lb
+					if lb_failure < min_experienced_benefit:
+						min_experienced_benefit = lb
+
 					limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
 					self.user_px[limited_cap_lbxi, ui] += p * plf
 			else:
-				## Check to see if it's a trivial calculation
-				# found_trivial = False
-				# min_by_pref, max_by_pref = NO_ROUTE_LATENCY*np.ones(self.n_prefixes), -NO_ROUTE_LATENCY*np.ones(self.n_prefixes)
-				# prefs = []
-				# for pref_j, lb, p, plf, lfs in all_pv:
-				# 	min_by_pref[pref_j] = np.minimum(min_by_pref[pref_j],lb)
-				# 	max_by_pref[pref_j] = np.maximum(max_by_pref[pref_j],lb)
-				# 	prefs.append(pref_j)
-				# for pref_j in set(prefs):
-				# 	if min_by_pref[pref_j] >= np.max(np.delete(max_by_pref, pref_j)):
-				# 		### singleton benefit at this benefit
-				# 		lb = max_by_pref[pref_j]
-				# 		lbx_i = np.where(lb - lbx <= 0)[0][0]
-				# 		if plf > 0:
-				# 			lb_failure = lb * lb_multiplier_link_failure * (1 + lfs)
-				# 			limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
-				# 			self.user_px[limited_cap_lbxi, ui] += plf
-				# 		self.user_px[lbx_i, ui] += 1.0 - plf
-				# 		found_trivial = True
-				# 		break
-				# if found_trivial: 
-				# 	continue
-
 				all_pv = sorted(all_pv,key=lambda el : el[1])
 				running_probs = np.zeros((self.n_prefixes))
 				running_probs[all_pv[0][0]] = all_pv[0][2]
@@ -459,6 +469,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 				for i in range(1,len(all_pv)):
 					pref_j, lb, p, plf, lfs = all_pv[i]
+
+					if lb > max_experienced_benefit:
+						max_experienced_benefit = lb
+					if lb < min_experienced_benefit:
+						min_experienced_benefit = lb
 
 					# calculate prob(max latency benefit)
 					# we calculate this iteratively, from the smallest to the largest value
@@ -472,10 +487,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					lbx_i = np.where(lb - lbx <= 0)[0][0]
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
-						lb_failure = lb * lb_multiplier_link_failure * ( 1 + lfs )
+						lb_failure = lb * lb_multiplier_link_failure * np.log2( 1 + lfs )
+
+						if lb_failure > max_experienced_benefit:
+							max_experienced_benefit = lb
+						if lb_failure < min_experienced_benefit:
+							min_experienced_benefit = lb
+
 						limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
 						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
 
+		self.recent_lbx_history.append((min_experienced_benefit, max_experienced_benefit))
 
 		if remeasure and verb and self.worker_i == WORKER_OF_INTEREST:
 			self.print(ug_inds_to_loop)
@@ -491,8 +513,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# no benefit means no path, so it's actually just the most 
 				# negative benefit we can give
 				self.user_px[0,ui] = 1
+
+
 		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
-		
 
 		## save calc cache for later if its not set
 		if self.user_ip_cache['init_ip'] is None:
@@ -590,6 +613,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.this_time_ip_cache = {}
 			self.init_user_px_cache()
 			self.calc_cache.clear_new_measurement_caches()
+			self.update_lbx()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
 			parents_on = data

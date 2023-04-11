@@ -51,6 +51,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			using_resilience_benefit=False, **kwargs):
 		super().__init__(*args, **kwargs)
 		# (hyper-) parameters
+
 		self.iter = 0
 		self.initialization = init
 		self.explore = explore
@@ -600,7 +601,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			metrics['latency_benefits']['sparse'].append(self.sparse_solution['latency_benefit'])
 			metrics['norm_penalties']['sparse'].append(self.sparse_solution['norm_penalty'])
 			metrics['prefix_cost']['sparse'].append(self.sparse_solution['prefix_cost'])
-
 			## Extremes
 			self.solve_extremes(verbose=verbose)
 			metrics['sparse_objective_vals']['maximal'].append(self.extreme['maximal_objective'])
@@ -1046,6 +1046,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			this_grad = self.heaviside_gradient(
 				before_heavisside, after_heavisside, 
 				advertisement[poppi,rand_outer_prefix])
+			this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]]
 			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
 
 			self.all_rb_calls_results[self.popp_to_ind[killed_popp]].append((self.iter,poppi, rand_outer_prefix, this_grad))
@@ -1056,7 +1057,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# 		advertisement[self.popp_to_ind[call_popp],rand_outer_prefix]))
 			# 	print("before_heavisside {} after_heavisside {}, grad: {}".format(
 			# 		before_heavisside,after_heavisside,this_grad))
-			grad_rb[poppi,rand_outer_prefix] += this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]]
+			grad_rb[poppi,rand_outer_prefix] += this_grad
 
 			ind += 3
 
@@ -1594,7 +1595,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			# if self.iter == 2:
+			# if self.iter >= 10:
 			# 	break
 
 		if self.verbose:
