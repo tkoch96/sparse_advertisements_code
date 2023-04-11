@@ -1595,7 +1595,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			# if self.iter >= 10:
+			# if self.iter >= 5:
 			# 	break
 
 		if self.verbose:

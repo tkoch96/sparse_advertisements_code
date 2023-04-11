@@ -47,11 +47,13 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity):
 			new_link_volume = all_new_link_volumes[poppi]
 
 			if new_link_volume <= new_link_capacity:
-				these_ugis = np.array([sas.ug_to_ind[ug] for ug in these_ugs])
 				user_latencies = sas.get_ground_truth_user_latencies(adv)
-				new_perfs = np.array([user_latencies[sas.ug_to_ind[ug]] for ug in these_ugs])
-				valid_solutions.append((prefi_set, new_perfs - pre_user_latencies[these_ugis],
-					sas.ug_vols[these_ugis], all_new_link_volumes))
+				if not any(user_latencies==NO_ROUTE_LATENCY):
+					these_ugis = np.array([sas.ug_to_ind[ug] for ug in these_ugs])
+					new_perfs = np.array([user_latencies[sas.ug_to_ind[ug]] for ug in these_ugs])
+					valid_solutions.append((prefi_set, new_perfs - pre_user_latencies[these_ugis],
+						sas.ug_vols[these_ugis], all_new_link_volumes))
+
 			adv[poppi,np.array(prefi_set)] = 1
 		# if len(valid_solutions) > 0:
 		# 	# greedily stop
@@ -75,19 +77,25 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity):
 	else:
 		best_solution = None
 
+	
 	return best_solution
 
-def assess_resilience_to_congestion(sas, adv, fn=None):
+def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 	## for painter/TIPSY
 	## assume each link is congested by X% (i.e., need to move X% of capacity's traffic off of it)
 	## see if there's a solution
 	## if there's a solution, do it and note the latency penalty compared to optimal
 
 	# return cdf of latency penalties, possibly as a function of X
-	
-	X_vals = [5,10,15,20,25,30,45,40,45,50]
 	metrics = {X:[] for X in X_vals}
 	required_link_caps = None
+
+	if solution == 'painter':
+		old_caps = copy.deepcopy(sas.link_capacities_by_popp)
+		deployment = sas.deployment
+		deployment['link_capacities'] = {popp:100000 for popp in sas.popps}
+		sas.update_deployment(deployment)
+
 	for X in X_vals:
 		_, pre_ug_catchments = sas.calculate_user_choice(adv)
 		for popp in sas.popps:
@@ -101,26 +109,23 @@ def assess_resilience_to_congestion(sas, adv, fn=None):
 			if soln is None:
 				print("Didn't get solution for popp {}, fn {}".format(popp,fn))
 				continue
-			metrics[X].append(np.sum(soln['latency_deltas']))
+			metrics[X] = metrics[X] + list(soln['latency_deltas'])
 			new_required_link_caps = soln['link_volumes']
 			if required_link_caps is None:
 				required_link_caps = new_required_link_caps
 			else:
 				update_capis = new_required_link_caps > required_link_caps
 				required_link_caps[update_capis] = new_required_link_caps[update_capis]
-	if fn is not None:
-		print(fn)
-		print(metrics)
-		f,ax = plt.subplots(1)
-		ax.plot(X_vals,[np.average(metrics[X]) for X in X_vals])
-		ax.set_xlabel("Total Latency Effect (ms)")
-		ax.set_ylabel("CDF of Cases")
-		plt.savefig(os.path.join('figures',fn))
-		plt.clf()
-		plt.close()
+
+	if solution == 'painter':
+		deployment['link_capacities'] = old_caps
+		sas.update_deployment(deployment)
 
 	link_capacities = {sas.popps[poppi]:required_link_caps[poppi][0] for poppi in range(sas.n_popps)}
-	return link_capacities
+	return {
+		'link_capacities': link_capacities,
+		'metrics': metrics,
+	}
 
 
 def popp_failure_latency_comparisons():
@@ -131,6 +136,7 @@ def popp_failure_latency_comparisons():
 	np.random.seed(31413)
 	metrics = {}
 	N_TO_SIM = 1
+	X_vals = [20]
 	gamma = 2
 	capacity = True
 
@@ -148,6 +154,7 @@ def popp_failure_latency_comparisons():
 		'deployment': {i:None for i in range(N_TO_SIM)},
 		'settings': {i:None for i in range(N_TO_SIM)},
 		'ug_to_vol': {i:None for i in range(N_TO_SIM)},
+		'resilience_to_congestion': {i:{k:[] for k in soln_types} for i in range(N_TO_SIM)},
 	}
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
@@ -176,7 +183,7 @@ def popp_failure_latency_comparisons():
 
 			## See which capacities are required for PAINTER
 			adv = sas.painter_solution['advertisement']
-			new_link_capacities = assess_resilience_to_congestion(sas, adv, fn=None)
+			new_link_capacities = assess_resilience_to_congestion(sas, adv, 'painter', X_vals)['link_capacities']
 
 			## Given these capacities, solve all the solutions
 			for popp in sas.popps:
@@ -197,8 +204,8 @@ def popp_failure_latency_comparisons():
 					print("No solution for {}".format(solution))
 					continue
 				print("{} {} ".format(solution,np.round(adv,2)))
-				new_link_capacities = assess_resilience_to_congestion(sas, adv, 
-					fn = "resilience_to_congestion--{}.pdf".format(solution))
+				m = assess_resilience_to_congestion(sas, adv, solution, X_vals)['metrics']
+				metrics['resilience_to_congestion'][random_iter][solution] = m
 
 				_, pre_ug_catchments = sas.calculate_user_choice(adv)
 				pre_user_latencies = sas.get_ground_truth_user_latencies(adv)
@@ -244,7 +251,7 @@ def popp_failure_latency_comparisons():
 	finally:
 		if wm is not None:
 			wm.stop_workers()
-	f,ax=plt.subplots(2,1)
+	f,ax=plt.subplots(3,1)
 	f.set_size_inches(6,12)
 
 	for solution in soln_types:
@@ -273,7 +280,17 @@ def popp_failure_latency_comparisons():
 
 			x,cdf_x = get_cdf_xy(list(zip(diffs,wts)), weighted=True)
 			ax[1].plot(x,cdf_x,label=solution)
+
+
+			m = metrics['resilience_to_congestion']
+			for X in X_vals:
+				x,cdf_x = get_cdf_xy(list([el for ri in range(N_TO_SIM) for el in m[ri][solution][X] ]))
+				ax[2].plot(x,cdf_x,label="{} Drain pct={}".format(solution,X))
+
+
 		except:
+			import traceback
+			traceback.print_exc()
 			continue
 
 	ax[0].legend(fontsize=8)
@@ -289,6 +306,13 @@ def popp_failure_latency_comparisons():
 	ax[1].set_ylabel("CDF of UGs")
 	ax[1].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 	ax[1].set_xlim([-50,0])
+
+	ax[2].set_xlabel("Latency Change (new - old) (ms)")
+	ax[2].set_ylabel("CDF of UGs")
+	ax[2].grid(True)
+	ax[2].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
+	# ax[2].set_xlim([0,150])
+	ax[2].legend(fontsize=8)
 
 	save_fig("popp_latency_failure_comparison_{}.pdf".format(DPSIZE))
 
