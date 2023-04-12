@@ -179,6 +179,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			'link_failure_severities': copy.copy(self.link_failure_severities),
 		}
 
+	def summarize_cache_size(self):
+		## 
+		for obj,nm in zip([self.user_ip_cache, self.calc_cache, self.this_time_ip_cache], 
+			['user ip', 'calc cache', 'this time ip']):
+			self.print("{} cache -- {} size".format(nm,round(len(pickle.dumps(obj))/1e6)))
+
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
 			benefits across all users."""
@@ -562,6 +568,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def print(self, s):
 		print("Worker {} -- {}".format(self.worker_i, s))
 
+	def check_clear_cache(self):
+		print("Current cache size is {}".format(len(self.calc_cache.all_caches['lb'])))
+		if len(self.calc_cache.all_caches['lb']) > 1000:
+			# order of lbx_density + n_popps*n_prefixes per entry
+			# self.print("Clearing calc cache, currently size {}".format(
+			# 	len(pickle.dumps(self.calc_cache))/1e6))
+			self.print("Clearing calc cache")
+			self.clear_new_meas_caches()
+
+	def clear_new_meas_caches(self):
+		self.this_time_ip_cache = {}
+		self.init_user_px_cache()
+		self.calc_cache.clear_new_measurement_caches()
+		self.update_lbx()
+
 	def check_for_commands(self):
 		# print("checking for commands in worker {}".format(self.worker_i))
 		try:
@@ -600,20 +621,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				ret.append(self.latency_benefit(base_adv, **kwa))
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
-
 				i += 1
 				# kwa['verb'] = True
 				if i%100 == 0 and kwa.get('verb'):
-					print("worker {} : {} pct. done calcing latency benefits, {}ms per iter".format(self.worker_i, 
+					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
 						i * 100.0 /len(data), round(1000*(time.time() - ts) / i)))
+				self.check_clear_cache()
 			# if len(data)>10:
 			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
 
 		elif cmd == 'reset_new_meas_cache':
-			self.this_time_ip_cache = {}
-			self.init_user_px_cache()
-			self.calc_cache.clear_new_measurement_caches()
-			self.update_lbx()
+			self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
 			parents_on = data

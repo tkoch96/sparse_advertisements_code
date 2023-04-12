@@ -732,7 +732,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
 		self.gradient_support_settings = {
-			'support_size': 500, # setting this value to size(a) turns it off
+			'support_size': 1000, # setting this value to size(a) turns it off
+			'info_support_size': 200,
 		}
 
 		self.uncertainty_factor = 10
@@ -1283,7 +1284,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			pct_resilience = 50
 			pct_transit = 70 
 
-			n_total = self.gradient_support_settings['support_size']
+			n_total = self.gradient_support_settings['info_support_size']
 			n_rb = int(n_total * pct_resilience / 100)
 			n_lb = n_total - n_rb
 			

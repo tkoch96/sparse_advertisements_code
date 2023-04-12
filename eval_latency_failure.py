@@ -18,18 +18,17 @@ def adv_summary(popps,adv):
 				print("Prefix {} has {}".format(pref, popps[poppi]))
 		print("\n")
 
-def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity):
+def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwargs):
 	## for a given popp, there's technically power_set(number of advertisement to popp) that we could turn off
 	## so if that's intractable, might need to sample it or something
-
-	## also compute minimum required capacities for there to be the best solution in all cases
-	min_required_capacities = np.zeros((sas.n_popps,1))
 
 	_, pre_ug_catchments = sas.calculate_user_choice(adv)
 	poppi = sas.popp_to_ind[popp]
 	pre_user_latencies = sas.get_ground_truth_user_latencies(adv)
 
 	prefis = np.where(adv[poppi,:])[0]
+	if kwargs.get('verb'):
+		print(prefis)
 	valid_solutions = []
 	for withdrawal_number in range(1,len(prefis) + 1):
 		for prefi_set in itertools.combinations(prefis,withdrawal_number):
@@ -41,9 +40,19 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity):
 				pre_ug_catchments[sas.ug_to_ind[ug]] != ug_catchments[sas.ug_to_ind[ug]]]
 			if len(these_ugs) == 0:
 				continue
-			all_new_link_volumes = np.zeros((sas.n_popps,1))
+			all_new_link_volumes = np.zeros((sas.n_popps,))
 			for ugi,catchi in ug_catchments.items():
+				if catchi is None:
+					continue
+				if kwargs.get('verb'):
+					print(ugi)
+					print("{} {}".format(catchi,sas.ug_vols[ugi]))
 				all_new_link_volumes[catchi] += sas.ug_vols[ugi]
+				if kwargs.get('verb'):
+					if all_new_link_volumes[poppi] > 0:
+						print(all_new_link_volumes)
+						print(ugi)
+						print(catchi)
 			new_link_volume = all_new_link_volumes[poppi]
 
 			if new_link_volume <= new_link_capacity:
@@ -90,6 +99,8 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 	metrics = {X:[] for X in X_vals}
 	required_link_caps = None
 
+	adv = threshold_a(adv)
+
 	if solution == 'painter':
 		old_caps = copy.deepcopy(sas.link_capacities_by_popp)
 		deployment = sas.deployment
@@ -100,15 +111,17 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 		_, pre_ug_catchments = sas.calculate_user_choice(adv)
 		for popp in sas.popps:
 			these_ugis = np.array([ugi for ugi,catchi in pre_ug_catchments.items() if catchi == sas.popp_to_ind[popp]])
-			if len(these_ugis) == 0:
+			poppi = sas.popp_to_ind[popp]
+			if len(these_ugis) == 0 or len(np.where(adv[poppi,:])[0]) == 0:
 				# nothing to solve
 				continue
 			current_link_volume = np.sum(sas.ug_vols[these_ugis])
 			new_link_cap = current_link_volume  * (1- X/100)
 			soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap)
 			if soln is None:
-				print("Didn't get solution for popp {}, fn {}".format(popp,fn))
-				continue
+				print("Didn't get solution for popp {}, soln type {}".format(popp,solution))
+				soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap,verb=True)
+				exit(0)
 			metrics[X] = metrics[X] + list(soln['latency_deltas'])
 			new_required_link_caps = soln['link_volumes']
 			if required_link_caps is None:
@@ -121,7 +134,7 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 		deployment['link_capacities'] = old_caps
 		sas.update_deployment(deployment)
 
-	link_capacities = {sas.popps[poppi]:required_link_caps[poppi][0] for poppi in range(sas.n_popps)}
+	link_capacities = {sas.popps[poppi]:required_link_caps[poppi] for poppi in range(sas.n_popps)}
 	return {
 		'link_capacities': link_capacities,
 		'metrics': metrics,
@@ -137,7 +150,7 @@ def popp_failure_latency_comparisons():
 	metrics = {}
 	N_TO_SIM = 1
 	X_vals = [20]
-	gamma = 2
+	gamma = 10
 	capacity = True
 
 	lambduh = .01
@@ -169,7 +182,7 @@ def popp_failure_latency_comparisons():
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
-			n_prefixes = np.maximum(4,len(deployment['popps'])//10)
+			n_prefixes = np.maximum(4,len(deployment['popps'])//4)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
@@ -252,7 +265,7 @@ def popp_failure_latency_comparisons():
 		if wm is not None:
 			wm.stop_workers()
 	f,ax=plt.subplots(3,1)
-	f.set_size_inches(6,12)
+	f.set_size_inches(6,17)
 
 	for solution in soln_types:
 		print("Solution {}".format(solution))

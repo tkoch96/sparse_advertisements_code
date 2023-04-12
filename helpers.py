@@ -42,7 +42,6 @@ class Calc_Cache():
 	def __init__(self):
 		## VARIOUS CACHES
 		self.all_caches = {
-		### GTI IS THE PROBLEM I THINK, solution could just be to store the indices to set to true
 			'gti': {}, # ground truth ingresses for UGs given advertisements
 			'lb': {}, # latency benefit by advertisement (very small)
 			'ing_prob': {}, # ingress probabilities by active ingresses, each entry is npopp x nug
@@ -59,8 +58,14 @@ class Calc_Cache():
 			self.all_caches[k] = {}
 
 	def clear_all_caches(self):
-		for k in self.all_caches:
-			self.all_caches[k] = {}
+		del self.all_caches
+		self.all_caches = {
+			'gti': {}, # ground truth ingresses for UGs given advertisements
+			'lb': {}, # latency benefit by advertisement (very small)
+			'ing_prob': {}, # ingress probabilities by active ingresses, each entry is npopp x nug
+			'distance': {}, # geographic distances between UGs and PoPs, (very small)
+			'parents_on': {}, # stores indices of parent tracker that should be set to 'on'
+		}
 
 	def update_cache(self, new_cache_obj):
 		## Just update each entry

@@ -301,9 +301,14 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 			ug_perfs[ug][pop,peer].append(lat)
 		except KeyError:
 			ug_perfs[ug][pop,peer] = [lat]
+	to_del = []
 	for ug in ug_perfs:
+		if len(ug_perfs[ug]) == 1:
+			to_del.append(ug)
+			continue
 		for popp, lats in ug_perfs[ug].items():
 			ug_perfs[ug][popp] = np.min(lats)
+	for ug in to_del: del ug_perfs[ug]
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 	print("{} UGs, {} popps".format(len(ugs), len(popps)))
@@ -467,8 +472,8 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 def load_actual_deployment():
 	# considering_pops = list(POP_TO_LOC['vultr'])
-	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
-	considering_pops = ['miami', 'atlanta']
+	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):

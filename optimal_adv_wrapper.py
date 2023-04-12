@@ -525,18 +525,22 @@ class Optimal_Adv_Wrapper:
 		ugs = kwargs.get('ugs', self.ugs)
 		ug_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
 		n_ug = len(ugs)
+
+		a = threshold_a(a)
+
 		for prefix_i in range(self.n_prefixes):
-			# try:
-			# 	routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())]
-			# 	continue
-			# except KeyError:
-			# 	pass
+			cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
+			try:
+				routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
+				continue
+			except KeyError:
+				pass
 			this_actives = np.where(a[:,prefix_i] == 1)[0]
 			actives[prefix_i] = this_actives
 			this_routed_through_ingress = {}
 			if np.sum(a[:,prefix_i]) == 0:
 				routed_through_ingress[prefix_i] = this_routed_through_ingress
-				self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
+				self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 				continue
 			active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
 			active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
@@ -545,7 +549,7 @@ class Optimal_Adv_Wrapper:
 				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
 				this_routed_through_ingress[ugs[ui]] = bao
 			routed_through_ingress[prefix_i] = this_routed_through_ingress
-			# self.calc_cache.all_caches['gti'][tuple(a[:,prefix_i].flatten())] = (this_routed_through_ingress,this_actives)
+			self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 		return routed_through_ingress, actives
 
 	def enforce_measured_prefs(self, routed_through_ingress, actives):
