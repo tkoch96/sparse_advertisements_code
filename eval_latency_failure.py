@@ -182,7 +182,7 @@ def popp_failure_latency_comparisons():
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
-			n_prefixes = np.maximum(4,len(deployment['popps'])//4)
+			n_prefixes = np.maximum(4,5 * int(np.log2(len(deployment['popps']))))
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
@@ -196,7 +196,17 @@ def popp_failure_latency_comparisons():
 
 			## See which capacities are required for PAINTER
 			adv = sas.painter_solution['advertisement']
-			new_link_capacities = assess_resilience_to_congestion(sas, adv, 'painter', X_vals)['link_capacities']
+			solution = 'painter'
+			ret = assess_resilience_to_congestion(sas, adv, solution, X_vals)
+			pickle.dump(ret, open('tmp.pkl','wb'))
+			new_link_capacities = ret['link_capacities']
+			m = ret['metrics']
+			f,ax = plt.subplots()
+			for X in X_vals:
+				x,cdf_x = get_cdf_xy(list([el for el in m[X] ]))
+				ax.plot(x,cdf_x,label="{} Drain pct={}".format(solution,X))
+			plt.savefig('figures/just_painter_resilience_to_congestion.pdf')
+			exit(0)
 
 			## Given these capacities, solve all the solutions
 			for popp in sas.popps:

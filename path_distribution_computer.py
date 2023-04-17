@@ -569,12 +569,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		print("Worker {} -- {}".format(self.worker_i, s))
 
 	def check_clear_cache(self):
-		print("Current cache size is {}".format(len(self.calc_cache.all_caches['lb'])))
 		if len(self.calc_cache.all_caches['lb']) > 1000:
 			# order of lbx_density + n_popps*n_prefixes per entry
 			# self.print("Clearing calc cache, currently size {}".format(
 			# 	len(pickle.dumps(self.calc_cache))/1e6))
-			self.print("Clearing calc cache")
+			self.print("Clearing calc cache, current len {}".format(len(self.calc_cache.all_caches['lb'])))
 			self.clear_new_meas_caches()
 
 	def clear_new_meas_caches(self):

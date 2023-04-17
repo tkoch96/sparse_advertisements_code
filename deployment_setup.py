@@ -9,6 +9,7 @@ def get_random_ingress_priorities(deployment):
 	pop_to_loc = deployment['pop_to_loc']
 	metro_loc = deployment['metro_loc']
 	provider_popps = deployment['provider_popps']
+	provider_ases = list(set(peer for pop,peer in provider_popps))
 
 
 	ingress_priorities = {}
@@ -32,26 +33,47 @@ def get_random_ingress_priorities(deployment):
 
 		other_peerings = list(get_difference(list(ug_perfs[ug]), [probably_anycast]))
 		if len(other_peerings) > 0:
-			associated_dists = []
-			for op in other_peerings:
+			### Model 
+			## user has a preferred provider
+			## shortest path within that preferred provider
+			## random violations of the model
+
+			op_by_as = {}
+			for pop,peer in other_peerings:
 				try:
-					d = dist_cache[pop_to_loc[op[0]], metro_loc[ug[0]]]
+					op_by_as[peer].append((pop,peer))
 				except KeyError:
-					d = geopy.distance.geodesic(
-						pop_to_loc[op[0]], metro_loc[ug[0]]).km
-					# add noise to break ties
-					dist_cache[pop_to_loc[op[0]], metro_loc[ug[0]]] = d
-				d += .01 *np.random.uniform()
-				associated_dists.append(d)
-			ranked_peerings_by_dist = sorted(zip(associated_dists,other_peerings), key = lambda el : el[0])
-			for i,(_,pi) in enumerate(ranked_peerings_by_dist):
-				priorities[pi] = i + 1
+					op_by_as[peer] = [(pop,peer)]
+
+			priority_counter = 1
+			ases = list(op_by_as)
+			these_non_provider_ases = get_difference(ases, provider_ases)
+			these_provider_ases = get_intersection(ases, provider_ases)
+			np.random.shuffle(these_non_provider_ases)
+			np.random.shuffle(these_provider_ases)
+			ases = these_non_provider_ases + these_provider_ases
+
+			for _as in ases:
+				associated_dists = []
+				this_as_peerings = op_by_as[_as]
+				for popp in this_as_peerings:
+					try:
+						d = dist_cache[pop_to_loc[popp[0]], metro_loc[ug[0]]]
+					except KeyError:
+						d = geopy.distance.geodesic(
+							pop_to_loc[popp[0]], metro_loc[ug[0]]).km
+						# add noise to break ties
+						dist_cache[pop_to_loc[popp[0]], metro_loc[ug[0]]] = d
+					d += .01 *np.random.uniform()
+					associated_dists.append(d)
+				ranked_peerings_by_dist = sorted(zip(associated_dists,this_as_peerings), key = lambda el : el[0])
+				for _,pi in ranked_peerings_by_dist:
+					priorities[pi] = priority_counter
+					priority_counter += 1
 			## randomly flip some priorities
-			## could add in the 'preferred provider' model, where a user just always goes with the same provider
-			## unless it can't
 			if len(priorities) > 1:
 				for pi in list(priorities):
-					if np.random.random() < .01:
+					if np.random.random() < .05:
 						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
@@ -60,7 +82,8 @@ def get_random_ingress_priorities(deployment):
 
 		for popp,priority in priorities.items():
 			ingress_priorities[ug][popp] = priority
-
+		# if np.random.random() > .999:
+		# 	print("{} -- {}".format(ug, ingress_priorities[ug]))
 	return ingress_priorities
 
 def get_link_capacities(deployment):
@@ -471,8 +494,8 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	return anycast_latencies, ug_perfs
 
 def load_actual_deployment():
-	# considering_pops = list(POP_TO_LOC['vultr'])
-	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	considering_pops = list(POP_TO_LOC['vultr'])
+	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
 	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
