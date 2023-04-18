@@ -142,9 +142,9 @@ def get_link_capacities(deployment):
 	ips = deployment['ingress_priorities']
 	for ug in ips:
 		most_favored = [popp for popp in ips[ug] if ips[ug][popp] == 0][0]
-		if most_favored == ('amsterdam','1299'):
-			print(ug)
-			print(ips[ug])
+		# if most_favored == ('amsterdam','1299'):
+		# 	print(ug)
+		# 	print(ips[ug])
 		try:
 			anycast_vol_mapping[most_favored] += ug_to_vol[ug]
 		except KeyError:
@@ -331,6 +331,10 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 			continue
 		for popp, lats in ug_perfs[ug].items():
 			ug_perfs[ug][popp] = np.min(lats)
+		if any([lat == 1 for lat in ug_perfs[ug].values()]):
+			# trivial
+			to_del.append(ug)
+			continue
 	for ug in to_del: del ug_perfs[ug]
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
@@ -504,7 +508,7 @@ def load_actual_deployment():
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
-			n_users_per_peer=300)
+			n_users_per_peer=30)
 
 		## add sub-ms latency noise to arbitrarily break ties
 		for ug in ug_perfs:
@@ -703,12 +707,6 @@ def get_random_deployment_by_size(problem_size):
 
 	print("----Creating Random Deployment-----")
 	sizes = problem_params[problem_size]
-
-	if problem_size == 'really_friggin_small':
-		MIN_LATENCY = 1
-		MAX_LATENCY = 20
-	else:
-		from constants import MIN_LATENCY, MAX_LATENCY
 
 	### Probably update this to be a slightly more interesting model later
 	random_latency = lambda : np.random.uniform(MIN_LATENCY, MAX_LATENCY)

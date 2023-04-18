@@ -188,10 +188,6 @@ class Optimal_Adv_Wrapper:
 		# ingress,ug -> stores ~ how many times ingress wins for a ug
 		self.n_wins = {ug:{i:0 for i in range(self.n_popp)} for ug in self.ugs}
 
-		self.popp_by_ug_indicator = np.zeros((self.n_popp, self.n_ug))
-		for ui in range(self.n_ug):
-			for popp in sorted(self.ug_perfs[self.ugs[ui]]):
-				self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
 			# if len(self.ug_perfs[self.ugs[ui]]) > 1:
 			# 	for popp in self.ug_perfs[self.ugs[ui]]:
 			# 		print(self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]])
@@ -199,21 +195,30 @@ class Optimal_Adv_Wrapper:
 			# 	print(self.popp_by_ug_indicator[:,ui])
 			# 	exit(0)
 
-		## only sub-workers should spawn these arrays if they get too big
-		max_entries = 10000e6
-		# ijk'th entry of ingress probabilities is probability that user k ingresses over popp i for prefix j
-		if self.n_popp * self.n_prefixes * self.n_ug < max_entries:
-			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))
-		# ijk'th entry of parent tracker indicates whether, for ug i, popp j getes beaten by popp k
-		if self.n_popp**2 * self.n_ug < max_entries*64: # more lenient since dtype is bool
+		try:
+			### Worker bee
+			print("Allocating objects in worker {}".format(self.worker_i))
 			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
-		self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
-		for ui in range(self.n_ug):
-			for popp in self.ug_perfs[self.ugs[ui]]:
-				self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
+			# ijk'th entry of ingress probabilities is probability that user k ingresses over popp i for prefix j
+			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))\
+
+			self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
+			for ui in range(self.n_ug):
+				for popp in self.ug_perfs[self.ugs[ui]]:
+					self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
+
+		except AttributeError:
+			### Main thread
+			print("Allocating objects in main thread")
+			self.parent_tracker = {}
+			self.popp_by_ug_indicator = np.zeros((self.n_popp, self.n_ug), np.ushort)
+			for ui in range(self.n_ug):
+				for popp in sorted(self.ug_perfs[self.ugs[ui]]):
+					self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
 
 		try:
 			n_workers = self.get_n_workers()
+			print("Splitting and assigning deployments")
 			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 			for worker in range(n_workers):
 				if len(subdeployments[worker]['ugs']) == 0: continue
@@ -228,37 +233,37 @@ class Optimal_Adv_Wrapper:
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
 		except AttributeError:
-			# not initialized yet, or a worker bee
 			pass
 
 
-		### Resilience benefit backup pre-calcs
-		self.rb_backups = {}
-		for ug in self.ug_perfs:
-			for popp1 in self.ug_perfs[ug]:
-				for popp2 in self.ug_perfs[ug]:
-					if popp1 == popp2: continue
-					# support popp2 provides to popp1
-					# if popp1 fails, popp2 should be really close to the latency
-					if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
-						backup = 1
-					else:
-						# should multiply this by probability of user using this ingress anyway
-						delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
-						if delta > 50:
-							backup = .01
-						elif delta > 30:
-							backup = .1
-						elif delta > 10:
-							backup = .3
-						elif delta > 5:
-							backup = .5
-						else:
-							backup = 1
-					try:
-						self.rb_backups[ug,popp1][popp2] = backup
-					except KeyError:
-						self.rb_backups[ug,popp1] = {popp2: backup}
+		# self.rb_backups = {}
+		# for ug in self.ug_perfs:
+		# 	for popp1 in self.ug_perfs[ug]:
+		# 		for popp2 in self.ug_perfs[ug]:
+		# 			if popp1 == popp2: continue
+		# 			# support popp2 provides to popp1
+		# 			# if popp1 fails, popp2 should be really close to the latency
+		# 			if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
+		# 				backup = 100
+		# 			else:
+		# 				# should multiply this by probability of user using this ingress anyway
+		# 				delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
+		# 				if delta > 50:
+		# 					backup = 1
+		# 				elif delta > 30:
+		# 					backup = 10
+		# 				elif delta > 10:
+		# 					backup = 30
+		# 				elif delta > 5:
+		# 					backup = 50
+		# 				else:
+		# 					backup = 100
+		# 			popp1i = self.popp_to_ind[popp1]
+		# 			popp2i = self.popp_to_ind[popp2]
+		# 			try:
+		# 				self.rb_backups[ug,popp1i][popp2i] = backup
+		# 			except KeyError:
+		# 				self.rb_backups[ug,popp1i] = {popp2i: backup}
 
 
 		#### TMP 
@@ -275,7 +280,11 @@ class Optimal_Adv_Wrapper:
 			We just simulate latencies randomly (or however).
 			This function turns ug -> popp -> lat into 3D array of popp, ug, prefixes for ease of use
 		"""
-		self.measured_latencies = np.zeros((self.n_popp, len(self.ugs)))
+		try:
+			self.worker_i
+		except AttributeError:
+			# Only needed for worker bees
+			return
 		self.measured_latency_benefits = np.zeros((self.n_popp, len(self.ugs)))
 		total_vol = np.sum(self.whole_deployment_ug_vols)
 		for ug in self.ugs:
@@ -285,13 +294,10 @@ class Optimal_Adv_Wrapper:
 				## benefit per user is -1 * latency * volume fraction
 				## we multiply by volume fraction so that later we can just calculate the sum and
 				## have that be the correct average benefit
-				self.measured_latencies[popp_i,ugi] = self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY)
 				weight = self.ug_vols[ugi] / total_vol
 				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
 					
 		# same for each prefix (ease of calculation later)
-		self.measured_latencies = np.tile(np.expand_dims(self.measured_latencies, axis=1), 
-			(1, self.n_prefixes, 1))
 		self.measured_latency_benefits = np.tile(np.expand_dims(self.measured_latency_benefits, axis=1), 
 			(1, self.n_prefixes, 1))
 
@@ -490,6 +496,36 @@ class Optimal_Adv_Wrapper:
 		# lots of backup for very good relative option
 		self.ug_catchments = ug_catchments
 
+		try:
+			self.rb_backups # init if needed
+		except AttributeError:
+			### Resilience benefit backup pre-calcs
+			self.rb_backups = np.zeros((self.n_ug,self.n_popps,self.n_popps),dtype=np.ushort)
+			for ug in tqdm.tqdm(self.ug_perfs,desc="Calculating RB backups"):
+				for popp1 in self.ug_perfs[ug]:
+					for popp2 in self.ug_perfs[ug]:
+						if popp1 == popp2: continue
+						# support popp2 provides to popp1
+						# if popp1 fails, popp2 should be really close to the latency
+						if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
+							backup = 100
+						else:
+							# should multiply this by probability of user using this ingress anyway
+							delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
+							if delta > 50:
+								backup = 1
+							elif delta > 30:
+								backup = 10
+							elif delta > 10:
+								backup = 30
+							elif delta > 5:
+								backup = 50
+							else:
+								backup = 100
+						popp1i = self.popp_to_ind[popp1]
+						popp2i = self.popp_to_ind[popp2]
+						self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup
+
 		poppi_to_ugi = {}
 		for ugi,poppi in self.ug_catchments.items():
 			if poppi is None: continue
@@ -498,19 +534,23 @@ class Optimal_Adv_Wrapper:
 			except KeyError:
 				poppi_to_ugi[poppi] = [ugi]
 
+		# self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
+		# for popp1i in poppi_to_ugi:
+		# 	for ugi in poppi_to_ugi[popp1i]:
+		# 		ug = self.ugs[ugi]
+		# 		try:
+		# 			self.rb_backups[ug,popp1i]
+		# 		except KeyError:
+		# 			# ug has no route, or ug has a route to only 1 popp 
+		# 			continue
+		# 		for popp2i,bck in self.rb_backups[ug,popp1i].items():
+		# 			self.rb_popp_support[popp1i,popp2i] += bck
+
 		self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
 		for popp1i in poppi_to_ugi:
-			popp1 = self.popps[popp1i]
 			for ugi in poppi_to_ugi[popp1i]:
-				ug = self.ugs[ugi]
-				try:
-					self.rb_backups[ug,popp1]
-				except KeyError:
-					# ug has no route, or ug has a route to only 1 popp 
-					continue
-				for popp2,bck in self.rb_backups[ug,popp1].items():
-					popp2i = self.popp_to_ind[popp2]
-					self.rb_popp_support[popp1i,popp2i] += bck
+				for popp2i in range(self.n_popps):
+					self.rb_popp_support[popp1i,popp2i] += np.sum(self.rb_backups[ugi,popp1i,popp2i])
 
 		self.rb_popp_support += .0001
 		self.popp_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T

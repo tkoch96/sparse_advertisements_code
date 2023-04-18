@@ -158,36 +158,39 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				pdfs[adv_ret_i, :, worker_i] = pdf
 
 		### Convert all pdfs to be at the same scale
+		GLOBAL_LBX_DENSITY = 10 * LBX_DENSITY
 		inds = np.arange(LBX_DENSITY)
+		new_lbxs = np.zeros((n_to_flush,GLOBAL_LBX_DENSITY,n_workers))
+		new_pdfs = np.zeros((n_to_flush,GLOBAL_LBX_DENSITY,n_workers))
 		for adv_ret_i in range(n_to_flush):
 			new_max, new_min = np.max(lbxs[adv_ret_i,:,:].flatten()), np.min(lbxs[adv_ret_i,:,:].flatten())
 			for worker_i in range(n_workers):
 				old_min, old_max = lbxs[adv_ret_i,0,worker_i],lbxs[adv_ret_i,-1,worker_i]
-				if old_min == new_min and old_max == new_max:
-					continue
-				rescaled_pdf = np.zeros(pdfs[adv_ret_i,:,worker_i].shape)
-				remap_arr = (old_min + inds * (old_max - old_min) / LBX_DENSITY - new_min) * LBX_DENSITY / (new_max - new_min)
-				remap_arr = np.round(remap_arr).astype(np.int32).clip(0,LBX_DENSITY-1)
+				rescaled_pdf = np.zeros((GLOBAL_LBX_DENSITY,))
+				remap_arr = (old_min + inds * (old_max - old_min) / LBX_DENSITY - new_min) * GLOBAL_LBX_DENSITY / (new_max - new_min)
+				remap_arr = np.round(remap_arr).astype(np.int32).clip(0,GLOBAL_LBX_DENSITY-1)
 				for ind in np.where(pdfs[adv_ret_i,:,worker_i] > 0)[0]:
 					rescaled_pdf[remap_arr[ind]] += pdfs[adv_ret_i,ind,worker_i]
-				lbxs[adv_ret_i,:,worker_i] = np.linspace(new_min, new_max, LBX_DENSITY)
-				pdfs[adv_ret_i,:,worker_i] = rescaled_pdf
+				new_lbxs[adv_ret_i,:,worker_i] = np.linspace(new_min, new_max, GLOBAL_LBX_DENSITY)
+				new_pdfs[adv_ret_i,:,worker_i] = rescaled_pdf
 
 		for adv_ret_i in range(n_to_flush):
 			## point density x number of cores
 			if n_workers > 1:
-				x,px = self.pdf_sum_function(lbxs[adv_ret_i,...],pdfs[adv_ret_i,...],**kwargs)
+				x,px = self.pdf_sum_function(new_lbxs[adv_ret_i,...],new_pdfs[adv_ret_i,...],**kwargs)
 			else:
-				x,px = lbxs[adv_ret_i,:,0], pdfs[adv_ret_i,:,0]
+				x,px = np.expand_dims(new_lbxs[adv_ret_i,:,0],axis=1), np.expand_dims(new_pdfs[adv_ret_i,:,0],axis=1)
 			mean = np.sum(px.flatten()*x.flatten())
 			ret_to_call[adv_ret_i] = (mean, (x.flatten(), px.flatten()))
-
-			if kwargs.get('verbose'):
-				for _z,_x,_y in zip(*(np.where(pdfs>.01))):
-					print("{},{}-> {},{}".format(_x,_y,lbxs[adv_ret_i,_x,_y],pdfs[_z,_x,_y]))
-				for _x,_y in zip(*(np.where(px>.01))):
-					print("{},{}-> {},{}".format(_x,_y,x[_x],px[_x,_y]))
-				exit(0)
+			# kwargs['verbose'] = True
+			# if kwargs.get('verbose'):
+			# 	print("\n")
+			# 	for _z,_x,_y in zip(*(np.where(pdfs>.01))):
+			# 		print("{},{}-> {},{}".format(_x,_y,lbxs[adv_ret_i,_x,_y],pdfs[_z,_x,_y]))
+			# 	for _z,_x,_y in zip(*(np.where(new_pdfs>.01))):
+			# 		print("{},{}-> {},{}".format(_x,_y,new_lbxs[adv_ret_i,_x,_y],new_pdfs[_z,_x,_y]))
+			# 	for _x,_y in zip(*(np.where(px>.01))):
+			# 		print("{},{}-> {},{}".format(_x,_y,x[_x],px[_x,_y]))
 
 		self.lb_args_queue = []
 		self.get_cache()
@@ -1030,6 +1033,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.last_rb_calls_results = {}
 		ind = 0
+		normalize_factors_by_popp_pref = {}
+		for call_popp,killed_popp,prefi in calls:
+			cpi,kpi = self.popp_to_ind[call_popp], self.popp_to_ind[killed_popp]
+			try:
+				normalize_factors_by_popp_pref[cpi,prefi] += self.popp_sample_probs[cpi,kpi]
+			except KeyError:
+				normalize_factors_by_popp_pref[cpi,prefi] = self.popp_sample_probs[cpi,kpi]
+
 		for call_popp, killed_popp, rand_outer_prefix in calls:
 			poppi = self.popp_to_ind[call_popp]
 			if advertisement[poppi,rand_outer_prefix]:
@@ -1047,7 +1058,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			this_grad = self.heaviside_gradient(
 				before_heavisside, after_heavisside, 
 				advertisement[poppi,rand_outer_prefix])
-			this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]]
+			## should actually be average gradient over all killed popps
+			this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]] / normalize_factors_by_popp_pref[poppi,rand_outer_prefix]
 			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
 
 			self.all_rb_calls_results[self.popp_to_ind[killed_popp]].append((self.iter,poppi, rand_outer_prefix, this_grad))
@@ -1397,7 +1409,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							print(potential_value_measure[m][best_flips[m]])
 							pickle.dump(a,open('remeasure_a.pkl','wb'))
 							print('woops')
-							print(np.where(self.parent_tracker[7,:,:]))
 							_,u = self.latency_benefit_fn(a, verbose_workers=True,retnow=True)
 							print("This flips had value: {}".format(value_func(u,force=m)))
 							print(u)
@@ -1452,7 +1463,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
 			store_metrics=True))
 
-		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True)
+		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True,verbose=True)
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		self.metrics['effective_objectives'].append(self.measured_objective(copy.copy(threshold_a(advertisement))))

@@ -26,7 +26,6 @@ def large_logical_and(arr1,arr2):
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def __init__(self, worker_i):
 		self.worker_i = worker_i
-		self.recent_lbx_history = []
 		args, kwargs = self.start_connection()
 		super().__init__(*args, **kwargs)
 		self.calculate_user_latency_by_peer()
@@ -38,14 +37,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
 
-		min_lbx = -1 * NO_ROUTE_LATENCY * 2 * max_vol / total_deployment_volume
+		min_lbx = -1 * NO_ROUTE_LATENCY * 10 * max_vol / total_deployment_volume
 		max_lbx = 0
 
 		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
-		self.big_lbx = np.zeros((LBX_DENSITY, len(self.whole_deployment_ugs)))
-		for i in range(len(self.whole_deployment_ugs)):
+		self.big_lbx = np.zeros((LBX_DENSITY, self.n_ug))
+		for i in range(self.n_ug):
 			self.big_lbx[:,i] = copy.copy(self.lbx)
-
+		self.lb_range_trackers = {ui: [min_lbx,max_lbx] for ui in range(self.n_ug)}
+		self.lb_range_alpha = .01
 
 		self.stop = False
 		self.calc_cache = Calc_Cache()
@@ -56,24 +56,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter = 0
 		print('started in worker {}'.format(self.worker_i))
 		self.run()
-
-	def update_lbx(self):
-		## idea is to keep lbx centered in the region of interest
-		if len(self.recent_lbx_history) < 10000:
-			return
-		all_min_max = np.array(self.recent_lbx_history)
-		min_lbx = np.percentile(all_min_max[:,0], 1)
-		max_lbx = np.percentile(all_min_max[:,1], 99)
-		delta = max_lbx - min_lbx
-		wiggle = delta * .1
-		min_lbx = min_lbx - wiggle
-		max_lbx = np.minimum(0,max_lbx + wiggle)
-		print("New min: {}, new max: {}".format(min_lbx, max_lbx))
-		self.lbx = np.linspace(min_lbx, max_lbx, num=LBX_DENSITY)
-		self.big_lbx = np.zeros((LBX_DENSITY, len(self.whole_deployment_ugs)))
-		for i in range(len(self.whole_deployment_ugs)):
-			self.big_lbx[:,i] = copy.copy(self.lbx)
-		self.recent_lbx_history = []
 
 	def start_connection(self):
 		context = zmq.Context()
@@ -212,7 +194,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		USER_OF_INTEREST = None
-		WORKER_OF_INTEREST = None
+		WORKER_OF_INTEREST = 0
 
 
 		timers = {
@@ -431,9 +413,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		all_pref_inds = np.arange(self.n_prefixes)
 
-		min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
 
+		ug_benefit_updates = []
 		for ui in ug_inds_to_loop:
+			min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
 			all_pv_i = np.where(p_mat[:,:,ui])
 			## combine benefit with bernoulli link failure
 			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
@@ -502,15 +485,27 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 						limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
 						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
+			if min_experienced_benefit == max_experienced_benefit:
+				min_experienced_benefit -= .1
+			self.lb_range_trackers[ui][0] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][0] + \
+				self.lb_range_alpha * min_experienced_benefit
+			self.lb_range_trackers[ui][1] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][1] + \
+				self.lb_range_alpha * max_experienced_benefit
+			if np.abs(self.lb_range_trackers[ui][0] - self.big_lbx[0,ui]) > .01 or \
+				np.abs(self.lb_range_trackers[ui][1] - self.big_lbx[-1,ui]) > .01:
+				ug_benefit_updates.append(ui)
+				
 
-		self.recent_lbx_history.append((min_experienced_benefit, max_experienced_benefit))
-
-		if remeasure and verb and self.worker_i == WORKER_OF_INTEREST:
+		if verb and self.worker_i == WORKER_OF_INTEREST and False:
 			self.print(ug_inds_to_loop)
+			total_b = 0
 			for bi,ui in zip(*np.where(self.user_px)):
 				p = self.user_px[bi,ui]
-				if p < .99 and p > .001:
-					self.print("UI {} experiences benefit index {} with prob {}".format(ui,bi,p))
+				if p > .001:
+					self.print("UI {} experiences benefit index {} ({}) with prob {}".format(
+						ui,bi,self.lbx[bi],p))
+					total_b += p*self.lbx[bi]
+			print("Total : {}".format(total_b))
 
 
 		for ui in ug_inds_to_loop:
@@ -539,8 +534,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		timers['benefit'] = time.time()
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
-		xsumx, psumx = self.pdf_sum_function(self.big_lbx[:,:px.shape[1]], px)
+		xsumx, psumx = self.pdf_sum_function(self.big_lbx, px)
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
+
+		# for ui in ug_benefit_updates:
+			# self.print("Updating UG {} to be min {} max {}, was {} -> {}".format(ui,round(self.lb_range_trackers[ui][0],3),
+			# 	round(self.lb_range_trackers[ui][1],3), round(self.big_lbx[0,ui],3),round(self.big_lbx[-1,ui],3)))
+			# self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
+			# 	num=LBX_DENSITY)
 
 		if np.sum(psumx) < .5:
 			print("ERRRRRR : {}".format(np.sum(psumx)))
@@ -550,6 +551,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			lbx = lbx * benefit_renorm
 			benefits = benefits * benefit_renorm
 			self.big_lbx = self.big_lbx * benefit_renorm
+
 		timers['convolution'] = time.time()
 		# if np.random.random() > .9:
 		# 	t_order = ['start','probs','capacity_1','capacity_2',
@@ -569,10 +571,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		print("Worker {} -- {}".format(self.worker_i, s))
 
 	def check_clear_cache(self):
-		if len(self.calc_cache.all_caches['lb']) > 1000:
+		if len(self.calc_cache.all_caches['lb']) > 10000:
 			# order of lbx_density + n_popps*n_prefixes per entry
-			# self.print("Clearing calc cache, currently size {}".format(
-			# 	len(pickle.dumps(self.calc_cache))/1e6))
+			self.print("Clearing calc cache, currently size {}".format(
+				len(pickle.dumps(self.calc_cache))/1e6))
 			self.print("Clearing calc cache, current len {}".format(len(self.calc_cache.all_caches['lb'])))
 			self.clear_new_meas_caches()
 
@@ -580,7 +582,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.this_time_ip_cache = {}
 		self.init_user_px_cache()
 		self.calc_cache.clear_new_measurement_caches()
-		self.update_lbx()
 
 	def check_for_commands(self):
 		# print("checking for commands in worker {}".format(self.worker_i))

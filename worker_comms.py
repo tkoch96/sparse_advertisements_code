@@ -32,7 +32,9 @@ class Worker_Manager:
 		# self.worker_to_uis = {}
 		self.worker_to_deployments = {}
 		n_workers = self.get_n_workers()
+		print("Splitting deployment into subdeployments.")
 		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
+		print("Done splitting deployment into subdeployments.")
 		
 		context = zmq.Context()
 		for worker in range(n_workers):

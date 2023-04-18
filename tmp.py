@@ -1,12 +1,8 @@
-aeff=(True, True, False, True, False, False, True, False, False, True, False, False, True, True, False, True, False, False, True, True, False, True, False, False, True, False, False, True, True, False, True, True, False, True, False, False, True, False, False, True, True, False, True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, False, False, True, True, False, True, False, False, True, False, False, True, False, False, True, False, False, True, True, False)
-
-aeff2=(True, False, False, True, True, False, True, True, False, True, False, False, True, False, False, True, False, False, True, False, False, True, False, False, True, True, False, True, True, False, True, False, False, True, False, False, True, False, False, True, True, False, True, True, False, True, True, False, True, True, False, True, True, False, True, False, False, True, False, False, True, False, False, True, True, False, True, True, False, True, True, False, True, True, False, True, False, False, True, False, False, True, False, False, True, True, False, True, True, False)
-
-rem=(True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, True, False, True, False, False, True, False, False, True, True, False, True, False, False, True, True, False, True, False, False, False, True, False, True, True, False, True, False, False, True, True, False, True, False, False, True, False, False, True, False, False, True, False, False, True, False, False, True, True, False, True, False, False, True, False, False, True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, True, False)
-
-rem2=(True, True, False, True, False, False, True, False, False, True, False, False, True, True, False, True, False, False, True, True, False, True, False, False, True, False, False, True, True, False, True, True, False, True, False, False, True, False, False, True, True, False, True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, False, False, True, True, False, True, True, False, True, True, False, True, False, False, True, True, False, True, False, False, True, False, False, True, False, False, True, False, False, True, True, False)
-
-
-print(aeff==aeff2)
-print(aeff==rem)
-print(rem==rem2)
+rows = []
+for row in open('screenlog.0','r'):
+	if "Current cache size" in row:
+		continue
+	rows.append(row)
+with open('newscreenlog.0','w') as f:
+	for row in rows:
+		f.write(row)

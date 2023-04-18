@@ -5,14 +5,11 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
 	'lightsteelblue']
 
-MIN_LATENCY = 1
-MAX_LATENCY = 300
+
 LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
 GRAD_CLIP_VAL = 10
-NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
-NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
-# LBX_DENSITY = MAX_LATENCY # number of points to discretize benefit into
-LBX_DENSITY = int(NO_ROUTE_LATENCY)
+
+LBX_DENSITY = 500
 
 BASE_SOCKET = 31427
 
@@ -31,8 +28,17 @@ PRINT_FREQUENCY = {
 	'large': 1
 }[DPSIZE]
 
+if DPSIZE == "really_friggin_small":
+	MIN_LATENCY = 1
+	MAX_LATENCY = 20
+else:
+	MIN_LATENCY = 1
+	MAX_LATENCY = 300
+NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
+NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
+
 N_WORKERS = {
-	'really_friggin_small': 1,
+	'really_friggin_small': 2,
 	'actual': 8,
 	'small': 4,
 	'decent': 8,

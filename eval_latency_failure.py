@@ -118,10 +118,29 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 			current_link_volume = np.sum(sas.ug_vols[these_ugis])
 			new_link_cap = current_link_volume  * (1- X/100)
 			soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap)
-			if soln is None:
+			if soln is None and solution == 'painter':
 				print("Didn't get solution for popp {}, soln type {}".format(popp,solution))
 				soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap,verb=True)
 				exit(0)
+			elif soln is None:
+				## assign badness
+				metrics[X] = metrics[X] + list(NO_ROUTE_LATENCY * np.ones((len(these_ugis))))
+				continue
+
+			## summarize solutions
+			pfx_withdrawals = soln['prefix_withdrawals']
+			adv[poppi,np.array(pfx_withdrawals)] = 0
+			_, post_ug_catchments = sas.calculate_user_choice(adv)
+			users_of_interest = [ui for ui,catch in post_ug_catchments.items() if catch != pre_ug_catchments[ui]]
+			for ui in users_of_interest:
+				ug = sas.ugs[ui]
+				catch_before, catch_after = sas.popps[pre_ug_catchments[ui]], sas.popps[post_ug_catchments[ui]]
+				print("UG {} was visiting popp {} with {} ms, after withdrawal is {} with {} ms, delta {} ms".format(
+					ug,catch_before,round(sas.ug_perfs[ug][catch_before]),catch_after,round(sas.ug_perfs[ug][catch_after]),
+					round(sas.ug_perfs[ug][catch_after] - sas.ug_perfs[ug][catch_before])))
+			adv[poppi,np.array(pfx_withdrawals)] = 1
+
+
 			metrics[X] = metrics[X] + list(soln['latency_deltas'])
 			new_required_link_caps = soln['link_volumes']
 			if required_link_caps is None:
@@ -198,7 +217,6 @@ def popp_failure_latency_comparisons():
 			adv = sas.painter_solution['advertisement']
 			solution = 'painter'
 			ret = assess_resilience_to_congestion(sas, adv, solution, X_vals)
-			pickle.dump(ret, open('tmp.pkl','wb'))
 			new_link_capacities = ret['link_capacities']
 			m = ret['metrics']
 			f,ax = plt.subplots()
@@ -206,7 +224,7 @@ def popp_failure_latency_comparisons():
 				x,cdf_x = get_cdf_xy(list([el for el in m[X] ]))
 				ax.plot(x,cdf_x,label="{} Drain pct={}".format(solution,X))
 			plt.savefig('figures/just_painter_resilience_to_congestion.pdf')
-			exit(0)
+			# exit(0)
 
 			## Given these capacities, solve all the solutions
 			for popp in sas.popps:
@@ -258,14 +276,8 @@ def popp_failure_latency_comparisons():
 						else:
 							best_perf = np.min(other_available)
 						poppi = ug_catchments[sas.ug_to_ind[ug]]
-						# if poppi is None:
-						# 	actual_perf = NO_ROUTE_LATENCY
-						# else:
-						# 	actual_ingress = sas.popps[poppi]
-						# 	actual_perf = sas.ug_perfs[ug][actual_ingress]
 						actual_perf = user_latencies[sas.ug_to_ind[ug]]
 						metrics['popp_failures'][random_iter][solution].append((best_perf - actual_perf, ug_vols[ug]))
-			# exit(0)
 			pickle.dump(metrics, open(metrics_fn,'wb'))
 	except:
 		import traceback

@@ -132,7 +132,9 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
+		print("Initial greedy advertisement comuptation")
 		advs = self.painter_v4(**kwargs)
+		self.advs = advs
 		
 		save_verb = copy.copy(self.verbose)
 		self.verbose = False
@@ -145,20 +147,24 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.path_measures = 0 
 		self.clear_caches()
 		ts = time.time()
+		print("Starting painter computation")
 		while not self.stop:
-			print("Painter iteration {}, {}s per iter".format(self.iter,
-				(time.time() - ts) / (self.iter+1)))
+			print("Measuring ingresses")
 			## conduct measurement with this advertisement strategy
 			self.measure_ingresses(self.painter_advs_to_sparse_advs(advs))
 			## recalc painter decision with new information
+			print("Solving greedy allocation")
 			advs = self.painter_v4(**kwargs)
 			self.stop_tracker(advs)
 			self.iter += 1
 
+			print("Painter iteration {}, {}s per iter".format(self.iter,
+				(time.time() - ts) / (self.iter+1)))
+
 			self.advs = advs
 
-			if self.iter == 3:
-				break
+			# if self.iter == 3:
+			# 	break
 
 		### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
 		painter_budget = self.n_prefixes - 1
