@@ -182,7 +182,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				x,px = np.expand_dims(new_lbxs[adv_ret_i,:,0],axis=1), np.expand_dims(new_pdfs[adv_ret_i,:,0],axis=1)
 			mean = np.sum(px.flatten()*x.flatten())
 			ret_to_call[adv_ret_i] = (mean, (x.flatten(), px.flatten()))
-			# kwargs['verbose'] = True
 			# if kwargs.get('verbose'):
 			# 	print("\n")
 			# 	for _z,_x,_y in zip(*(np.where(pdfs>.01))):
@@ -314,7 +313,10 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		latency_benefit, u = self.latency_benefit_fn(threshold_a(a), **kwargs)
 
 		if self.using_resilience_benefit:
+			cpset = copy.copy(kwargs.get('verbose_workers',False))
+			kwargs['verbose_workers'] = False
 			resilience_benefit = self.resilience_benefit_fn(a, **kwargs)
+			kwargs['verbose_workers'] = cpset
 		else:
 			resilience_benefit = 0
 
@@ -1059,7 +1061,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				before_heavisside, after_heavisside, 
 				advertisement[poppi,rand_outer_prefix])
 			## should actually be average gradient over all killed popps
-			this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]] / normalize_factors_by_popp_pref[poppi,rand_outer_prefix]
+			# this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]] / normalize_factors_by_popp_pref[poppi,rand_outer_prefix]
 			self.last_rb_calls_results[call_popp,killed_popp,rand_outer_prefix] = this_grad
 
 			self.all_rb_calls_results[self.popp_to_ind[killed_popp]].append((self.iter,poppi, rand_outer_prefix, this_grad))
@@ -1105,10 +1107,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			pref_sty = linestyles[pref_i%len(linestyles)]
 			for popp_i in range(self.n_popp):
 				if 'xlimupper' in kwargs:
-					ax[0,0].plot(kwargs['xlimupper'],all_as[:,popp_i,pref_i], pref_sty, 
+					ax[0,0].plot(kwargs['xlimupper'],all_as[::5,popp_i,pref_i], pref_sty, 
 						c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
 				else:
-					ax[0,0].plot(all_as[:,popp_i,pref_i], pref_sty, 
+					ax[0,0].plot(all_as[::5,popp_i,pref_i], pref_sty, 
 						c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
 				ax[1,0].plot(all_grads[:,popp_i,pref_i], 
 					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
@@ -1459,7 +1461,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.last_effective_objective = self.current_effective_objective
 		self.metrics['effective_gammas'].append(self.get_gamma())
 		self.metrics['actual_nonconvex_objective'].append(self.measured_objective(advertisement, verb=True))
-		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement))
+		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement, verb=True))
 		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
 			store_metrics=True))
 
@@ -1607,8 +1609,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			# if self.iter >= 5:
-			# 	break
+			if self.iter >= 65:
+				break
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(

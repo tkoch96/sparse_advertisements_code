@@ -45,7 +45,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for i in range(self.n_ug):
 			self.big_lbx[:,i] = copy.copy(self.lbx)
 		self.lb_range_trackers = {ui: [min_lbx,max_lbx] for ui in range(self.n_ug)}
-		self.lb_range_alpha = .01
+		self.lb_range_alpha = .005
 
 		self.stop = False
 		self.calc_cache = Calc_Cache()
@@ -194,7 +194,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		USER_OF_INTEREST = None
-		WORKER_OF_INTEREST = 0
+		WORKER_OF_INTEREST = None
 
 
 		timers = {
@@ -301,10 +301,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						self.ingress_px[poppi, ui] += max_prob
 						changed_popps[poppi] = None 
 			timers['capacity_1'] = time.time()
-			# if verb:
-			# 	for poppi, ui in zip(*np.where(self.ingress_px)):
-			# 		print("UI {} visits ingress {} with prob {}".format(ui,
-			# 			poppi,round(self.ingress_px[poppi,ui],2)))
+
 			## prob that user j contributes volx i
 			for ingress_i in changed_popps:
 				ug_prob_vols_this_ingress_i = np.where(self.ingress_px[ingress_i,:] > 0)[0]
@@ -422,8 +419,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
 				self.link_failure_severities[poppi]) \
 				for poppi,prefj in zip(*all_pv_i)]
-			if ui == USER_OF_INTEREST and self.worker_i == WORKER_OF_INTEREST and verb and remeasure:
-				self.print(all_pv)
+			# if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+			# 	self.print("PV : {}".format(all_pv))
+
 			if len(all_pv) == 0:
 				# this user has no paths
 				continue
@@ -435,7 +433,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if lb < min_experienced_benefit:
 					min_experienced_benefit = lb
 
-				lbx_i = np.where(lb - lbx <= 0)[0][0]
+				if lb <= self.big_lbx[0,ui]:
+					lbx_i = 0
+				elif lb >= self.big_lbx[-1,ui]:
+					lbx_i = self.big_lbx.shape[0] - 1 
+				else:
+					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
+
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
 					lb_failure = lb * lb_multiplier_link_failure * np.log2(1 + lfs)
@@ -445,7 +449,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					if lb_failure < min_experienced_benefit:
 						min_experienced_benefit = lb
 
-					limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
+					if lb_failure <= self.big_lbx[0,ui]:
+						limited_cap_lbxi = 0
+					elif lb_failure >= self.big_lbx[-1,ui]:
+						limited_cap_lbxi = self.big_lbx.shape[0] - 1 
+					else:
+						limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
+
 					self.user_px[limited_cap_lbxi, ui] += p * plf
 			else:
 				all_pv = sorted(all_pv,key=lambda el : el[1])
@@ -459,11 +469,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				for i in range(1,len(all_pv)):
 					pref_j, lb, p, plf, lfs = all_pv[i]
 
-					if lb > max_experienced_benefit:
-						max_experienced_benefit = lb
-					if lb < min_experienced_benefit:
-						min_experienced_benefit = lb
-
 					# calculate prob(max latency benefit)
 					# we calculate this iteratively, from the smallest to the largest value
 					# probability calc is basically probability of this value (p) times probability 
@@ -473,7 +478,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 					if max_prob == 0 : continue
 
-					lbx_i = np.where(lb - lbx <= 0)[0][0]
+					if lb > max_experienced_benefit:
+						max_experienced_benefit = lb
+					if lb < min_experienced_benefit:
+						min_experienced_benefit = lb
+
+					if lb <= self.big_lbx[0,ui]:
+						lbx_i = 0
+					elif lb >= self.big_lbx[-1,ui]:
+						lbx_i = self.big_lbx.shape[0] - 1 
+					else:
+						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
+
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
 						lb_failure = lb * lb_multiplier_link_failure * np.log2( 1 + lfs )
@@ -482,29 +498,50 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 							max_experienced_benefit = lb
 						if lb_failure < min_experienced_benefit:
 							min_experienced_benefit = lb
-
-						limited_cap_lbxi = np.where(lb_failure - lbx <= 0)[0][0]
+						
+						if lb_failure <= self.big_lbx[0,ui]:
+							limited_cap_lbxi = 0
+						elif lb_failure >= self.big_lbx[-1,ui]:
+							limited_cap_lbxi = self.big_lbx.shape[0] - 1 
+						else:
+							limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
+						
 						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
+
+
+
+			# static assignment to best possible
+			max_experienced_benefit = self.best_latency_benefits[ui] 	
+			# lower bound it a little more
+			min_experienced_benefit = min_experienced_benefit * 1.5
 			if min_experienced_benefit == max_experienced_benefit:
 				min_experienced_benefit -= .1
 			self.lb_range_trackers[ui][0] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][0] + \
 				self.lb_range_alpha * min_experienced_benefit
 			self.lb_range_trackers[ui][1] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][1] + \
 				self.lb_range_alpha * max_experienced_benefit
+
 			if np.abs(self.lb_range_trackers[ui][0] - self.big_lbx[0,ui]) > .01 or \
 				np.abs(self.lb_range_trackers[ui][1] - self.big_lbx[-1,ui]) > .01:
 				ug_benefit_updates.append(ui)
-				
 
-		if verb and self.worker_i == WORKER_OF_INTEREST and False:
-			self.print(ug_inds_to_loop)
+			# if self.worker_i == WORKER_OF_INTEREST and ui == 3:
+			# 	print(all_pv)
+			# 	print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
+
+
+		if verb and self.worker_i == WORKER_OF_INTEREST:
+			self.print("UG inds to loop : {}".format(ug_inds_to_loop))
 			total_b = 0
+			prnts = []
 			for bi,ui in zip(*np.where(self.user_px)):
 				p = self.user_px[bi,ui]
 				if p > .001:
-					self.print("UI {} experiences benefit index {} ({}) with prob {}".format(
-						ui,bi,self.lbx[bi],p))
-					total_b += p*self.lbx[bi]
+					prnts.append((ui,bi,self.big_lbx[bi,ui],p))
+					total_b += p*self.big_lbx[bi,ui]
+			for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
+				self.print("UI {} experiences benefit index {} ({}) with prob {}".format(
+					ui,bi,round(lb,5),round(p,2)))
 			print("Total : {}".format(total_b))
 
 
@@ -537,11 +574,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx, px)
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
 
-		# for ui in ug_benefit_updates:
-			# self.print("Updating UG {} to be min {} max {}, was {} -> {}".format(ui,round(self.lb_range_trackers[ui][0],3),
-			# 	round(self.lb_range_trackers[ui][1],3), round(self.big_lbx[0,ui],3),round(self.big_lbx[-1,ui],3)))
-			# self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
-			# 	num=LBX_DENSITY)
+		if verb and self.worker_i == WORKER_OF_INTEREST:
+			print("Expected is {}".format(benefit))
+
+		for ui in ug_benefit_updates:
+			# if self.worker_i == WORKER_OF_INTEREST and ui in [1,2,3,4,5]:
+				# self.print("Updating UG {} to be min {} max {}, was {} -> {}".format(ui,round(self.lb_range_trackers[ui][0],3),
+				# 	round(self.lb_range_trackers[ui][1],3), round(self.big_lbx[0,ui],3),round(self.big_lbx[-1,ui],3)))
+			self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
+				num=LBX_DENSITY)
 
 		if np.sum(psumx) < .5:
 			print("ERRRRRR : {}".format(np.sum(psumx)))

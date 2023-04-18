@@ -9,7 +9,7 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
 GRAD_CLIP_VAL = 10
 
-LBX_DENSITY = 500
+LBX_DENSITY = 50
 
 BASE_SOCKET = 31427
 
@@ -18,7 +18,7 @@ import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-DPSIZE = 'actual'
+DPSIZE = 'really_friggin_small'
 PRINT_FREQUENCY = {
 	'really_friggin_small': 15,
 	'actual': 12,

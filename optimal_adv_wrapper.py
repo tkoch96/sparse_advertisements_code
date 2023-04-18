@@ -142,6 +142,10 @@ class Optimal_Adv_Wrapper:
 		self.provider_popp_inds = [self.popp_to_ind[popp] for popp in self.provider_popps]
 		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
 
+		# for popp, prio in self.ground_truth_ingress_priorities[self.ugs[19]].items():
+		# 	print("{} -- prio {}".format(self.popp_to_ind[popp],prio))
+		# exit(0)
+
 		self.metro_loc = deployment['metro_loc']
 		self.pop_to_loc = deployment['pop_to_loc']
 		self.link_capacities_by_popp = deployment['link_capacities']
@@ -280,12 +284,12 @@ class Optimal_Adv_Wrapper:
 			We just simulate latencies randomly (or however).
 			This function turns ug -> popp -> lat into 3D array of popp, ug, prefixes for ease of use
 		"""
-		try:
-			self.worker_i
-		except AttributeError:
-			# Only needed for worker bees
-			return
-		self.measured_latency_benefits = np.zeros((self.n_popp, len(self.ugs)))
+		# try:
+		# 	self.worker_i
+		# except AttributeError:
+		# 	# Only needed for worker bees
+		# 	return
+		self.mlbs = np.zeros((self.n_popp, self.n_ug))
 		total_vol = np.sum(self.whole_deployment_ug_vols)
 		for ug in self.ugs:
 			ugi = self.ug_to_ind[ug]
@@ -295,10 +299,11 @@ class Optimal_Adv_Wrapper:
 				## we multiply by volume fraction so that later we can just calculate the sum and
 				## have that be the correct average benefit
 				weight = self.ug_vols[ugi] / total_vol
-				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
+				self.mlbs[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
 					
 		# same for each prefix (ease of calculation later)
-		self.measured_latency_benefits = np.tile(np.expand_dims(self.measured_latency_benefits, axis=1), 
+		self.best_latency_benefits = np.max(self.mlbs,axis=0)
+		self.measured_latency_benefits = np.tile(np.expand_dims(self.mlbs, axis=1), 
 			(1, self.n_prefixes, 1))
 
 	def l1_norm(self, a):
@@ -484,6 +489,13 @@ class Optimal_Adv_Wrapper:
 					user_latencies[ugi] = latency
 		if kwargs.get('get_ug_catchments', False):
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
+		# if kwargs.get('verb'):
+		# 	for ui,poppi in ug_ingress_decisions.items():
+		# 		if ui != 19:
+		# 			continue
+		# 		print(routed_through_ingress)
+		# 		print("UI {} going through poppi {} benefit {}".format(
+		# 			ui,poppi,self.mlbs[poppi,ui]))
 		return user_latencies, ug_ingress_decisions
 
 	def update_ug_ingress_decisions(self, ug_catchments):
@@ -575,7 +587,7 @@ class Optimal_Adv_Wrapper:
 				continue
 			except KeyError:
 				pass
-			this_actives = np.where(a[:,prefix_i] == 1)[0]
+			this_actives = np.where(a[:,prefix_i])[0]
 			actives[prefix_i] = this_actives
 			this_routed_through_ingress = {}
 			if np.sum(a[:,prefix_i]) == 0:
@@ -589,7 +601,8 @@ class Optimal_Adv_Wrapper:
 				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
 				this_routed_through_ingress[ugs[ui]] = bao
 			routed_through_ingress[prefix_i] = this_routed_through_ingress
-			self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+			if len(ugs) == self.n_ug:
+				self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 		return routed_through_ingress, actives
 
 	def enforce_measured_prefs(self, routed_through_ingress, actives):

@@ -202,6 +202,7 @@ def popp_failure_latency_comparisons():
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
 			n_prefixes = np.maximum(4,5 * int(np.log2(len(deployment['popps']))))
+			n_prefixes = np.minimum(len(deployment['popps'])//4, n_prefixes)
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
@@ -367,7 +368,7 @@ def plot_lats_from_adv(sas, advertisement, fn):
 		metrics = {}
 		if i ==0:
 			adv = threshold_a(advertisement)
-			print("Current adv: {}".format(adv_summary(sas.popps, advertisement)))
+			adv_summary(sas.popps, advertisement)
 		else: # anycast
 			adv = np.zeros(advertisement.shape)
 			adv[:,0] = 1
