@@ -5,7 +5,6 @@ import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
 
 def adv_summary(popps,adv):
-	return
 	adv = threshold_a(adv)
 	print("\n")
 	print("\n")
@@ -17,6 +16,8 @@ def adv_summary(popps,adv):
 			for poppi in np.where(adv[:,pref])[0]:
 				print("Prefix {} has {}".format(pref, popps[poppi]))
 		print("\n")
+
+
 
 def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwargs):
 	## for a given popp, there's technically power_set(number of advertisement to popp) that we could turn off
@@ -59,7 +60,7 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwarg
 
 			if new_link_volume <= new_link_capacity:
 				user_latencies = sas.get_ground_truth_user_latencies(adv)
-				if not any(user_latencies==NO_ROUTE_LATENCY):
+				if not any(user_latencies==NO_ROUTE_LATENCY): ## check to make sure we don't inundate any other link
 					these_ugis = np.array([sas.ug_to_ind[ug] for ug in these_ugs])
 					new_perfs = np.array([user_latencies[sas.ug_to_ind[ug]] for ug in these_ugs])
 					valid_solutions.append((prefi_set, new_perfs - pre_user_latencies[these_ugis],
@@ -300,8 +301,18 @@ def popp_failure_latency_comparisons():
 			popps = sorted(list(set(deployment['popps'])))
 			try:
 				adv_summary(popps,adv)
+				n_prefs_by_popp = np.sum(adv,axis=1)
+				x,cdf_x = get_cdf_xy(n_prefs_by_popp)
+				plt.plot(x,cdf_x,label=solution)
+				
 			except:
 				continue
+	plt.grid(True)
+	plt.xlabel("Number of Prefixes Being Advertised via Ingress")
+	plt.ylabel("CDF of PoPPs")
+	plt.legend()
+	plt.savefig("n_prefs_by_popp_solutions.pdf")
+	plt.clf(); plt.close()
 
 	for solution in soln_types:
 		try:
