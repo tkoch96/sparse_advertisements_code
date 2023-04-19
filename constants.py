@@ -38,7 +38,7 @@ NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 N_WORKERS = {
-	'really_friggin_small': 2,
+	'really_friggin_small': 1,
 	'actual': 8,
 	'small': 4,
 	'decent': 8,

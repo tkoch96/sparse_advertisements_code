@@ -1,4 +1,4 @@
-import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, geopy.distance, warnings, tqdm
+import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, warnings, tqdm
 from subprocess import call, check_output
 np.setbufsize(262144*8)
 np.set_printoptions(precision=2)
@@ -45,6 +45,48 @@ def violates(ordering, bigger, smallers):
 		if wb > np.where(ordering == s)[0]:
 			return True
 	return False
+
+
+def compare_estimated_actual_per_user():
+	import glob
+	modeled_user_lats = {}
+	for worker_log in glob.glob(os.path.join(CACHE_DIR, 'worker*log.txt')):
+		for row in open(worker_log,'r'):
+			itr,ui,bi,lb,p = row.strip().split(',')
+			itr,ui,bi,lb,p = int(itr),int(ui),int(bi),float(lb),float(p)
+			try:
+				modeled_user_lats[itr]
+			except KeyError:
+				modeled_user_lats[itr] = {}
+			try:
+				modeled_user_lats[itr][ui].append((bi,lb,p))
+			except KeyError:
+				modeled_user_lats[itr][ui] = [(bi,lb,p)]
+	actual_user_lats = {}
+	for row in open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'r'):
+		itr,ui,poppi,b = row.strip().split(',')
+		itr,ui,poppi,b = int(itr),int(ui),int(poppi),float(b)
+		try:
+			actual_user_lats[itr]
+		except KeyError:
+			actual_user_lats[itr] = {}
+		actual_user_lats[itr][ui] = (poppi,b)
+
+	itrs = list(sorted(list(actual_user_lats)))
+	uis = list(sorted(list(actual_user_lats[0])))
+	f,ax = plt.subplots()
+	for ui in uis:
+		for itr in itrs:
+			modeled_user_lats[itr][ui] = sum(lb*p for _,lb,p in modeled_user_lats[itr][ui])
+		these_modeled_lats = np.array([modeled_user_lats[itr][ui] for itr in itrs])
+		these_actual_lats = np.array([actual_user_lats[itr][ui][1] for itr in itrs])
+		ax.plot(itrs, these_actual_lats - these_modeled_lats)
+
+	ax.set_xlabel("Iteration")
+	ax.set_ylabel("Actual - Modeled Benefit")
+	plt.savefig("figures/benefit_modeling_error.pdf")
+	plt.clf()
+	plt.close()
 
 class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def __init__(self, *args, init={'type':'using_objective'}, explore='bimodality',
@@ -737,9 +779,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
 		self.gradient_support_settings = {
-			'support_size': 1000, # setting this value to size(a) turns it off
-			'info_support_size': 200,
-		}
+			'really_friggin_small':{
+				'support_size': 50, # setting this value to size(a) turns it off
+				'info_support_size': 100,
+			},
+			'actual': {
+				'support_size': 1000, # setting this value to size(a) turns it off
+				'info_support_size': 200,
+			},
+		}.get(DPSIZE)
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
@@ -908,6 +956,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.metrics['res_benefit_grads'].append(res_grad)
 				self.metrics['cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
 
+		### max movement should be at least .01
+		### so multiply alpha by .01 / max val if its less
+		max_val = np.max(np.abs(net_grad).flatten())
+		DESIRED_MAX_VAL = 1.0
+		if max_val < DESIRED_MAX_VAL:
+			mult = (DESIRED_MAX_VAL / (max_val+1e-8))
+			net_grad = net_grad * mult
+			print("Modified gradient by a factor of {}".format(mult))
 		return -1 * net_grad
 
 	def gradients_resilience_benefit(self, advertisement):
@@ -1086,6 +1142,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return a
 
 	def make_plots(self, *args, **kwargs):
+
+		compare_estimated_actual_per_user()
+		
+
 		plt.rcParams["figure.figsize"] = (10,20)
 		plt.rcParams.update({'font.size': 14})
 		f,ax = plt.subplots(8,2)
@@ -1624,32 +1684,9 @@ def main():
 		deployment = get_random_deployment(DPSIZE)
 
 
-		# ## Comparing different solutions
-		# lambduh = .001
-		# sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-		# 	lambduh=lambduh,with_capacity=False)
-		# wm = Worker_Manager(sas.get_init_kwa(), deployment)
-		# wm.start_workers()
-		# sas.set_worker_manager(wm)
-		# sas.compare_different_solutions(deployment_size=DPSIZE,n_run=5)
-		# exit(0)
-
-
-		# ## Simple test
-		# lambduh = .0001
-		# gamma = 1.0
-		# sas = Sparse_Advertisement_Solver(deployment, 
-		# 	lambduh=lambduh,verbose=True,with_capacity=False,n_prefixes=20,
-		# 	using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
-		# wm = Worker_Manager(sas.get_init_kwa(), deployment)
-		# wm.start_workers()
-		# sas.set_worker_manager(wm)
-		# sas.solve()
-		# sas.make_plots()
-
 		### With VULTR measurements test
 		lambduh = .01
-		gamma = 10.0
+		gamma = 2.0
 		n_prefixes = np.maximum(4,len(deployment['popps'])//4)
 		sas = Sparse_Advertisement_Solver(deployment, 
 			lambduh=lambduh,verbose=True,with_capacity=True,n_prefixes=n_prefixes,
@@ -1660,16 +1697,8 @@ def main():
 		sas.solve()
 		sas.make_plots()
 		soln = sas.get_last_advertisement()
-
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
 
-
-		# ## Capacity Test ( I think this works, but not positive )
-		# lambduh = .1
-		# sas = Sparse_Advertisement_Solver(get_random_deployment('small'), 
-		# 	lambduh=lambduh,verbose=True,with_capacity=True)
-		# sas.solve()
-		# sas.make_plots()
 	except:
 		import traceback
 		traceback.print_exc()

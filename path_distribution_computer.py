@@ -26,10 +26,14 @@ def large_logical_and(arr1,arr2):
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def __init__(self, worker_i):
 		self.worker_i = worker_i
+
+
 		args, kwargs = self.start_connection()
 		super().__init__(*args, **kwargs)
 		self.calculate_user_latency_by_peer()
 		self.with_capacity = kwargs.get('with_capacity', False)
+		with open(os.path.join(CACHE_DIR, 'worker_{}_log.txt'.format(self.worker_i)),'w') as f:
+			pass
 
 		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
 		## divided by their contribution to the total volume (i.e., multiplied by a weight)
@@ -530,8 +534,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 	print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
 
 
-		if verb and self.worker_i == WORKER_OF_INTEREST:
-			self.print("UG inds to loop : {}".format(ug_inds_to_loop))
+		if verb:
 			total_b = 0
 			prnts = []
 			for bi,ui in zip(*np.where(self.user_px)):
@@ -540,9 +543,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					prnts.append((ui,bi,self.big_lbx[bi,ui],p))
 					total_b += p*self.big_lbx[bi,ui]
 			for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
-				self.print("UI {} experiences benefit index {} ({}) with prob {}".format(
-					ui,bi,round(lb,5),round(p,2)))
-			print("Total : {}".format(total_b))
+				ug = self.ugs[ui]
+				ui_global = self.whole_deployment_ug_to_ind[ug]
+				self.log("{},{},{},{},{}\n".format(
+					self.iter,ui_global,bi,lb,p))
+			# print("Total : {}".format(total_b))
 
 
 		for ui in ug_inds_to_loop:
@@ -607,6 +612,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
 		
 		return benefit, (xsumx.flatten(),psumx.flatten())
+
+	def log(self,s):
+		self.log_ptr = open(os.path.join(CACHE_DIR, 'worker_{}_log.txt'.format(self.worker_i)),'a')
+		self.log_ptr.write(s)
+		self.log_ptr.close()
 
 	def print(self, s):
 		print("Worker {} -- {}".format(self.worker_i, s))

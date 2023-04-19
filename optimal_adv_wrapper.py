@@ -214,6 +214,8 @@ class Optimal_Adv_Wrapper:
 		except AttributeError:
 			### Main thread
 			print("Allocating objects in main thread")
+			with open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'w') as f:
+				pass
 			self.parent_tracker = {}
 			self.popp_by_ug_indicator = np.zeros((self.n_popp, self.n_ug), np.ushort)
 			for ui in range(self.n_ug):
@@ -489,14 +491,16 @@ class Optimal_Adv_Wrapper:
 					user_latencies[ugi] = latency
 		if kwargs.get('get_ug_catchments', False):
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
-		# if kwargs.get('verb'):
-		# 	for ui,poppi in ug_ingress_decisions.items():
-		# 		if ui != 19:
-		# 			continue
-		# 		print(routed_through_ingress)
-		# 		print("UI {} going through poppi {} benefit {}".format(
-		# 			ui,poppi,self.mlbs[poppi,ui]))
+		if kwargs.get('verb'):
+			for ui,poppi in ug_ingress_decisions.items():
+				self.log("{},{},{},{}\n".format(
+					self.iter,ui,poppi,self.mlbs[poppi,ui]))
 		return user_latencies, ug_ingress_decisions
+
+	def log(self,s):
+		self.log_ptr = open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'a')
+		self.log_ptr.write(s)
+		self.log_ptr.close()
 
 	def update_ug_ingress_decisions(self, ug_catchments):
 		"""For updating variables that only change with ug catchments."""
