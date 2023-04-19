@@ -784,8 +784,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				'info_support_size': 100,
 			},
 			'actual': {
-				'support_size': 1000, # setting this value to size(a) turns it off
-				'info_support_size': 200,
+				'support_size': 200, # setting this value to size(a) turns it off
+				'info_support_size': 50,
 			},
 		}.get(DPSIZE)
 

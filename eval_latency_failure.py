@@ -1,7 +1,7 @@
 from constants import *
 from helpers import *
 
-import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools
+import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
 
 def adv_summary(popps,adv):
@@ -30,6 +30,8 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwarg
 	if kwargs.get('verb'):
 		print(prefis)
 	valid_solutions = []
+	ts = time.time()
+	max_time = 600
 	for withdrawal_number in range(1,len(prefis) + 1):
 		for prefi_set in itertools.combinations(prefis,withdrawal_number):
 			adv[poppi,np.array(prefi_set)] = 0
@@ -64,9 +66,9 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwarg
 						sas.ug_vols[these_ugis], all_new_link_volumes))
 
 			adv[poppi,np.array(prefi_set)] = 1
-		# if len(valid_solutions) > 0:
-		# 	# greedily stop
-		# 	break
+		if len(valid_solutions) > 0 or time.time() - ts > max_time:
+			# greedily stop
+			break
 	if len(valid_solutions) > 0:
 		## pick the best one w.r.t. latency
 		best_solution,best_deltas,vols,best_new_link_volumes = valid_solutions[0]
