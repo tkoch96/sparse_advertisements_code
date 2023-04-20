@@ -190,12 +190,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		
-		if not kwargs.get('plotit') and not verb:
-			try:
-				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
-				return ret
-			except KeyError:
-				pass
+		# if not kwargs.get('plotit') and not verb:
+		try:
+			ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
+			return ret
+		except KeyError:
+			pass
 
 		USER_OF_INTEREST = None
 		WORKER_OF_INTEREST = None

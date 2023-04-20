@@ -491,6 +491,33 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	keep_ugs = list(set(ug for popp in popp_to_ug for ug in popp_to_ug[popp] if popp not in provider_popps))
 	ug_perfs = {ug:ug_perfs[ug] for ug in keep_ugs}
 
+
+
+
+	## Remove providers who have very few users
+	n_ugs_by_provider = {provider:0 for provider in provider_popps}
+	for ug in ug_perfs:
+		for provider in provider_popps:
+			try:
+				ug_perfs[ug][provider]
+				n_ugs_by_provider[provider] += 1
+			except KeyError:
+				continue
+	to_del_popps = []
+	for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
+		if n < 10:
+			to_del_popps.append(popp)
+		else:
+			break
+	print("Removing providers : {} since they don't have enough measurements.".format(
+		to_del_popps))
+	ug_perfs = {ug: {popp: ug_perfs[ug][popp] for popp in get_difference(ug_perfs[ug], to_del_popps)}
+		for ug in ug_perfs}
+	for ug in list(ug_perfs):
+		if len(ug_perfs[ug]) < 2:
+			del ug_perfs[ug]
+	anycast_latencies = {ug:anycast_latencies[ug] for ug in ug_perfs}
+
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 	print("{} UGs, {} popps after limiting users".format(len(ugs), len(popps)))

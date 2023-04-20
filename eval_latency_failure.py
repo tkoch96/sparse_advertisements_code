@@ -127,6 +127,7 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 				exit(0)
 			elif soln is None:
 				## assign badness
+				print("Didn't get solution for popp {}, soln type {}".format(popp,solution))
 				metrics[X] = metrics[X] + list(NO_ROUTE_LATENCY * np.ones((len(these_ugis))))
 				continue
 
@@ -290,8 +291,7 @@ def popp_failure_latency_comparisons():
 	finally:
 		if wm is not None:
 			wm.stop_workers()
-	f,ax=plt.subplots(3,1)
-	f.set_size_inches(6,17)
+	
 
 	for solution in soln_types:
 		print("Solution {}".format(solution))
@@ -313,6 +313,10 @@ def popp_failure_latency_comparisons():
 	plt.legend()
 	plt.savefig("n_prefs_by_popp_solutions.pdf")
 	plt.clf(); plt.close()
+
+	f,ax=plt.subplots(3,1)
+	f.set_size_inches(6,17)
+
 
 	for solution in soln_types:
 		try:

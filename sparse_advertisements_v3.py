@@ -303,25 +303,27 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			self.verbose = False
 			self.using_resilience_benefit = False
 			a = np.ones((self.n_popp, self.n_prefixes))
-			obj_on = self.modeled_objective(a)
-			advs = {}
 			exclude = []
 
-			### Cache results
-			# need to turn off resilience benefit if its on, because
-			# that would make this init O(n_popp^2) computations which 
-			# isn't practical / worth it
-			for i in range(self.n_popp):
-				a[i,:] = 0
-				self.latency_benefit_fn(a)
-				a[i,:] = 1
+			if True: # toggle
+				### Cache results
+				obj_on = self.modeled_objective(a)
+				# need to turn off resilience benefit if its on, because
+				# that would make this init O(n_popp^2) computations which 
+				# isn't practical / worth it
+				for i in range(self.n_popp):
+					a[i,:] = 0
+					self.latency_benefit_fn(a)
+					a[i,:] = 1
+					
+				self.flush_latency_benefit_queue()
+				for i in range(self.n_popp):
+					a[i,:] = 0
+					if self.modeled_objective(a) < obj_on:
+						exclude.append(i)
+					a[i,:] = 1
 				
-			self.flush_latency_benefit_queue()
-			for i in range(self.n_popp):
-				a[i,:] = 0
-				if self.modeled_objective(a) < obj_on:
-					exclude.append(i)
-				a[i,:] = 1
+
 			self.using_resilience_benefit = save_resilience_setting
 
 			# everything off, to start, with some jitter
@@ -784,8 +786,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				'info_support_size': 100,
 			},
 			'actual': {
-				'support_size': 200, # setting this value to size(a) turns it off
-				'info_support_size': 50,
+				'support_size': 150, # setting this value to size(a) turns it off
+				'info_support_size': 40,
 			},
 		}.get(DPSIZE)
 
@@ -1045,8 +1047,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 
 		# TODO : could bias towards popps that 'matter' more
-		ts=time.time()
-
 		rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
 			size=N_EXPLORE) 
 		# associated prefix distribution should be biased towards prefixes that are far from 1 and 0
@@ -1524,7 +1524,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement, verb=True))
 		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
 			store_metrics=True))
-
 		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True,verbose=True)
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
@@ -1600,6 +1599,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['advertisements'].append(copy.copy(advertisement))
 		while not self.stop:
 
+			timers = []
+			t_last = time.time()
+
 			if self.verbose:
 				print("\n\n")
 				print("LEARNING ITERATION : {}".format(self.iter))
@@ -1610,6 +1612,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if self.verbose:
 				print("calcing grads")
 			grads = self.gradient_fn(advertisement)
+
+			## grads
+			timers.append(time.time() - t_last)
+			t_last = time.time()
+
 			self.recent_grads = grads
 			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
 			a_k = advertisement
@@ -1634,6 +1641,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				if self.verbose:
 					print("Gradient stepped to a new advertisement, issuing measurement.")
 				self.measure_ingresses(advertisement)
+			
+			## measure
+			timers.append(time.time() - t_last)
+			t_last = time.time()
 
 			# Calculate, advertise & measure information about the prefix that would 
 			# give us the most new information
@@ -1651,16 +1662,28 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if self.verbose:
 				print("finding max info took {}s ".format(round(time.time() - tsmaxinfo,2)))
 			
+			## info
+			timers.append(time.time() - t_last)
+			t_last = time.time()
+			
 			# Check stopping conditions
 			self.stop_tracker(advertisement)
 			self.iter += 1
+			
+			## stop
+			timers.append(time.time() - t_last)
+			t_last = time.time()
 
 			# Add to metrics
 			if self.verbose:
 				self.summarize_user_latencies(threshold_a(advertisement))
 
-			self.t_per_iter = (time.time() - t_start) / self.iter
+			## summarize lats
+			timers.append(time.time() - t_last)
+			t_last = time.time()
 
+
+			self.t_per_iter = (time.time() - t_start) / self.iter
 			if self.iter % PRINT_FREQUENCY == 0 and self.verbose:
 				print("Optimizing, iter: {}, t_per_iter : {}s, GTO: {}, RD: {}, RDE: {}, {} path measures".format(
 					self.iter, round(self.t_per_iter,2), 
@@ -1669,8 +1692,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			if self.iter >= 65:
-				break
+			# if self.iter >= 65:
+			# 	break
+
+			for t,lab in zip(timers, ['grads','measure','info','stop','summarize_lats']):
+				print("Timer: {} -- {} s".format(lab, round(t,2)))
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(
