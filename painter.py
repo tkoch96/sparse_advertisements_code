@@ -163,9 +163,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 			self.advs = advs
 
-			# if self.iter == 3:
-			# 	break
-
 		### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
 		painter_budget = self.n_prefixes - 1
 		advs_cp = copy.deepcopy(self.advs)

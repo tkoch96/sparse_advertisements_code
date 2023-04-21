@@ -53,7 +53,7 @@ def compare_estimated_actual_per_user():
 	for worker_log in glob.glob(os.path.join(CACHE_DIR, 'worker*log.txt')):
 		for row in open(worker_log,'r'):
 			if 'benefit_estimate' not in row: continue
-			_,itr,ui,bi,lb,p = row.strip().split(',')
+			_,itr,ui,bi,lb,p,popps_str = row.strip().split(',')
 			itr,ui,bi,lb,p = int(itr),int(ui),int(bi),float(lb),float(p)
 			try:
 				modeled_user_lats[itr]
@@ -84,7 +84,8 @@ def compare_estimated_actual_per_user():
 			modeled_user_lats[itr][ui] = sum(lb*p for _,lb,p in set(modeled_user_lats[itr][ui]))
 		these_modeled_lats = np.array([modeled_user_lats[itr][ui] for itr in itrs])
 		these_actual_lats = np.array([actual_user_lats[itr][ui][1] for itr in itrs])
-		ax.plot(itrs, these_actual_lats - these_modeled_lats)
+		deltas = these_actual_lats - these_modeled_lats
+		ax.plot(itrs, deltas)
 
 	ax.set_xlabel("Iteration")
 	ax.set_ylabel("Actual - Modeled Benefit")
@@ -111,6 +112,21 @@ def investigate_congestion_events():
 			except KeyError:
 				link_failure_events[uid] = [(itr,vol_users - link_cap)]
 			max_itr = itr
+	# for row in open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'r'):
+	# 	if 'link_fail_report' not in row: continue
+	# 	_,itr,ingress_i,failing_poppi,link_cap,vol_users,uis,p_fails = row.strip().split(',')
+	# 	if failing_poppi != 'none':
+	# 		failing_poppi = int(failing_poppi)
+	# 	itr,ingress_i,link_cap,vol_users,p_fails = int(itr),int(ingress_i),float(link_cap),float(vol_users),float(p_fails)
+	# 	uis = [int(el) for el in uis.split('-')]
+
+	# 	uid = (ingress_i,failing_poppi)
+
+	# 	try:
+	# 		link_failure_events[uid].append((itr, vol_users - link_cap))
+	# 	except KeyError:
+	# 		link_failure_events[uid] = [(itr,vol_users - link_cap)]
+	# 	max_itr = itr
 
 	plt.rcParams["figure.figsize"] = (8,6)
 	f,ax = plt.subplots()
@@ -833,7 +849,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
-			'really_friggin_small': 2,
+			'really_friggin_small': 20,
 			'actual': 5,
 		}.get(DPSIZE, 1)
 
@@ -1003,7 +1019,23 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		max_val = np.max(np.abs(net_grad).flatten())
 		DESIRED_MAX_VAL = 1.0
 		if max_val < DESIRED_MAX_VAL:
-			mult = (DESIRED_MAX_VAL / (max_val+1e-8))
+			## check to make sure this rescale wouldn't flip multiple advertisement indices at once
+			
+			inds = np.abs(net_grad)>1e-3	
+			alphas = (ADVERTISEMENT_THRESHOLD - a[inds]) / (self.alpha * net_grad[inds])
+			alphas = alphas[alphas>0]
+			if len(alphas) > 0:
+				limiting_alpha = np.min(alphas)
+				mult = np.minimum(limiting_alpha, (DESIRED_MAX_VAL / (max_val+1e-8)))
+			else:
+				mult = 1.0
+
+
+			# print((DESIRED_MAX_VAL / (max_val+1e-8)))
+			# print(limiting_alpha)
+			# print(mult)
+			# exit(0)
+
 			net_grad = net_grad * mult
 			print("Modified gradient by a factor of {}".format(mult))
 		return -1 * net_grad
@@ -1733,7 +1765,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			# if self.iter >= 65:
+			# if self.iter >= 5:
 			# 	break
 
 			for t,lab in zip(timers, ['grads','measure','info','stop','summarize_lats']):
@@ -1765,6 +1797,8 @@ def main():
 		sas.make_plots()
 		soln = sas.get_last_advertisement()
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))
+
+		compare_estimated_actual_per_user()
 
 	except:
 		import traceback

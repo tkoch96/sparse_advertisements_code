@@ -147,7 +147,7 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 
 			metrics[X] = metrics[X] + list(soln['latency_deltas'])
 			new_required_link_caps = soln['link_volumes']
-			if required_link_caps is None:
+			if required_link_caps is None and new_required_link_caps is not None:
 				required_link_caps = new_required_link_caps
 			else:
 				update_capis = new_required_link_caps > required_link_caps
@@ -157,7 +157,10 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 		deployment['link_capacities'] = old_caps
 		sas.update_deployment(deployment)
 
-	link_capacities = {sas.popps[poppi]:required_link_caps[poppi] for poppi in range(sas.n_popps)}
+	if required_link_caps is not None:
+		link_capacities = {sas.popps[poppi]:required_link_caps[poppi] for poppi in range(sas.n_popps)}
+	else:
+		link_capacities = None
 	return {
 		'link_capacities': link_capacities,
 		'metrics': metrics,
@@ -385,7 +388,7 @@ def plot_lats_from_adv(sas, advertisement, fn):
 		metrics = {}
 		if i ==0:
 			adv = threshold_a(advertisement)
-			adv_summary(sas.popps, advertisement)
+			# adv_summary(sas.popps, advertisement)
 		else: # anycast
 			adv = np.zeros(advertisement.shape)
 			adv[:,0] = 1
