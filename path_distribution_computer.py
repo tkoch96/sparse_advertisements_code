@@ -190,12 +190,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		
-		# if not kwargs.get('plotit') and not verb:
-		try:
-			ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
-			return ret
-		except KeyError:
-			pass
+		if not verb:
+			## don't rely on caching if we want to log / print statistics
+			try:
+				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
+				return ret
+			except KeyError:
+				pass
 
 		USER_OF_INTEREST = None
 		WORKER_OF_INTEREST = None
@@ -354,12 +355,27 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 			if verb:
 				for ingress_i in np.where(self.p_link_fails)[0]:
-					self.print("{} Ingress {} ({}) fails with probability {}, users {}".format(self.worker_i,ingress_i, self.popps[ingress_i],
-					 self.p_link_fails[ingress_i], np.where(self.ingress_px[ingress_i,:] > .1)[0]))
-					self.print(np.where(self.ingress_px[ingress_i,:]))
+					# self.print("{} Ingress {} ({}) fails with probability {}, users {}".format(self.worker_i,ingress_i, self.popps[ingress_i],
+					#  	self.p_link_fails[ingress_i], np.where(self.ingress_px[ingress_i,:] > .1)[0]))
 					whole_deployment_uis = [self.whole_deployment_ug_to_ind[self.ugs[ui]] for ui in np.where(self.ingress_px[ingress_i,:])[0]]
-					self.print("whole deployment uis {} ".format(whole_deployment_uis))
-					self.print("severity is {}".format(self.link_failure_severities[ingress_i]))
+					severity = self.link_failure_severities[ingress_i]
+					# self.print(np.where(self.ingress_px[ingress_i,:]))
+					# self.print("whole deployment uis {} ".format(whole_deployment_uis))
+					# self.print("severity is {}".format(severity))
+
+
+					# ui_global = self.whole_deployment_ug_to_ind[ug]
+					uis = np.where(self.ingress_px[ingress_i,:] > .001)[0]
+					uis_global = [self.whole_deployment_ug_to_ind[self.ugs[ui]] for ui in uis]
+					users_str = "-".join([str(el) for el in uis_global])
+					failing_popp = kwargs.get('failing_popp','none')
+					if failing_popp != 'none':
+						failing_popp = self.popp_to_ind[failing_popp]
+					self.log("link_fail_report,{},{},{},{},{},{},{}\n".format(
+						self.iter,ingress_i,failing_popp,self.link_capacities[ingress_i],
+						severity,users_str,self.p_link_fails[ingress_i]))
+
+
 					
 					ug_prob_vols_this_ingress_i = np.where(self.ingress_px[ingress_i,:] > .1)[0]
 					include_in_px = []
@@ -390,10 +406,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
 
 
-					self.print("Ingress capacity is {} while users contribute {}, prob {}".format(self.link_capacities[ingress_i],
-						x_vol_this_ingress,p_vol_this_ingress))
+					# self.print("Ingress capacity is {} while users contribute {}, prob {}".format(self.link_capacities[ingress_i],
+					# 	x_vol_this_ingress,p_vol_this_ingress))
 
-		
 			timers['capacity_2'] = time.time()
 			timers['capacity_3'] = time.time()
 			ug_inds_to_loop = list(ug_inds_to_loop)
@@ -438,7 +453,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					min_experienced_benefit = lb
 
 				if lb <= self.big_lbx[0,ui]:
-					lbx_i = 0
+					## reformat now, this is a big deal
+					self.big_lbx[:,ui] = np.linspace(lb*1.5, self.big_lbx[-1,ui])
+					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
 				elif lb >= self.big_lbx[-1,ui]:
 					lbx_i = self.big_lbx.shape[0] - 1 
 				else:
@@ -454,7 +471,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						min_experienced_benefit = lb
 
 					if lb_failure <= self.big_lbx[0,ui]:
-						limited_cap_lbxi = 0
+						## reformat now, this is a big deal
+						self.big_lbx[:,ui] = np.linspace(lb_failure*1.5, self.big_lbx[-1,ui])
+						limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
 					elif lb_failure >= self.big_lbx[-1,ui]:
 						limited_cap_lbxi = self.big_lbx.shape[0] - 1 
 					else:
@@ -488,7 +507,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						min_experienced_benefit = lb
 
 					if lb <= self.big_lbx[0,ui]:
-						lbx_i = 0
+						## reformat now, this is a big deal
+						self.big_lbx[:,ui] = np.linspace(lb*1.5, self.big_lbx[-1,ui])
+						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
 					elif lb >= self.big_lbx[-1,ui]:
 						lbx_i = self.big_lbx.shape[0] - 1 
 					else:
@@ -504,7 +525,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 							min_experienced_benefit = lb
 						
 						if lb_failure <= self.big_lbx[0,ui]:
-							limited_cap_lbxi = 0
+							## reformat now, this is a big deal
+							self.big_lbx[:,ui] = np.linspace(lb_failure*1.5, self.big_lbx[-1,ui])
+							limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
 						elif lb_failure >= self.big_lbx[-1,ui]:
 							limited_cap_lbxi = self.big_lbx.shape[0] - 1 
 						else:
@@ -542,13 +565,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if p > .001:
 					prnts.append((ui,bi,self.big_lbx[bi,ui],p))
 					total_b += p*self.big_lbx[bi,ui]
-			for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
-				ug = self.ugs[ui]
-				ui_global = self.whole_deployment_ug_to_ind[ug]
-				self.log("{},{},{},{},{}\n".format(
-					self.iter,ui_global,bi,lb,p))
+			if kwargs.get('failing_popp') is None:
+				for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
+					ug = self.ugs[ui]
+					ui_global = self.whole_deployment_ug_to_ind[ug]
+					self.log("benefit_estimate,{},{},{},{},{}\n".format(
+						self.iter,ui_global,bi,lb,round(p,2)))
 			# print("Total : {}".format(total_b))
-
 
 		for ui in ug_inds_to_loop:
 			if np.sum(self.user_px[:,ui]) == 0:

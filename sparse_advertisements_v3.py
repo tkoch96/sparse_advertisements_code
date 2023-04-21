@@ -52,7 +52,8 @@ def compare_estimated_actual_per_user():
 	modeled_user_lats = {}
 	for worker_log in glob.glob(os.path.join(CACHE_DIR, 'worker*log.txt')):
 		for row in open(worker_log,'r'):
-			itr,ui,bi,lb,p = row.strip().split(',')
+			if 'benefit_estimate' not in row: continue
+			_,itr,ui,bi,lb,p = row.strip().split(',')
 			itr,ui,bi,lb,p = int(itr),int(ui),int(bi),float(lb),float(p)
 			try:
 				modeled_user_lats[itr]
@@ -64,7 +65,8 @@ def compare_estimated_actual_per_user():
 				modeled_user_lats[itr][ui] = [(bi,lb,p)]
 	actual_user_lats = {}
 	for row in open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'r'):
-		itr,ui,poppi,b = row.strip().split(',')
+		if 'benefit_estimate' not in row: continue
+		_,itr,ui,poppi,b = row.strip().split(',')
 		itr,ui,poppi,b = int(itr),int(ui),int(poppi),float(b)
 		try:
 			actual_user_lats[itr]
@@ -74,10 +76,12 @@ def compare_estimated_actual_per_user():
 
 	itrs = list(sorted(list(actual_user_lats)))
 	uis = list(sorted(list(actual_user_lats[0])))
+	
+	plt.rcParams["figure.figsize"] = (8,6)
 	f,ax = plt.subplots()
 	for ui in uis:
 		for itr in itrs:
-			modeled_user_lats[itr][ui] = sum(lb*p for _,lb,p in modeled_user_lats[itr][ui])
+			modeled_user_lats[itr][ui] = sum(lb*p for _,lb,p in set(modeled_user_lats[itr][ui]))
 		these_modeled_lats = np.array([modeled_user_lats[itr][ui] for itr in itrs])
 		these_actual_lats = np.array([actual_user_lats[itr][ui][1] for itr in itrs])
 		ax.plot(itrs, these_actual_lats - these_modeled_lats)
@@ -85,6 +89,44 @@ def compare_estimated_actual_per_user():
 	ax.set_xlabel("Iteration")
 	ax.set_ylabel("Actual - Modeled Benefit")
 	plt.savefig("figures/benefit_modeling_error.pdf")
+	plt.clf()
+	plt.close()
+
+def investigate_congestion_events():
+	import glob
+	link_failure_events = {}
+	for worker_log in glob.glob(os.path.join(CACHE_DIR, 'worker*log.txt')):
+		for row in open(worker_log,'r'):
+			if 'link_fail_report' not in row: continue
+			_,itr,ingress_i,failing_poppi,link_cap,vol_users,uis,p_fails = row.strip().split(',')
+			if failing_poppi != 'none':
+				failing_poppi = int(failing_poppi)
+			itr,ingress_i,link_cap,vol_users,p_fails = int(itr),int(ingress_i),float(link_cap),float(vol_users),float(p_fails)
+			uis = [int(el) for el in uis.split('-')]
+
+			uid = (ingress_i,failing_poppi)
+
+			try:
+				link_failure_events[uid].append((itr, vol_users - link_cap))
+			except KeyError:
+				link_failure_events[uid] = [(itr,vol_users - link_cap)]
+			max_itr = itr
+
+	plt.rcParams["figure.figsize"] = (8,6)
+	f,ax = plt.subplots()
+	for uid in link_failure_events:
+		x,y = [el[0] for el in link_failure_events[uid]],\
+			[el[1] for el in link_failure_events[uid]]
+		if max_itr - x[-1] < 5:
+			# only label recent issues
+			ax.plot(x,y,label='{} over, {} fails'.format(uid[0],uid[1]))
+		else:
+			ax.plot(x,y)
+
+	ax.set_xlabel("Iteration")
+	ax.set_ylabel("Excess Link Load")
+	ax.legend(fontsize=6)
+	plt.savefig("figures/reported_failure_events_during_training.pdf")
 	plt.clf()
 	plt.close()
 
@@ -257,6 +299,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			# we don't know for sure where users are going
 			# so we have to compute over all users
 			tmp[self.popp_to_ind[popp],:] = 0
+			cpkwargs['failing_popp'] = popp
 			self.latency_benefit_fn(a * tmp, **cpkwargs)
 			tmp[self.popp_to_ind[popp],:] = 1
 		rets = self.flush_latency_benefit_queue()
@@ -357,10 +400,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		latency_benefit, u = self.latency_benefit_fn(threshold_a(a), **kwargs)
 
 		if self.using_resilience_benefit:
-			cpset = copy.copy(kwargs.get('verbose_workers',False))
-			kwargs['verbose_workers'] = False
 			resilience_benefit = self.resilience_benefit_fn(a, **kwargs)
-			kwargs['verbose_workers'] = cpset
 		else:
 			resilience_benefit = 0
 
@@ -793,7 +833,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
-			'really_friggin_small': 5,
+			'really_friggin_small': 2,
 			'actual': 5,
 		}.get(DPSIZE, 1)
 
@@ -1144,6 +1184,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	def make_plots(self, *args, **kwargs):
 
 		compare_estimated_actual_per_user()
+		investigate_congestion_events()
 		
 
 		plt.rcParams["figure.figsize"] = (10,20)

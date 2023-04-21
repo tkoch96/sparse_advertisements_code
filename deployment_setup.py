@@ -92,7 +92,7 @@ def get_link_capacities(deployment):
 	# problem is to solve
 	EASYNESS_MULT = { 
 		'easy': 1,
-		'medium': 2,
+		'medium': .15,
 		'hard': .1,
 	}[RESILIENCE_DIFFICULTY]
 

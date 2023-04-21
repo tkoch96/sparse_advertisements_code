@@ -413,10 +413,16 @@ class Optimal_Adv_Wrapper:
 			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
 				# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
 				for poppi in np.where(cap_violations)[0]:
-					print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
-						kwargs.get('failing'), 
-						link_volumes[poppi] - self.link_capacities_arr[poppi]))
-					print("Users {} now using this ingress".format(ingress_to_users[poppi]))
+					poppi_failed = kwargs.get('failing', 'none')
+					if poppi_failed != 'none':
+						poppi_failed = self.popp_to_ind[poppi_failed]
+					# print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
+					# 	poppi_failed, link_volumes[poppi] - self.link_capacities_arr[poppi]))
+					# print("Users {} now using this ingress".format(ingress_to_users[poppi]))
+					users_str = "-".join([str(el) for el in ingress_to_users[poppi]])
+					self.log("link_fail_report,{},{},{},{},{},{}\n".format(
+						self.iter,poppi,poppi_failed,self.link_capacities[poppi],
+						link_volumes[poppi],users_str))
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
@@ -493,7 +499,7 @@ class Optimal_Adv_Wrapper:
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
 		if kwargs.get('verb'):
 			for ui,poppi in ug_ingress_decisions.items():
-				self.log("{},{},{},{}\n".format(
+				self.log("benefit_estimate,{},{},{},{}\n".format(
 					self.iter,ui,poppi,self.mlbs[poppi,ui]))
 		return user_latencies, ug_ingress_decisions
 
