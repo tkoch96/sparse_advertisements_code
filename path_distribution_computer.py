@@ -157,9 +157,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.ingress_px = np.zeros((self.n_popp, self.n_ug))
 		self.p_link_fails = np.zeros(self.n_popp)
 		self.link_failure_severities = np.zeros(self.n_popp)
+		self.big_lbx = np.zeros((LBX_DENSITY, self.n_ug))
+		for ui in range(self.n_ug):
+			self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
+					num=LBX_DENSITY)
 		self.user_ip_cache = {
 			'init_ip': None,
 			'default_px': copy.copy(self.user_px),
+			'big_lbx': copy.copy(self.big_lbx),
 			'ingress_px': copy.copy(self.ingress_px),
 			'p_link_fails': copy.copy(self.p_link_fails),
 			'link_failure_severities': copy.copy(self.link_failure_severities),
@@ -251,6 +256,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				ug_inds_to_loop[ui] = None
 			ug_inds_to_loop = np.array(sorted(list(ug_inds_to_loop)))
 			self.user_px = copy.copy(self.user_ip_cache['default_px'])
+			self.big_lbx = copy.copy(self.user_ip_cache['big_lbx'])
 			if self.with_capacity:
 				self.ingress_px = copy.copy(self.user_ip_cache['default_ingress_px'])
 				self.p_link_fails = copy.copy(self.user_ip_cache['p_link_fails'])
@@ -438,8 +444,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
 				self.link_failure_severities[poppi]) \
 				for poppi,prefj in zip(*all_pv_i)]
-			# if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
-			# 	self.print("PV : {}".format(all_pv))
+			if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+				self.print("PV : {}".format(all_pv))
 
 			if len(all_pv) == 0:
 				# this user has no paths
@@ -460,10 +466,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					lbx_i = self.big_lbx.shape[0] - 1 
 				else:
 					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
+				if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+					self.print("LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
+						self.big_lbx[-1,ui]))
 
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
-					lb_failure = lb * lb_multiplier_link_failure * np.log2(1 + lfs)
+					lb_failure = lb * (1 + lfs)
 
 					if lb_failure > max_experienced_benefit:
 						max_experienced_benefit = lb
@@ -514,10 +523,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						lbx_i = self.big_lbx.shape[0] - 1 
 					else:
 						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
+					if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+						self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
+							self.big_lbx[-1,ui]))
 
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
-						lb_failure = lb * lb_multiplier_link_failure * np.log2( 1 + lfs )
+						lb_failure = lb * ( 1 + lfs )
 
 						if lb_failure > max_experienced_benefit:
 							max_experienced_benefit = lb
@@ -567,10 +579,20 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					total_b += p*self.big_lbx[bi,ui]
 			if kwargs.get('failing_popp') is None:
 				for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
+					# get likely popps
+					likely_popps = np.where(self.ingress_px[:,ui]>.01)[0]
+					likely_popps_str = "-".join([str(el) for el in likely_popps])
 					ug = self.ugs[ui]
 					ui_global = self.whole_deployment_ug_to_ind[ug]
-					self.log("benefit_estimate,{},{},{},{},{}\n".format(
-						self.iter,ui_global,bi,lb,round(p,2)))
+					log_str = "benefit_estimate,{},{},{},{},{},{}\n".format(
+						self.iter,ui_global,bi,lb,round(p,2),likely_popps_str)
+					if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+						all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
+							self.link_failure_severities[poppi]) \
+							for poppi,prefj in zip(*np.where(p_mat[:,:,ui]))]
+						self.print("PV : {}".format(all_pv))
+						self.print(log_str)
+					self.log(log_str)
 			# print("Total : {}".format(total_b))
 
 		for ui in ug_inds_to_loop:
@@ -587,6 +609,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if self.user_ip_cache['init_ip'] is None:
 			self.user_ip_cache['init_ip'] = p_mat
 			self.user_ip_cache['default_px'] = copy.copy(self.user_px)
+			self.user_ip_cache['big_lbx'] = copy.copy(self.big_lbx)
 			if self.with_capacity:
 				self.user_ip_cache['default_ingress_px'] = copy.copy(self.ingress_px)
 				self.user_ip_cache['p_link_fails'] = copy.copy(self.p_link_fails)
@@ -601,9 +624,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx, px)
 		benefit = np.sum(xsumx.flatten() * psumx.flatten())
-
-		if verb and self.worker_i == WORKER_OF_INTEREST:
-			print("Expected is {}".format(benefit))
 
 		for ui in ug_benefit_updates:
 			# if self.worker_i == WORKER_OF_INTEREST and ui in [1,2,3,4,5]:
@@ -653,6 +673,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.clear_new_meas_caches()
 
 	def clear_new_meas_caches(self):
+		print("Clearing caches")
 		self.this_time_ip_cache = {}
 		self.init_user_px_cache()
 		self.calc_cache.clear_new_measurement_caches()
