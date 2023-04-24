@@ -224,10 +224,16 @@ def popp_failure_latency_comparisons():
 			ret = assess_resilience_to_congestion(sas, adv, solution, X_vals)
 			new_link_capacities = ret['link_capacities']
 			m = ret['metrics']
+			pickle.dump(m,open('tmp.pkl','wb'))
 			f,ax = plt.subplots()
+			f.set_size_inches(8,6)
 			for X in X_vals:
 				x,cdf_x = get_cdf_xy(list([el for el in m[X] ]))
 				ax.plot(x,cdf_x,label="{} Drain pct={}".format(solution,X))
+			ax.set_xlabel("Latency Change (new - old) (ms)")
+			ax.set_ylabel("CDF of UGs")
+			ax.grid(True)
+			ax.set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 			plt.savefig('figures/just_painter_resilience_to_congestion.pdf')
 			# exit(0)
 
