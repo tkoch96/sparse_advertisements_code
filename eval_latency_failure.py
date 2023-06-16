@@ -219,28 +219,6 @@ def popp_failure_latency_comparisons():
 				wm.start_workers()
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
-			sas.solve_painter()
-
-			## See which capacities are required for PAINTER
-			adv = sas.painter_solution['advertisement']
-			solution = 'painter'
-			ret = assess_resilience_to_congestion(sas, adv, solution, X_vals)
-			new_link_capacities = ret['link_capacities']
-			m = ret['metrics']
-			f,ax = plt.subplots()
-			for X in X_vals:
-				x,cdf_x = get_cdf_xy(list([el for el in m[X] ]))
-				ax.plot(x,cdf_x,label="{} Drain pct={}".format(solution,X))
-			plt.savefig('figures/just_painter_resilience_to_congestion.pdf')
-			# exit(0)
-
-			## Given these capacities, solve all the solutions
-			for popp in sas.popps:
-				if deployment['link_capacities'][popp] < new_link_capacities[popp]:
-					deployment['link_capacities'][popp] = new_link_capacities[popp]
-			print("NLC : {}".format(deployment['link_capacities']))
-			metrics['deployment'][random_iter] = deployment
-			sas.update_deployment(deployment)
 			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=True,
 				 dont_update_deployment=True)
 

@@ -1,4 +1,5 @@
 CACHE_DIR = "cache"
+DATA_DIR = "data"
 GRAPH_DIR = "graphs"
 KM_TO_MS = .01
 cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','darkseagreen','palegoldenrod',
@@ -40,11 +41,11 @@ NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 N_WORKERS = {
 	'really_friggin_small': 1,
 	'actual': 8,
-	'small': 4,
+	'small': 2,
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)
-RESILIENCE_DIFFICULTY = 'medium'
+RESILIENCE_DIFFICULTY = 'hard'
 
 
 

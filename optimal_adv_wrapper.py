@@ -117,6 +117,14 @@ class Optimal_Adv_Wrapper:
 		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
 		self.ug_perfs = deployment['ug_perfs']
 		self.ug_anycast_perfs = deployment['ug_anycast_perfs']
+
+		# compute best popp by ug
+		self.best_popp_by_ug = {}
+		for ug,perfs in self.ug_perfs.items():
+			popps = list(perfs)
+			lats = [perfs[popp] for popp in popps]
+			self.best_popp_by_ug[ug] = popps[np.argmin(lats)]
+
 		# Shape of the variables
 		self.popps = sorted(list(set(deployment['popps'])))
 		self.n_popps = len(self.popps)
@@ -420,9 +428,12 @@ class Optimal_Adv_Wrapper:
 					# 	poppi_failed, link_volumes[poppi] - self.link_capacities_arr[poppi]))
 					# print("Users {} now using this ingress".format(ingress_to_users[poppi]))
 					users_str = "-".join([str(el) for el in ingress_to_users[poppi]])
-					self.log("link_fail_report,{},{},{},{},{},{}\n".format(
-						self.iter,poppi,poppi_failed,self.link_capacities[poppi],
-						link_volumes[poppi],users_str))
+					try:
+						self.log("link_fail_report,{},{},{},{},{},{}\n".format(
+							self.iter,poppi,poppi_failed,self.link_capacities[poppi],
+							link_volumes[poppi],users_str))
+					except:
+						continue
 			for cap_violation in np.where(cap_violations)[0]:
 				for ugi in ingress_to_users[cap_violation]:
 					user_latencies[ugi] = NO_ROUTE_LATENCY
@@ -578,7 +589,7 @@ class Optimal_Adv_Wrapper:
 		self.popp_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T
 
 	def calculate_ground_truth_ingress(self, a, **kwargs):
-		### Returns routed_through ingress -> prefix -> ug -> popp_i
+		### Returns routed_through_ingress: prefix -> ug -> popp_i
 		## and actives prefix -> [active popp indices]
 
 		### Somewhat efficient implementation using matrix logic

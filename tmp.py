@@ -1,8 +1,11 @@
-rows = []
-for row in open('screenlog.0','r'):
-	if "Current cache size" in row:
+
+a_lats = {}
+all_a_lats = {}
+for row in open('cache/vultr_anycast_latency.csv','r'):
+	t,ip,lat,pop = row.strip().split(",")
+	all_a_lats[ip] = None
+	if lat == '-1':
 		continue
-	rows.append(row)
-with open('newscreenlog.0','w') as f:
-	for row in rows:
-		f.write(row)
+	a_lats[ip] = None
+
+print("{} in total, {} with response".format(len(all_a_lats), len(a_lats)))		

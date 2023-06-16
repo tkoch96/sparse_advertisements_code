@@ -438,6 +438,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		ug_benefit_updates = []
 		for ui in ug_inds_to_loop:
+
+			#### This methodology assumes every user visits their lowest-latency link
+			#### should we instead artificially inflate user latencies on failed links so they choose to go to other places?
+			#### that way, users with almost-as-good options will just naturally shift off
+
 			min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
 			all_pv_i = np.where(p_mat[:,:,ui])
 			## combine benefit with bernoulli link failure

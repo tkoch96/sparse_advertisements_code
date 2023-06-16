@@ -91,7 +91,7 @@ def get_link_capacities(deployment):
 	# controls backup volume we have, therefore how hard the resilience
 	# problem is to solve
 	EASYNESS_MULT = { 
-		'easy': 1,
+		'easy': .8,
 		'medium': .15,
 		'hard': .1,
 	}[RESILIENCE_DIFFICULTY]
@@ -429,93 +429,94 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 	print("{} UGs, {} popps after intersecting latency".format(len(ugs), len(popps)))
 
+	if kwargs.get('do_filter', True):
 
-
-	### Randomly limit to max_n_ug per popp, unless the popp is a provider
-	max_n_ug = kwargs.get('n_users_per_peer', 200)
-	provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
-	provider_popps = []
-	for row in open(provider_fn, 'r'):
-		pop,peer = row.strip().split(',')
-		if pop not in considering_pops:
-			continue
-		provider_popps.append((pop,peer))
-	popp_to_ug = {popp:[] for popp in popps}
-	for ug, perfs in ug_perfs.items():
-		for popp in perfs:
-			if popp in provider_popps: continue
-			popp_to_ug[popp].append(ug)
-	
-	import matplotlib.pyplot as plt
-	x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
-	plt.plot(x,cdf_x)
-	plt.xlabel("Number of UGs per Ingress")
-	plt.ylabel("CDF of Ingresses")
-	plt.grid(True)
-	plt.savefig('figures/n_ugs_per_ingress.pdf')
-
-	n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
-	for popp,_ugs in popp_to_ug.items():
-		if popp in provider_popps: continue
-
-		### Favor users whose best popp is not a provider
-		peer_ugs, provider_ugs = [],[]
-		for _ug in _ugs:
-			these_popps = list(ug_perfs[_ug])
-			perfs = np.array([ug_perfs[_ug][_popp] for _popp in these_popps])
-			best_popp = these_popps[np.argmin(perfs)]
-			if best_popp in provider_popps:
-				provider_ugs.append(_ug)
-			else:
-				peer_ugs.append(_ug)
-		if len(peer_ugs) > 0:
-			np.random.shuffle(peer_ugs)
-		if len(provider_ugs) > 0:
-			np.random.shuffle(provider_ugs)
-
-		n_keeping_peer = np.minimum(len(peer_ugs), max_n_ug)
-		n_peer_was_best += n_keeping_peer
-		n_keeping_provider = np.minimum(max_n_ug - n_keeping_peer, len(provider_ugs))
-		n_provider_was_best += n_keeping_provider
-		n_keep = np.minimum(len(_ugs), max_n_ug)
-		n_total_users += n_keep
-
-		_ugs = peer_ugs + provider_ugs
-		popp_to_ug[popp] = _ugs[0:n_keep]
-
-	print("Out of {} UGs, {} ({} pct) peer was best, {} ({} pct) provider was best.".format(
-		n_total_users, n_peer_was_best, round(n_peer_was_best*100/n_total_users,2),
-		n_provider_was_best,round(n_provider_was_best*100/n_total_users,2)))
-
-
-	keep_ugs = list(set(ug for popp in popp_to_ug for ug in popp_to_ug[popp] if popp not in provider_popps))
-	ug_perfs = {ug:ug_perfs[ug] for ug in keep_ugs}
-
-
-
-
-	## Remove providers who have very few users
-	n_ugs_by_provider = {provider:0 for provider in provider_popps}
-	for ug in ug_perfs:
-		for provider in provider_popps:
-			try:
-				ug_perfs[ug][provider]
-				n_ugs_by_provider[provider] += 1
-			except KeyError:
+		### Randomly limit to max_n_ug per popp, unless the popp is a provider
+		max_n_ug = kwargs.get('n_users_per_peer', 200)
+		provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
+		provider_popps = []
+		for row in open(provider_fn, 'r'):
+			pop,peer = row.strip().split(',')
+			if pop not in considering_pops:
 				continue
-	to_del_popps = []
-	for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
-		if n < 10:
-			to_del_popps.append(popp)
+			provider_popps.append((pop,peer))
+		popp_to_ug = {popp:[] for popp in popps}
+		for ug, perfs in ug_perfs.items():
+			for popp in perfs:
+				if kwargs.get('focus_on_peers',True):
+					if popp in provider_popps: continue
+				popp_to_ug[popp].append(ug)
+		
+		import matplotlib.pyplot as plt
+		x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
+		plt.plot(x,cdf_x)
+		plt.xlabel("Number of UGs per Ingress")
+		plt.ylabel("CDF of Ingresses")
+		plt.grid(True)
+		plt.savefig('figures/n_ugs_per_ingress.pdf')
+
+		n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
+		for popp,_ugs in popp_to_ug.items():
+			if kwargs.get('focus_on_peers',True):
+				if popp in provider_popps: continue
+
+			### Favor users whose best popp is not a provider
+			peer_ugs, provider_ugs = [],[]
+			for _ug in _ugs:
+				these_popps = list(ug_perfs[_ug])
+				perfs = np.array([ug_perfs[_ug][_popp] for _popp in these_popps])
+				best_popp = these_popps[np.argmin(perfs)]
+				if best_popp in provider_popps:
+					provider_ugs.append(_ug)
+				else:
+					peer_ugs.append(_ug)
+			if len(peer_ugs) > 0:
+				np.random.shuffle(peer_ugs)
+			if len(provider_ugs) > 0:
+				np.random.shuffle(provider_ugs)
+
+			n_keeping_peer = np.minimum(len(peer_ugs), max_n_ug)
+			n_peer_was_best += n_keeping_peer
+			n_keeping_provider = np.minimum(max_n_ug - n_keeping_peer, len(provider_ugs))
+			n_provider_was_best += n_keeping_provider
+			n_keep = np.minimum(len(_ugs), max_n_ug)
+			n_total_users += n_keep
+
+			_ugs = peer_ugs + provider_ugs
+			popp_to_ug[popp] = _ugs[0:n_keep]
+
+		print("Out of {} UGs, {} ({} pct) peer was best, {} ({} pct) provider was best.".format(
+			n_total_users, n_peer_was_best, round(n_peer_was_best*100/n_total_users,2),
+			n_provider_was_best,round(n_provider_was_best*100/n_total_users,2)))
+
+		if kwargs.get('focus_on_peers',True):
+			keep_ugs = list(set(ug for popp in popp_to_ug for ug in popp_to_ug[popp] if popp not in provider_popps))
 		else:
-			break
-	print("Removing providers : {} since they don't have enough measurements.".format(
-		to_del_popps))
-	ug_perfs = {ug: {popp: ug_perfs[ug][popp] for popp in get_difference(ug_perfs[ug], to_del_popps)}
-		for ug in ug_perfs}
-	for ug in list(ug_perfs):
-		if len(ug_perfs[ug]) < 2:
-			del ug_perfs[ug]
+			keep_ugs = list(set(ug for popp in popp_to_ug for ug in popp_to_ug[popp]))
+		ug_perfs = {ug:ug_perfs[ug] for ug in keep_ugs}
+
+		## Remove providers who have very few users
+		n_ugs_by_provider = {provider:0 for provider in provider_popps}
+		for ug in ug_perfs:
+			for provider in provider_popps:
+				try:
+					ug_perfs[ug][provider]
+					n_ugs_by_provider[provider] += 1
+				except KeyError:
+					continue
+		to_del_popps = []
+		for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
+			if n < 10:
+				to_del_popps.append(popp)
+			else:
+				break
+		print("Removing providers : {} since they don't have enough measurements.".format(
+			to_del_popps))
+		ug_perfs = {ug: {popp: ug_perfs[ug][popp] for popp in get_difference(ug_perfs[ug], to_del_popps)}
+			for ug in ug_perfs}
+		for ug in list(ug_perfs):
+			if len(ug_perfs[ug]) < 2:
+				del ug_perfs[ug]
 	anycast_latencies = {ug:anycast_latencies[ug] for ug in ug_perfs}
 
 	ugs = sorted(list(ug_perfs))
@@ -523,6 +524,43 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("{} UGs, {} popps after limiting users".format(len(ugs), len(popps)))
 
 	return anycast_latencies, ug_perfs
+
+def export_interesting_measurements():
+	considering_pops = ['miami', 'atlanta']
+	anycast_latencies, ug_perfs = load_actual_perfs(considering_pops = considering_pops, n_users_per_peer=300000,
+		focus_on_peers=False)
+	# ug_perfs = get_random_deployment_by_size('really_friggin_small')['ug_perfs']
+
+	all_popps = list(set(popp for ug in ug_perfs for popp in ug_perfs[ug]))
+	profiles = {}
+	for ug in ug_perfs:
+		all_perfs = np.array(list(ug_perfs[ug].values()))
+		ml = np.min(all_perfs)
+		popp_key = tuple(sorted(list(ug_perfs[ug].keys()), key = lambda el : "-".join([str(_el) for _el in el])))
+		try:
+			profiles[popp_key].append((ug,ml))
+		except KeyError:
+			profiles[popp_key] = [(ug, ml)]
+	print("{} profiles".format(len(profiles)))
+	n_to_keep = 400
+	keep_ugs = []
+	for p in profiles:
+		keep_ugs = keep_ugs + [el[0] for el in sorted(profiles[p], key = lambda el : el[1])[0:n_to_keep]]
+	print("Keeping {} Ugs".format(len(keep_ugs)))
+
+	with open(os.path.join(CACHE_DIR, 'interesting_targets_to_probe.csv'),'w') as f:
+		for ug in keep_ugs:
+			all_perfs = np.array(list(ug_perfs[ug].values()))
+			if np.min(all_perfs) > 50:
+				# this target would not likely use one of these popps
+				continue
+			if np.random.random() > .99:
+				print("UG {} perfs {} anycast {}".format(ug,ug_perfs[ug],anycast_latencies[ug]))
+			_, ip = ug
+			popps = list(ug_perfs[ug])
+			popps = [str(popp[0]) + "|" + str(popp[1]) for popp in popps]
+			popps_str = "-".join(popps)
+			f.write("{},{}\n".format(ip,popps_str))
 
 def load_actual_deployment():
 	considering_pops = list(POP_TO_LOC['vultr'])
@@ -799,6 +837,6 @@ def get_random_deployment_by_size(problem_size):
 	return deployment
 
 if __name__ == "__main__":
-	load_actual_deployment()
+	export_interesting_measurements()
 	# cluster_actual_users()
 
