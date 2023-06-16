@@ -19,7 +19,7 @@ import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-DPSIZE = 'really_friggin_small'
+DPSIZE = 'actual'
 PRINT_FREQUENCY = {
 	'really_friggin_small': 20,
 	'actual': 12,

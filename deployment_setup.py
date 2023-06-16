@@ -91,8 +91,8 @@ def get_link_capacities(deployment):
 	# controls backup volume we have, therefore how hard the resilience
 	# problem is to solve
 	EASYNESS_MULT = { 
-		'easy': .8,
-		'medium': .15,
+		'easy': 1,
+		'medium': .5,
 		'hard': .1,
 	}[RESILIENCE_DIFFICULTY]
 
@@ -573,7 +573,7 @@ def load_actual_deployment():
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
 		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
-			n_users_per_peer=30)
+			n_users_per_peer=300)
 
 		## add sub-ms latency noise to arbitrarily break ties
 		for ug in ug_perfs:
