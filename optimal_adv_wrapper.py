@@ -4,6 +4,7 @@ from constants import *
 from helpers import *
 from test_polyphase import *
 from worker_comms import Worker_Manager
+from solve_lp_assignment import *
 
 
 class Ing_Obj:
@@ -54,6 +55,12 @@ class Optimal_Adv_Wrapper:
 		self.pdf_sum_function = sum_pdf_fixed_point
 
 		self.calc_cache = Calc_Cache()
+
+		self.linear_prog_soln_cache = {
+			'regular': {},
+			'failure_catch': {},
+		}
+
 		self.update_deployment(deployment)	
 
 	def set_worker_manager(self, wm):
@@ -100,6 +107,36 @@ class Optimal_Adv_Wrapper:
 			'with_capacity': self.with_capacity,
 		}
 
+	def solve_lp_assignment(self, adv, **kwargs):
+		cache_rep = tuple(np.where(threshold_a(adv))[0].flatten())
+		computing_best_lats = kwargs.get('computing_best_lats', False)
+		try:
+			if kwargs.get('verb'):
+				raise KeyError
+			ret =  self.linear_prog_soln_cache['regular'][cache_rep, computing_best_lats]
+			return ret
+		except KeyError:
+			pass
+		ret = solve_lp_assignment(self, adv, **kwargs)
+		
+		self.linear_prog_soln_cache['regular'][cache_rep, computing_best_lats] = ret
+		return ret
+
+	def solve_lp_with_failure_catch(self, adv, **kwargs):
+		cache_rep = tuple(np.where(threshold_a(adv))[0].flatten())
+		computing_best_lats = kwargs.get('computing_best_lats', False)
+		try:
+			if kwargs.get('verb'):
+				raise KeyError
+			ret = self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats]
+			return ret
+		except KeyError:
+			pass
+		ret = solve_lp_with_failure_catch(self, adv, **kwargs)
+		self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats] = ret
+		return ret
+
+
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
 		### Keeps the parent-tracker up to date
@@ -117,13 +154,6 @@ class Optimal_Adv_Wrapper:
 		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
 		self.ug_perfs = deployment['ug_perfs']
 		self.ug_anycast_perfs = deployment['ug_anycast_perfs']
-
-		# compute best popp by ug
-		self.best_popp_by_ug = {}
-		for ug,perfs in self.ug_perfs.items():
-			popps = list(perfs)
-			lats = [perfs[popp] for popp in popps]
-			self.best_popp_by_ug[ug] = popps[np.argmin(lats)]
 
 		# Shape of the variables
 		self.popps = sorted(list(set(deployment['popps'])))
@@ -195,8 +225,6 @@ class Optimal_Adv_Wrapper:
 			self.ui_to_vol_i[ui] = np.where(self.ug_to_vol[self.ugs[ui]] -\
 				self.vol_x <=0)[0][0]
 
-
-
 		# ingress,ug -> stores ~ how many times ingress wins for a ug
 		self.n_wins = {ug:{i:0 for i in range(self.n_popp)} for ug in self.ugs}
 
@@ -229,6 +257,15 @@ class Optimal_Adv_Wrapper:
 			for ui in range(self.n_ug):
 				for popp in sorted(self.ug_perfs[self.ugs[ui]]):
 					self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
+
+			## compute best latency by ug
+			print("Solving for best latency in main thread")
+			one_per_ingress_adv = np.identity(self.n_popps)
+			ret = self.solve_lp_assignment(one_per_ingress_adv,
+				computing_best_lats=True)
+			if not ret['solved']:
+				raise ValueError("Cant solve problem in the best case, increase caps.")
+			self.best_lats_by_ug = ret['lats_by_ug']
 
 		try:
 			n_workers = self.get_n_workers()
@@ -396,27 +433,31 @@ class Optimal_Adv_Wrapper:
 				[round(self.ug_perfs[self.ugs[ui]][self.popps[bop]],2) for ui in help_ug_by_peer[bop]]))
 			print([round(el,2) for el in self.recent_grads[bop,:]])
 
-	def get_ground_truth_user_latencies(self, a, **kwargs):
+	def get_ground_truth_user_latencies(self, a, mode='lp', **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
-		user_latencies, ug_ingress_decisions = self.calculate_user_choice(a)
+		if mode == 'best':
+			user_latencies, ug_ingress_decisions = self.calculate_user_choice(a, mode=mode,**kwargs)
+		elif mode == 'lp':
+			ret = self.solve_lp_with_failure_catch(threshold_a(a))
+			user_latencies = ret['lats_by_ug']
+			ug_ingress_decisions = ret['paths_by_ug']
+		else:
+			raise ValueError("Unknown mode {}".format(mode))
 		
 		if self.with_capacity:
 			link_volumes = np.zeros(self.n_popp)
 			ingress_to_users = {}
-			for ugi, ingress_i in ug_ingress_decisions.items():
-				if ingress_i is None: continue
-				link_volumes[ingress_i] += self.ug_vols[ugi]
-				try:
-					ingress_to_users[ingress_i].append(ugi)
-				except KeyError:
-					ingress_to_users[ingress_i] = [ugi]
+			for ugi, ingressesvols in ug_ingress_decisions.items():
+				for ingress_i,vol in ingressesvols:
+					link_volumes[ingress_i] += vol
+					try:
+						ingress_to_users[ingress_i].append(ugi)
+					except KeyError:
+						ingress_to_users[ingress_i] = [ugi]
 			cap_violations = link_volumes > self.link_capacities_arr
 
 			if kwargs.get('store_metrics'):
 				self.metrics['link_utilizations'].append(link_volumes / self.link_capacities_arr)
-			# poppi = self.popp_to_ind[('atlanta','3257')]
-			# print("PoPP {} ({}) summary".format(self.popps[poppi], poppi))
-			# print("Users {} using this ingress".format(ingress_to_users.get(poppi)))
 
 			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
 				# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
@@ -466,7 +507,7 @@ class Optimal_Adv_Wrapper:
 			tmp[self.popp_to_ind[popp],:] = 0
 
 			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-				ugs=these_ugs, failing=popp)
+				ugs=these_ugs, failing=popp, mode='best')
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well
@@ -489,29 +530,50 @@ class Optimal_Adv_Wrapper:
 			tmp[self.popp_to_ind[popp],:] = 1
 		return benefit
 
-	def calculate_user_choice(self, a, **kwargs):
-		"""Calculates UG -> popp assuming they go to their best performing popp."""
+	def calculate_user_choice(self, a, mode = 'lp', **kwargs):
+		"""Calculates UG -> popp assuming they act according to decision mode 'mode'."""
+		## returns user latencies (np array) and ug_ingress_decisions maps ugi to [(poppi, vol)]
 		ugs = kwargs.get('ugs', self.ugs)
-		a = threshold_a(a)
-		user_latencies = NO_ROUTE_LATENCY * np.ones((len(ugs)))
-		routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, ugs=ugs)
-		ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
-		for prefix_i in range(a.shape[1]):
-			for ugi,ug in enumerate(kwargs.get('ugs', ugs)):
-				routed_ingress = routed_through_ingress[prefix_i].get(ug)
-				if routed_ingress is None:
-					latency = NO_ROUTE_LATENCY
-				else:
-					latency = self.ug_perfs[ug][self.popps[routed_ingress]]
-				if latency < user_latencies[ugi]: 
-					ug_ingress_decisions[ugi] = routed_ingress
-					user_latencies[ugi] = latency
+		if mode == 'best':
+			# every user visits their best popp
+			a = threshold_a(a)
+			user_latencies = NO_ROUTE_LATENCY * np.ones((len(ugs)))
+			routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, ugs=ugs)
+			ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
+			for prefix_i in range(a.shape[1]):
+				for ugi,ug in enumerate(kwargs.get('ugs', ugs)):
+					routed_ingress = routed_through_ingress[prefix_i].get(ug)
+					if routed_ingress is None:
+						latency = NO_ROUTE_LATENCY
+					else:
+						latency = self.ug_perfs[ug][self.popps[routed_ingress]]
+					if latency < user_latencies[ugi]: 
+						ug_ingress_decisions[ugi] = [(routed_ingress,1)]
+						user_latencies[ugi] = latency
+		elif mode == 'lp':
+			ret = self.solve_lp_with_failure_catch(threshold_a(a), ugs=ugs)
+			if not ret['solved']:
+				## no valid capacity constraining solution, just go with 
+				## each user chooses their best
+				return self.calculate_user_choice(a, mode='best', **kwargs)
+			user_latencies = ret['lats_by_ug']
+			ug_ingress_decisions_tmp = ret['paths_by_ug']
+
+			### Need to update this knowing that some ugs may be fixed !!
+			## for now, just solving for anything and limiting to the ones I want
+			ug_ingress_decisions = {self.ug_to_ind[ug]: ug_ingress_decisions_tmp[self.ug_to_ind[ug]] for ug in ugs}
+			if len(ugs) != self.n_ug:
+				ug_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
+				user_latencies = user_latencies[ug_inds]
+
 		if kwargs.get('get_ug_catchments', False):
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
 		if kwargs.get('verb'):
-			for ui,poppi in ug_ingress_decisions.items():
-				self.log("benefit_estimate,{},{},{},{}\n".format(
-					self.iter,ui,poppi,self.mlbs[poppi,ui]))
+			for ui,poppipcts in ug_ingress_decisions.items():
+				for poppi,pct in poppipcts:
+					self.log("benefit_estimate,{},{},{},{},{}\n".format(
+						self.iter,ui,poppi,pct,self.mlbs[poppi,ui]))
+
 		return user_latencies, ug_ingress_decisions
 
 	def log(self,s):
@@ -560,12 +622,12 @@ class Optimal_Adv_Wrapper:
 						self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup
 
 		poppi_to_ugi = {}
-		for ugi,poppi in self.ug_catchments.items():
-			if poppi is None: continue
-			try:
-				poppi_to_ugi[poppi].append(ugi)
-			except KeyError:
-				poppi_to_ugi[poppi] = [ugi]
+		for ugi,poppipcts in self.ug_catchments.items():
+			for poppi,pct in poppipcts:
+				try:
+					poppi_to_ugi[poppi].append(ugi)
+				except KeyError:
+					poppi_to_ugi[poppi] = [ugi]
 
 		# self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
 		# for popp1i in poppi_to_ugi:
@@ -601,7 +663,7 @@ class Optimal_Adv_Wrapper:
 
 		a = threshold_a(a)
 
-		for prefix_i in range(self.n_prefixes):
+		for prefix_i in range(a.shape[1]):
 			cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
 			try:
 				routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
@@ -623,6 +685,7 @@ class Optimal_Adv_Wrapper:
 				this_routed_through_ingress[ugs[ui]] = bao
 			routed_through_ingress[prefix_i] = this_routed_through_ingress
 			if len(ugs) == self.n_ug:
+				## not a subset of user groups, cache result for general utility
 				self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 		return routed_through_ingress, actives
 

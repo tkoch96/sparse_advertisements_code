@@ -36,6 +36,7 @@ def get_random_ingress_priorities(deployment):
 			### Model 
 			## user has a preferred provider
 			## shortest path within that preferred provider
+			## user prefers peering connections to providers, random preference in valid peers
 			## random violations of the model
 
 			op_by_as = {}
@@ -93,7 +94,7 @@ def get_link_capacities(deployment):
 	EASYNESS_MULT = { 
 		'easy': 1,
 		'medium': .5,
-		'hard': .1,
+		'hard': .2,
 	}[RESILIENCE_DIFFICULTY]
 
 	popps = deployment['popps']
@@ -130,30 +131,25 @@ def get_link_capacities(deployment):
 	for popp,v in vol_best.items():
 		if popp not in provider_popps:
 			## Set capacity roughly as the amount of client traffic you'd expect to receive
-			link_capacities[popp] = vol_popp[popp] # kind of easy
+			link_capacities[popp] = .8 * vol_popp[popp] # kind of easy
 		else:
 			## Set capacity as some baseline + resilience
 			## resilience should be proportional to max peer volume
 			link_capacities[popp] = baseline_transit_volume
-
-	### Sanity check to make sure the problem isn't ill-posed, make sure default
-	# deployment has sufficient capacity
-	anycast_vol_mapping = {}
-	ips = deployment['ingress_priorities']
-	for ug in ips:
-		most_favored = [popp for popp in ips[ug] if ips[ug][popp] == 0][0]
-		# if most_favored == ('amsterdam','1299'):
-		# 	print(ug)
-		# 	print(ips[ug])
+	
+	#### increase capacitity so that we can handle 1.x times anycast load
+	scale_factor = 1.1
+	ingress_priorities = deployment['ingress_priorities']
+	anycast_load = {}
+	for ug in ugs:
+		ranked_prefs = sorted(ingress_priorities[ug].items(), key = lambda el : el[1])
+		best_popp = ranked_prefs[0][0]
 		try:
-			anycast_vol_mapping[most_favored] += ug_to_vol[ug]
+			anycast_load[best_popp] += ug_to_vol[ug]
 		except KeyError:
-			anycast_vol_mapping[most_favored] = ug_to_vol[ug]
-	for mf in anycast_vol_mapping:
-		if anycast_vol_mapping[mf] > link_capacities[mf]:
-			print("popp {} will be inundated {} vs {}".format(mf,anycast_vol_mapping[mf], link_capacities[mf]))
-			exit(0)
-	####
+			anycast_load[best_popp] = ug_to_vol[ug]
+	for popp in anycast_load:
+		link_capacities[popp] = scale_factor * np.maximum(anycast_load[popp], link_capacities[popp])
 
 	# poi = ('miami','4230')
 	# next_bests = {}
@@ -284,7 +280,7 @@ def parse_lat(lat_str):
 
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("Loading performances, only considering pops: {}".format(considering_pops))
-	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
+	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst_filled_in.csv')
 	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 	violate_sol = {}
 	for row in open(os.path.join(CACHE_DIR, 'addresses_violating_sol.csv'),'r'):
@@ -306,7 +302,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 		# if np.random.random() > .9999999:break
 		fields = row.strip().split(',')
 		if fields[2] not in considering_pops: continue
-		t,ip,pop,peer,lat = fields
+		t,ip,pop,peer,_,lat = fields
 		lat = parse_lat(lat)
 		metro = 'tmp'
 		asn = ip#ip32_to_24(ip)
@@ -526,7 +522,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	return anycast_latencies, ug_perfs
 
 def export_interesting_measurements():
-	considering_pops = ['miami', 'atlanta']
+	considering_pops = list(POP_TO_LOC['vultr'])#['miami', 'atlanta']
 	anycast_latencies, ug_perfs = load_actual_perfs(considering_pops = considering_pops, n_users_per_peer=300000,
 		focus_on_peers=False)
 	# ug_perfs = get_random_deployment_by_size('really_friggin_small')['ug_perfs']

@@ -1,5 +1,6 @@
 from constants import *
 from helpers import *
+from solve_lp_assignment import *
 
 import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
@@ -17,16 +18,17 @@ def adv_summary(popps,adv):
 				print("Prefix {} has {}".format(pref, popps[poppi]))
 		print("\n")
 
-
-
-def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwargs):
+def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity, **kwargs):
 	## for a given popp, there's technically power_set(number of advertisement to popp) that we could turn off
 	## so if that's intractable, might need to sample it or something
+	pre_soln = solve_lp_with_failure_catch(sas, adv)
+	pre_lats_by_ug = pre_soln['lats_by_ug']
+	pre_paths_by_ug = pre_soln['paths_by_ug']
 
-	_, pre_ug_catchments = sas.calculate_user_choice(adv)
+	save_cap = copy.copy(sas.link_capacities_arr[sas.popp_to_ind[popp]])
+	sas.link_capacities_arr[sas.popp_to_ind[popp]] = new_link_capacity
+
 	poppi = sas.popp_to_ind[popp]
-	pre_user_latencies = sas.get_ground_truth_user_latencies(adv)
-
 	prefis = np.where(adv[poppi,:])[0]
 	if kwargs.get('verb'):
 		print(prefis)
@@ -36,35 +38,16 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwarg
 	for withdrawal_number in range(1,len(prefis) + 1):
 		for prefi_set in itertools.combinations(prefis,withdrawal_number):
 			adv[poppi,np.array(prefi_set)] = 0
-			_, ug_catchments = sas.calculate_user_choice(adv) # simulates TIPSY
+			## unclear exactly how to handle this --- we should allow > 1 util, just the best one
+			soln = solve_lp_with_failure_catch(sas, adv)
+			if not soln['solved']: continue
 
-			## Look at users whose catchment has changed
-			these_ugs = [ug for ug in sas.ugs if \
-				pre_ug_catchments[sas.ug_to_ind[ug]] != ug_catchments[sas.ug_to_ind[ug]]]
-			if len(these_ugs) == 0:
-				continue
-			all_new_link_volumes = np.zeros((sas.n_popps,))
-			for ugi,catchi in ug_catchments.items():
-				if catchi is None:
-					continue
-				if kwargs.get('verb'):
-					print(ugi)
-					print("{} {}".format(catchi,sas.ug_vols[ugi]))
-				all_new_link_volumes[catchi] += sas.ug_vols[ugi]
-				if kwargs.get('verb'):
-					if all_new_link_volumes[poppi] > 0:
-						print(all_new_link_volumes)
-						print(ugi)
-						print(catchi)
-			new_link_volume = all_new_link_volumes[poppi]
+			## Get UG inds of interest (i.e., those who've changed)
+			ugis_of_interest = np.array([ugi for ugi in soln['paths_by_ug'] if 
+				soln['paths_by_ug'][ugi] != pre_paths_by_ug[ugi]])
 
-			if new_link_volume <= new_link_capacity:
-				user_latencies = sas.get_ground_truth_user_latencies(adv)
-				if not any(user_latencies==NO_ROUTE_LATENCY): ## check to make sure we don't inundate any other link
-					these_ugis = np.array([sas.ug_to_ind[ug] for ug in these_ugs])
-					new_perfs = np.array([user_latencies[sas.ug_to_ind[ug]] for ug in these_ugs])
-					valid_solutions.append((prefi_set, new_perfs - pre_user_latencies[these_ugis],
-						sas.ug_vols[these_ugis], all_new_link_volumes))
+			valid_solutions.append((prefi_set, soln['lats_by_ug'][ugis_of_interest] - pre_lats_by_ug[ugis_of_interest],
+			 sas.ug_vols[ugis_of_interest]))
 
 			adv[poppi,np.array(prefi_set)] = 1
 		if len(valid_solutions) > 0 or time.time() - ts > max_time:
@@ -72,28 +55,28 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, new_link_capacity,**kwarg
 			break
 	if len(valid_solutions) > 0:
 		## pick the best one w.r.t. latency
-		best_solution,best_deltas,vols,best_new_link_volumes = valid_solutions[0]
-		best_metric = np.sum(best_deltas)
+		best_solution,best_deltas,vols = valid_solutions[0]
+		best_metric = np.sum(best_deltas * vols)
 		for solution in valid_solutions:
-			pref_solution, performance_deltas, vols, new_link_volumes = solution
+			pref_solution, performance_deltas, vols = solution
 			if np.sum(performance_deltas * vols) < best_metric:
 				best_solution = pref_solution
 				best_metric = np.sum(performance_deltas * vols)
 				best_deltas = performance_deltas
-				best_new_link_volumes = new_link_volumes
 		best_solution = {
 			'prefix_withdrawals': best_solution,
 			'latency_deltas': best_deltas,
-			'link_volumes': best_new_link_volumes,
 		}
 	else:
 		best_solution = None
+
+	sas.link_capacities_arr[sas.popp_to_ind[popp]] = save_cap
 
 	
 	return best_solution
 
 def assess_resilience_to_congestion(sas, adv, solution, X_vals):
-	## for painter/TIPSY
+	## !!!!!!for painter/TIPSY!!!!!!
 	## assume each link is congested by X% (i.e., need to move X% of capacity's traffic off of it)
 	## see if there's a solution
 	## if there's a solution, do it and note the latency penalty compared to optimal
@@ -104,22 +87,25 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 
 	adv = threshold_a(adv)
 
-	if solution == 'painter':
-		old_caps = copy.deepcopy(sas.link_capacities_by_popp)
-		deployment = sas.deployment
-		deployment['link_capacities'] = {popp:100000 for popp in sas.popps}
-		sas.update_deployment(deployment)
-
 	for X in X_vals:
 		_, pre_ug_catchments = sas.calculate_user_choice(adv)
+		# pre_lats_by_ug = solve_lp_with_failure_catch(sas, adv)['lats_by_ug']
+		popp_to_ug_vols = {}
+		for ugi, catchivols in pre_ug_catchments.items():
+			for catchi,vol in catchivols:
+				try:
+					popp_to_ug_vols[catchi].append((ugi,vol))
+				except KeyError:
+					popp_to_ug_vols[catchi] = [(ugi,vol)]
 		for popp in sas.popps:
-			these_ugis = np.array([ugi for ugi,catchi in pre_ug_catchments.items() if catchi == sas.popp_to_ind[popp]])
 			poppi = sas.popp_to_ind[popp]
+			ugivols = popp_to_ug_vols.get(poppi,[])
+			these_ugis = np.array(list(set(ugi for ugi,_ in ugivols)))
 			if len(these_ugis) == 0 or len(np.where(adv[poppi,:])[0]) == 0:
 				# nothing to solve
 				continue
-			current_link_volume = np.sum(sas.ug_vols[these_ugis])
-			new_link_cap = current_link_volume  * (1- X/100)
+			current_link_volume = sum(vol for _,vol in ugivols)
+			new_link_cap = current_link_volume * (1- X/100)
 			soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap)
 			if soln is None and solution == 'painter':
 				print("Didn't get solution for popp {}, soln type {}".format(popp,solution))
@@ -136,36 +122,20 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 			adv[poppi,np.array(pfx_withdrawals)] = 0
 			_, post_ug_catchments = sas.calculate_user_choice(adv)
 			users_of_interest = [ui for ui,catch in post_ug_catchments.items() if catch != pre_ug_catchments[ui]]
-			for ui in users_of_interest:
-				ug = sas.ugs[ui]
-				catch_before, catch_after = sas.popps[pre_ug_catchments[ui]], sas.popps[post_ug_catchments[ui]]
-				print("UG {} was visiting popp {} with {} ms, after withdrawal is {} with {} ms, delta {} ms".format(
-					ug,catch_before,round(sas.ug_perfs[ug][catch_before]),catch_after,round(sas.ug_perfs[ug][catch_after]),
-					round(sas.ug_perfs[ug][catch_after] - sas.ug_perfs[ug][catch_before])))
+			# for ui in users_of_interest:
+			# 	ug = sas.ugs[ui]
+			# 	catch_before, catch_after = sas.popps[pre_ug_catchments[ui]], sas.popps[post_ug_catchments[ui]]
+			# 	print("UG {} was visiting popp {} with {} ms, after withdrawal is {} with {} ms, delta {} ms".format(
+			# 		ug,catch_before,round(sas.ug_perfs[ug][catch_before]),catch_after,round(sas.ug_perfs[ug][catch_after]),
+			# 		round(sas.ug_perfs[ug][catch_after] - sas.ug_perfs[ug][catch_before])))
 			adv[poppi,np.array(pfx_withdrawals)] = 1
 
 
 			metrics[X] = metrics[X] + list(soln['latency_deltas'])
-			new_required_link_caps = soln['link_volumes']
-			if required_link_caps is None and new_required_link_caps is not None:
-				required_link_caps = new_required_link_caps
-			else:
-				update_capis = new_required_link_caps > required_link_caps
-				required_link_caps[update_capis] = new_required_link_caps[update_capis]
 
-	if solution == 'painter':
-		deployment['link_capacities'] = old_caps
-		sas.update_deployment(deployment)
-
-	if required_link_caps is not None:
-		link_capacities = {sas.popps[poppi]:required_link_caps[poppi] for poppi in range(sas.n_popps)}
-	else:
-		link_capacities = None
 	return {
-		'link_capacities': link_capacities,
 		'metrics': metrics,
 	}
-
 
 def popp_failure_latency_comparisons():
 	# for each deployment, get different advertisement strategies
@@ -175,8 +145,8 @@ def popp_failure_latency_comparisons():
 	np.random.seed(31413)
 	metrics = {}
 	N_TO_SIM = 1
-	X_vals = [20]
-	gamma = 10
+	X_vals = [40]
+	gamma = 2
 	capacity = True
 
 	lambduh = .01
@@ -209,7 +179,8 @@ def popp_failure_latency_comparisons():
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
 			deployment = get_random_deployment(DPSIZE)
 			n_prefixes = np.maximum(4,5 * int(np.log2(len(deployment['popps']))))
-			n_prefixes = np.minimum(len(deployment['popps'])//4, n_prefixes)
+			n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
+			metrics['deployment'][random_iter] = deployment
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
@@ -219,7 +190,7 @@ def popp_failure_latency_comparisons():
 				wm.start_workers()
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
-			ret = sas.compare_different_solutions(deployment_size=DPSIZE,n_run=1, verbose=True,
+			ret = sas.compare_different_solutions(deployment_size=DPSIZE, n_run=1, verbose=True,
 				 dont_update_deployment=True)
 
 			ug_vols = sas.ug_to_vol
@@ -235,35 +206,35 @@ def popp_failure_latency_comparisons():
 				metrics['resilience_to_congestion'][random_iter][solution] = m
 
 				_, pre_ug_catchments = sas.calculate_user_choice(adv)
-				pre_user_latencies = sas.get_ground_truth_user_latencies(adv)
+				pre_lats_by_ug = solve_lp_with_failure_catch(sas, adv)['lats_by_ug']
+
 				metrics['adv'][random_iter][solution] = adv
-				metrics['latencies'][random_iter][solution] = pre_user_latencies
-				metrics['best_latencies'][random_iter] = np.zeros(pre_user_latencies.shape)
+				metrics['latencies'][random_iter][solution] = pre_lats_by_ug
+				metrics['best_latencies'][random_iter] = copy.copy(sas.best_lats_by_ug)
 				metrics['ug_to_vol'][random_iter] = sas.ug_vols
-				for ug in sas.ugs:
-					metrics['best_latencies'][random_iter][sas.ug_to_ind[ug]] = np.min(
-						list(sas.ug_perfs[ug].values()))
 				for popp in sas.popps:
 					adv_cpy = np.copy(adv)
-					adv_cpy[sas.popp_to_ind[popp]] = 0
+					adv_cpy[sas.popp_to_ind[popp],:] = 0
 					## q: what is latency experienced for these ugs compared to optimal?
 					_, ug_catchments = sas.calculate_user_choice(adv_cpy)
-					user_latencies = sas.get_ground_truth_user_latencies(adv_cpy)
+					user_latencies = solve_lp_with_failure_catch(sas, adv_cpy)['lats_by_ug']
+
+					## best user latencies is not necessarily just lowest latency
+					## need to factor in capacity
+					one_per_peer_adv = np.eye(sas.n_popps)
+					one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
+					best_user_latencies = solve_lp_with_failure_catch(sas, one_per_peer_adv)['lats_by_ug']
 
 					## Look at users whose catchment has changed
+					# most users aren't affected by a change, so we're zooming in on the relevant bits
 					these_ugs = [ug for ug in sas.ugs if \
 						pre_ug_catchments[sas.ug_to_ind[ug]] != ug_catchments[sas.ug_to_ind[ug]]]
 
 					for ug in these_ugs:
-						best_perf = np.min(list(sas.ug_perfs[ug].values()))
-						other_available = [sas.ug_perfs[ug][u] for u in sas.ug_perfs[ug] if u != popp]
-						if len(other_available) == 0:
-							best_perf = MAX_LATENCY
-						else:
-							best_perf = np.min(other_available)
-						poppi = ug_catchments[sas.ug_to_ind[ug]]
+						best_perf = best_user_latencies[sas.ug_to_ind[ug]]
 						actual_perf = user_latencies[sas.ug_to_ind[ug]]
-						metrics['popp_failures'][random_iter][solution].append((best_perf - actual_perf, ug_vols[ug]))
+						metrics['popp_failures'][random_iter][solution].append((best_perf - actual_perf, 
+							ug_vols[ug]))
 			pickle.dump(metrics, open(metrics_fn,'wb'))
 	except:
 		import traceback
@@ -370,45 +341,40 @@ def plot_lats_from_adv(sas, advertisement, fn):
 		else: # anycast
 			adv = np.zeros(advertisement.shape)
 			adv[:,0] = 1
-		_, pre_ug_catchments = sas.calculate_user_choice(adv)
-		pre_user_latencies = sas.get_ground_truth_user_latencies(adv)
 
-		metrics['latencies'] = pre_user_latencies
+		pre_soln = sas.solve_lp_with_failure_catch( adv)
+		pre_lats_by_ug = pre_soln['lats_by_ug']
+		pre_ug_decisions = pre_soln['paths_by_ug']
+
+		metrics['latencies'] = pre_lats_by_ug
+		metrics['best_latencies'] = copy.copy(sas.best_lats_by_ug)
 		metrics['popp_failures'] = []
-		metrics['best_latencies'] = np.zeros(pre_user_latencies.shape)
-		for ug in sas.ugs:
-			metrics['best_latencies'][sas.ug_to_ind[ug]] = np.min(
-				list(sas.ug_perfs[ug].values()))
 
-		for popp in sas.popps:
+		for popp in tqdm.tqdm(sas.popps, desc="Plotting lats from advs..."):
 			adv_cpy = np.copy(adv)
 			adv_cpy[sas.popp_to_ind[popp]] = 0
 			## q: what is latency experienced for these ugs compared to optimal?
-			_, ug_catchments = sas.calculate_user_choice(adv_cpy)
-			user_latencies = sas.get_ground_truth_user_latencies(adv_cpy,
-				overloadverb=(i==0), failing=popp)
+			one_per_ingress_adv = np.identity(sas.n_popps)
+			one_per_ingress_adv[sas.popp_to_ind[popp]] = 0
+			ret = sas.solve_lp_with_failure_catch(one_per_ingress_adv,
+				computing_best_lats=True)
+			failed_best_lats_by_ug = ret['lats_by_ug']
+
+			fail_soln = sas.solve_lp_with_failure_catch(adv_cpy)
+			post_ug_decisions = fail_soln['paths_by_ug']
+			post_lats_by_ug = fail_soln['lats_by_ug']
 
 			## Look at users whose catchment has changed
-			these_ugs = [ug for ug in sas.ugs if \
-				pre_ug_catchments[sas.ug_to_ind[ug]] != ug_catchments[sas.ug_to_ind[ug]]]
+			these_ugs = [ugi for ugi in post_ug_decisions if \
+				pre_ug_decisions[ugi] != post_ug_decisions[ugi]]
+
+			### TODO -- what to do about failed users?
 
 			inundated=False
-			for ug in these_ugs:
-				other_available = [sas.ug_perfs[ug][u] for u in sas.ug_perfs[ug] if u != popp]
-				if len(other_available) == 0:
-					best_perf = MAX_LATENCY
-				else:
-					best_perf = np.min(other_available)
-				poppi = ug_catchments[sas.ug_to_ind[ug]]
-				# if poppi is None:
-				# 	actual_perf = NO_ROUTE_LATENCY
-				# else:
-				# 	actual_ingress = sas.popps[poppi]
-				# 	actual_perf = sas.ug_perfs[ug][actual_ingress]
-				actual_perf = user_latencies[sas.ug_to_ind[ug]]
-				if actual_perf == NO_ROUTE_LATENCY:
-					inundated = True
-				metrics['popp_failures'].append((best_perf - actual_perf, ug_vols[ug]))
+			for ugi in list(set(these_ugs)):
+				metrics['popp_failures'].append((failed_best_lats_by_ug[ugi] - \
+					post_lats_by_ug[ugi], sas.ug_vols[ugi]))
+
 			# if inundated and i==0:
 			# 	recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
 			# 	these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if

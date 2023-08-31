@@ -40,7 +40,7 @@ NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 N_WORKERS = {
 	'really_friggin_small': 1,
-	'actual': 8,
+	'actual': 2,
 	'small': 2,
 	'decent': 8,
 	'med': 1,

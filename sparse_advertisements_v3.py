@@ -66,8 +66,8 @@ def compare_estimated_actual_per_user():
 	actual_user_lats = {}
 	for row in open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'r'):
 		if 'benefit_estimate' not in row: continue
-		_,itr,ui,poppi,b = row.strip().split(',')
-		itr,ui,poppi,b = int(itr),int(ui),int(poppi),float(b)
+		_,itr,ui,poppi,pct,b = row.strip().split(',')
+		itr,ui,poppi,pct,b = int(itr),int(ui),int(poppi),float(pct),float(b)
 		try:
 			actual_user_lats[itr]
 		except KeyError:
@@ -141,7 +141,7 @@ def investigate_congestion_events():
 
 	ax.set_xlabel("Iteration")
 	ax.set_ylabel("Excess Link Load")
-	ax.legend(fontsize=6)
+	# ax.legend(fontsize=6)
 	plt.savefig("figures/reported_failure_events_during_training.pdf")
 	plt.clf()
 	plt.close()
@@ -392,7 +392,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			if len(exclude) > 0:
 				a[np.array(exclude),1] = .45
 			## then just generally very little on otherwise
-			prob_on = np.minimum((MAX_LATENCY - MIN_LATENCY ) / 2 / (self.lambduh * self.n_popp * (self.n_prefixes - 2)), .05)
+			prob_on = .25#np.minimum((MAX_LATENCY - MIN_LATENCY ) / 2 / (self.lambduh * self.n_popp * (self.n_prefixes - 2)), .1)
 			is_on = np.random.random(size=(self.n_popp, self.n_prefixes)) < prob_on
 			is_on[:,0:2] = False
 			a[is_on] = .55
@@ -849,7 +849,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
-			'really_friggin_small': 20,
+			'really_friggin_small': 5,#20,
 			'actual': 5,
 		}.get(DPSIZE, 1)
 
@@ -1017,19 +1017,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		### max movement should be at least .01
 		### so multiply alpha by .01 / max val if its less
 		max_val = np.max(np.abs(net_grad).flatten())
-		DESIRED_MAX_VAL = 1.0
+		DESIRED_MAX_VAL = 5.0
 		if max_val < DESIRED_MAX_VAL:
 			## check to make sure this rescale wouldn't flip multiple advertisement indices at once
 			
-			inds = np.abs(net_grad)>1e-3	
+			inds = np.abs(net_grad)>1e-3
 			alphas = (ADVERTISEMENT_THRESHOLD - a[inds]) / (self.alpha * net_grad[inds])
 			alphas = alphas[alphas>0]
 			if len(alphas) > 0:
 				limiting_alpha = np.min(alphas)
-				mult = np.minimum(limiting_alpha, (DESIRED_MAX_VAL / (max_val+1e-8)))
+				mult = np.minimum(limiting_alpha, (DESIRED_MAX_VAL / (max_val+1e-8))) * .98
 			else:
 				mult = 1.0
-
 
 			# print((DESIRED_MAX_VAL / (max_val+1e-8)))
 			# print(limiting_alpha)
@@ -1765,9 +1764,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				self.make_plots()
 
-			# if self.iter >= 5:
-			# 	break
-
+			if self.iter >= 100:
+				break
+			break
 			for t,lab in zip(timers, ['grads','measure','info','stop','summarize_lats']):
 				print("Timer: {} -- {} s".format(lab, round(t,2)))
 

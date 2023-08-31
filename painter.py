@@ -83,7 +83,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		delta_alpha = .7
 		self.last_objective = self.obj
 		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
-			use_resilience=False)
+			use_resilience=False, mode='best')
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
 
@@ -140,7 +140,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.verbose = False
 
 		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
-			use_resilience=False) # technically this is a measurement, uncounted
+			use_resilience=False, mode='best') # technically this is a measurement, uncounted
 		self.stop = False
 		self.rolling_delta = 10
 		self.iter = 0
@@ -173,8 +173,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 			advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
 			## We can measure these objectives, since we've already measured all these advertisement configurations
 			if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp),
-				use_resilience=False) < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
-				use_resilience=False):
+				use_resilience=False, mode='best') < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
+				use_resilience=False, mode='best'):
 				## go with this solution
 				self.advs = copy.deepcopy(advs_cp)
 			else:
