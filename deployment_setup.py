@@ -94,7 +94,7 @@ def get_link_capacities(deployment):
 	EASYNESS_MULT = { 
 		'easy': 1,
 		'medium': .5,
-		'hard': .2,
+		'hard': .01,
 	}[RESILIENCE_DIFFICULTY]
 
 	popps = deployment['popps']
@@ -108,6 +108,20 @@ def get_link_capacities(deployment):
 
 	vol_best,vol_popp = {popp: 0 for popp in popps}, {popp:0 for popp in get_difference(popps,provider_popps)}
 	popp_to_ug = {}
+	
+	if True:
+		import matplotlib.pyplot as plt
+		n_peers_by_ug = {ug:len([el for el in ug_perfs[ug] if el not in provider_popps]) for ug in ug_perfs}
+		# print({ug:[el for el in ug_perfs[ug] if el not in provider_popps] for ug in ug_perfs})
+		x,cdf_x = get_cdf_xy(list(n_peers_by_ug.values()))
+		plt.semilogx(x,cdf_x)
+		plt.xlabel("Number reachable peers")
+		plt.ylabel("cdf of UGS")
+		plt.grid(True)
+		plt.savefig('figures/number_peers_by_ug.pdf')
+		plt.clf();plt.close()
+
+
 	for ug in ug_perfs:
 		these_popps = list(ug_perfs[ug])
 		best_performer = these_popps[np.argmin([ug_perfs[ug][popp] for popp in these_popps])]
@@ -131,7 +145,7 @@ def get_link_capacities(deployment):
 	for popp,v in vol_best.items():
 		if popp not in provider_popps:
 			## Set capacity roughly as the amount of client traffic you'd expect to receive
-			link_capacities[popp] = .8 * vol_popp[popp] # kind of easy
+			link_capacities[popp] = .05 * vol_popp[popp] # kind of easy
 		else:
 			## Set capacity as some baseline + resilience
 			## resilience should be proportional to max peer volume
@@ -148,8 +162,26 @@ def get_link_capacities(deployment):
 			anycast_load[best_popp] += ug_to_vol[ug]
 		except KeyError:
 			anycast_load[best_popp] = ug_to_vol[ug]
+	n_prov,n_tot=0,0
+	anycast_link_utils = []
 	for popp in anycast_load:
+		n_tot += anycast_load[popp]
+		if popp in provider_popps:
+			n_prov += anycast_load[popp]
+		tmp = copy.copy(link_capacities[popp])
 		link_capacities[popp] = scale_factor * np.maximum(anycast_load[popp], link_capacities[popp])
+		anycast_link_utils.append(anycast_load[popp] / link_capacities[popp])
+		if tmp != link_capacities[popp]:
+			print("Increased {} link cap by a factor of {}, provider: {}".format(
+				popp, link_capacities[popp]/tmp, popp in provider_popps))
+	print("provider volume makes up {} of total anycast".format(round(100*n_prov/n_tot,2)))
+	vol_by_metro = {}
+	for metro,asn in ugs:
+		try:
+			vol_by_metro[metro] += ug_to_vol[(metro,asn)]
+		except KeyError:
+			vol_by_metro[metro] = ug_to_vol[(metro,asn)]
+	print(vol_by_metro)
 
 	# poi = ('miami','4230')
 	# next_bests = {}
@@ -186,9 +218,13 @@ def get_link_capacities(deployment):
 		ax[0].semilogx(x,cdf_x,label="User Volumes")
 		x,cdf_x = get_cdf_xy(list(link_capacities.values()))
 		ax[0].semilogx(x,cdf_x,label="All Link Caps")
+		x,cdf_x = get_cdf_xy(list(vol_by_metro.values()))
+		ax[0].semilogx(x,cdf_x,label="All Metro Volumes")
+		x,cdf_x = get_cdf_xy(anycast_link_utils)
+		ax[0].semilogx(x, cdf_x, label="Anycast Link Utils")
 		ax[0].legend()
 		ax[0].set_xlabel('Volume')
-		ax[0].set_ylabel("CDF of Users or PoPPs")
+		ax[0].set_ylabel("CDF of Users/PoPPs/Metros")
 		ax[0].grid(True)
 
 	
@@ -215,9 +251,17 @@ def cluster_actual_users(**kwargs):
 
 		IGNORE_LAT = 10*NO_ROUTE_LATENCY
 		latencies_mat = IGNORE_LAT * np.ones((len(ugs), len(popps)), dtype=np.float32)
+		best_pop_by_ug, best_lat_by_ug = {}, {}
 		for ug, perfs in ug_perfs.items():
 			for popp,lat in perfs.items():
 				latencies_mat[ug_to_ind[ug],popp_to_ind[popp]] = lat
+				try:
+					if best_lat_by_ug[ug] > lat:
+						best_lat_by_ug[ug] = lat
+						best_pop_by_ug[ug] = popp[0]
+				except KeyError:
+					best_lat_by_ug[ug] = lat
+					best_pop_by_ug[ug] = popp[0]
 
 		from sklearn.cluster import Birch
 		### threshold would probably be tuned by whatever gets me an appropriate number of clusters
@@ -233,26 +277,28 @@ def cluster_actual_users(**kwargs):
 				examples_by_label[lab] = [ugs[i]]
 		all_labs = sorted(list(examples_by_label))
 		np.random.shuffle(all_labs)
-		# for lab in all_labs:
-		# 	if len(examples_by_label[lab]) == 1: continue
-		# 	print("Lab {}, ugs: ".format(lab))
-		# 	for ug in examples_by_label[lab]:
-		# 		print("{} -- {}".format(ug,ug_perfs[ug]))
-		# 	print("\n\n")
-		# 	if np.random.random() > .95:break
+		for lab in all_labs:
+			if len(examples_by_label[lab]) == 1: continue
+			# print("Lab {}, ugs: ".format(lab))
+			# for ug in examples_by_label[lab]:
+			# 	print("{} -- {}".format(ug,ug_perfs[ug]))
+			# print("\n\n")
+			if np.random.random() > .95:break
 
 		clustered_ug_perfs, clustered_anycast_perfs = {},{}
 		ug_id = 0
 		print("{} subcluster labels but {} different ug labels".format(len(brc.subcluster_labels_),
 			len(examples_by_label)))
 		for sc_center, lab in zip(brc.subcluster_centers_, brc.subcluster_labels_):
-			metro = str("metro-{}".format(ug_id))
-			this_lab_ug = (metro, ug_id)
 			try:
 				these_ugs = examples_by_label[lab]
 			except KeyError:
 				# print("no UGs found for subcluster label {}".format(lab))
 				continue
+			pops_these_ugs = list([best_pop_by_ug[ug] for ug in these_ugs])
+			most_popular_pop = max(set(pops_these_ugs), key=pops_these_ugs.count)
+			metro = most_popular_pop
+			this_lab_ug = (metro, ug_id)
 			avg_anycast_lat = np.mean([anycast_latencies[ug] for ug in these_ugs])
 			clustered_anycast_perfs[this_lab_ug] = avg_anycast_lat
 			clustered_ug_perfs[this_lab_ug] = {}
@@ -273,14 +319,9 @@ def cluster_actual_users(**kwargs):
 
 	return clustered_ug_perfs, clustered_anycast_perfs
 
-def parse_lat(lat_str):
-	lat = float(lat_str) * 1000
-	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
-	return lat
-
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("Loading performances, only considering pops: {}".format(considering_pops))
-	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst_filled_in.csv')
+	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
 	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 	violate_sol = {}
 	for row in open(os.path.join(CACHE_DIR, 'addresses_violating_sol.csv'),'r'):
@@ -338,7 +379,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	anycast_latencies = {}
 	anycast_pop = {}
-	for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
+	for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency_smaller.csv')
 		,'r'),desc="Parsing VULTR anycast latencies"):
 		# if np.random.random() > .999999:break
 		_,ip,lat,pop = row.strip().split(',')
@@ -493,16 +534,29 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 		## Remove providers who have very few users
 		n_ugs_by_provider = {provider:0 for provider in provider_popps}
+		n_providers_by_ug = {ug:0 for ug in ug_perfs}
 		for ug in ug_perfs:
 			for provider in provider_popps:
 				try:
 					ug_perfs[ug][provider]
 					n_ugs_by_provider[provider] += 1
+					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
+		plt.clf()
+		plt.close()
+		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+		plt.plot(x,cdf_x,label="Frac UGs by Provider")
+		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+		plt.plot(x,cdf_x,label="Frac Providers by UG")
+		plt.legend()
+		plt.savefig('figures/provider_meas_description_preprune.pdf')
+		plt.clf()
+		plt.close()
+
 		to_del_popps = []
 		for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
-			if n < 10:
+			if n < 2:
 				to_del_popps.append(popp)
 			else:
 				break
@@ -510,9 +564,64 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 			to_del_popps))
 		ug_perfs = {ug: {popp: ug_perfs[ug][popp] for popp in get_difference(ug_perfs[ug], to_del_popps)}
 			for ug in ug_perfs}
-		for ug in list(ug_perfs):
-			if len(ug_perfs[ug]) < 2:
-				del ug_perfs[ug]
+
+		provider_popps = get_difference(provider_popps,to_del_popps)
+
+		## Remove providers who have very few users
+		n_ugs_by_provider = {provider:0 for provider in provider_popps}
+		n_providers_by_ug = {ug:0 for ug in ug_perfs}
+		for ug in ug_perfs:
+			for provider in provider_popps:
+				try:
+					ug_perfs[ug][provider]
+					n_ugs_by_provider[provider] += 1
+					n_providers_by_ug[ug] += 1
+				except KeyError:
+					continue
+		plt.clf()
+		plt.close()
+		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+		plt.plot(x,cdf_x,label="Frac UGs by Provider")
+		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+		plt.plot(x,cdf_x,label="Frac Providers by UG")
+		plt.legend()
+		plt.savefig('figures/provider_meas_description_postprune.pdf')
+		plt.clf()
+		plt.close()
+		
+		## Remove users have measurements to too few providers
+		cutoff_frac = .35
+		to_del = list([ug for ug,n in n_providers_by_ug.items() if n/len(provider_popps) < cutoff_frac])
+		print("Removing {} out of {} UGs since they don't have measurements to enough providers.".format(
+			len(to_del), len(ug_perfs)))
+		for ug in to_del:
+			del ug_perfs[ug]
+
+		n_ugs_by_provider = {provider:0 for provider in provider_popps}
+		n_providers_by_ug = {ug:0 for ug in ug_perfs}
+		for ug in ug_perfs:
+			for provider in provider_popps:
+				try:
+					ug_perfs[ug][provider]
+					n_ugs_by_provider[provider] += 1
+					n_providers_by_ug[ug] += 1
+				except KeyError:
+					continue
+		plt.clf()
+		plt.close()
+		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+		plt.plot(x,cdf_x,label="Frac UGs by Provider")
+		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+		plt.plot(x,cdf_x,label="Frac Providers by UG")
+		plt.legend()
+		plt.savefig('figures/provider_meas_description_postprune2.pdf')
+		plt.clf()
+		plt.close()
+
+		
+		# for ug in list(ug_perfs):
+		# 	if len(ug_perfs[ug]) < 2:
+		# 		del ug_perfs[ug]
 	anycast_latencies = {ug:anycast_latencies[ug] for ug in ug_perfs}
 
 	ugs = sorted(list(ug_perfs))
@@ -521,46 +630,135 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	return anycast_latencies, ug_perfs
 
-def export_interesting_measurements():
-	considering_pops = list(POP_TO_LOC['vultr'])#['miami', 'atlanta']
-	anycast_latencies, ug_perfs = load_actual_perfs(considering_pops = considering_pops, n_users_per_peer=300000,
-		focus_on_peers=False)
-	# ug_perfs = get_random_deployment_by_size('really_friggin_small')['ug_perfs']
+# def export_interesting_measurements():
+# 	# considering_pops = list(POP_TO_LOC['vultr'])#['miami', 'atlanta']
+# 	considering_pops = ['miami', 'atlanta']
+# 	anycast_latencies, ug_perfs = load_actual_perfs(considering_pops = considering_pops, n_users_per_peer=300000,
+# 		focus_on_peers=False)
+# 	# ug_perfs = get_random_deployment_by_size('really_friggin_small')['ug_perfs']
 
-	all_popps = list(set(popp for ug in ug_perfs for popp in ug_perfs[ug]))
-	profiles = {}
+# 	all_popps = list(set(popp for ug in ug_perfs for popp in ug_perfs[ug]))
+# 	profiles = {}
+# 	for ug in ug_perfs:
+# 		all_perfs = np.array(list(ug_perfs[ug].values()))
+# 		ml = np.min(all_perfs)
+# 		popp_key = tuple(sorted(list(ug_perfs[ug].keys()), key = lambda el : "-".join([str(_el) for _el in el])))
+# 		try:
+# 			profiles[popp_key].append((ug,ml))
+# 		except KeyError:
+# 			profiles[popp_key] = [(ug, ml)]
+# 	print("{} profiles".format(len(profiles)))
+# 	n_to_keep = 400
+# 	keep_ugs = []
+# 	for p in profiles:
+# 		keep_ugs = keep_ugs + [el[0] for el in sorted(profiles[p], key = lambda el : el[1])[0:n_to_keep]]
+# 	print("Keeping {} Ugs".format(len(keep_ugs)))
+
+# 	with open(os.path.join(CACHE_DIR, 'interesting_targets_to_probe.csv'),'w') as f:
+# 		for ug in keep_ugs:
+# 			all_perfs = np.array(list(ug_perfs[ug].values()))
+# 			if np.min(all_perfs) > 50:
+# 				# this target would not likely use one of these popps
+# 				continue
+# 			if np.random.random() > .99:
+# 				print("UG {} perfs {} anycast {}".format(ug,ug_perfs[ug],anycast_latencies[ug]))
+# 			_, ip = ug
+# 			popps = list(ug_perfs[ug])
+# 			popps = [str(popp[0]) + "|" + str(popp[1]) for popp in popps]
+# 			popps_str = "-".join(popps)
+# 			f.write("{},{}\n".format(ip,popps_str))
+
+def get_random_ug_to_vol(deployment):
+	## Set UG vols to balance non-provider expected volume
+	ugs = deployment['ugs']
+	popps = deployment['popps']
+	provider_popps = deployment['provider_popps']
+	ug_perfs = deployment['ug_perfs']
+
+
+	ug_to_vol = {ug:.5 + .5 * np.random.random() for ug in ugs}
+	non_provider_popps = get_difference(popps,provider_popps)
+	popp_to_ug = {popp:[] for popp in non_provider_popps}
 	for ug in ug_perfs:
-		all_perfs = np.array(list(ug_perfs[ug].values()))
-		ml = np.min(all_perfs)
-		popp_key = tuple(sorted(list(ug_perfs[ug].keys()), key = lambda el : "-".join([str(_el) for _el in el])))
-		try:
-			profiles[popp_key].append((ug,ml))
-		except KeyError:
-			profiles[popp_key] = [(ug, ml)]
-	print("{} profiles".format(len(profiles)))
-	n_to_keep = 400
-	keep_ugs = []
-	for p in profiles:
-		keep_ugs = keep_ugs + [el[0] for el in sorted(profiles[p], key = lambda el : el[1])[0:n_to_keep]]
-	print("Keeping {} Ugs".format(len(keep_ugs)))
-
-	with open(os.path.join(CACHE_DIR, 'interesting_targets_to_probe.csv'),'w') as f:
-		for ug in keep_ugs:
-			all_perfs = np.array(list(ug_perfs[ug].values()))
-			if np.min(all_perfs) > 50:
-				# this target would not likely use one of these popps
+		for popp in ug_perfs[ug]:
+			if popp in provider_popps:
 				continue
-			if np.random.random() > .99:
-				print("UG {} perfs {} anycast {}".format(ug,ug_perfs[ug],anycast_latencies[ug]))
-			_, ip = ug
-			popps = list(ug_perfs[ug])
-			popps = [str(popp[0]) + "|" + str(popp[1]) for popp in popps]
-			popps_str = "-".join(popps)
-			f.write("{},{}\n".format(ip,popps_str))
+			popp_to_ug[popp].append(ug)
+	def calc_popp_vol(ugv):
+		popp_vol = {popp:sum(ugv[ug] for ug in popp_to_ug[popp]) for popp in popp_to_ug}
+		return popp_vol
 
-def load_actual_deployment():
-	considering_pops = list(POP_TO_LOC['vultr'])
-	# considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	last_r = 100000
+	max_n_iter = 10
+	end = False
+	_iter = 0
+	vol_by_metro = {}
+	for metro,asn in ugs:
+		try:
+			vol_by_metro[metro] += ug_to_vol[(metro,asn)]
+		except KeyError:
+			vol_by_metro[metro] = ug_to_vol[(metro,asn)]
+	print(vol_by_metro)
+	while not end:
+		## Tries to increase low-volume ingress expected volume by inflating user volumes
+		## I.e., attempts to deal with low target counts in certain ingresses
+		popp_vols = calc_popp_vol(ug_to_vol)
+		all_vols = list([popp_vols[popp] for popp in non_provider_popps])
+
+		ranked_vols = np.argsort(all_vols)
+		min_popp,max_popp = non_provider_popps[ranked_vols[0]],non_provider_popps[ranked_vols[-1]]
+		curr_min_ind = 1
+		while len(get_difference(popp_to_ug[min_popp], popp_to_ug[max_popp])) == 0:
+			min_popp = non_provider_popps[ranked_vols[curr_min_ind]]
+			curr_min_ind += 1
+			if min_popp == max_popp:
+				end = True
+				break
+
+		min_vol,max_vol = popp_vols[min_popp],popp_vols[max_popp]
+		
+		this_r = max_vol / min_vol
+		if this_r < 1.1:
+			end = True
+		for ug in popp_to_ug[min_popp]:
+			if ug in popp_to_ug[max_popp]: continue
+			# print("multiplying {}".format(ug))
+			ug_to_vol[ug] = ug_to_vol[ug] * 1.2
+		
+		if _iter == max_n_iter:
+			break
+			
+		if _iter > 1000 and last_r <= this_r:
+			break
+
+		last_r = copy.copy(this_r)
+		_iter += 1
+	vol_by_metro = {}
+	for metro,asn in ugs:
+		try:
+			vol_by_metro[metro] += ug_to_vol[(metro,asn)]
+		except KeyError:
+			vol_by_metro[metro] = ug_to_vol[(metro,asn)]
+	### normalize each metro to be random between 1 and 10
+	normal_factor = {metro: 1+9*np.random.random() for metro in vol_by_metro}
+	for ug in ugs:
+		ug_to_vol[ug] = ug_to_vol[ug] * normal_factor[ug[0]] / vol_by_metro[ug[0]]
+
+
+	# Normalize
+	max_vol = np.max(list(ug_to_vol.values()))
+	for ug in ug_to_vol:
+		ug_to_vol[ug] = ug_to_vol[ug] / max_vol
+
+	return ug_to_vol
+
+def load_actual_deployment(deployment_size):
+	if deployment_size == 'actual-large':
+		considering_pops = list(POP_TO_LOC['vultr'])
+	elif deployment_size == 'actual':
+		considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+	else:
+		raise ValueError("Deployment size {} not supported".format(deployment_size))
 	# considering_pops = ['miami', 'atlanta']
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
@@ -593,69 +791,18 @@ def load_actual_deployment():
 			provider_popps.append((pop,peer))
 
 		ugs = sorted(list(ug_perfs))
-		np.random.shuffle(ugs)
 		popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
+		pop_to_n = {}
 		print("{} popps, {} ugs".format(len(popps), len(ugs)))
+		for pop,peer in popps:
+			try:
+				pop_to_n[pop] += 1
+			except KeyError:
+				pop_to_n[pop] = 1
+		print("Ingress counts by PoP: {}".format(pop_to_n))
 		provider_popps = get_intersection(provider_popps, popps)
 		n_providers = len(set(peer for pop,peer in provider_popps))
-		
-		## Set UG vols to balance non-provider expected volume
-		ug_to_vol = {ug:1 for ug in ugs}
-		non_provider_popps = get_difference(popps,provider_popps)
-		popp_to_ug = {popp:[] for popp in non_provider_popps}
-		for ug in ug_perfs:
-			for popp in ug_perfs[ug]:
-				if popp in provider_popps:
-					continue
-				popp_to_ug[popp].append(ug)
-		def calc_popp_vol(ugv):
-			popp_vol = {popp:sum(ugv[ug] for ug in popp_to_ug[popp]) for popp in popp_to_ug}
-			return popp_vol
-
-
-		last_r = 100000
-		max_n_iter = 1000
-		end = False
-		_iter = 0
-		while not end:
-			## Tries to increase low-volume ingress expected volume by inflating user volumes
-			## I.e., attempts to deal with low target counts in certain ingresses
-			popp_vols = calc_popp_vol(ug_to_vol)
-			all_vols = list([popp_vols[popp] for popp in non_provider_popps])
-
-			ranked_vols = np.argsort(all_vols)
-			min_popp,max_popp = non_provider_popps[ranked_vols[0]],non_provider_popps[ranked_vols[-1]]
-			curr_min_ind = 1
-			while len(get_difference(popp_to_ug[min_popp], popp_to_ug[max_popp])) == 0:
-				min_popp = non_provider_popps[ranked_vols[curr_min_ind]]
-				curr_min_ind += 1
-				if min_popp == max_popp:
-					end = True
-
-			min_vol,max_vol = popp_vols[min_popp],popp_vols[max_popp]
-			
-			this_r = max_vol / min_vol
-			if this_r < 1.1:
-				end = True
-			for ug in popp_to_ug[min_popp]:
-				if ug in popp_to_ug[max_popp]: continue
-				# print("multiplying {}".format(ug))
-				ug_to_vol[ug] = ug_to_vol[ug] * 1.2
-			
-			if _iter == max_n_iter:
-				break
-				
-			if _iter > 10 and last_r <= this_r:
-				break
-
-			last_r = copy.copy(this_r)
-			_iter += 1
-
-		# Normalize
-		max_vol = np.max(list(ug_to_vol.values()))
-		for ug in ug_to_vol:
-			ug_to_vol[ug] = ug_to_vol[ug] / max_vol
-
+	
 		metros = list(set(metro for metro,asn in ugs))
 		metro_loc = {}
 		for ug in ug_perfs:
@@ -668,15 +815,18 @@ def load_actual_deployment():
 			'ugs': ugs,
 			'ug_perfs': ug_perfs,
 			'ug_anycast_perfs': anycast_latencies,
-			'ug_to_vol': ug_to_vol,
 			'whole_deployment_ugs': ugs,
-			'whole_deployment_ug_to_vol': ug_to_vol,
+			'whole_deployment_ug_perfs': ug_perfs,
 			'popps': popps,
 			'metro_loc': metro_loc,
 			'pop_to_loc': pop_to_loc,
 			'n_providers': n_providers,
 			'provider_popps': provider_popps,
 		}
+
+		ug_to_vol = get_random_ug_to_vol(deployment)
+		deployment['ug_to_vol'] = ug_to_vol
+		deployment['whole_deployment_ug_to_vol'] = ug_to_vol
 
 		ingress_priorities = get_random_ingress_priorities(deployment)
 		deployment['ingress_priorities'] = ingress_priorities
@@ -688,10 +838,9 @@ def load_actual_deployment():
 
 	else:
 		deployment = pickle.load(open(deployment_cache_fn,'rb'))
-		ug_perfs = deployment['ug_perfs']
-		anycast_latencies = deployment['ug_anycast_perfs']
-		pop_to_loc = deployment['pop_to_loc']
-		metro_loc = deployment['metro_loc']
+
+		ug_to_vol = get_random_ug_to_vol(deployment)
+		deployment['ug_to_vol'] = ug_to_vol
 
 		ingress_priorities = get_random_ingress_priorities(deployment)
 		deployment['ingress_priorities'] = ingress_priorities
@@ -755,8 +904,8 @@ problem_params = {
 }
 
 def get_random_deployment(problem_size):
-	if problem_size == 'actual':
-		return load_actual_deployment()
+	if 'actual' in problem_size:
+		return load_actual_deployment(problem_size)
 	else:
 		return get_random_deployment_by_size(problem_size)
 
@@ -816,6 +965,7 @@ def get_random_deployment_by_size(problem_size):
 		'ug_to_vol': ug_to_vol,
 		'ug_anycast_perfs': ug_anycast_perfs,
 		'whole_deployment_ugs': ugs,
+		'whole_deployment_ug_perfs': ug_perfs,
 		'whole_deployment_ug_to_vol': ug_to_vol,
 		'popps': popps,
 		'metro_loc': metro_loc,

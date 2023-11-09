@@ -12,18 +12,23 @@ GRAD_CLIP_VAL = 10
 
 LBX_DENSITY = 50
 
-BASE_SOCKET = 31427
+BASE_SOCKET = 31463
+
+# simulating routing preferences or not
+SIMULATED = True
 
 ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-DPSIZE = 'actual'
+DPSIZE = 'actual-large'
+# DPSIZE = 'small'
 PRINT_FREQUENCY = {
 	'really_friggin_small': 20,
+	'actual-large': 12,
 	'actual': 12,
-	'small': 5,
+	'small': 20,
 	'decent': 1,
 	'med': 1,
 	'large': 1
@@ -39,9 +44,10 @@ NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 N_WORKERS = {
-	'really_friggin_small': 1,
-	'actual': 2,
-	'small': 2,
+	'really_friggin_small': 2,
+	'actual': 1,
+	'actual-large': 8,
+	'small': 4,
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)

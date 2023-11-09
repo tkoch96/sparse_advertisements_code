@@ -46,7 +46,7 @@ class Optimal_Adv_Wrapper:
 		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
 		self.epsilon = .05 # change in objective less than this -> stop
-		self.max_n_iter = 300 # maximum number of learning iterations
+		self.max_n_iter = 100 # maximum number of learning iterations
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
@@ -55,11 +55,6 @@ class Optimal_Adv_Wrapper:
 		self.pdf_sum_function = sum_pdf_fixed_point
 
 		self.calc_cache = Calc_Cache()
-
-		self.linear_prog_soln_cache = {
-			'regular': {},
-			'failure_catch': {},
-		}
 
 		self.update_deployment(deployment)	
 
@@ -82,6 +77,10 @@ class Optimal_Adv_Wrapper:
 		self.calc_cache.clear_all_caches()
 		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
 			self.ug_perfs[self.ugs[ui]]} for ui in range(self.n_ug)}
+		# self.linear_prog_soln_cache = {
+		# 	'regular': {},
+		# 	'failure_catch': {},
+		# }
 		try:
 			msg = pickle.dumps(['reset_cache', ()])
 			self.send_receive_workers(msg)
@@ -108,10 +107,11 @@ class Optimal_Adv_Wrapper:
 		}
 
 	def solve_lp_assignment(self, adv, **kwargs):
-		cache_rep = tuple(np.where(threshold_a(adv))[0].flatten())
+		cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
 		computing_best_lats = kwargs.get('computing_best_lats', False)
 		try:
-			if kwargs.get('verb'):
+			if kwargs.get('verb') or kwargs.get('smallverb'):
+				# print("Note, verbose is on so we're ignoring LP cache in woFC")
 				raise KeyError
 			ret =  self.linear_prog_soln_cache['regular'][cache_rep, computing_best_lats]
 			return ret
@@ -123,19 +123,19 @@ class Optimal_Adv_Wrapper:
 		return ret
 
 	def solve_lp_with_failure_catch(self, adv, **kwargs):
-		cache_rep = tuple(np.where(threshold_a(adv))[0].flatten())
+		cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
 		computing_best_lats = kwargs.get('computing_best_lats', False)
 		try:
-			if kwargs.get('verb'):
+			if kwargs.get('verb') or kwargs.get('smallverb'):
+				# print("Note, verbose is on so we're ignoring LP cache in WFC")
 				raise KeyError
 			ret = self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats]
-			return ret
+			return copy.deepcopy(ret)
 		except KeyError:
 			pass
 		ret = solve_lp_with_failure_catch(self, adv, **kwargs)
-		self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats] = ret
+		self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats] = copy.deepcopy(ret)
 		return ret
-
 
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
@@ -144,7 +144,41 @@ class Optimal_Adv_Wrapper:
 			for childi,parenti in inds:
 				self.parent_tracker[ui,childi,parenti] = True
 
-	def update_deployment(self, deployment):
+	def output_deployment(self):
+		deployment = {
+			'ugs': self.ugs,
+			'ug_perfs': self.ug_perfs,
+			'ug_to_vol': self.ug_to_vol,
+			'ug_anycast_perfs': self.ug_anycast_perfs,
+			'whole_deployment_ugs': self.whole_deployment_ugs,
+			'whole_deployment_ug_perfs': self.whole_deployment_ug_perfs,
+			'whole_deployment_ug_to_vol': self.whole_deployment_ug_to_vol,
+			'popps': self.popps,
+			'metro_loc': self.metro_loc,
+			'pop_to_loc': self.pop_to_loc,
+			'n_providers': self.n_providers,
+			'provider_popps': self.provider_popps,
+			'ingress_priorities': self.ground_truth_ingress_priorities,
+			'link_capacities': self.link_capacities_by_popp,
+		}
+		return copy.deepcopy(deployment)
+
+	def update_deployment(self, deployment, **kwargs):
+
+		quick_update = kwargs.get('quick_update', False)
+
+		### Get rid of ugs with only one pop
+		n_pop_by_ug = {ug:{} for ug in deployment['ug_perfs']}
+		for ug in deployment['ug_perfs']:
+			for pop,peer in deployment['ug_perfs'][ug]:
+				n_pop_by_ug[ug][pop] = None
+		ug_to_del = list(ug for ug,v in n_pop_by_ug.items() if len(v) <= 1)
+		for ug in ug_to_del:
+			for k in ['ugs', 'whole_deployment_ugs']:
+				deployment[k] = get_difference(deployment[k], ug_to_del)
+			for k in ['ug_perfs', 'ug_to_vol', 'ug_anycast_perfs', 'ingress_priorities', 'whole_deployment_ug_to_vol']:
+				deployment[k] = {ug:v for ug,v in deployment[k].items() if ug not in ug_to_del}
+
 		self.deployment = deployment
 		self.ugs = deployment['ugs']
 		self.n_ug = len(self.ugs)
@@ -153,6 +187,7 @@ class Optimal_Adv_Wrapper:
 		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
 		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
 		self.ug_perfs = deployment['ug_perfs']
+		self.whole_deployment_ug_perfs = deployment['whole_deployment_ug_perfs']
 		self.ug_anycast_perfs = deployment['ug_anycast_perfs']
 
 		# Shape of the variables
@@ -187,18 +222,8 @@ class Optimal_Adv_Wrapper:
 		self.metro_loc = deployment['metro_loc']
 		self.pop_to_loc = deployment['pop_to_loc']
 		self.link_capacities_by_popp = deployment['link_capacities']
-
-		try:
-			self.worker_i
-			### Worker thread, need to divide capacities by the number of workers
-			### where appropriate
-			for popp, cap in self.link_capacities_by_popp.items():
-				if popp in self.provider_popps:
-					self.link_capacities_by_popp[popp] = cap / N_WORKERS
-		except AttributeError:
-			pass
-
 		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
+
 		self.link_capacities_arr = np.zeros(self.n_popp)
 		for poppi, cap in self.link_capacities.items():
 			self.link_capacities_arr[poppi] = cap
@@ -228,16 +253,42 @@ class Optimal_Adv_Wrapper:
 		# ingress,ug -> stores ~ how many times ingress wins for a ug
 		self.n_wins = {ug:{i:0 for i in range(self.n_popp)} for ug in self.ugs}
 
-			# if len(self.ug_perfs[self.ugs[ui]]) > 1:
-			# 	for popp in self.ug_perfs[self.ugs[ui]]:
-			# 		print(self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]])
-			# 		print("{} {}".format(popp,self.popp_to_ind[popp]))
-			# 	print(self.popp_by_ug_indicator[:,ui])
-			# 	exit(0)
+		try:
+			self.worker_i
+			### Worker thread, need to divide capacities by the number of workers
+			### where appropriate
+
+			## want to apportion capacity according to how much of the capacity I think
+			## each worker will use
+			## users will "likely want to use" low latency popps, so maybe their top 10
+			best_n = 10
+			global_popp_vol_ctr, this_wrkr_popp_vol_ctr = {popp:0 for popp in self.popps},{popp:0 for popp in self.popps}
+			for ug in self.whole_deployment_ugs:
+				sorted_popps = sorted(self.whole_deployment_ug_perfs[ug].items(), key = lambda el : el[1])
+				for best_popp,perf in sorted_popps[0:best_n]:
+					if ug in self.ugs:
+						this_wrkr_popp_vol_ctr[best_popp] += self.whole_deployment_ug_to_vol[ug]
+					global_popp_vol_ctr[best_popp] += self.whole_deployment_ug_to_vol[ug]
+
+			for popp, cap in self.link_capacities_by_popp.items():
+				if global_popp_vol_ctr[popp] > 0 and this_wrkr_popp_vol_ctr[popp] > 0:
+					## percent of volume this worker woud likely contribute
+					divider = this_wrkr_popp_vol_ctr[popp] / global_popp_vol_ctr[popp]
+					divider = 1.05 / divider # be a little more conservative
+					# print("Worker {} dividing popp {} by {}".format(self.worker_i, popp, round(divider,2)))
+				else:
+					divider = 1 # likely won't use any of it, so it doesn't matter
+
+				self.link_capacities_by_popp[popp] = cap / divider
+
+		except AttributeError:
+			pass
+		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
+
 
 		try:
 			### Worker bee
-			print("Allocating objects in worker {}".format(self.worker_i))
+			self.worker_i
 			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
 			# ijk'th entry of ingress probabilities is probability that user k ingresses over popp i for prefix j
 			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))\
@@ -249,7 +300,6 @@ class Optimal_Adv_Wrapper:
 
 		except AttributeError:
 			### Main thread
-			print("Allocating objects in main thread")
 			with open(os.path.join(CACHE_DIR, 'main_thread_log.txt'),'w') as f:
 				pass
 			self.parent_tracker = {}
@@ -259,17 +309,25 @@ class Optimal_Adv_Wrapper:
 					self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.ugs[ui]][self.popp_to_ind[popp]]
 
 			## compute best latency by ug
-			print("Solving for best latency in main thread")
-			one_per_ingress_adv = np.identity(self.n_popps)
-			ret = self.solve_lp_assignment(one_per_ingress_adv,
-				computing_best_lats=True)
-			if not ret['solved']:
-				raise ValueError("Cant solve problem in the best case, increase caps.")
-			self.best_lats_by_ug = ret['lats_by_ug']
+			self.linear_prog_soln_cache = {
+				'regular': {},
+				'failure_catch': {},
+			}
+			if not quick_update:
+				one_per_ingress_adv = np.identity(self.n_popps)
+				ret = self.solve_lp_assignment(one_per_ingress_adv,
+					computing_best_lats=True)
+				if not ret['solved'] and kwargs.get('exit_on_impossible', True):
+					raise ValueError("Cant solve problem in the best case, increase caps.")
+				elif not kwargs.get('exit_on_impossible', True):
+					pass
+				else:
+					self.best_lats_by_ug = ret['lats_by_ug']
 
 		try:
+			if quick_update:
+				raise AttributeError
 			n_workers = self.get_n_workers()
-			print("Splitting and assigning deployments")
 			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 			for worker in range(n_workers):
 				if len(subdeployments[worker]['ugs']) == 0: continue
@@ -317,12 +375,12 @@ class Optimal_Adv_Wrapper:
 		# 				self.rb_backups[ug,popp1i] = {popp2i: backup}
 
 
-		#### TMP 
 		self.all_rb_calls_results = {poppi:[] for poppi in range(self.n_popps)}
 		self.all_lb_calls_results = []
-
-		self.clear_caches()
-		self.calculate_user_latency_by_peer()
+		if not quick_update:
+			#### TMP 
+			self.clear_caches()
+			self.calculate_user_latency_by_peer()
 
 	def calculate_user_latency_by_peer(self):
 		"""
@@ -437,49 +495,54 @@ class Optimal_Adv_Wrapper:
 		#### Measures actual user latencies as if we were to advertise 'a'
 		if mode == 'best':
 			user_latencies, ug_ingress_decisions = self.calculate_user_choice(a, mode=mode,**kwargs)
+			if self.with_capacity:
+				link_volumes = np.zeros(self.n_popp)
+				ingress_to_users = {}
+				for ugi, ingressesvols in ug_ingress_decisions.items():
+					if ingressesvols is None: continue
+					for ingress_i,vol in ingressesvols:
+						link_volumes[ingress_i] += vol
+						try:
+							ingress_to_users[ingress_i].append(ugi)
+						except KeyError:
+							ingress_to_users[ingress_i] = [ugi]
+				cap_violations = link_volumes > self.link_capacities_arr
+
+				if kwargs.get('store_metrics'):
+					self.metrics['link_utilizations'].append(link_volumes / self.link_capacities_arr)
+
+				if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
+					# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
+					for poppi in np.where(cap_violations)[0]:
+						poppi_failed = kwargs.get('failing', 'none')
+						if poppi_failed != 'none':
+							poppi_failed = self.popp_to_ind[poppi_failed]
+						# print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
+						# 	poppi_failed, link_volumes[poppi] - self.link_capacities_arr[poppi]))
+						# print("Users {} now using this ingress".format(ingress_to_users[poppi]))
+						users_str = "-".join([str(el) for el in ingress_to_users[poppi]])
+						try:
+							self.log("link_fail_report,{},{},{},{},{},{}\n".format(
+								self.iter,poppi,poppi_failed,self.link_capacities[poppi],
+								link_volumes[poppi],users_str))
+						except:
+							continue
+				for cap_violation in np.where(cap_violations)[0]:
+					for ugi in ingress_to_users[cap_violation]:
+						user_latencies[ugi] = NO_ROUTE_LATENCY
+			# if self.verbose and len(np.where(cap_violations)[0]) > 0:
+			# 	print([round(el,2) for el in user_latencies])
 		elif mode == 'lp':
 			ret = self.solve_lp_with_failure_catch(threshold_a(a))
+			if not ret['solved']:
+				print("In ground truth user latencies, didn't successfully solve LP")
+				return self.get_ground_truth_user_latencies(a, mode='best', **kwargs)
 			user_latencies = ret['lats_by_ug']
 			ug_ingress_decisions = ret['paths_by_ug']
 		else:
 			raise ValueError("Unknown mode {}".format(mode))
 		
-		if self.with_capacity:
-			link_volumes = np.zeros(self.n_popp)
-			ingress_to_users = {}
-			for ugi, ingressesvols in ug_ingress_decisions.items():
-				for ingress_i,vol in ingressesvols:
-					link_volumes[ingress_i] += vol
-					try:
-						ingress_to_users[ingress_i].append(ugi)
-					except KeyError:
-						ingress_to_users[ingress_i] = [ugi]
-			cap_violations = link_volumes > self.link_capacities_arr
-
-			if kwargs.get('store_metrics'):
-				self.metrics['link_utilizations'].append(link_volumes / self.link_capacities_arr)
-
-			if (self.verbose or kwargs.get('overloadverb')) and len(np.where(cap_violations)[0]) > 0:
-				# print("LV: {}, LC: {}".format(link_volumes, self.link_capacities_arr))
-				for poppi in np.where(cap_violations)[0]:
-					poppi_failed = kwargs.get('failing', 'none')
-					if poppi_failed != 'none':
-						poppi_failed = self.popp_to_ind[poppi_failed]
-					# print("PoPP {} ({}) inundated when failing {}, severity {}".format(self.popps[poppi], poppi,
-					# 	poppi_failed, link_volumes[poppi] - self.link_capacities_arr[poppi]))
-					# print("Users {} now using this ingress".format(ingress_to_users[poppi]))
-					users_str = "-".join([str(el) for el in ingress_to_users[poppi]])
-					try:
-						self.log("link_fail_report,{},{},{},{},{},{}\n".format(
-							self.iter,poppi,poppi_failed,self.link_capacities[poppi],
-							link_volumes[poppi],users_str))
-					except:
-						continue
-			for cap_violation in np.where(cap_violations)[0]:
-				for ugi in ingress_to_users[cap_violation]:
-					user_latencies[ugi] = NO_ROUTE_LATENCY
-		# if self.verbose and len(np.where(cap_violations)[0]) > 0:
-		# 	print([round(el,2) for el in user_latencies])
+		
 		return user_latencies
 
 	def benefit_from_user_latencies(self, user_latencies, ugs):
@@ -507,7 +570,9 @@ class Optimal_Adv_Wrapper:
 			tmp[self.popp_to_ind[popp],:] = 0
 
 			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-				ugs=these_ugs, failing=popp, mode='best')
+				ugs=these_ugs)
+			# user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
+			# 	ugs=these_ugs, failing=popp, mode='best')
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well
@@ -654,7 +719,6 @@ class Optimal_Adv_Wrapper:
 		### Returns routed_through_ingress: prefix -> ug -> popp_i
 		## and actives prefix -> [active popp indices]
 
-		### Somewhat efficient implementation using matrix logic
 		routed_through_ingress = {} # prefix -> UG -> ingress index
 		actives = {} # prefix -> indices where we adv
 		ugs = kwargs.get('ugs', self.ugs)
@@ -663,30 +727,67 @@ class Optimal_Adv_Wrapper:
 
 		a = threshold_a(a)
 
-		for prefix_i in range(a.shape[1]):
-			cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
-			try:
-				routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
-				continue
-			except KeyError:
-				pass
-			this_actives = np.where(a[:,prefix_i])[0]
-			actives[prefix_i] = this_actives
-			this_routed_through_ingress = {}
-			if np.sum(a[:,prefix_i]) == 0:
+		if SIMULATED:
+
+			### Somewhat efficient implementation using matrix logic
+			for prefix_i in range(a.shape[1]):
+				cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
+				try:
+					routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
+					continue
+				except KeyError:
+					pass
+				this_actives = np.where(a[:,prefix_i])[0]
+				actives[prefix_i] = this_actives
+				this_routed_through_ingress = {}
+				if np.sum(a[:,prefix_i]) == 0:
+					routed_through_ingress[prefix_i] = this_routed_through_ingress
+					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+					continue
+				active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
+				active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
+				best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
+				for ui, bao in zip(range(n_ug), best_available_options):
+					if active_popp_ug_indicator[bao,ui] == 0: continue # no route
+					this_routed_through_ingress[ugs[ui]] = bao
 				routed_through_ingress[prefix_i] = this_routed_through_ingress
-				self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
-				continue
-			active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
-			active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
-			best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
-			for ui, bao in zip(range(n_ug), best_available_options):
-				if active_popp_ug_indicator[bao,ui] == 0: continue # no route
-				this_routed_through_ingress[ugs[ui]] = bao
-			routed_through_ingress[prefix_i] = this_routed_through_ingress
-			if len(ugs) == self.n_ug:
-				## not a subset of user groups, cache result for general utility
-				self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+				if len(ugs) == self.n_ug:
+					## not a subset of user groups, cache result for general utility
+					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+
+		else:
+			#### NEED TO ACTUALLY MEASURE THINGS IN THE REAL INTERNET
+			### also would make sense for, at least at first, to have some sort of caching of results so that I
+			### can recover from errors, restart from iterations and given state, etc..
+			## like given algorithm, deployment, current advertisement, iteration, continue optimizing
+			for prefix_i in range(a.shape[1]):
+				cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
+				try:
+					routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
+					continue
+				except KeyError:
+					pass
+				this_actives = np.where(a[:,prefix_i])[0]
+				actives[prefix_i] = this_actives
+				this_routed_through_ingress = {}
+				if np.sum(a[:,prefix_i]) == 0:
+					routed_through_ingress[prefix_i] = this_routed_through_ingress
+					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+					continue
+				###### REPLACE THIS WITH CORRECT STUFF, i.e., measuring catchments from actual advertisements to this prefix
+				active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
+				active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
+				best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
+				for ui, bao in zip(range(n_ug), best_available_options):
+					if active_popp_ug_indicator[bao,ui] == 0: continue # no route
+					this_routed_through_ingress[ugs[ui]] = bao
+				routed_through_ingress[prefix_i] = this_routed_through_ingress
+				if len(ugs) == self.n_ug:
+					## not a subset of user groups, cache result for general utility
+					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+
+
+
 		return routed_through_ingress, actives
 
 	def enforce_measured_prefs(self, routed_through_ingress, actives):

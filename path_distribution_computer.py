@@ -17,6 +17,9 @@ except:
 
 USER_OF_INTEREST = None
 
+# dont make this too big or you'll break the VM
+MAX_CACHE_SIZE = 5000
+
 
 #### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
 @nb.njit(fastmath=True,parallel=True)
@@ -666,15 +669,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		print("Worker {} -- {}".format(self.worker_i, s))
 
 	def check_clear_cache(self):
-		if len(self.calc_cache.all_caches['lb']) > 10000:
+		if len(self.calc_cache.all_caches['lb']) > MAX_CACHE_SIZE:
 			# order of lbx_density + n_popps*n_prefixes per entry
-			self.print("Clearing calc cache, currently size {}".format(
-				len(pickle.dumps(self.calc_cache))/1e6))
-			self.print("Clearing calc cache, current len {}".format(len(self.calc_cache.all_caches['lb'])))
+			# self.print("Clearing calc cache, currently size {}".format(
+			# 	len(pickle.dumps(self.calc_cache))/1e6))
+			# self.print("Clearing calc cache, current len {}".format(len(self.calc_cache.all_caches['lb'])))
 			self.clear_new_meas_caches()
 
 	def clear_new_meas_caches(self):
-		print("Clearing caches")
+		# print("Clearing caches")
 		self.this_time_ip_cache = {}
 		self.init_user_px_cache()
 		self.calc_cache.clear_new_measurement_caches()
@@ -704,6 +707,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		elif cmd == 'calc_compressed_lb':
 
 			ts = time.time()
+			tlp = time.time()
 			ret = []
 			base_args,base_kwa = data[0]
 			base_adv, = base_args
@@ -719,9 +723,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					base_adv[ind] = not base_adv[ind]
 				i += 1
 				# kwa['verb'] = True
-				if i%100 == 0 and kwa.get('verb'):
+				if time.time() - tlp > 100:
 					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
-						i * 100.0 /len(data), round(1000*(time.time() - ts) / i)))
+						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
+					tlp = time.time()
 				self.check_clear_cache()
 			# if len(data)>10:
 			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
@@ -759,6 +764,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.start_connection()
 			return
 		elif cmd == 'end':
+			print("Received end command in worker {}, stopping".format(self.worker_i))
 			self.stop = True
 			self.main_socket.close()
 			return
@@ -771,6 +777,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		while not self.stop:
 			self.check_for_commands()
 			time.sleep(.01)
+		print("Ended run loop in worker {}".format(self.worker_i))
 
 if __name__ == "__main__":
 	worker_i = int(sys.argv[1])

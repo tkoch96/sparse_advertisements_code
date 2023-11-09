@@ -14,6 +14,11 @@ except:
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+def parse_lat(lat_str):
+	lat = float(lat_str) * 1000
+	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
+	return lat
+
 def ip32_to_24(ip):
 	return ".".join(ip.split(".")[0:3]) + ".0"
 
@@ -33,7 +38,7 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 			'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
 		})
 		for k in get_difference(deployment, deployments[-1]):
-			deployments[-1][k] = copy.copy(deployment[k])
+			deployments[-1][k] = copy.deepcopy(deployment[k])
 
 	return deployments
 

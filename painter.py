@@ -149,11 +149,11 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		ts = time.time()
 		print("Starting painter computation")
 		while not self.stop:
-			print("Measuring ingresses")
+			# print("Measuring ingresses")
 			## conduct measurement with this advertisement strategy
 			self.measure_ingresses(self.painter_advs_to_sparse_advs(advs))
 			## recalc painter decision with new information
-			print("Solving greedy allocation")
+			# print("Solving greedy allocation")
 			advs = self.painter_v4(**kwargs)
 			self.stop_tracker(advs)
 			self.iter += 1
@@ -162,23 +162,24 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				(time.time() - ts) / (self.iter+1)))
 
 			self.advs = advs
+			break
 
-		### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
-		painter_budget = self.n_prefixes - 1
-		advs_cp = copy.deepcopy(self.advs)
-		for pref_i in range(painter_budget):
-			if len(advs_cp[painter_budget][self.n_prefixes - pref_i - 1]) == 0:
-				# if PAINTER decided not to allocate any here, it obviously won't matter
-				continue
-			advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
-			## We can measure these objectives, since we've already measured all these advertisement configurations
-			if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp),
-				use_resilience=False, mode='best') < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
-				use_resilience=False, mode='best'):
-				## go with this solution
-				self.advs = copy.deepcopy(advs_cp)
-			else:
-				break
+		# ### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
+		# painter_budget = self.n_prefixes - 1
+		# advs_cp = copy.deepcopy(self.advs)
+		# for pref_i in range(painter_budget):
+		# 	if len(advs_cp[painter_budget][self.n_prefixes - pref_i - 1]) == 0:
+		# 		# if PAINTER decided not to allocate any here, it obviously won't matter
+		# 		continue
+		# 	advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
+		# 	## We can measure these objectives, since we've already measured all these advertisement configurations
+		# 	if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp),
+		# 		use_resilience=False, mode='best') < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
+		# 		use_resilience=False, mode='best'):
+		# 		## go with this solution
+		# 		self.advs = copy.deepcopy(advs_cp)
+		# 	else:
+		# 		break
 		self.verbose = save_verb
 
 	def painter_v4(self, **kwargs):
