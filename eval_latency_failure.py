@@ -82,6 +82,7 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, pre_soln, **kwargs):
 		 sas.ug_vols, 0))
 	else:
 		for withdrawal_number in range(1,len(prefis) + 1):
+			if withdrawal_number > 2: break
 			for prefi_set in itertools.combinations(prefis,withdrawal_number):
 				adv[poppi,np.array(prefi_set)] = 0
 				## unclear exactly how to handle this --- we should allow > 1 util, just the best one
@@ -104,7 +105,7 @@ def compute_optimal_prefix_withdrawals(sas, adv, popp, pre_soln, **kwargs):
 				 	sas.ug_vols, soln['fraction_congested_volume']))
 
 				adv[poppi,np.array(prefi_set)] = 1
-			if len(valid_solutions) > 0 or time.time() - ts > max_time:
+			if len(valid_solutions) > 0 or time.time() - ts > max_time or np.sum(adv.flatten()) == 0:
 				# greedily stop
 				break
 	if len(valid_solutions) > 0:
@@ -170,14 +171,15 @@ def assess_resilience_to_flash_crowds(sas, adv, solution, X_vals):
 				print("{} inundated popps".format(len(inundated_popps)))
 			soln = None
 			soln_adv = copy.deepcopy(adv)
-			ts, max_time = time.time(), 10 # seconds
-
+			ts, max_time, max_n_tries = time.time(), 10, 100 # seconds
+			n = 0
 			while len(inundated_popps) > 0:
 				### Greedily search to find a solution to the problem with TIPSY
 				popp = inundated_popps[np.random.choice(list(range(len(inundated_popps))))]
 				# print("trying drawing to withdraw a prefix from {}".format(popp))
 				soln = compute_optimal_prefix_withdrawals(sas, soln_adv, popp, pre_soln,
 					allow_congestion=True, can_withdraw_none=False)
+				n+=1
 				if soln is not None:
 					# print("withdrawing {}".format(soln['prefix_withdrawals']))
 					soln_adv[sas.popp_to_ind[popp], soln['prefix_withdrawals']] = 0
@@ -185,7 +187,7 @@ def assess_resilience_to_flash_crowds(sas, adv, solution, X_vals):
 					new_soln = sas.solve_lp_with_failure_catch(soln_adv)
 					inundated_popps = [sas.popps[poppi] for poppi,v in new_soln['vols_by_poppi'].items() if round(v,2) > 1]
 					# print("{} inundated popps after withdrawal".format(len(inundated_popps)))
-				if time.time() - ts > max_time:
+				if time.time() - ts > max_time or n > max_n_tries:
 					break
 			if doprnt:
 				print("After termination, {} inundated popps".format(len(inundated_popps)))
@@ -284,7 +286,7 @@ def assess_resilience_to_congestion(sas, adv, solution, X_vals):
 def deployment_to_prefixes(deployment):
 	n_prefixes = np.maximum(4,4 * int(np.log2(len(deployment['popps']))))
 	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
-	return n_prefixes
+	return 50#n_prefixes
 
 def popp_failure_latency_comparisons():
 	# for each deployment, get different advertisement strategies
@@ -293,9 +295,9 @@ def popp_failure_latency_comparisons():
 
 	# np.random.seed(31413)
 	metrics = {}
-	N_TO_SIM = 2
-	X_vals = [10,40,80,100,130,150,180,200,210,220,250]#[10,20,30,40,50,60,70,80,90,100]
-	gamma = 1.5
+	N_TO_SIM = 1
+	X_vals = [10,40,100,150,200]#[10,40,80,100,130,150,180,200,210,220,250]#[10,20,30,40,50,60,70,80,90,100]
+	gamma = 10
 	capacity = True
 
 	#### NOTE -- need to make sure lambduh decreases with the problem size
@@ -343,6 +345,7 @@ def popp_failure_latency_comparisons():
 				pass
 			print("-----Deployment number = {} -------".format(random_iter))
 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
+
 			deployment = get_random_deployment(DPSIZE)
 			metrics['deployment'][random_iter] = deployment
 			n_prefixes = deployment_to_prefixes(deployment)
@@ -355,7 +358,7 @@ def popp_failure_latency_comparisons():
 				wm.start_workers()
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
-
+			### Solve the problem for each type of solution (sparse, painter, etc...)
 			ret = sas.compare_different_solutions(deployment_size=DPSIZE, n_run=1, verbose=True,
 				 dont_update_deployment=True)
 			metrics['compare_rets'][random_iter] = ret
@@ -378,7 +381,94 @@ def popp_failure_latency_comparisons():
 	except:
 		import traceback
 		traceback.print_exc()
+
+	# ms_to_test = [5,20,50]
+	# ms_to_color = {5:'k',20:'b', 50:'m'}
+	# soln_to_marker = {'sparse': 'x', 'painter': ',', 'anyopt': '*', 'one_per_pop': 'o','oracle':'>'}
+	# n_subs = 2
+	# f,ax = plt.subplots(2,1)
+	# f,ax=plt.subplots(n_subs,1)
+	# f.set_size_inches(6,4*n_subs)
+	# plt_every = 20
+	# if True:
+	# 	plot_arrs = {}
+	# 	try:
+	# 		for random_iter in range(N_TO_SIM):
+	# 			print("-----Deployment number = {} -------".format(random_iter))
+	# 			metrics['popp_failures'][random_iter] = {k:[] for k in soln_types}
+	# 			deployment = metrics['deployment'][random_iter]
+	# 			n_prefixes = deployment_to_prefixes(deployment)
+	# 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+	# 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
+	# 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
+	# 			metrics['settings'][random_iter] = sas.get_init_kwa()
+	# 			if wm is None:
+	# 				wm = Worker_Manager(sas.get_init_kwa(), deployment)
+	# 				wm.start_workers()
+	# 			sas.set_worker_manager(wm)
+	# 			sas.update_deployment(deployment)
+	# 			best_lats_by_ug = {ug:np.min(list(sas.ug_perfs[ug].values())) for ug in sas.ug_perfs}
+	# 			for solution in tqdm.tqdm(soln_types,desc="Counting options"):
+	# 				try:
+	# 					adv = metrics['adv'][random_iter][solution]
+	# 				except:
+	# 					print("No solution for {}".format(solution))
+	# 					continue
+	# 				if len(adv) == 0: continue
+	# 				routed_through_ingress, _ = sas.calculate_ground_truth_ingress(adv)
+	# 				option_goodness_per_ug_popp = {ug:{} for ug in sas.ugs}
+	# 				option_goodness_per_ug_pop = {ug:{} for ug in sas.ugs}
+					
+
+	# 				### CDF of UGs. one line per X ms. Number of options within X ms
+	# 				for prefix in routed_through_ingress:
+	# 					for ug,poppi in routed_through_ingress[prefix].items():
+	# 						delta = sas.ug_perfs[ug][sas.popps[poppi]] - best_lats_by_ug[ug]
+	# 						option_goodness_per_ug_popp[ug][poppi] = delta
+	# 						pop = sas.popps[poppi][0]
+	# 						try:
+	# 							option_goodness_per_ug_pop[ug][pop] = np.minimum(delta, option_goodness_per_ug_pop[ug][pop])
+	# 						except KeyError:
+	# 							option_goodness_per_ug_pop[ug][pop] = delta
+	# 				for ms in ms_to_test:
+	# 					n_lt_ms = list([(sum(1 for lat in lats.values() if lat <= ms),sas.ug_to_vol[ug]) for 
+	# 						ug,lats in option_goodness_per_ug_popp.items()])
+	# 					x1,cdf_x1 = get_cdf_xy(n_lt_ms, weighted=True)
+	# 					ax[0].plot(x1[::plt_every],cdf_x1[::plt_every],label="{} -- {} ms".format(solution,ms),marker=soln_to_marker[solution],
+	# 						color=ms_to_color[ms])
+	# 					n_lt_ms = list([(sum(1 for lat in lats.values() if lat <= ms),sas.ug_to_vol[ug]) for 
+	# 						ug,lats in option_goodness_per_ug_pop.items()])
+	# 					x2,cdf_x2 = get_cdf_xy(n_lt_ms, weighted=True)
+	# 					ax[1].plot(x2[::plt_every],cdf_x2[::plt_every],label="{} -- {} ms".format(solution,ms),marker=soln_to_marker[solution],
+	# 						color=ms_to_color[ms])
+	# 					plot_arrs[solution,ms] = [(x1,cdf_x1), (x2,cdf_x2)]
+	# 			break
+
+	# 	except:
+	# 		import traceback
+	# 		traceback.print_exc()
+	# 	finally:
+	# 		if wm is not None:
+	# 			wm.stop_workers()
+	# 	pickle.dump(plot_arrs,open('tmp.pkl','wb'))
+	# else:
+	# 	plot_arrs = pickle.load(open('tmp.pkl','rb'))
+	# 	for solution,ms in plot_arrs:
+	# 		for i in range(2):
+	# 			x1,cdf_x1 = plot_arrs[solution,ms][i]
+	# 			ax[i].plot(x1[::10],cdf_x1[::10],label="{} -- {} ms".format(solution,ms),marker=soln_to_marker[solution],
+	# 				color=ms_to_color[ms])
+
+	# for i in range(2):
+	# 	ax[i].set_xlabel("Number of Options within Latency")
+	# 	ax[i].set_ylabel("CDF of Solutions")
+	# 	ax[i].legend()
+	# 	ax[i].set_xlim([0,5])
+	# 	ax[i].set_xticks([0,1,2,3,4,5])
+
+	# save_fig('number_options_witin_latency_threshold.pdf')
 	
+	# exit(0)
 
 	RECALC_FAILURE_METRICS = False
 	try:
@@ -409,7 +499,6 @@ def popp_failure_latency_comparisons():
 				# print(sorted(n_pop_by_ug))
 				# exit(0)
 
-
 				for solution in soln_types:
 					adv = metrics['adv'][random_iter][solution]
 					if len(adv) == 0:
@@ -425,13 +514,15 @@ def popp_failure_latency_comparisons():
 						adv_cpy[sas.popp_to_ind[popp],:] = 0
 						## q: what is latency experienced for these ugs compared to optimal?
 						_, ug_catchments = sas.calculate_user_choice(adv_cpy)
-						user_latencies = sas.solve_lp_with_failure_catch(adv_cpy)['lats_by_ug']
+						user_latencies = sas.solve_lp_with_failure_catch(adv_cpy,
+							really_bad_fail=True)['lats_by_ug']
 
 						## best user latencies is not necessarily just lowest latency
 						## need to factor in capacity
 						one_per_peer_adv = np.eye(sas.n_popps)
 						one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
-						best_user_latencies = sas.solve_lp_with_failure_catch(one_per_peer_adv)['lats_by_ug']
+						best_user_latencies = sas.solve_lp_with_failure_catch(one_per_peer_adv,
+							really_bad_fail=True)['lats_by_ug']
 
 						## Look at users whose catchment has changed
 						# most users aren't affected by a change, so we're zooming in on the relevant bits
@@ -440,13 +531,16 @@ def popp_failure_latency_comparisons():
 						these_ugs = sas.ugs
 
 						for ug in these_ugs:
+							new_perf = user_latencies[sas.ug_to_ind[ug]]
 							# best_perf = best_user_latencies[sas.ug_to_ind[ug]]
 							# actual_perf = user_latencies[sas.ug_to_ind[ug]]
 							# metrics['popp_failures'][random_iter][solution].append((best_perf - actual_perf, 
 							# 	ug_vols[ug]))
-							pre_perf = pre_lats_by_ug[sas.ug_to_ind[ug]]
-							new_perf = user_latencies[sas.ug_to_ind[ug]]
-							metrics['popp_failures'][random_iter][solution].append((pre_perf - new_perf, 
+							# pre_perf = pre_lats_by_ug[sas.ug_to_ind[ug]]
+							# metrics['popp_failures'][random_iter][solution].append((pre_perf - new_perf, 
+							# 	ug_vols[ug]))
+							best_perf = best_user_latencies[sas.ug_to_ind[ug]]
+							metrics['popp_failures'][random_iter][solution].append((best_perf - new_perf, 
 								ug_vols[ug]))
 					metrics['pop_failures'][random_iter][solution] = []
 					for pop in tqdm.tqdm(sas.pops, 
@@ -527,7 +621,7 @@ def popp_failure_latency_comparisons():
 
 	### Calculates some measure of practical resilience for each strategy
 	### current resilience measure is flash crowd / DDoS attack in a region
-	RECALC_RESILIENCE = False
+	RECALC_RESILIENCE = True
 	try:
 		for random_iter in range(N_TO_SIM):
 			if RECALC_RESILIENCE or metrics['resilience_to_congestion'][random_iter]['sparse']  == \

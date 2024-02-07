@@ -489,8 +489,8 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		all_as = []
 		
 		if logn_possibilities >= np.log2(1e6):
-			if DPSIZE != "really_friggin_small":
-				return
+			# if DPSIZE != "really_friggin_small":
+				# return
 			n_possibilities = int(1e2)
 			objs = np.zeros((n_possibilities,))
 			actual_objs = np.zeros((n_possibilities,))
@@ -567,19 +567,49 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 	def solve_sparse(self, **kwargs):
 
 		## Initialize advertisement, solve sparse
-		init_adv = kwargs.get('init_adv')
-		if init_adv is None:
-			adv = self.init_advertisement()
-		else:
-			adv = init_adv
-		self.sas.update_deployment(self.deployment)			
-		self.sas.set_worker_manager(self.get_worker_manager())
-		self.sas.solve(init_adv=adv)
-		self.sas.make_plots()
+
+		orig_deployment = copy.deepcopy(self.sas.output_deployment())
+		orig_n_prefixes = copy.copy(self.sas.n_prefixes)
+		## split problem in half
+		sparse_advs = []
+		for problem_iter_i in range(2): # could theoretically do this as many times as I want
+			new_deployment = copy.deepcopy(orig_deployment)
+			for k in ['ug_to_vol', 'whole_deployment_ug_to_vol']:
+				for ug,v in new_deployment[k].items():
+					new_deployment[k][ug] = v / 2
+			new_n_prefixes = orig_n_prefixes // 2
+			if orig_n_prefixes % 2 == 1: # odd number of prefixes
+				new_n_prefixes += problem_iter_i
+			self.sas.n_prefixes = new_n_prefixes
+			self.n_prefixes = new_n_prefixes
+			print("Updating to new pseudo-deployment for problem iter {}".format(problem_iter_i))
+			self.sas.update_deployment(new_deployment)
+			self.update_deployment(new_deployment)
+
+			init_adv = kwargs.get('init_adv')
+			if init_adv is None:
+				adv = self.init_advertisement()
+			else:
+				print("WARNING -- SPLITTING DEPLOYMENT BUT USING SAME INIT")
+				adv = init_adv
+			self.sas.set_worker_manager(self.get_worker_manager())
+			self.sas.solve(init_adv=adv)
+			self.sas.make_plots()
+			sparse_advs.append(self.sas.get_last_advertisement())
+
+		## reset everything
+		print("Recombining deployment, setting advertisement to combined version")
+		self.sas.n_prefixes = orig_n_prefixes
+		self.n_prefixes = orig_n_prefixes
+		self.update_deployment(orig_deployment)
+		self.sas.update_deployment(orig_deployment)
+
+		self.sas.reset_metrics()
+		final_adv = np.concatenate((sparse_advs[0], sparse_advs[1]), axis=1)
+		self.sas.metrics['advertisements'].append(final_adv)
 
 		sparse_adv = threshold_a(self.sas.get_last_advertisement())
 		sparse_objective = self.measured_objective(sparse_adv)
-
 		self.sparse_solution = {
 			'objective': sparse_objective,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(sparse_adv),

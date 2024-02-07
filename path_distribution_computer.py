@@ -84,8 +84,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter += 1
 
 	def get_limited_cap_latency_multiplier(self):
-		power = 1.03
-		return np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER
+		# LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
+		# power = 1.03
+		LIMITED_CAP_LATENCY_MULTIPLIER = 5
+		power = 1.05
+		return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
 
 	def clear_caches(self):
 		self.this_time_ip_cache = {}
@@ -360,7 +363,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if old_p != new_p:
 					recalc_popps[ingress_i] = None
 				self.p_link_fails[ingress_i] = new_p
-				self.link_failure_severities[ingress_i] = severity
+				self.link_failure_severities[ingress_i] = severity / self.link_capacities[ingress_i]
 
 			if verb:
 				for ingress_i in np.where(self.p_link_fails)[0]:
@@ -476,7 +479,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
-					lb_failure = lb * (1 + lfs)
+					lb_failure = lb * (1 + lfs) * lb_multiplier_link_failure
+					# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
+					# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
 
 					if lb_failure > max_experienced_benefit:
 						max_experienced_benefit = lb
@@ -534,7 +539,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
 						lb_failure = lb * ( 1 + lfs )
-
+						# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
+						# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
 						if lb_failure > max_experienced_benefit:
 							max_experienced_benefit = lb
 						if lb_failure < min_experienced_benefit:

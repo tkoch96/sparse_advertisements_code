@@ -557,7 +557,9 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_resilience_benefit(self, a, **kwargs):
 		#### NOTE -- this calculation does not factor in capacity, since that would take a long time
+		#### so why even calculate it
 		benefit = 0
+		return benefit
 		tmp = np.ones(a.shape)
 		a = threshold_a(a)
 		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a, **kwargs)
@@ -569,10 +571,10 @@ class Optimal_Adv_Wrapper:
 				continue
 			tmp[self.popp_to_ind[popp],:] = 0
 
-			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-				ugs=these_ugs)
 			# user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-			# 	ugs=these_ugs, failing=popp, mode='best')
+			# 	ugs=these_ugs) #### TAKES FOREVER
+			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
+				ugs=these_ugs, failing=popp, mode='best')
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well

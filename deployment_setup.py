@@ -112,14 +112,18 @@ def get_link_capacities(deployment):
 	if True:
 		import matplotlib.pyplot as plt
 		n_peers_by_ug = {ug:len([el for el in ug_perfs[ug] if el not in provider_popps]) for ug in ug_perfs}
-		# print({ug:[el for el in ug_perfs[ug] if el not in provider_popps] for ug in ug_perfs})
 		x,cdf_x = get_cdf_xy(list(n_peers_by_ug.values()))
-		plt.semilogx(x,cdf_x)
+		plt.semilogx(x,cdf_x,label='Just Peers')
+		n_peers_by_ug = {ug:len(ug_perfs[ug]) for ug in ug_perfs}
+		x,cdf_x = get_cdf_xy(list(n_peers_by_ug.values()))
+		plt.semilogx(x,cdf_x,label='All')
+		plt.legend()
 		plt.xlabel("Number reachable peers")
 		plt.ylabel("cdf of UGS")
 		plt.grid(True)
 		plt.savefig('figures/number_peers_by_ug.pdf')
 		plt.clf();plt.close()
+	exit(0)
 
 
 	for ug in ug_perfs:
@@ -979,6 +983,8 @@ def get_random_deployment_by_size(problem_size):
 	print("----Done Creating Random Deployment-----")
 	print("Deployment has {} users, {} popps, {} pops".format(
 		len(ugs), len(popps), len(pop_to_loc)))
+
+	deployment['link_capacities'] = {popp:10000 for popp in deployment['link_capacities']}
 
 	return deployment
 

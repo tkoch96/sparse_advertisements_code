@@ -25,10 +25,10 @@ def threshold_a(a):
 DPSIZE = 'actual-large'
 # DPSIZE = 'small'
 PRINT_FREQUENCY = {
-	'really_friggin_small': 20,
+	'really_friggin_small': 50,
 	'actual-large': 12,
 	'actual': 12,
-	'small': 20,
+	'small': 50,
 	'decent': 1,
 	'med': 1,
 	'large': 1
@@ -46,8 +46,8 @@ NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 N_WORKERS = {
 	'really_friggin_small': 2,
 	'actual': 1,
-	'actual-large': 8,
-	'small': 4,
+	'actual-large': 1,
+	'small': 1,
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)

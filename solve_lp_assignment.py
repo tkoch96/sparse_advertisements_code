@@ -84,7 +84,7 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	### minimizes average latency, but if that fails it instead 
 	### minimizes MLU
 	ts = time.time()
-	verb = True
+	verb = False
 	computing_best_lats = kwargs.get('computing_best_lats', False)
 	ret_min_latency = solve_lp_assignment(sas, adv, **kwargs)
 	if verb:
@@ -206,7 +206,10 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 		for poppi,vol in pathvols:
 			try:
 				inundated_popps[poppi]
-				these_lats.append((NO_ROUTE_LATENCY, vol))
+				if kwargs.get('really_bad_fail',False):
+					these_lats.append((NO_ROUTE_LATENCY*100, vol))
+				else:
+					these_lats.append((NO_ROUTE_LATENCY, vol))
 				congested_volume += sas.ug_vols[ugi] * vol
 			except KeyError:
 				popp = sas.popps[poppi]
