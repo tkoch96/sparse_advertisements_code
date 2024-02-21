@@ -1,6 +1,7 @@
 CACHE_DIR = "cache"
 DATA_DIR = "data"
 GRAPH_DIR = "graphs"
+FIG_DIR = 'figures'
 KM_TO_MS = .01
 cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','darkseagreen','palegoldenrod',
 	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
@@ -12,7 +13,7 @@ GRAD_CLIP_VAL = 10
 
 LBX_DENSITY = 50
 
-BASE_SOCKET = 31463
+BASE_SOCKET = 31415
 
 # simulating routing preferences or not
 SIMULATED = True
@@ -24,11 +25,12 @@ def threshold_a(a):
 
 DPSIZE = 'actual-large'
 # DPSIZE = 'small'
+# DPSIZE = 'really_friggin_small'
 PRINT_FREQUENCY = {
 	'really_friggin_small': 50,
-	'actual-large': 12,
+	'actual-large': 8,
 	'actual': 12,
-	'small': 50,
+	'small': 10,
 	'decent': 1,
 	'med': 1,
 	'large': 1
@@ -44,15 +46,18 @@ NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 N_WORKERS = {
-	'really_friggin_small': 2,
+	'really_friggin_small': 1,
 	'actual': 1,
-	'actual-large': 1,
-	'small': 1,
+	'actual-large': 10,
+	'small': 3,
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)
 RESILIENCE_DIFFICULTY = 'hard'
 
+
+#### minimuze MLU + ALPHA * LATENCY ;; so alpha is a tradeoff between congestion and latency (roughly)
+ALPHA = .00001
 
 
 DEFAULT_EXPLORE = 'entropy'

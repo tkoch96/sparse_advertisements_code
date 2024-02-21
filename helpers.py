@@ -14,6 +14,11 @@ except:
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+def deployment_to_prefixes(deployment):
+	n_prefixes = np.maximum(4,4 * int(np.log2(len(deployment['popps']))))
+	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
+	return 2 * n_prefixes
+
 def parse_lat(lat_str):
 	lat = float(lat_str) * 1000
 	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))

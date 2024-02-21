@@ -28,6 +28,36 @@ class Worker_Manager:
 	def get_n_workers(self):
 		return N_WORKERS
 
+	def update_worker_deployments(self, new_deployment):
+		self.deployment = new_deployment
+		self.worker_to_deployments = {}
+		n_workers = self.get_n_workers()
+		print("Splitting deployment into subdeployments.")
+		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
+		print("Done splitting deployment into subdeployments.")
+		
+		context = zmq.Context()
+		for worker in range(n_workers):
+			if len(subdeployments[worker]['ugs']) == 0: continue
+			## It would be annoying to make the code work for cases in which a processor focuses on one user
+			print("Updating deployment in worker {}".format(worker))
+			assert len(subdeployments[worker]['ugs']) >= 1
+			self.worker_to_deployments[worker] = subdeployments[worker]
+			# send worker startup information
+			# args = [copy.deepcopy(subdeployments[worker])]
+			# kwargs = self.get_init_kwa()
+			# msg = pickle.dumps(('init',(args,kwargs)))
+			msg = pickle.dumps(('update_deployment', subdeployments[worker]))
+			self.worker_sockets[worker].send(msg)
+			while True:
+				try:
+					msg = pickle.loads(self.worker_sockets[worker].recv())
+					if msg == 'ACK':
+						break
+				except:
+					time.sleep(.5)
+
+
 	def start_workers(self):
 		# self.worker_to_uis = {}
 		self.worker_to_deployments = {}
@@ -74,11 +104,12 @@ class Worker_Manager:
 			except:
 				pass
 
-	def send_receive_workers(self, msg):
+	def send_receive_workers(self, msg, L_TIMEOUT = 10*60):
 		n_workers = self.get_n_workers()
 		for worker, worker_socket in self.worker_sockets.items():
 			worker_socket.send(msg)
 		rets = {}
+		timeouts = {workeri:time.time() + L_TIMEOUT for workeri in range(n_workers)}
 		while True:
 			# wait for responses from workers
 			for worker in range(n_workers):
@@ -93,10 +124,15 @@ class Worker_Manager:
 							print("Received error message from worker {}, sending again".format(worker))
 							self.worker_sockets[worker].send(msg)
 					except zmq.error.Again: # Timeout, must be stll calculating
-						time.sleep(SLEEP_PERIOD)
-						pass
+						if time.time() > timeouts[worker]:
+							## resend the message
+							print("Potential error in worker {}, no message after {}s. Resending.".format(worker, L_TIMEOUT))
+							self.worker_sockets[worker].send(msg)
+							timeouts[worker] = time.time() + L_TIMEOUT
+				
 			if len(rets) == n_workers:
 				break
+			time.sleep(SLEEP_PERIOD)
 		return rets
 
 	def send_receive_worker(self, worker_i, msg):

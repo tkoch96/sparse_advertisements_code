@@ -33,10 +33,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		args, kwargs = self.start_connection()
 		super().__init__(*args, **kwargs)
-		self.calculate_user_latency_by_peer()
+
 		self.with_capacity = kwargs.get('with_capacity', False)
 		with open(os.path.join(CACHE_DIR, 'worker_{}_log.txt'.format(self.worker_i)),'w') as f:
 			pass
+		self.init_all_vars()
+		self.run()
+		print('started in worker {}'.format(self.worker_i))
+	
+	def init_all_vars(self):
+		self.calculate_user_latency_by_peer()
 
 		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
 		## divided by their contribution to the total volume (i.e., multiplied by a weight)
@@ -61,8 +67,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.init_user_px_cache()
 
 		self.iter = 0
-		print('started in worker {}'.format(self.worker_i))
-		self.run()
 
 	def start_connection(self):
 		context = zmq.Context()
@@ -500,6 +504,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.user_px[limited_cap_lbxi, ui] += p * plf
 			else:
 				all_pv = sorted(all_pv,key=lambda el : el[1])
+				
 				running_probs = np.zeros((self.n_prefixes))
 				running_probs[all_pv[0][0]] = all_pv[0][2]
 
@@ -559,6 +564,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 
 
+
 			# static assignment to best possible
 			max_experienced_benefit = self.best_latency_benefits[ui] 	
 			# lower bound it a little more
@@ -577,7 +583,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# if self.worker_i == WORKER_OF_INTEREST and ui == 3:
 			# 	print(all_pv)
 			# 	print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
-
 
 		if verb:
 			total_b = 0
@@ -737,6 +742,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# if len(data)>10:
 			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
 
+		elif cmd == "solve_lp":
+			try:
+				adv,deployment = data[self.worker_i]
+				deployment_save = self.output_deployment()
+				self.clear_caches()
+				self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
+				ret = self.solve_lp_with_failure_catch(adv)
+				self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
+			except IndexError:
+				## not enough to work on
+				ret = {}
 		elif cmd == 'reset_new_meas_cache':
 			self.clear_new_meas_caches()
 			ret = "ACK"

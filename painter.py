@@ -85,6 +85,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
 			use_resilience=False, mode='best')
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
+		print("PAINTER ITER {}, RD {}".format(self.iter, self.rolling_delta))
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
 
 	def _get_new_improvements(self, being_adved, **kwargs):
@@ -162,24 +163,9 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				(time.time() - ts) / (self.iter+1)))
 
 			self.advs = advs
-			break
+			if self.iter == 10:
+				break
 
-		# ### Now incorporate lambduh --- cut off any prefixes that don't contribute positively to the objective function
-		# painter_budget = self.n_prefixes - 1
-		# advs_cp = copy.deepcopy(self.advs)
-		# for pref_i in range(painter_budget):
-		# 	if len(advs_cp[painter_budget][self.n_prefixes - pref_i - 1]) == 0:
-		# 		# if PAINTER decided not to allocate any here, it obviously won't matter
-		# 		continue
-		# 	advs_cp[painter_budget][self.n_prefixes - pref_i - 1] = []
-		# 	## We can measure these objectives, since we've already measured all these advertisement configurations
-		# 	if self.measured_objective(self.painter_advs_to_sparse_advs(advs_cp),
-		# 		use_resilience=False, mode='best') < self.measured_objective(self.painter_advs_to_sparse_advs(self.advs),
-		# 		use_resilience=False, mode='best'):
-		# 		## go with this solution
-		# 		self.advs = copy.deepcopy(advs_cp)
-		# 	else:
-		# 		break
 		self.verbose = save_verb
 
 	def painter_v4(self, **kwargs):
