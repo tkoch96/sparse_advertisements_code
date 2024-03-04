@@ -6,7 +6,6 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	### minimizes MLU
 	ts = time.time()
 	verb = False
-	computing_best_lats = kwargs.get('computing_best_lats', False)
 	ret_min_latency = solve_lp_assignment(sas, adv, **kwargs)
 	if verb:
 		print("Trying first without MLU took {} s".format(round(time.time() - ts,2)))
@@ -15,7 +14,7 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 		if kwargs.get('smallverb'):
 			print("Solved LP just minimizing latency")
 		return ret_min_latency
-	elif kwargs.get('smallverb'):
+	elif kwargs.get('smallverb') or verb:
 		print("Failed to solve min latency problem.")
 
 	if np.sum(adv.flatten()) == 0:
@@ -161,7 +160,6 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 def solve_lp_assignment(sas, adv, ugs=None, verb=False, **kwargs):
 	### Minimizes average latency subject to not inundating a link,
 	### but could fail if there's not enough aggregate capacity
-	computing_best_lats = kwargs.get('computing_best_lats', False)
 	if np.sum(adv.flatten()) == 0:
 		return {'solved': False}
 

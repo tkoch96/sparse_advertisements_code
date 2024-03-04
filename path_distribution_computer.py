@@ -18,6 +18,7 @@ except:
 USER_OF_INTEREST = None
 
 # dont make this too big or you'll break the VM
+# 2000 for lots of workers / smaller VMs. 15000 for fewer workers / large VMs
 MAX_CACHE_SIZE = 5000
 
 
@@ -35,7 +36,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		super().__init__(*args, **kwargs)
 
 		self.with_capacity = kwargs.get('with_capacity', False)
-		with open(os.path.join(CACHE_DIR, 'worker_{}_log.txt'.format(self.worker_i)),'w') as f:
+		with open(os.path.join(CACHE_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, DPSIZE)),'w') as f:
 			pass
 		self.init_all_vars()
 		self.run()
@@ -50,7 +51,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
 
-		min_lbx = -1 * NO_ROUTE_LATENCY * 10 * max_vol / total_deployment_volume
+		min_lbx = -1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume
 		max_lbx = 0
 
 		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
@@ -88,11 +89,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter += 1
 
 	def get_limited_cap_latency_multiplier(self):
-		# LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
-		# power = 1.03
-		LIMITED_CAP_LATENCY_MULTIPLIER = 5
-		power = 1.05
-		return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
+		LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
+		power = 1.03
+		# LIMITED_CAP_LATENCY_MULTIPLIER = 5
+		# power = 1.05
+		# return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
+		return np.minimum(2, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
 
 	def clear_caches(self):
 		self.this_time_ip_cache = {}
@@ -186,6 +188,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			['user ip', 'calc cache', 'this time ip']):
 			self.print("{} cache -- {} size".format(nm,round(len(pickle.dumps(obj))/1e6)))
 
+	def lfs_to_penalty(self, lfs):
+		"""LFS is the greedy-allocation volume divided by the link capacity. Want to compute a
+			multiplicative latency penalty to encourage people to not inundate links. 
+			But can't be too rough so that it's unstable."""
+		return np.power(lfs, .1)
+
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
 			benefits across all users."""
@@ -213,7 +221,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			except KeyError:
 				pass
 
-		USER_OF_INTEREST = None
+		USER_OF_INTEREST = None #### UI is respect to the whole deployment
 		WORKER_OF_INTEREST = None
 
 
@@ -455,8 +463,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
 				self.link_failure_severities[poppi]) \
 				for poppi,prefj in zip(*all_pv_i)]
-			if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
-				self.print("PV : {}".format(all_pv))
+			# if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
+			# 	self.print("PV : {}".format(all_pv))
 
 			if len(all_pv) == 0:
 				# this user has no paths
@@ -477,13 +485,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					lbx_i = self.big_lbx.shape[0] - 1 
 				else:
 					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-				if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
-					self.print("LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
-						self.big_lbx[-1,ui]))
+				# if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
+				# 	self.print("LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
+				# 		self.big_lbx[-1,ui]))
 
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
-					lb_failure = lb * (1 + lfs) * lb_multiplier_link_failure
+					lb_failure = lb * self.lfs_to_penalty(lfs) * lb_multiplier_link_failure
 					# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
 					# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
 
@@ -537,13 +545,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						lbx_i = self.big_lbx.shape[0] - 1 
 					else:
 						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-					if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+					if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
 						self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
 							self.big_lbx[-1,ui]))
 
 					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
 					if plf > 0:
-						lb_failure = lb * ( 1 + lfs )
+						lb_failure = lb * self.lfs_to_penalty(lfs)
 						# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
 						# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
 						if lb_failure > max_experienced_benefit:
@@ -584,6 +592,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 	print(all_pv)
 			# 	print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
 
+		
+		for ui in ug_inds_to_loop:
+			if np.sum(self.user_px[:,ui]) == 0:
+				# This user experiences no benefit with probability 1
+				# no benefit means no path, so it's actually just the most 
+				# negative benefit we can give
+				self.user_px[0,ui] = 1
+		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
+
 		if verb:
 			total_b = 0
 			prnts = []
@@ -601,24 +618,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					ui_global = self.whole_deployment_ug_to_ind[ug]
 					log_str = "benefit_estimate,{},{},{},{},{},{}\n".format(
 						self.iter,ui_global,bi,lb,round(p,2),likely_popps_str)
-					if verb and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+					if verb and self.worker_i == WORKER_OF_INTEREST and ui_global == USER_OF_INTEREST:
 						all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
 							self.link_failure_severities[poppi]) \
 							for poppi,prefj in zip(*np.where(p_mat[:,:,ui]))]
-						self.print("PV : {}".format(all_pv))
+						self.print("PV : {}".format(sorted(all_pv, key=lambda el : -1 * el[1])))
 						self.print(log_str)
 					self.log(log_str)
 			# print("Total : {}".format(total_b))
-
-		for ui in ug_inds_to_loop:
-			if np.sum(self.user_px[:,ui]) == 0:
-				# This user experiences no benefit with probability 1
-				# no benefit means no path, so it's actually just the most 
-				# negative benefit we can give
-				self.user_px[0,ui] = 1
-
-
-		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
 
 		## save calc cache for later if its not set
 		if self.user_ip_cache['init_ip'] is None:
@@ -672,7 +679,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		return benefit, (xsumx.flatten(),psumx.flatten())
 
 	def log(self,s):
-		self.log_ptr = open(os.path.join(CACHE_DIR, 'worker_{}_log.txt'.format(self.worker_i)),'a')
+		self.log_ptr = open(os.path.join(CACHE_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, DPSIZE)),'a')
 		self.log_ptr.write(s)
 		self.log_ptr.close()
 

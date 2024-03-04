@@ -2,6 +2,7 @@ CACHE_DIR = "cache"
 DATA_DIR = "data"
 GRAPH_DIR = "graphs"
 FIG_DIR = 'figures'
+RUN_DIR = 'runs'
 KM_TO_MS = .01
 cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','darkseagreen','palegoldenrod',
 	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
@@ -23,18 +24,27 @@ import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-DPSIZE = 'actual-large'
-# DPSIZE = 'small'
+# DPSIZE = 'actual'
+# DPSIZE = 'actual-large'
+# DPSIZE = 'small'	
 # DPSIZE = 'really_friggin_small'
+DPSIZE = 'actual_first_prototype'
 PRINT_FREQUENCY = {
-	'really_friggin_small': 50,
-	'actual-large': 8,
-	'actual': 12,
+	'really_friggin_small': 20,
+	'actual-large': 15,
+	'actual': 30,
+	'actual_first_prototype': 10,
 	'small': 10,
 	'decent': 1,
 	'med': 1,
 	'large': 1
 }[DPSIZE]
+
+# ## The point of the actual first prototype is to not simulate shit
+# if DPSIZE == 'actual_first_prototype':
+# 	assert not SIMULATED
+
+N_POPS_ACTUAL_DEPLOYMENT = 10
 
 if DPSIZE == "really_friggin_small":
 	MIN_LATENCY = 1
@@ -47,9 +57,10 @@ NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 N_WORKERS = {
 	'really_friggin_small': 1,
-	'actual': 1,
-	'actual-large': 10,
-	'small': 3,
+	'actual': 12,
+	'actual-large': 1,
+	'actual_first_prototype': 4,
+	'small': 4,
 	'decent': 8,
 	'med': 1,
 }.get(DPSIZE, 8)

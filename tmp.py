@@ -1,5 +1,13 @@
-import pickle
+import numpy as np
+class Foo:
+	def __init__(self):
+		pass
+	def f(self):
+		self.x=np.array([4])
+		# self.y=getattr(self,'x')
+		self.y = self.x
+		self.x[0] += 1
+		print("{} {}".format(self.x,self.y))
 
-d = pickle.load(open('cache/popp_failure_latency_comparison_actual.pkl','rb'))
-sparse_adv = d['adv'][0]['sparse']
-print(d['latencies'][0]['sparse'])
+f = Foo()
+f.f()

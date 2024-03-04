@@ -376,7 +376,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				prob_on = prob_ons[i]
 				is_on = np.random.random(size=(self.n_popp)) < prob_on
 				a[is_on,start_ind+i] = .55
-				a += .02 * (np.random.uniform(size=a.shape) - .5) # noise
+			a += .02 * (np.random.uniform(size=a.shape) - .5) # noise
 			print("Done Initializing")
 			print("Initial numbers of popps on per prefix.")
 			print(np.sum(threshold_a(a),axis=0))
@@ -400,7 +400,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				prob_on = prob_ons[i-1]
 				is_on = np.random.random(size=(self.n_popp)) < prob_on
 				a[is_on,i] = .55
-				a += .02 * (np.random.uniform(size=a.shape) - .5) # noise
+			a += .02 * (np.random.uniform(size=a.shape) - .5) # noise
 			print("Done Initializing")
 
 			print("Initial numbers of popps on per prefix.")
@@ -484,39 +484,18 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		logn_possibilities = n_arr
 		all_as = []
 		
-		if logn_possibilities >= np.log2(1e6):
-			# if DPSIZE != "really_friggin_small":
-				# return
-			n_possibilities = int(1e2)
-			objs = np.zeros((n_possibilities,))
-			actual_objs = np.zeros((n_possibilities,))
-			print("Note -- too complex to get oracle solution. Randomly sampling a whole bunch to"\
-				" find the best")
-			vcpy = copy.copy(self.verbose)
-			self.verbose = False
+		n_possibilities = int(1e2)
+		objs = np.zeros((n_possibilities,))
+		actual_objs = np.zeros((n_possibilities,))
+		vcpy = copy.copy(self.verbose)
+		self.verbose = False
 
-			for i in range(n_possibilities):
-				a = np.random.randint(0,high=2,size=(self.n_popp,self.n_prefixes))
-				objs[i] = self.measured_objective(a)
-				actual_objs[i] = self.actual_nonconvex_objective(a)
-				all_as.append(copy.deepcopy(a))
-			self.verbose = vcpy
-		else:	
-			a = np.zeros((n_arr,))
-			objs = np.zeros((n_possibilities,))
-			actual_objs = np.zeros((n_possibilities,))
-
-			## for each prefix there are 2**n_popps possibilities
-			# all combinations of 2**n_popps choose n_prefs
-			# so 1 -> 2**n_popps C n_prefs, convert to binary representation
-			for i in range(n_possibilities):
-				b = str(bin(i))[2:]
-				ib = "0" * (n_arr - len(b)) + b
-				for j,el in enumerate(ib):
-					a[j] = int(el) * 1.0
-				objs[i] = self.measured_objective(a.reshape((self.n_popp, self.n_prefixes)))
-				actual_objs[i] = self.actual_nonconvex_objective(a.reshape((self.n_popp,self.n_prefixes)))
-				all_as.append(copy.deepcopy(a))
+		for i in tqdm.tqdm(range(n_possibilities), desc="Finding a decent random solution."):
+			a = np.random.randint(0,high=2,size=(self.n_popp,self.n_prefixes))
+			objs[i] = self.measured_objective(a)
+			actual_objs[i] = self.actual_nonconvex_objective(a)
+			all_as.append(copy.deepcopy(a))
+		self.verbose = vcpy
 
 		# Approx according to L1 norm
 		random_objective = np.min(objs)
@@ -561,71 +540,18 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		self.clear_caches()
 
 	def solve_sparse(self, **kwargs):
-		# if DPSIZE not in ['really_friggin_small', 'small', 'actual-large']: #### not sure this does anything
-		if DPSIZE not in ['small']:
-			## split problem in half
-			orig_deployment = copy.deepcopy(self.sas.output_deployment())
-			orig_n_prefixes = copy.copy(self.sas.n_prefixes)
-			orig_ugs = self.ugs
-			np.random.shuffle(orig_ugs)
-			half_ugs = len(orig_ugs) // 2
-			sparse_advs = []
-			for problem_iter_i in range(2): # could theoretically do this as many times as I want
-				new_deployment = copy.deepcopy(orig_deployment)
-				if problem_iter_i == 0:
-					these_ugs = sorted(copy.deepcopy(orig_ugs[0:half_ugs]))
-				else:
-					these_ugs = sorted(copy.deepcopy(orig_ugs[half_ugs:]))
-				for k in ['ugs', 'whole_deployment_ugs']:
-					new_deployment[k] = these_ugs
-				for k in ['ug_perfs', 'whole_deployment_ug_perfs', 'ug_to_vol','ug_anycast_perfs',
-					'whole_deployment_ug_to_vol','ingress_priorities','whole_deployment_ingress_priorities']:
-					new_deployment[k] = copy.deepcopy({ug:orig_deployment[k][ug] for ug in these_ugs})
-				new_n_prefixes = orig_n_prefixes // 2
-				if orig_n_prefixes % 2 == 1: # odd number of prefixes
-					new_n_prefixes += problem_iter_i
-				self.sas.n_prefixes = new_n_prefixes
-				self.n_prefixes = new_n_prefixes
-				print("Updating to new pseudo-deployment for problem iter {}".format(problem_iter_i))
-				self.sas.update_deployment(new_deployment)
-				self.update_deployment(new_deployment)
-				self.clear_caches()
-				self.sas.clear_caches()
-
-				init_adv = kwargs.get('init_adv')
-				if init_adv is None:
-					adv = self.init_advertisement()
-				else:
-					print("WARNING -- SPLITTING DEPLOYMENT BUT USING SAME INIT")
-					adv = init_adv
-				wm = self.get_worker_manager()
-				self.sas.set_worker_manager(wm)
-				self.sas.solve(init_adv=adv)
-				self.sas.make_plots()
-				sparse_advs.append(self.sas.get_last_advertisement())
-
-				self.sas.clear_caches()
-				self.clear_caches()
-
-			## reset everything
-			print("Recombining deployment, setting advertisement to combined version")
-			self.sas.n_prefixes = orig_n_prefixes
-			self.n_prefixes = orig_n_prefixes
-			self.update_deployment(orig_deployment)
-			self.sas.update_deployment(orig_deployment)
-
-			final_adv = np.concatenate((sparse_advs[0], sparse_advs[1]), axis=1)
+		init_adv = kwargs.get('init_adv')
+		if init_adv is None:
+			adv = self.init_advertisement()
 		else:
-			init_adv = kwargs.get('init_adv')
-			if init_adv is None:
-				adv = self.init_advertisement()
-			else:
-				adv = init_adv
-			self.sas.set_worker_manager(self.get_worker_manager())
-			self.sas.solve(init_adv=adv)
+			adv = init_adv
+		self.sas.set_worker_manager(self.get_worker_manager())
+		self.sas.solve(init_adv=adv, **kwargs)
+		try:
 			self.sas.make_plots()
-			final_adv = self.sas.get_last_advertisement()
-
+		except:
+			pass
+		final_adv = self.sas.get_last_advertisement()
 		self.sas.reset_metrics()
 		self.sas.metrics['advertisements'].append(final_adv)
 
@@ -771,6 +697,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				'support_size': 50, # setting this value to size(a) turns it off
 				'info_support_size': 100,
 			},
+			'actual_first_prototype': {
+				'support_size': 200, # setting this value to size(a) turns it off
+				'info_support_size': 50,
+			},
 			'actual': {
 				'support_size': 1000, # setting this value to size(a) turns it off
 				'info_support_size': 300,
@@ -784,9 +714,24 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = {
 			'really_friggin_small': 5,#20,
+			'actual_first_prototype': 1,
 			'actual': 3,
 			'actual-large': 3,
 		}.get(DPSIZE, 1)
+
+		self.optimization_var_names = ['rolling_delta', 'rolling_delta_eff', 'rolling_adv_delta', 'rolling_adv_eps', 'last_objective',
+			'current_pseudo_objective', 'iter', 'uncertainty_factor', 'stop', 'alpha', 'path_measures', 'current_effective_objective']
+		self.save_state_every = 10
+
+	def set_hotstart(self, **kwargs):
+		if kwargs.get('hotstart_dir', None) is None:
+			## initialize save dir
+			t_start = int(time.time())
+			self.save_run_dir = os.path.join(RUN_DIR, '{}-{}-sparse'.format(t_start, DPSIZE))
+			call("mkdir {}".format(self.save_run_dir), shell=True)
+		else:
+			self.save_run_dir = os.path.join(RUN_DIR, kwargs.get('hotstart_dir'))
+			self.load_optimization_state()
 
 	def apply_prox_l1(self, w_k):
 		"""Applies proximal gradient method to updated variable. Proximal gradient
@@ -835,7 +780,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			for ind,val in best_from_last_time:
 				if (ind,'ba') in calls or (ind,'ab') in calls: 
 					continue
-				if np.abs(val) < self.lambduh:
+				if np.abs(val) < self.lambduh or np.abs(val) < .001:
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - a[ind]) > \
@@ -949,54 +894,48 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.metrics['res_benefit_grads'].append(res_grad)
 				self.metrics['cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
 
-		### max movement should be at least .01
-		### so multiply alpha by .01 / max val if its less
-		max_val = np.max(np.abs(net_grad).flatten())
 		DESIRED_MAX_VAL = 5.0
-		if max_val < DESIRED_MAX_VAL:
+		max_val = np.max(np.abs(net_grad.flatten()))
+		if max_val < DESIRED_MAX_VAL and max_val > 0:
+			## try to flip at least one index
 			## check to make sure this rescale wouldn't flip multiple advertisement indices at once
+			## we might not flip any, or flip multiple because of momentum, however
 			
 			inds = np.abs(net_grad)>1e-3
+
 			alphas = (ADVERTISEMENT_THRESHOLD - a[inds]) / (self.alpha * net_grad[inds])
 			alphas = alphas[alphas>0]
 			if len(alphas) > 0:
 				limiting_alpha = np.min(alphas)
-				mult = np.minimum(limiting_alpha, (DESIRED_MAX_VAL / (max_val+1e-8))) * .98
+				mult = np.minimum(limiting_alpha, (DESIRED_MAX_VAL / max_val)) * 1.0001
 			else:
 				mult = 1.0
 
-			# print((DESIRED_MAX_VAL / (max_val+1e-8)))
-			# print(limiting_alpha)
-			# print(mult)
-			# exit(0)
-
 			net_grad = net_grad * mult
-			print("Modified gradient by a factor of {}".format(mult))
+			print("Modified gradient by a factor of {} to ensure approximately one flip".format(mult))
+		else:
+			print("WARNING -- gradient is very large, max val is {}".format(max_val))
+		
 		return -1 * net_grad
 
 	def gradients_resilience_benefit_link(self, advertisement):
+
+		## want to test popp,pref 
+		## turn it off, fail a popp. measure LB (a)
+		## turn it on, fail same popp. measure LB (b)
+		## should turn popp,pref on if (b) > (a)
+
+
+
 		### Positive resilience benefit gradient means turning a popp
 		## on will increase resilience
-		### increasing resilience means maximizing average delta benefit under popp failures
-
-
-		## turn the popp under consideration on
-		## turn a random popp,prefix that was previously on, off
-		## notice LB(now) - LB default (a) to get a comparison to how useful it is on
-		## turn the popp under consideration off (simulating failure)
-		## notice LB(now) - LB default (b) to measure how bad it would be if this popp failed
-
-		## if (b) is much more negative than (a), we should encourage resilience
-
-		## to encourage resilience we do heavisside(b,a)
+		### increasing resilience means maximizing benefit under popp failures
 
 
 		grad_rb = np.zeros(advertisement.shape)
 		a_effective = threshold_a(advertisement).astype(bool)
 		calls = []
 
-		## get current latency benefit
-		lb_default,_ = self.latency_benefit(a_effective, retnow=True)
 
 		total_n_grad_calc = self.gradient_support_settings['support_size']
 		
@@ -1006,39 +945,31 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
 		gamma = self.get_gamma()
 		try:
-			best_from_last_time = sorted(self.last_rb_calls_results.items(), key = lambda el : 
+			best_from_last_time = sorted(self.last_rb_calls_results_popp.items(), key = lambda el : 
 				-1 * np.abs(el[1]))
 			n_significant = 0
-			for (popp,rand_popp,rand_outer_prefix),val in best_from_last_time:
-				if (popp,rand_popp,rand_outer_prefix) in calls: 
+			for (popp,rand_kill_popp,rand_outer_prefix),val in best_from_last_time:
+				if (popp,rand_kill_popp,rand_outer_prefix) in calls: 
 					continue
 				if gamma * np.abs(val) < self.lambduh:
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp],rand_outer_prefix]) > \
 					ADVERTISEMENT_THRESHOLD * 7 / 10: 
-					# advertismeent is almost completely on or completely off
+					# advertisment is almost completely on or completely off
 					continue
 
-				## popp unfailed, ij on/off
 				tmp_a = copy.copy(a_effective)
-				poppi = self.popp_to_ind[popp]
-				if advertisement[poppi,rand_outer_prefix]:
-					tmp_a[poppi,rand_outer_prefix] = False
-					self.latency_benefit(tmp_a)
-					tmp_a[poppi,rand_outer_prefix] = True
-				else:
-					tmp_a[poppi,rand_outer_prefix] = True
-					self.latency_benefit(tmp_a)
-					tmp_a[poppi,rand_outer_prefix] = False
+				this_popp_random_kill = self.popp_to_ind[rand_kill_popp]
+				tmp_a[this_popp_random_kill,:] = False # kill this random popp
 
-				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
-				this_popp_random_kill = self.popp_to_ind[rand_popp]
-				tmp_a[this_popp_random_kill,:] = False # Also kill this random popp
+				poppi = self.popp_to_ind[popp]
+				tmp_a[poppi,rand_outer_prefix] = True # Turn this popp on
 				self.latency_benefit(tmp_a)
-				tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False # turn this popp off
+				tmp_a[poppi,rand_outer_prefix] = False # turn this popp off
 				self.latency_benefit(tmp_a)
-				calls.append((popp, rand_popp, rand_outer_prefix))
+
+				calls.append((popp, rand_kill_popp, rand_outer_prefix))
 
 				n_significant += 1
 				if n_significant >= N_REMEASURE:
@@ -1070,72 +1001,45 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# random kill popp
 			this_popp_random_kill = np.random.choice(np.arange(self.n_popp),
 				 p=self.popp_sample_probs[poppi,:]) 
-			rand_popp = self.popps[this_popp_random_kill]
-			if (popp, rand_popp, rand_outer_prefix) in calls: continue
+			rand_kill_popp = self.popps[this_popp_random_kill]
+			if (popp, rand_kill_popp, rand_outer_prefix) in calls: continue
 			
 			tmp_a = copy.copy(a_effective)
+			tmp_a[this_popp_random_kill,:] = False # kill this random popp
 
-			## popp unfailed, ij on/off
-			if advertisement[poppi,rand_outer_prefix]:
-				tmp_a[poppi,rand_outer_prefix] = False
-				self.latency_benefit(tmp_a)
-				tmp_a[poppi,rand_outer_prefix] = True
-			else:
-				tmp_a[poppi,rand_outer_prefix] = True
-				self.latency_benefit(tmp_a)
-				tmp_a[poppi,rand_outer_prefix] = False
-
-			tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = True # Turn this popp on
-			tmp_a[this_popp_random_kill,:] = False # Also kill this random popp
+			poppi = self.popp_to_ind[popp]
+			tmp_a[poppi,rand_outer_prefix] = True # Turn this popp on
 			self.latency_benefit(tmp_a)
-			tmp_a[self.popp_to_ind[popp],rand_outer_prefix] = False # turn this popp off
+			tmp_a[poppi,rand_outer_prefix] = False # turn this popp off
 			self.latency_benefit(tmp_a)
-			calls.append((popp, rand_popp, rand_outer_prefix))
+			calls.append((popp, rand_kill_popp, rand_outer_prefix))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
-
 		self.last_rb_calls_results_popp = {}
 		ind = 0
-		normalize_factors_by_popp_pref = {}
-		for call_popp,killed_popp,prefi in calls:
-			cpi,kpi = self.popp_to_ind[call_popp], self.popp_to_ind[killed_popp]
-			try:
-				normalize_factors_by_popp_pref[cpi,prefi] += self.popp_sample_probs[cpi,kpi]
-			except KeyError:
-				normalize_factors_by_popp_pref[cpi,prefi] = self.popp_sample_probs[cpi,kpi]
-
 		for call_popp, killed_popp, rand_outer_prefix in calls:
 			poppi = self.popp_to_ind[call_popp]
-			if advertisement[poppi,rand_outer_prefix]:
-				popp_unfailed_ij_on = lb_default
-				popp_unfailed_ij_off, _ = all_lb_rets[ind]
-			else:
-				popp_unfailed_ij_off = lb_default
-				popp_unfailed_ij_on, _ = all_lb_rets[ind]
-			popp_failed_ij_on,_ = all_lb_rets[ind+1] # popp under consideration on under failure
-			popp_failed_ij_off, _ = all_lb_rets[ind+2] # popp under consideration off under failure
+			
+			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
+			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
 
-			before_heavisside = popp_failed_ij_off - popp_unfailed_ij_off
-			after_heavisside = popp_failed_ij_on - popp_unfailed_ij_on
 
 			this_grad = self.heaviside_gradient(
-				before_heavisside, after_heavisside, 
+				failed_on, failed_off, 
 				advertisement[poppi,rand_outer_prefix])
-			## should actually be average gradient over all killed popps
-			# this_grad = this_grad * self.popp_sample_probs[poppi,self.popp_to_ind[killed_popp]] / normalize_factors_by_popp_pref[poppi,rand_outer_prefix]
-			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
 
-			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter,poppi, rand_outer_prefix, this_grad))
+			grad_rb[poppi,rand_outer_prefix] += this_grad
 
 			# if np.abs(this_grad) > 5:
-
 			# 	print("RGRAD Entry {},{}, a value {}".format(self.popp_to_ind[call_popp],rand_outer_prefix,
 			# 		advertisement[self.popp_to_ind[call_popp],rand_outer_prefix]))
 			# 	print("before_heavisside {} after_heavisside {}, grad: {}".format(
-			# 		before_heavisside,after_heavisside,this_grad))
-			grad_rb[poppi,rand_outer_prefix] += this_grad
+			# 		failed_on,failed_off,this_grad))
 
-			ind += 3
+			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
+			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter, poppi, rand_outer_prefix, this_grad))
+
+			ind += 2
 
 		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
@@ -1160,7 +1064,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
 		# number of gradient calcs that re-calc previously high gradients
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
-		gamma = self.get_gamma()
 
 
 		try:
@@ -1354,12 +1257,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		for pref_i in range(self.n_prefixes):
 			pref_sty = linestyles[pref_i%len(linestyles)]
 			for popp_i in range(self.n_popp):
-				if 'xlimupper' in kwargs:
-					ax[0,0].plot(kwargs['xlimupper'],all_as[::5,popp_i,pref_i], pref_sty, 
-						c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				else:
-					ax[0,0].plot(all_as[::5,popp_i,pref_i], pref_sty, 
-						c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
+				# if 'xlimupper' in kwargs: ### Dont plot the advertisements, they add nothing and make things slow
+				# 	ax[0,0].plot(kwargs['xlimupper'],all_as[::5,popp_i,pref_i], pref_sty, 
+				# 		c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
+				# else:
+				# 	ax[0,0].plot(all_as[::5,popp_i,pref_i], pref_sty, 
+				# 		c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
 				ax[1,0].plot(all_grads[:,popp_i,pref_i], 
 					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
 				ax[2,0].plot(all_cost_grads[:,popp_i,pref_i], 
@@ -1376,6 +1279,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		ax[3,0].set_ylabel("LB Grad")
 		ax[4,0].set_ylabel("Res Grad")
 
+		start_iter = 0
+		if self.iter > 10:
+			start_iter = 10
+
 		all_objectives = self.metrics['actual_nonconvex_objective']
 		all_pseudo_objectives = self.metrics['pseudo_objectives']
 		all_effective_ojectives = self.metrics['effective_objectives']
@@ -1384,15 +1291,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_gt_latency_benefits = self.metrics['gt_latency_benefit']
 		all_gt_resilience_benefits = self.metrics['gt_resilience_benefit']
 		all_gammas = self.metrics['effective_gammas']
-		ax[1,1].plot(all_pseudo_objectives)
+		ax[1,1].plot(list(range(start_iter,len(all_pseudo_objectives))), all_pseudo_objectives[start_iter:])
 		ax[1,1].set_ylabel("Believed Objective")
 		ax[0,1].plot(all_objectives)
 		ax[0,1].set_ylabel("GT Objective")
 		ax[2,1].plot(all_effective_ojectives)
 		ax[2,1].set_ylabel("GT Effective Objective")
-		ax[3,1].plot(all_resilience_benefits)
+		ax[3,1].plot(list(range(start_iter,len(all_resilience_benefits))), all_resilience_benefits[start_iter:])
 		ax[3,1].set_ylabel("Res Ben")
-		ax[4,1].plot(all_latency_benefits)
+		ax[4,1].plot(list(range(start_iter,len(all_latency_benefits))), all_latency_benefits[start_iter:])
 		ax[4,1].set_ylabel("Lat Ben")
 		ax[5,0].plot(all_gt_latency_benefits)
 		ax[5,0].set_ylabel("GT Lat Ben")
@@ -1737,7 +1644,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.last_objective = self.current_pseudo_objective
 		self.last_effective_objective = self.current_effective_objective
 		self.metrics['effective_gammas'].append(self.get_gamma())
-		self.metrics['actual_nonconvex_objective'].append(self.measured_objective(advertisement, verb=True, mode='best', save_metrics=True))
+		self.metrics['actual_nonconvex_objective'].append(self.measured_objective(advertisement, verb=True, save_metrics=True))
 		self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement, verb=True))
 		self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
 			store_metrics=True))
@@ -1765,6 +1672,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		print("RAD: {}".format(self.rolling_adv_delta))
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
 
+		if self.iter % self.save_state_every == 0:
+			### Save optimization state 
+			self.output_optimization_state()
+
 	def get_init_kwa(self):
 		return {
 			'lambduh': self.lambduh, 
@@ -1777,33 +1688,86 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'n_prefixes': self.n_prefixes,
 		}
 
-	def solve(self, init_adv=None):
+	def output_optimization_state(self):
+		print("Saving optimization state, dont exit...")
+		self.optimization_vars = {}
+		for k in self.optimization_var_names:
+			self.optimization_vars[k] = getattr(self, k)
+		out_fn = os.path.join(self.save_run_dir, 'state-{}.pkl'.format(self.iter))
+		save_state = {
+			'deployment': self.output_deployment(), # link caps, user performance, etc.
+			'advertisement': self.get_last_advertisement(), # the optimization variable
+			'optimization_vars': self.optimization_vars, # related to when we're going to stop
+			'parent_tracker': self.parent_tracker, # measured ingress preferences
+			'measured': self.measured,
+			'measured_prefs': self.measured_prefs,
+		}
+		pickle.dump(save_state, open(out_fn, 'wb'))
+		print("Done saving")
+
+	def load_optimization_state(self, specific_iter=None):
 		self.clear_caches()
-		self.set_alpha()
+		if specific_iter is None:
+			import glob
+			all_states = glob.glob(os.path.join(self.save_run_dir, '*'))
+			all_iters = [int(re.search("state\-(.+)\.pkl", fn).group(1)) for fn in all_states if "state" in fn]
+			specific_iter = np.max(all_iters)
+		print("Loading save state {}".format(specific_iter))
+		save_state = pickle.load(open(os.path.join(self.save_run_dir, 'state-{}.pkl'.format(specific_iter)),'rb'))
+
+		## update advertisement
+		self.metrics['advertisements'] = [save_state['advertisement']]
+		self.optimization_advertisement = save_state['advertisement']
+		self.n_prefixes = self.optimization_advertisement.shape[1]
+
+		## update deployment
+		self.update_deployment(save_state['deployment'])
+
+		from realworld_measure_wrapper import RealWorld_Measure_Wrapper
+		past_rundirs = [self.save_run_dir]
+		self.rw_measure_wrapper = RealWorld_Measure_Wrapper(self.save_run_dir, self.output_deployment(), past_rundirs=past_rundirs)
+
+		## various optimization variables
+		for k,v in save_state['optimization_vars'].items():
+			print("{} {}".format(k,v))
+			setattr(self, k, v)
+
+		## information about learned preferneces
+		self.measured_prefs = save_state['measured_prefs']
+		self.parent_tracker = save_state['parent_tracker']
+		for (ui,beaten_ingress,routed_ingress), tf in self.parent_tracker.items():
+			if not tf: continue
+			try:
+				self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
+			except KeyError:
+				self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
+		self.update_parent_tracker_workers()
+
+		self.measured = save_state['measured']
+
+		self.calculate_user_choice(self.optimization_advertisement, get_ug_catchments=True)
+
+	def init_optimization_vars(self):
+		self.clear_caches()
+		
+		self.set_alpha() # momentum parameter
+
 		self.measured = {}
-		# Initialize model of path probabilities
-		if init_adv is None:
-			advertisement = self.init_advertisement()
-		else:
-			advertisement = init_adv
 		self.path_measures = 0 
-		# Measure where we start, update model of path probabilities
-		self.measure_ingresses(advertisement)
-		a_km1 = advertisement
+		
 		if self.verbose:
 			# self.print_adv(advertisement)
 			print("Optimizing over {} peers and {} ugs".format(self.n_popp, self.n_ug))
 
 		self.iter = 0
 
-		t_start = time.time()
 		self.reset_metrics()
 		self.stop = False
 
 		# Add to metrics / init vars
-		self.current_objective = self.measured_objective(advertisement)
-		self.current_pseudo_objective = self.modeled_objective(advertisement)
-		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
+		self.current_objective = self.measured_objective(self.optimization_advertisement)
+		self.current_pseudo_objective = self.modeled_objective(self.optimization_advertisement)
+		self.current_effective_objective = self.modeled_objective(threshold_a(self.optimization_advertisement))
 		self.last_objective = self.current_pseudo_objective
 		self.last_effective_objective = self.current_effective_objective
 		self.rolling_delta = 10
@@ -1813,8 +1777,26 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		self.metrics['actual_nonconvex_objective'].append(self.current_objective)
-		self.metrics['effective_objectives'].append(self.measured_objective(threshold_a(advertisement)))
-		self.metrics['advertisements'].append(copy.copy(advertisement))
+		self.metrics['effective_objectives'].append(self.measured_objective(threshold_a(self.optimization_advertisement)))
+		self.metrics['advertisements'].append(copy.copy(self.optimization_advertisement))
+
+	def solve(self, init_adv=None, **kwargs):
+		self.set_hotstart(**kwargs)
+		if self.iter >= self.max_n_iter: return
+		if kwargs.get('hotstart_dir') is None:
+			if init_adv is None:
+				self.optimization_advertisement = self.init_advertisement()
+			else:
+				self.optimization_advertisement = init_adv
+			self.init_optimization_vars()
+
+			# Measure where we start, update model of path probabilities
+			self.measure_ingresses(self.optimization_advertisement)
+
+
+		t_start = time.time()
+		a_km1 = copy.copy(self.optimization_advertisement)
+
 		while not self.stop:
 
 			timers = []
@@ -1829,7 +1811,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			# calculate gradients
 			if self.verbose:
 				print("calcing grads")
-			grads = self.gradient_fn(advertisement)
+			grads = self.gradient_fn(self.optimization_advertisement)
 
 			## grads
 			timers.append(time.time() - t_last)
@@ -1837,28 +1819,28 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			self.recent_grads = grads
 			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
-			a_k = advertisement
+			a_k = self.optimization_advertisement
 			w_k = a_k - self.alpha * grads + self.beta * (a_k - a_km1)
 			if self.proximal:
-				advertisement = self.apply_prox_l1(w_k)
+				self.optimization_advertisement = self.apply_prox_l1(w_k)
 			else:
-				advertisement = w_k
-			a_km1 = a_k
+				self.optimization_advertisement = w_k
+			a_km1 = copy.copy(a_k)
 			self.last_advertisement = a_km1
 
 			# another constraint we may want is 0 <= a_ij <= 1
 			# the solution is just clipping to be in the set
 			# clipping can mess with gradient descent
-			advertisement = self.impose_advertisement_constraint(advertisement)
+			self.optimization_advertisement = self.impose_advertisement_constraint(self.optimization_advertisement)
  
-			self.metrics['advertisements'].append(copy.copy(advertisement))
-			self.metrics['grads'].append(advertisement - a_k)
+			self.metrics['advertisements'].append(copy.copy(self.optimization_advertisement))
+			self.metrics['grads'].append(self.optimization_advertisement - a_k)
 
 			# Take a gradient step and update measured paths + probabilities
-			if not np.array_equal(threshold_a(advertisement), threshold_a(a_km1)):
+			if not np.array_equal(threshold_a(self.optimization_advertisement), threshold_a(a_km1)):
 				if self.verbose:
 					print("Gradient stepped to a new advertisement, issuing measurement.")
-				self.measure_ingresses(advertisement)
+				self.measure_ingresses(self.optimization_advertisement)
 			
 			## measure
 			timers.append(time.time() - t_last)
@@ -1870,7 +1852,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				tsmaxinfo = time.time()
 			for maxinfoi in range(self.n_max_info_iter):
 				print("Max info search iter {}".format(maxinfoi))
-				maximally_informative_advertisement = self.solve_max_information(advertisement)
+				maximally_informative_advertisement = self.solve_max_information(self.optimization_advertisement)
 				if maximally_informative_advertisement is not None:
 					self.measure_ingresses(maximally_informative_advertisement)
 				else:
@@ -1885,7 +1867,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			t_last = time.time()
 			
 			# Check stopping conditions
-			self.stop_tracker(advertisement)
+			self.stop_tracker(self.optimization_advertisement)
 			self.iter += 1
 			
 			## stop
@@ -1894,7 +1876,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			# Add to metrics
 			if self.verbose:
-				self.summarize_user_latencies(threshold_a(advertisement))
+				self.summarize_user_latencies(threshold_a(self.optimization_advertisement))
 
 			## summarize lats
 			timers.append(time.time() - t_last)
@@ -1916,7 +1898,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				print("Timer: {} -- {} s".format(lab, round(t,2)))
 
 			print("Updated numbers of popps on per prefix.")
-			print(np.sum(threshold_a(advertisement),axis=0))
+			print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(
@@ -1926,21 +1908,22 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 def main():
 	try:
-
+		np.random.seed(31415)
 		deployment = get_random_deployment(DPSIZE)
 
 
 		### With VULTR measurements test
-		lambduh = .01
+		lambduh = .0001
 		gamma = 2.0
-		n_prefixes = np.maximum(4,len(deployment['popps'])//4)
+		n_prefixes = deployment_to_prefixes(deployment)
 		sas = Sparse_Advertisement_Solver(deployment, 
 			lambduh=lambduh,verbose=True,with_capacity=True,n_prefixes=n_prefixes,
-			using_resilience_benefit=True, gamma=gamma)#n_prefixes=len(deployment['popps'])-1)
+			using_resilience_benefit=True, gamma=gamma)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)
-		sas.solve()
+		# sas.solve()
+		sas.solve(hotstart_dir='1709567097-actual_first_prototype-sparse')
 		sas.make_plots()
 		soln = sas.get_last_advertisement()
 		plot_lats_from_adv(sas, soln, 'basic_run_demo_{}.pdf'.format(DPSIZE))

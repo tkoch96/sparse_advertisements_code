@@ -275,6 +275,7 @@ def cluster_actual_users(**kwargs):
 	cluster_cache_fn = os.path.join(CACHE_DIR, 'clustered_perfs_{}.pkl'.format(cpstr))
 	if not os.path.exists(cluster_cache_fn):
 		anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
+		ug_to_ip = {}
 
 		### Form a matrix of all latencies
 		ugs = sorted(list(ug_perfs))
@@ -362,6 +363,13 @@ def cluster_actual_users(**kwargs):
 			most_popular_pop = max(set(pops_these_ugs), key=pops_these_ugs.count)
 			metro = most_popular_pop
 			this_lab_ug = (metro, ug_id)
+
+			for _,client_ip in these_ugs:
+				try:
+					ug_to_ip[this_lab_ug].append(client_ip)
+				except KeyError:
+					ug_to_ip[this_lab_ug] = [client_ip]
+
 			avg_anycast_lat = np.mean([anycast_latencies[ug] for ug in these_ugs])
 			clustered_anycast_perfs[this_lab_ug] = avg_anycast_lat
 			clustered_ug_perfs[this_lab_ug] = {}
@@ -376,11 +384,11 @@ def cluster_actual_users(**kwargs):
 		## need to make bs metro,asn -> average?
 		## need to make bs anycast latency -> average
 
-		pickle.dump([clustered_ug_perfs,clustered_anycast_perfs], open(cluster_cache_fn,'wb'))
+		pickle.dump([clustered_ug_perfs,clustered_anycast_perfs, ug_to_ip], open(cluster_cache_fn,'wb'))
 	else:
-		clustered_ug_perfs, clustered_anycast_perfs = pickle.load(open(cluster_cache_fn,'rb'))
+		clustered_ug_perfs, clustered_anycast_perfs, ug_to_ip = pickle.load(open(cluster_cache_fn,'rb'))
 
-	return clustered_ug_perfs, clustered_anycast_perfs
+	return clustered_ug_perfs, clustered_anycast_perfs, ug_to_ip
 
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("Loading performances, only considering pops: {}".format(considering_pops))
@@ -819,18 +827,23 @@ def get_random_ug_to_vol(deployment):
 def load_actual_deployment(deployment_size):
 	if deployment_size == 'actual-large':
 		considering_pops = list(POP_TO_LOC['vultr'])
+	# elif deployment_size == 'actual':
+	# 	considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
 	elif deployment_size == 'actual':
-		considering_pops = ['miami','amsterdam','newyork','atlanta','saopaulo','singapore','tokyo']
+		pops = list(POP_TO_LOC['vultr'])
+		considering_pops = np.random.choice(pops, size=N_POPS_ACTUAL_DEPLOYMENT, replace=False)
+	elif deployment_size == "actual_first_prototype":
+		considering_pops = ['newyork', 'atlanta']
 	else:
 		raise ValueError("Deployment size {} not supported".format(deployment_size))
-	# considering_pops = ['miami', 'atlanta']
+	print("Considering pops : {}".format(considering_pops))
 	cpstr = "-".join(sorted(considering_pops))
 	deployment_cache_fn = os.path.join(CACHE_DIR, 'actual_deployment_cache_{}.pkl'.format(cpstr))
 	if not os.path.exists(deployment_cache_fn):
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		# anycast_latencies, ug_perfs = load_actual_perfs(considering_pops=considering_pops)
-		ug_perfs, anycast_latencies = cluster_actual_users(considering_pops=considering_pops, 
+		ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users(considering_pops=considering_pops, 
 			n_users_per_peer=300)
 
 		## add sub-ms latency noise to arbitrarily break ties
@@ -877,6 +890,7 @@ def load_actual_deployment(deployment_size):
 
 		deployment = {
 			'ugs': ugs,
+			'ug_to_ip': ug_to_ip,
 			'ug_perfs': ug_perfs,
 			'ug_anycast_perfs': anycast_latencies,
 			'whole_deployment_ugs': ugs,
@@ -978,9 +992,6 @@ def get_random_deployment(problem_size):
 
 def get_random_deployment_by_size(problem_size):
 	#### Extensions / todos: 
-	### make users probabilistically have valid popps by distance
-	### we may want popps to be transit providers depending on the pop, randomly
-	### ug perfs should not be nonsensical based on distance
 
 	print("----Creating Random Deployment-----")
 	sizes = problem_params[problem_size]
@@ -990,7 +1001,7 @@ def get_random_deployment_by_size(problem_size):
 	random_transit_provider_latency = lambda : np.random.uniform(3,10) #lambda : np.random.uniform(MIN_LATENCY*1.3, MAX_LATENCY)
 
 	# testing ideas for learning over time
-	pops = np.arange(0,sizes['n_pop'])
+	pops = [str(el) for el in np.arange(0,sizes['n_pop'])]
 	def random_loc():
 		return (np.random.uniform(-30,30), np.random.uniform(-20,20))
 	pop_to_loc = {pop:random_loc() for pop in pops}
@@ -1011,8 +1022,8 @@ def get_random_deployment_by_size(problem_size):
 		if len(provs) == 0: # ensure at least one provider per pop
 			some_peers = np.append(some_peers, [np.random.randint(n_providers)])
 		for peer in some_peers:
-			popps.append((pop,peer))
-	provider_popps = [popp for popp in popps if popp[1] < n_providers]
+			popps.append((str(pop),str(peer)))
+	provider_popps = [popp for popp in popps if int(popp[1]) < n_providers]
 	for ug in ug_to_vol:
 		some_poppsi = np.random.choice(np.arange(len(popps)), size=np.random.randint(3,sizes['max_popp_per_ug']), replace=False)
 		some_popps = [popps[i] for i in some_poppsi]
@@ -1028,9 +1039,12 @@ def get_random_deployment_by_size(problem_size):
 			ug_perfs[ug][popp] = base_lat + random_transit_provider_latency()
 	ugs = list(ug_to_vol)
 	ug_anycast_perfs = {ug:np.random.choice(list(ug_perfs[ug].values())) for ug in ugs}
-	
+		
+	ug_to_ip = {ug:[str(i)] for i,ug in enumerate(ugs)}
+
 	deployment = {
 		'ugs': ugs,
+		'ug_to_ip': ug_to_ip,
 		'ug_perfs': ug_perfs,
 		'ug_to_vol': ug_to_vol,
 		'ug_anycast_perfs': ug_anycast_perfs,

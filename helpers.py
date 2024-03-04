@@ -14,6 +14,9 @@ except:
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+def pref_to_ip(pref):
+	return ".".join(pref.split(".")[0:3]) + ".1"
+
 def deployment_to_prefixes(deployment):
 	n_prefixes = np.maximum(4,4 * int(np.log2(len(deployment['popps']))))
 	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
@@ -46,6 +49,38 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 			deployments[-1][k] = copy.deepcopy(deployment[k])
 
 	return deployments
+
+class Ing_Obj:
+	def __init__(self, ing):
+		self.id = ing
+		self.parents = {}
+		self.children = {}
+		self.alive = True
+
+	def is_leaf(self):
+		return len(self.children) == []
+
+	def add_parent(self, parent):
+		self.parents[parent.id] = parent
+
+	def add_child(self, child):
+		self.children[child.id] = child
+
+	def has_child(self, potential_children):
+		return len(get_intersection(self.children, potential_children)) > 0
+
+	def has_parent(self, potential_parents):
+		return len(get_intersection(self.parents, potential_parents)) > 0
+
+	def has_info(self):
+		return len(self.parents) > 0 or len(self.children) > 0
+
+	def print(self):
+		print("Node : {}, parents: {}, children: {}, alive: {}".format(
+			self.id, list(self.parents), list(self.children), self.alive))
+
+	def kill(self):
+		self.alive = False
 
 class Calc_Cache():
 	### For caching results to computationally intensive tasks
@@ -591,7 +626,7 @@ def aggregate_by_subnet(ip_dict, aggregator=None, subnet=24, discard_v6=False):
 	return aggregate_ip_dict
 
 def get_cdf_xy(data, logx=False, logy=False, n_points = 500, weighted=False,
-	cutoff=None, default_log_low = -1):
+	cutoff=None, default_log_low = -1, x=None):
 	"""Returns x, cdf for your data on either log-lin or lin-lin plot."""
 
 	# sort it
@@ -636,19 +671,22 @@ def get_cdf_xy(data, logx=False, logy=False, n_points = 500, weighted=False,
 			else:
 				log_low = np.floor(np.log10(data[0]))
 			log_high = np.ceil(np.log10(data[-1]))
-		x = np.logspace(log_low,log_high,num=n_points)
+		if x is None:
+			x = np.logspace(log_low,log_high,num=n_points)
 	elif logy:
 		# Do an inverted log scale on the y axis to get an effect like
 		# .9, .99, .999, etc
 		# not implemented
 		log_low = -5
 		log_high = 0
-		x = np.linspace(data[0], data[-1], num=n_points)
+		if x is None:
+			x = np.linspace(data[0], data[-1], num=n_points)
 	else:
-		if weighted:
-			x = np.linspace(data[0][0], data[-1][0], num=n_points)
-		else:
-			x = np.linspace(data[0], data[-1],num=n_points)
+		if x is None:
+			if weighted:
+				x = np.linspace(data[0][0], data[-1][0], num=n_points)
+			else:
+				x = np.linspace(data[0], data[-1],num=n_points)
 
 	# Generate the CDF
 	cdf_data_obj = discrete_cdf(data, weighted=weighted)
