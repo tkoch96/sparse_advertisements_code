@@ -8,15 +8,17 @@ def strip_digs(s):
 	return re.sub(r'[0-9]', '', s)
 
 def fetch_files():
+	### Writes a command file that you'd execute to download all the data
 	nums = []
 	base_url = "https://dataverse.uclouvain.be/api/access/datafile/"
 	look_next = False
-	## god knows how I got this, but this is the key
+	## you get this from the main page: export metadata as DDI
 	for row in open('data/weathermap_xml.xml', 'r'):
 		if base_url in row:
 			data_id = re.search("datafile\/(\d+)\"", row).group(1)
-			# if not os.path.exists(os.path.join('data', data_id + ".zip")):
-			nums.append(data_id)
+			if not os.path.exists(os.path.join('data', 'weathermap_zips', data_id + ".zip")):
+				nums.append(data_id)
+			# nums.append(data_id)
 			look_next = True
 			continue
 		if look_next:
@@ -27,9 +29,11 @@ def fetch_files():
 	api_key = "c63e7428-43fb-4e80-af11-9d41110b8562"
 	with open(tmp_cmds_fn, 'w') as f:
 		for num in nums:
-			f.write("curl -s -o {} \"{}{}?key={}\" & \n".format(os.path.join('data', num +".zip"), base_url, num, api_key))
+			f.write("curl -s -o {} \"{}{}?key={}\" & \n".format(os.path.join('data', 'weathermap_zips', num +".zip"), base_url, num, api_key))
 
 def mp_parse(*args):
+	### Multiprocessing worker for reading data
+	### Reading yaml is slow, so multiple workers helps
 	fns,worker_i, = args[0]
 	print("Starting up in worker {}".format(worker_i))
 	recognized_locations = {k:None for k in ['syd', 'bom', 'sin', 'mrs','lax','was','nyc','ymq','dfw','pao','pdx','yto','sea','sjo','mia','bhs','chi','par','waw',
@@ -45,6 +49,7 @@ def mp_parse(*args):
 			print("{} percent done in worker {}".format(round(fni*100/n_total, 2), worker_i))
 			with zipfile.ZipFile(fn) as z:
 				for yaml_fn in z.namelist():
+					if ".log" in yaml_fn: continue
 					try:
 						t_report = int(re.search("(\d+)\.yaml", yaml_fn).group(1))
 					except AttributeError:
@@ -57,11 +62,13 @@ def mp_parse(*args):
 								found_loc = False
 								link['label'] = "#{}".format(linki) 
 								loc = strip_digs(link['peer'].split('-')[0])
+								loc = loc.lower()
 								try:
 									recognized_locations[loc]
 									found_loc = True
 								except KeyError:
 									loc = strip_digs(router.split('-')[0])
+									loc = loc.lower()
 									try:
 										recognized_locations[loc]
 										found_loc = True
@@ -69,6 +76,8 @@ def mp_parse(*args):
 										pass
 								if not found_loc:
 									loc = strip_digs(link['peer'].split('-')[0])
+									loc = loc.lower()
+									print('unrecognized location {}'.format(loc))
 									recognized_locations[loc] = None
 									found_loc = True
 								linkname = loc + "-" + router + "-" + link['peer']
@@ -106,15 +115,12 @@ def mp_parse(*args):
 
 
 def parse_and_plot():
-
+	#### Parses all yaml files, caches results, generates plots
 	files_dir = os.path.join(DATA_DIR, 'weathermap_zips')
-
-	
-	
 	hlstats_save_fn = os.path.join('data', 'weathermap_highlevelstats.pkl')
 	if not os.path.exists(hlstats_save_fn):
 		parsed_yaml_save_fn = os.path.join('data', 'weathermap_parsed_stats.pkl')
-		n_workers = multiprocessing.cpu_count()//2
+		n_workers = 32#multiprocessing.cpu_count()//2
 		if not os.path.exists(parsed_yaml_save_fn):
 			fns = list(sorted(glob.glob(os.path.join(files_dir, "*.zip"))))
 			fn_chunks = split_seq(fns, n_workers)
@@ -122,9 +128,9 @@ def parse_and_plot():
 			for worker_i in range(n_workers):
 				all_args.append((fn_chunks[worker_i], worker_i, ))
 
-			# ppool = multiprocessing.Pool(processes=n_workers)
-			# exit_codes = ppool.map(mp_parse, all_args)
-			# print(exit_codes)
+			ppool = multiprocessing.Pool(processes=n_workers)
+			exit_codes = ppool.map(mp_parse, all_args)
+			print(exit_codes)
 			
 
 			n_links_by_uid = {}
@@ -243,7 +249,6 @@ def parse_and_plot():
 	peak_util_dist_over_days = {pctl:{day:None for day in days} for pctl in pctls}
 	for day in tqdm.tqdm(days, desc="Computing peak utilization percentilesg over days..."):
 		these_lnk_utils = [peak_utils[lnk].get(day,0) for lnk in peak_utils]
-		peak_util_dist_over_days
 		for pctl in pctls:
 			peak_util_dist_over_days[pctl][day] = np.percentile(these_lnk_utils, pctl)
 

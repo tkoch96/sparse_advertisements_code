@@ -7,7 +7,6 @@ for row in tqdm.tqdm(open(lat_fn, 'r'), desc="Parsing per-ingress VULTR measurem
 	# if np.random.random() > .9999999:break
 	fields = row.strip().split(',')
 	t,ip,pop,peer,_,lat = fields
-	lat = parse_lat(lat)
 	metro = 'tmp'
 	asn = ip#ip32_to_24(ip)
 	ug = (metro,asn)
@@ -15,10 +14,7 @@ for row in tqdm.tqdm(open(lat_fn, 'r'), desc="Parsing per-ingress VULTR measurem
 		ug_perfs[ug]
 	except KeyError:
 		ug_perfs[ug] = {}
-	try:
-		ug_perfs[ug][pop,peer].append(lat)
-	except KeyError:
-		ug_perfs[ug][pop,peer] = [lat]
+	ug_perfs[ug] = None
 rows = []
 for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
 	,'r'),desc="Parsing VULTR anycast latencies"):
@@ -28,7 +24,6 @@ for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency.csv')
 	metro = 'tmp'
 	asn = ip#ip32_to_24(ip)
 	ug = (metro,asn)
-	lat = parse_lat(lat)
 	try:
 		ug_perfs[ug]
 	except KeyError:

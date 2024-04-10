@@ -96,6 +96,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 	def one_per_pop(self, **kwargs):
 		### Doesn't use actual hybridcast performance
+		if not self.simulated:
+			self.get_realworld_measure_wrapper()
 		all_advs = []
 		advs = {}
 		self.budget = self.n_prefixes - 1
@@ -134,6 +136,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
 		print("Initial greedy advertisement comuptation")
+		if not self.simulated:
+			self.get_realworld_measure_wrapper()
 		advs = self.painter_v4(**kwargs)
 		self.advs = advs
 		
@@ -163,8 +167,12 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				(time.time() - ts) / (self.iter+1)))
 
 			self.advs = advs
-			if self.iter == 10:
-				break
+			if self.simulated:
+				if self.iter == 10:
+					break
+			else:
+				if self.iter == 3:
+					break
 
 		self.verbose = save_verb
 
@@ -196,40 +204,39 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 			all_available_options = get_intersection(being_adved, self.ug_perfs[ug]) # checks (a) and (b)
 			if len(all_available_options) == 0: return []
 
-			ui = self.ug_to_ind[ug]
 			# Remove impossible options based on our known information
-			available_popp_inds = [self.popp_to_ind[popp] for popp in all_available_options]
-			# print(available_popp_inds)
-			for nodeid in get_intersection(self.measured_prefs[ui], available_popp_inds):
-				node = self.measured_prefs[ui][nodeid]
-				if node.has_parent(available_popp_inds):
+			for popp in get_intersection(self.measured_prefs[ug], all_available_options):
+				node = self.measured_prefs[ug][popp]
+				if node.has_parent(all_available_options):
 					node.kill()
-			possible_peers = [nodeid for nodeid, node in self.measured_prefs[ui].items() if node.alive]
-			# print(possible_peers)
-			available_options_limited = get_intersection(available_popp_inds, possible_peers)
-			# print(available_options_limited)
-			# print("\n")
-			# Reset for next time
-			for nodeid in list(self.measured_prefs[ui]):
-				self.measured_prefs[ui][nodeid].alive = True
+			possible_peers = [popp for popp, node in self.measured_prefs[ug].items() if node.alive]
+			available_options_limited = get_intersection(all_available_options, possible_peers)
+			## Reset for next time
+			for popp in list(self.measured_prefs[ug]):
+				self.measured_prefs[ug][popp].alive = True
+
+			## It could be that A > B and B > A if our model is wrong, which will then result in everything dying
+			if len(available_options_limited) == 0:
+				print("Note -- probably a cycle for {}".format(ug))
+				return []
 
 			available_options = []
 			dists = []
-			for popp_i in available_options_limited:
-				pop,p = self.popps[popp_i]
+			for popp in available_options_limited:
+				pop,p = popp
 				try:
 					d = pop_to_metro_dist_cache[self.metro_loc[ug[0]], self.pop_to_loc[pop]]
 				except KeyError:
 					d = geopy.distance.geodesic(self.metro_loc[ug[0]], self.pop_to_loc[pop]).km
 					pop_to_metro_dist_cache[self.metro_loc[ug[0]], self.pop_to_loc[pop]] = d
 				dists.append(d)
-			min_pop = self.popps[available_options_limited[np.argmin(np.array(dists))]][0]
-			available_options = [self.popps[poppi] for poppi in available_options_limited if \
-				self.pop_dist_cache[self.popps[poppi][0], min_pop] < cd] # check (c)
+			min_pop = available_options_limited[np.argmin(np.array(dists))][0]
+			available_options = [popp for popp in available_options_limited if \
+				self.pop_dist_cache[popp[0], min_pop] < cd] # check (c)
 			available_peers = [popp[1] for popp in available_options]
 			# Also include popp's too far away for which the same peer is just as close
-			ret_available_options = [self.popps[poppi] for poppi in available_options_limited if \
-				self.popps[poppi][1] in available_peers] # final note
+			ret_available_options = [popp for popp in available_options_limited if \
+				popp[1] in available_peers] # final note
 			
 			return ret_available_options
 
@@ -258,6 +265,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 			for u in self.ug_perfs[ug]:
 				self.ug_best_perf[ug] = np.minimum(self.ug_best_perf[ug], self.ug_perfs[ug][u])
 		ug_i_to_not_consider = []
+
 
 		def calc_mean_improvements(advs_by_pfx, new_pfxi, last_changed_popp, verb=False):
 			npfx = len(advs_by_pfx)
@@ -336,7 +344,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 							new_perf = np.mean(possible_latencies)
 						else:
 							# everything conflicts, performance is same as the old
-							new_perf = this_pfx_perf
+							new_perf = old_perf
 					else:
 						# PAINTER will select the new prefix if it's better
 						# the new prefixes performance would be ug_perfs -> ug -> popp

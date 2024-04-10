@@ -1,11 +1,13 @@
 import numpy as np, time, tqdm
 np.setbufsize(262144*8)
+np.set_printoptions(precision=5)
 from constants import *
 from helpers import *
+from subprocess import call, check_output
 from test_polyphase import *
 from worker_comms import Worker_Manager
 from solve_lp_assignment import *
-from realworld_measure_wrapper import RealWorld_Measure_Wrapper
+from scipy.sparse import csr_matrix, lil_matrix
 
 
 class Optimal_Adv_Wrapper:
@@ -14,8 +16,7 @@ class Optimal_Adv_Wrapper:
 		self.verbose = verbose
 		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
-		self.epsilon = .05 # change in objective less than this -> stop
-		self.max_n_iter = 100 # maximum number of learning iterations
+		self.epsilon = .005 # change in objective less than this -> stop
 		self.lambduh = lambduh # sparsity cost
 		self.gamma = gamma # resilience cost
 		self.with_capacity = kwargs.get('with_capacity', False)
@@ -27,7 +28,7 @@ class Optimal_Adv_Wrapper:
 
 		self.update_deployment(deployment)	
 
-		self.save_run_dir = os.path.join(RUN_DIR, 'generic_unused') ## Just to have a default to avoid annoying code breaks
+		self.set_save_run_dir(**kwargs)
 
 	def set_worker_manager(self, wm):
 		self.worker_manager = wm
@@ -46,8 +47,8 @@ class Optimal_Adv_Wrapper:
 
 	def clear_caches(self):
 		self.calc_cache.clear_all_caches()
-		self.measured_prefs = {ui: {self.popp_to_ind[popp]: Ing_Obj(self.popp_to_ind[popp]) for popp in \
-			self.ug_perfs[self.ugs[ui]]} for ui in range(self.n_ug)}
+		self.measured_prefs = {ug: {popp: Ing_Obj(popp) for popp in \
+			self.ug_perfs[ug]} for ug in self.ugs}
 		# self.linear_prog_soln_cache = {
 		# 	'regular': {},
 		# 	'failure_catch': {},
@@ -75,9 +76,11 @@ class Optimal_Adv_Wrapper:
 			'verbose': False,
 			'n_prefixes': self.n_prefixes,
 			'with_capacity': self.with_capacity,
+			'save_run_dir': self.save_run_dir,
 		}
 
 	def solve_lp_assignment(self, adv, **kwargs):
+		self.enforce_loaded_rwmw()
 		cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
 		computing_best_lats = kwargs.get('computing_best_lats', False)
 		try:
@@ -89,11 +92,13 @@ class Optimal_Adv_Wrapper:
 		except KeyError:
 			pass
 		ret = solve_lp_assignment(self, adv, **kwargs)
+		# ret = solve_lp_assignment(self, adv, **kwargs)
 		
 		self.linear_prog_soln_cache['regular'][cache_rep, computing_best_lats] = ret
 		return ret
 
 	def solve_lp_with_failure_catch(self, adv, **kwargs):
+		self.enforce_loaded_rwmw()
 		cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
 		computing_best_lats = kwargs.get('computing_best_lats', False)
 		try:
@@ -112,48 +117,302 @@ class Optimal_Adv_Wrapper:
 		#### Solves the linear program using worker bees
 		## no caching
 
+		advs = [(adv_i,adv,dep,flag) for adv_i,(adv,dep,flag) in enumerate(advs)]
+		np.random.shuffle(advs)
+		adv_i_to_adv = {adv_i: adv for adv_i, adv, _, _ in advs}
+
 		all_rets = [None for i in range(len(advs))]
 		if kwargs.get('cache_res', False):
 			new_advs = []
-			for i,(adv,dep) in enumerate(advs):
+			for adv_i,adv,dep,update_dep in advs:
 				## see if anything has been calculated beore
 				cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
 				try:
-					all_rets[i] = self.linear_prog_soln_cache['failure_catch'][cache_rep, False]
+					all_rets[adv_i] = self.linear_prog_soln_cache['failure_catch'][cache_rep, False]
 				except KeyError:
-					new_advs.append((adv,dep))
+					new_advs.append((adv_i,adv,dep,update_dep))
 
 			advs = new_advs
 		print("Pre-Computed {} rets from cache".format(sum(1 for r in all_rets if r is not None)))
 
 		if len(advs) > 0:
-			adv_chunks = split_seq(advs, int(np.ceil(len(advs)/self.get_n_workers())))
-			for adv_chunk in tqdm.tqdm(adv_chunks, desc="Computing LP assignments using workers..."):
-				msg = pickle.dumps(['solve_lp', adv_chunk])
-				from_workers = self.send_receive_workers(msg)
-				this_ret = list([from_workers[i] for i in range(self.get_n_workers()) if len(from_workers[i]) > 0])
-				for tr in this_ret:
-					for i,r in enumerate(all_rets):
-						if r is None:
-							break
-					all_rets[i] = tr
-				if kwargs.get('cache_res', False):
-					for (adv,dep), ret in zip(adv_chunk, this_ret):
-						cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
-						self.linear_prog_soln_cache['failure_catch'][cache_rep, False] = copy.deepcopy(ret)
+			max_n_in_flight = 350
+			n_advs = len(advs)
+			global_adv_chunks = split_seq(advs, int(np.ceil(n_advs/max_n_in_flight)))
+			for local_adv_chunk in tqdm.tqdm(global_adv_chunks, desc="Computing LP assignments using workers..."):
+				adv_chunks = split_seq(local_adv_chunk, self.get_n_workers())
+				msgs = []
+				for i in range(self.get_n_workers()):
+					msg = pickle.dumps(['solve_lp', adv_chunks[i]])
+					msgs.append(msg)
+				from_workers = self.worker_manager.send_receive_messages_workers(msgs)
+				for worker_i, ret in from_workers.items():
+					for tr in ret:
+						adv_i, answer = tr
+						all_rets[adv_i] = answer
+						if kwargs.get('cache_res', False):
+							adv = adv_i_to_adv[adv_i]
+							cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
+							self.linear_prog_soln_cache['failure_catch'][cache_rep, False] = answer
 
 		return all_rets
 
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
 		### Keeps the parent-tracker up to date
-		for ui, inds in self.calc_cache.all_caches['parents_on'].items():
-			for childi,parenti in inds:
-				self.parent_tracker[ui,childi,parenti] = True
+		for ug, inds in self.calc_cache.all_caches['parents_on'].items():
+			for child,parent in inds:
+				self.parent_tracker[ug,child,parent] = True
 
-	def output_deployment(self, nocopy=False):
+	def add_ug_perf(self, ug, popp, latency):
+		### Add performance to UG
+		if DEBUG_CLIENT_INFO_ADDING:
+			print("Main Thread, adding {}->{}:{}ms".format(ug,popp,round(latency)))
+		for pseudo_ug in self.og_ugs_to_new_ugs[ug]:
+			self.ug_perfs[pseudo_ug][popp] = latency
+
+	def del_ug_perf(self, ug, popp):
+		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
+			print("Main Thread, Deleting {}->{}".format(ug,popp))
+		for pseudo_ug in self.og_ugs_to_new_ugs[ug]:
+			del self.ug_perfs[pseudo_ug][popp]
+
+			if len(self.ug_perfs[pseudo_ug]) <= 1:
+				self.del_ug(pseudo_ug)
+
+	def del_ug(self, ug):
+		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
+			print("Main Thread, Deleting {}".format(ug))
+		try:
+			self.ug_perfs[ug]
+			del self.ug_perfs[ug]
+		except KeyError:
+			for pseudo_ug in self.og_ugs_to_new_ugs[ug]:
+				del self.ug_perfs[pseudo_ug]
+
+	def del_client(self, client):
+		if DEBUG_CLIENT_INFO_ADDING:
+			print("Main Thread, Deleting client {}".format(client))
+		relevant_ugs = []
+		for ug,clients in self.ug_to_ip.items():
+			if client in clients:
+				relevant_ugs.append(ug)
+		for this_ug in list(set(relevant_ugs)):
+			self.ug_to_ip[this_ug] = get_difference(self.ug_to_ip[this_ug], [client])
+			if DEBUG_CLIENT_INFO_ADDING:
+				print("New set of clients for {}: {}".format(this_ug, self.ug_to_ip[this_ug]))
+			if len(self.ug_to_ip[this_ug]) == 0:
+				self.del_ug(this_ug)
+
+	def check_update_deployment_upon_modify(self):
+		### When we modify UG perfs, it could be that many data structures need to change, check that these are changed
+		try:
+			self.worker_i
+			raise ValueError("This method should only be called in the main thread, never in a worker.")
+		except AttributeError:
+			pass
+
+
+		
+
+		self.ugs = sorted(list(self.ug_perfs))
+		self.ug_to_vol = {ug:self.ug_to_vol[ug] for ug in self.ugs}
+		self.n_ug = len(self.ugs)
+		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
+		self.ug_to_ip = {ug:self.ug_to_ip[ug] for ug in self.ugs}
+		self.ip_to_ug = {ip:ug for ug,ips in self.ug_to_ip.items() for ip in ips}
+		
+		### Need to update advertisement object when we add popps
+		new_popps = sorted(list(set(popp for ug in self.ug_perfs for popp in self.ug_perfs[ug])))
+		# print("Updated popp list will have {} popps, old has {}".format(len(new_popps), len(self.popps)))
+		# print("Removing {}, adding : {}".format(get_difference(self.popps,new_popps), get_difference(new_popps,self.popps)))
+		new_popp_to_ind = {popp:i for i,popp in enumerate(new_popps)}
+		removed_popps = get_difference(self.popps, new_popps)
+		removed_popps_inds = list([self.popp_to_ind[popp] for popp in removed_popps])
+		added_popps = get_difference(new_popps, self.popps)
+		added_popps_inds = list([new_popp_to_ind[popp] for popp in added_popps])
+
+		try:
+			if len(new_popps) == self.optimization_advertisement.shape[0]: #### TMP!!!!! we should be tracking which popps the optimization advertisement's indices correspond to separately
+				raise AttributeError
+			# print("Pre opt modify: {}".format(self.optimization_advertisement.shape))
+			pre_on = {}
+			for prefix_i in range(self.optimization_advertisement.shape[1]):
+				pre_on[prefix_i] = list(get_intersection([self.popps[poppi] for poppi in np.where(self.optimization_advertisement[:,prefix_i])[0]], new_popps))
+			for remove_poppi in sorted(removed_popps_inds, reverse=True): ## have to go back to front so indices stay consistent
+				# print("Removing: {} ({}) ".format(remove_poppi, self.popps[remove_poppi]))
+				self.optimization_advertisement = np.concatenate([self.optimization_advertisement[0:remove_poppi,:], self.optimization_advertisement[remove_poppi+1:,:]], axis=0)
+				self.last_advertisement = np.concatenate([self.last_advertisement[0:remove_poppi,:], self.last_advertisement[remove_poppi+1:,:]], axis=0)
+
+			for added_poppi in sorted(added_popps_inds): ## have to go front to back so indices stay consistent
+				# print("Adding: {} ({})".format(added_poppi, new_popps[added_poppi]))
+				self.optimization_advertisement = np.concatenate([self.optimization_advertisement[0:added_poppi,:], .45*np.ones(1,self.n_prefixes), self.optimization_advertisement[added_poppi:,:]], axis=0)
+				self.last_advertisement = np.concatenate([self.last_advertisement[0:added_poppi,:], .45*np.ones(1,self.n_prefixes), self.last_advertisement[added_poppi:,:]], axis=0)
+			post_on = {}
+			for prefix_i in range(self.optimization_advertisement.shape[1]):
+				post_on[prefix_i] = list([new_popps[poppi] for poppi in np.where(self.optimization_advertisement[:,prefix_i])[0]])
+				this_pre_on = sorted(pre_on[prefix_i])
+				this_post_on = sorted(post_on[prefix_i])
+				amb = get_difference(this_pre_on, this_post_on)
+				bma = get_difference(this_post_on, this_pre_on)
+				# print("In pre not post: {}, {}".format(amb, list([self.popp_to_ind[popp] for popp in amb])))
+				# print("In post not pre: {}, {}".format(bma, list([new_popp_to_ind[popp] for popp in bma])))
+				assert this_pre_on == this_post_on
+
+			# print("Post opt modify: {}".format(self.optimization_advertisement.shape))
+		except AttributeError:
+			import traceback
+			traceback.print_exc()
+			pass
+
+		self.popps = new_popps
+		self.popp_to_ind = new_popp_to_ind
+
+		try:
+			new_mp = {}
+			for ug in self.ug_perfs:
+				new_mp[ug] = {}
+				for popp,obj in self.measured_prefs.get(ug, {}).items():
+					if popp not in self.ug_perfs[ug]:
+						continue
+					obj.parents = {prnt: obj.parents[prnt] for prnt in get_intersection(self.ug_perfs[ug], obj.parents)}
+					obj.children = {child: obj.children[child] for child in get_intersection(self.ug_perfs[ug], obj.children)}
+					new_mp[ug][popp] = obj
+				for popp in get_difference(self.ug_perfs[ug], self.measured_prefs.get(ug,{})):
+					new_mp[ug][popp] = Ing_Obj(popp)
+			self.measured_prefs = new_mp
+		except AttributeError:
+			pass
+
+		self.whole_deployment_ugs = self.ugs
+		self.whole_deployment_n_ug = len(self.whole_deployment_ugs)
+		self.whole_deployment_ug_to_ind = {ug:i for i,ug in enumerate(self.whole_deployment_ugs)}
+		self.whole_deployment_ug_perfs = self.ug_perfs
+		self.ug_anycast_perfs = {ug:self.ug_anycast_perfs[ug] for ug in self.ugs}
+
+		self.n_popps = len(self.popps)
+		self.n_popp = len(self.popps)
+		self.pops = sorted(list(set([u[0] for u in self.popps])))
+		self.n_pops = len(self.pops)
+		self.pop_to_ind = {k:i for i,k in enumerate(self.pops)}
+		self.pop_to_popps = {}
+		for popp in self.popps:
+			try:
+				self.pop_to_popps[popp[0]].append(popp)
+			except KeyError:
+				self.pop_to_popps[popp[0]] = [popp]
+		self.pop_to_popp_inds = {pop:np.array([self.popp_to_ind[popp] for popp in self.pop_to_popps[pop]]) for pop in self.pops}
+
+		self.ui_to_poppi = {}
+		for ug in self.ug_perfs:
+			self.ui_to_poppi[self.ug_to_ind[ug]] = {}
+			for popp in self.ug_perfs[ug]:
+				self.ui_to_poppi[self.ug_to_ind[ug]][self.popp_to_ind[popp]] = None
+		self.poppi_to_ui = {}
+		for ug in self.ug_perfs:
+			for popp in self.ug_perfs[ug]:
+				try:
+					self.poppi_to_ui[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
+				except KeyError:
+					self.poppi_to_ui[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
+		for poppi in get_difference(list(range(self.n_popps)), self.poppi_to_ui):
+			self.poppi_to_ui[poppi] = []
+
+		self.provider_popps = get_intersection(self.provider_popps, self.popps)
+		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
+
+		self.n_providers = len(set(popp[1] for popp in self.provider_popps)) # number of provider ASes
+		self.provider_popp_inds = [self.popp_to_ind[popp] for popp in self.provider_popps]
+
+		all_current_link_capacities = list(self.link_capacities_by_popp.values())
+		old_popps = list(self.link_capacities_by_popp)
+		choices = list(range(len(old_popps)))
+		for popp in get_difference(self.popps, list(self.link_capacities_by_popp)): # add new link caps
+			self.link_capacities_by_popp[popp] = self.link_capacities_by_popp[old_popps[np.random.choice(choices)]]
+		self.link_capacities_by_popp = {popp: self.link_capacities_by_popp[popp] for popp in self.popps}
+		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
+
+		self.link_capacities_arr = np.zeros(self.n_popp)
+		for poppi, cap in self.link_capacities.items():
+			self.link_capacities_arr[poppi] = cap
+
+		self.whole_deployment_ug_to_vol = self.ug_to_vol
+		self.ug_vols = np.zeros(self.n_ug)
+		self.whole_deployment_ug_vols = np.zeros(self.whole_deployment_n_ug)
+		for ug, v in self.ug_to_vol.items():
+			self.ug_vols[self.ug_to_ind[ug]] = v
+		for ug, v in self.whole_deployment_ug_to_vol.items():
+			self.whole_deployment_ug_vols[self.whole_deployment_ug_to_ind[ug]] = v
+		all_vols = list(self.ug_to_vol.values())
+		self.vol_x = np.linspace(0, max(all_vols))
+		self.big_vol_x = np.zeros((len(self.vol_x), len(self.whole_deployment_ugs)))
+		for i in range(len(self.whole_deployment_ugs)):
+			self.big_vol_x[:,i] = copy.copy(self.vol_x)
+		self.ui_to_vol_i = {}
+		for ui in range(self.n_ug):
+			self.ui_to_vol_i[ui] = np.where(self.ug_to_vol[self.ugs[ui]] -\
+				self.vol_x <=0)[0][0]
+
+
+		try:
+			del self.rb_backups
+		except AttributeError:
+			pass
+
+		## compute best latency by ug
+		self.linear_prog_soln_cache = {
+			'regular': {},
+			'failure_catch': {},
+		}
+
+		### Main thread
+		with open(os.path.join(LOG_DIR, 'main_thread_log-{}.txt'.format(self.dpsize)),'w') as f:
+			pass
+		self.parent_tracker = {}
+
+		print("Getting best lats by UG")
+		one_per_ingress_adv = np.identity(self.n_popps)
+		ret = self.solve_lp_assignment(one_per_ingress_adv,
+			computing_best_lats=True)
+		self.optimal_expensive_solution = ret
+		self.best_lats_by_ug = ret['lats_by_ug']
+		
+		try:					
+			del self.rb_backups
+		except AttributeError:
+			pass
+		self.last_lb_calls_results = {}
+		self.last_rb_calls_results_popp = {}
+		self.all_rb_calls_results_popps = {poppi:[] for poppi in range(self.n_popps)}
+		self.all_rb_calls_results_pops = {popi:[] for popi in range(self.n_pops)}
+		self.n_resilience_benefit_popp_calls = {}
+		self.n_latency_benefit_calls = {}
+
+		self.all_lb_calls_results = []
+		self.deployment = self.output_deployment()
+
+	def restart_workers(self):
+		try:
+			wm = self.get_worker_manager()
+		except AttributeError:
+			# No worker manager, no problem
+			return
+		wm.deployment = self.output_deployment()
+		wm.stop_workers()
+		time.sleep(2)
+		wm.start_workers()
+
+		self.update_parent_tracker_workers()
+
+	def enforce_loaded_rwmw(self):
+		if not self.simulated:
+			### You need to load realworld measure wrapper before calling this function
+			self.rw_measure_wrapper
+
+	def output_deployment(self, copykeys='all'):
 		deployment = {
 			'ugs': self.ugs,
+			'dpsize': self.dpsize,
 			'ug_to_ip': self.ug_to_ip,
 			'ug_perfs': self.ug_perfs,
 			'ug_to_vol': self.ug_to_vol,
@@ -166,36 +425,45 @@ class Optimal_Adv_Wrapper:
 			'pop_to_loc': self.pop_to_loc,
 			'n_providers': self.n_providers,
 			'provider_popps': self.provider_popps,
-			'ingress_priorities': self.ground_truth_ingress_priorities,
-			'whole_deployment_ingress_priorities': self.whole_deployment_ground_truth_ingress_priorities,
 			'link_capacities': self.link_capacities_by_popp,
 		}
-		if not nocopy:
-			ret = copy.deepcopy(deployment)
+		if self.simulated:
+			deployment['ingress_priorities'] = self.ground_truth_ingress_priorities
+			deployment['whole_deployment_ingress_priorities'] = self.whole_deployment_ground_truth_ingress_priorities
+
+		if copykeys is not None:
+			if copykeys == 'all':
+				ret = copy.deepcopy(deployment)
+			else:
+				ret = {}
+				for k in deployment:
+					if k in copykeys:
+						ret[k] = copy.deepcopy(deployment[k])
+					else:
+						ret[k] = deployment[k]
 		else:
-			ret = deployment ## BE VERY CAREFUL
+			## Be very careful
+			ret = deployment
 
 		return ret
 
 	def update_deployment(self, deployment, **kwargs):
+		try:
+			self.clear_caches()
+		except:
+			pass
+
+		self.simulated = deployment.get('simulated', True)
+		if self.simulated:
+			self.max_n_iter = 200 # maximum number of learning iterations
+		else:
+			self.max_n_iter = 50 # maximum number of learning iterations
 
 		quick_update = kwargs.get('quick_update', False)
 
-		### Get rid of ugs with only one pop
-		n_pop_by_ug = {ug:{} for ug in deployment['ug_perfs']}
-		for ug in deployment['ug_perfs']:
-			for pop,peer in deployment['ug_perfs'][ug]:
-				n_pop_by_ug[ug][pop] = None
-		ug_to_del = list(ug for ug,v in n_pop_by_ug.items() if len(v) <= 1)
-		for ug in ug_to_del:
-			for k in ['ugs', 'whole_deployment_ugs']:
-				deployment[k] = get_difference(deployment[k], ug_to_del)
-			for k in ['ug_perfs', 'ug_to_vol', 'ug_anycast_perfs', 'ingress_priorities', 'whole_deployment_ug_to_vol']:
-				deployment[k] = {ug:v for ug,v in deployment[k].items() if ug not in ug_to_del}
-
-		self.deployment = deployment
+		self.dpsize = deployment['dpsize']
 		self.ugs = sorted(deployment['ugs'])
-		self.ug_to_ip = deployment['ug_to_ip']
+		self.ug_to_ip = deployment.get('ug_to_ip',None)
 		self.n_ug = len(self.ugs)
 		self.whole_deployment_ugs = sorted(deployment['whole_deployment_ugs'])
 		self.whole_deployment_n_ug = len(self.whole_deployment_ugs)
@@ -212,7 +480,19 @@ class Optimal_Adv_Wrapper:
 		self.n_pops = len(self.pops)
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
 		self.pop_to_ind = {k:i for i,k in enumerate(self.pops)}
+		self.pop_to_popps = {}
+		for popp in self.popps:
+			try:
+				self.pop_to_popps[popp[0]].append(popp)
+			except KeyError:
+				self.pop_to_popps[popp[0]] = [popp]
+		self.pop_to_popp_inds = {pop:np.array([self.popp_to_ind[popp] for popp in self.pop_to_popps[pop]]) for pop in self.pops}
 
+		self.ui_to_poppi = {}
+		for ug in self.ug_perfs:
+			self.ui_to_poppi[self.ug_to_ind[ug]] = {}
+			for popp in self.ug_perfs[ug]:
+				self.ui_to_poppi[self.ug_to_ind[ug]][self.popp_to_ind[popp]] = None
 		self.poppi_to_ui = {}
 		for ug in self.ug_perfs:
 			for popp in self.ug_perfs[ug]:
@@ -230,8 +510,9 @@ class Optimal_Adv_Wrapper:
 			self.n_prefixes = np.maximum(3,self.n_popp // 3)
 		self.n_providers = deployment['n_providers'] # number of provider ASes
 		self.provider_popp_inds = [self.popp_to_ind[popp] for popp in self.provider_popps]
-		self.ground_truth_ingress_priorities = deployment['ingress_priorities']
-		self.whole_deployment_ground_truth_ingress_priorities = deployment['whole_deployment_ingress_priorities']
+		if self.simulated:
+			self.ground_truth_ingress_priorities = deployment['ingress_priorities']
+			self.whole_deployment_ground_truth_ingress_priorities = deployment['whole_deployment_ingress_priorities']
 
 		self.metro_loc = deployment['metro_loc']
 		self.pop_to_loc = deployment['pop_to_loc']
@@ -260,9 +541,7 @@ class Optimal_Adv_Wrapper:
 			self.ui_to_vol_i[ui] = np.where(self.ug_to_vol[self.ugs[ui]] -\
 				self.vol_x <=0)[0][0]
 
-		# ingress,ug -> stores ~ how many times ingress wins for a ug
-		self.n_wins = {ug:{i:0 for i in range(self.n_popp)} for ug in self.ugs}
-
+		self.deployment = self.output_deployment()
 		try:
 			self.worker_i
 			### Worker thread, need to divide capacities by the number of workers
@@ -288,21 +567,35 @@ class Optimal_Adv_Wrapper:
 					# print("Worker {} dividing popp {} by {}".format(self.worker_i, popp, round(divider,2)))
 				else:
 					divider = 1 # likely won't use any of it, so it doesn't matter
-
+				divider = 1 #POSSIBLy TMP
 				self.link_capacities_by_popp[popp] = cap / divider
 
 		except AttributeError:
 			pass
 		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
 
+		try:
+			del self.rb_backups
+		except AttributeError:
+			pass
 
-		self.ingress_priority_inds = {ug:{self.popp_to_ind[popp]: \
-			self.whole_deployment_ground_truth_ingress_priorities[ug][popp] for popp in self.whole_deployment_ug_perfs[ug]} \
-			for ug in self.whole_deployment_ugs}
-		self.popp_by_ug_indicator = np.zeros((self.n_popp, self.whole_deployment_n_ug), np.ushort)
-		for ui in range(self.whole_deployment_n_ug):
-			for popp in sorted(self.whole_deployment_ug_perfs[self.whole_deployment_ugs[ui]]):
-				self.popp_by_ug_indicator[self.popp_to_ind[popp], ui] = self.n_popp + 1 - self.ingress_priority_inds[self.whole_deployment_ugs[ui]][self.popp_to_ind[popp]]
+		if self.simulated:
+			self.ingress_priority_inds = {ug:{self.popp_to_ind[popp]: \
+				self.whole_deployment_ground_truth_ingress_priorities[ug][popp] for popp in self.whole_deployment_ug_perfs[ug]} \
+				for ug in self.whole_deployment_ugs}
+			## Used for computing ground truth ingress
+			n_paths = sum(len(popps) for ug,popps in self.whole_deployment_ug_perfs.items())
+			data = np.zeros((n_paths))
+			rows = np.zeros((n_paths))
+			cols = np.zeros((n_paths))
+			i=0
+			for ui in range(self.whole_deployment_n_ug):
+				for popp in sorted(self.whole_deployment_ug_perfs[self.whole_deployment_ugs[ui]]):
+					data[i] = self.n_popp + 1 - self.ingress_priority_inds[self.whole_deployment_ugs[ui]][self.popp_to_ind[popp]]
+					rows[i] = self.popp_to_ind[popp]
+					cols[i] = ui
+					i += 1
+			self.popp_by_ug_indicator = csr_matrix((data, (rows,cols)), shape=(self.n_popp, self.whole_deployment_n_ug))
 
 		## compute best latency by ug
 		self.linear_prog_soln_cache = {
@@ -313,62 +606,32 @@ class Optimal_Adv_Wrapper:
 		try:
 			### Worker bee
 			self.worker_i
-			self.parent_tracker = np.zeros((self.n_ug, self.n_popp, self.n_popp), dtype=bool)
-			# ijk'th entry of ingress probabilities is probability that user k ingresses over popp i for prefix j
-			self.ingress_probabilities = np.zeros((self.n_popp, self.n_prefixes, self.n_ug))\
-
-			self.popp_by_ug_indicator_no_rank = np.zeros((self.n_popp, self.n_ug), dtype=bool)
-			for ui in range(self.n_ug):
-				for popp in self.ug_perfs[self.ugs[ui]]:
-					self.popp_by_ug_indicator_no_rank[self.popp_to_ind[popp],ui] = True
+			self.parent_tracker = {}
 			self.init_all_vars()
 		except AttributeError:
 			### Main thread
-			with open(os.path.join(CACHE_DIR, 'main_thread_log-{}.txt'.format(DPSIZE)),'w') as f:
+			with open(os.path.join(LOG_DIR, 'main_thread_log-{}.txt'.format(self.dpsize)),'w') as f:
 				pass
 			self.parent_tracker = {}
+			if not self.simulated:
+				try:
+					del self.rw_measure_wrapper
+				except AttributeError:
+					pass
+			self.get_realworld_measure_wrapper()
 
 			if not quick_update:
-
-				if SIMULATED:
-					one_per_ingress_adv = np.identity(self.n_popps)
-					ret = self.solve_lp_assignment(one_per_ingress_adv,
-						computing_best_lats=True)
-					if not ret['solved'] and kwargs.get('exit_on_impossible', True):
-						raise ValueError("Cant solve problem in the best case, increase caps.")
-					elif not kwargs.get('exit_on_impossible', True):
-						pass
-					else:
-						self.best_lats_by_ug = ret['lats_by_ug']
+				print("Getting best lats by UG")
+				one_per_ingress_adv = np.identity(self.n_popps)
+				ret = self.solve_lp_assignment(one_per_ingress_adv,
+					computing_best_lats=True)
+				self.optimal_expensive_solution = ret
+				if not ret['solved'] and kwargs.get('exit_on_impossible', True):
+					raise ValueError("Cant solve problem in the best case, increase caps.")
+				elif not kwargs.get('exit_on_impossible', True):
+					pass
 				else:
-					self.best_lats_by_ug = np.array([np.min(list(self.ug_perfs[self.ugs[ui]].values())) for ui in range(self.n_ug)])
-
-				### Resilience benefit backup pre-calcs
-				self.rb_backups = np.zeros((self.n_ug,self.n_popps,self.n_popps),dtype=np.ushort)
-				for ug in tqdm.tqdm(self.ug_perfs,desc="Calculating RB backups"):
-					for popp1 in self.ug_perfs[ug]:
-						for popp2 in self.ug_perfs[ug]:
-							if popp1 == popp2: continue
-							# support popp2 provides to popp1
-							# if popp1 fails, popp2 should be really close to the latency
-							if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
-								backup = 100
-							else:
-								# should multiply this by probability of user using this ingress anyway
-								delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
-								if delta > 50:
-									backup = 1
-								elif delta > 30:
-									backup = 10
-								elif delta > 10:
-									backup = 30
-								elif delta > 5:
-									backup = 50
-								else:
-									backup = 100
-							popp1i = self.popp_to_ind[popp1]
-							popp2i = self.popp_to_ind[popp2]
-							self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup * self.ug_to_vol[ug]
+					self.best_lats_by_ug = ret['lats_by_ug']
 					
 		try:
 			if quick_update:
@@ -392,6 +655,8 @@ class Optimal_Adv_Wrapper:
 
 		self.all_rb_calls_results_popps = {poppi:[] for poppi in range(self.n_popps)}
 		self.all_rb_calls_results_pops = {popi:[] for popi in range(self.n_pops)}
+		self.n_resilience_benefit_popp_calls = {}
+		self.n_latency_benefit_calls = {}
 
 		self.all_lb_calls_results = []
 		if not quick_update:
@@ -411,7 +676,8 @@ class Optimal_Adv_Wrapper:
 		# except AttributeError:
 		# 	# Only needed for worker bees
 		# 	return
-		self.mlbs = np.zeros((self.n_popp, self.n_ug))
+		self.measured_latency_benefits = {}
+		self.best_latency_benefits = {ui: -1 * NO_ROUTE_LATENCY for ui in range(self.n_ug)}
 		total_vol = np.sum(self.whole_deployment_ug_vols)
 		for ug in self.ugs:
 			ugi = self.ug_to_ind[ug]
@@ -421,12 +687,10 @@ class Optimal_Adv_Wrapper:
 				## we multiply by volume fraction so that later we can just calculate the sum and
 				## have that be the correct average benefit
 				weight = self.ug_vols[ugi] / total_vol
-				self.mlbs[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
+				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
+				self.best_latency_benefits[ugi] = np.maximum(self.best_latency_benefits[ugi], self.measured_latency_benefits[popp_i,ugi])
 					
 		# same for each prefix (ease of calculation later)
-		self.best_latency_benefits = np.max(self.mlbs,axis=0)
-		self.measured_latency_benefits = np.tile(np.expand_dims(self.mlbs, axis=1), 
-			(1, self.n_prefixes, 1))
 
 	def l1_norm(self, a):
 		return np.sum(np.abs(a).flatten())
@@ -441,6 +705,7 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_latency_benefit(self, a, **kwargs):
 		### Measures actual latency benefit as if we were to advertise 'a'
+		self.enforce_loaded_rwmw()
 		a_effective = threshold_a(a)
 		
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
@@ -448,6 +713,20 @@ class Optimal_Adv_Wrapper:
 		ugs = kwargs.get('ugs',self.ugs)
 		benefit = self.benefit_from_user_latencies(user_latencies,ugs)
 		return benefit
+
+	def get_ground_truth_latency_benefit_mp(self, advs, dep, **kwargs):
+		### Measures actual latency benefit as if we were to advertise 'a' in batches
+		call_args = []
+		for i,adv in enumerate(advs):
+			call_args.append((threshold_a(adv), dep, i%20==0))
+		lp_rets = self.solve_lp_with_failure_catch_mp(call_args, cache_res=False)
+		all_rets = []
+		ugs = kwargs.get('ugs', self.ugs)
+		for lp_ret in lp_rets:
+			user_latencies = lp_ret['lats_by_ug']
+			benefit = self.benefit_from_user_latencies(user_latencies,ugs)
+			all_rets.append(benefit)
+		return all_rets
 
 	def get_max_painter_benefit(self):
 		max_improve_over_anycast = 0
@@ -470,6 +749,7 @@ class Optimal_Adv_Wrapper:
 		return normalized_best_overall_benefit
 
 	def get_normalized_benefit(self, a, **kwargs):
+		self.enforce_loaded_rwmw()
 		a_effective = threshold_a(a)
 		user_latencies = self.get_ground_truth_user_latencies(a_effective, **kwargs)
 		# print([(ug,user_latencies[self.ug_to_ind[ug]]) for ug in self.ugs])
@@ -483,6 +763,7 @@ class Optimal_Adv_Wrapper:
 	def summarize_user_latencies(self, a):
 		### Summarizes which users are getting good latency and bad latency, peers that would benefit them
 		return
+		self.enforce_loaded_rwmw()
 		user_latencies = self.get_ground_truth_user_latencies(a)
 		cum_by_peer = {}
 		help_ug_by_peer = {}
@@ -510,6 +791,7 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_user_latencies(self, a, mode='lp', **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
+		self.enforce_loaded_rwmw()
 		if mode == 'best':
 			user_latencies, ug_ingress_decisions = self.calculate_user_choice(a, mode=mode,**kwargs)
 			if self.with_capacity:
@@ -560,16 +842,6 @@ class Optimal_Adv_Wrapper:
 		else:
 			raise ValueError("Unknown mode {}".format(mode))
 		
-		if kwargs.get('save_metrics', False):
-			top_ugs = self.get_top_ugs()
-			ug_to_latency = {}
-			for ug in top_ugs:
-				ug_to_latency[ug] = user_latencies[self.ug_to_ind[ug]]
-			try:
-				self.metrics['important_ug_latencies'].append(ug_to_latency)
-			except AttributeError:
-				pass
-		
 		return user_latencies
 
 	def get_top_ugs(self, n=20):
@@ -585,76 +857,64 @@ class Optimal_Adv_Wrapper:
 		these_benefits = user_benefits[these_inds]
 		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
-	def get_ground_truth_resilience_benefit(self, a, **kwargs):
+	def get_ground_truth_resilience_benefit(self, advertisement, **kwargs):
 		#### NOTE -- this calculation does not factor in capacity, since that would take a long time
 
 		benefit = 0
-		tmp = np.ones(a.shape)
-		a = threshold_a(a)
-		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(a, **kwargs)
+		if not self.simulated: ## Too expensive to compute if we're not simulating
+			return benefit 
 
-		# This is a slow operation, so we only compute resilience benefit for the top N ugs
-		# top_ugs = self.get_top_ugs()
-		top_ugs = self.ugs
-		total_vol = np.sum(self.ug_to_vol[ug] for ug in top_ugs)
+		self.enforce_loaded_rwmw()
+
+
+		tmp = np.ones(advertisement.shape)
+		advertisement = threshold_a(advertisement)
+		pre_user_latencies, pre_ug_catchments = self.calculate_user_choice(advertisement, **kwargs)
+
+		total_vol = np.sum(self.ug_to_vol[ug] for ug in self.ugs)
 
 		poppi_to_ui = {}
 		for ui in pre_ug_catchments:
 			for poppi,v in pre_ug_catchments[ui]:
 				try:
-					poppi_to_ui[poppi].append(ui)
+					poppi_to_ui[poppi].append((ui,v))
 				except KeyError:
-					poppi_to_ui[poppi] = [ui]
+					poppi_to_ui[poppi] = [(ui,v)]
 
-
-		ug_failure_latencies = {ug: None for ug in top_ugs}
-
+		popp_changes = np.zeros((self.n_popps))
+		current_res = {}
 		for popp in self.popps:
-			these_uis = poppi_to_ui.get(self.popp_to_ind[popp],[])
-			these_ugs = [self.ugs[ui] for ui in these_uis]
-			these_ugs_int = get_intersection(these_ugs, top_ugs)
-			if len(these_ugs_int) == 0: 
+			these_uis_vols = poppi_to_ui.get(self.popp_to_ind[popp],[])
+			ui_to_vol = {ui:vol for ui,vol in these_uis_vols}
+			these_ugs = [self.ugs[ui] for ui,_ in these_uis_vols]
+			if len(these_ugs) == 0: 
 				continue
 			tmp[self.popp_to_ind[popp],:] = 0
 
 			# user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
 			# 	ugs=these_ugs) #### TAKES FOREVER
-			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(a * tmp),
-				ugs=these_ugs_int, failing=popp, mode='best')
-
-			for ug, ul in zip(these_ugs_int, user_latencies):
-				ug_failure_latencies[ug] = ul
+			user_latencies, ug_catchments = self.calculate_user_choice(copy.copy(advertisement * tmp),
+				ugs=these_ugs, failing=popp, mode='best')
 
 			## benefit is user latency under failure - user latency under no failure
 			# I might want this to be compared to best possible, but oh well
-			these_inds = np.array([self.ug_to_ind[ug] for ug in these_ugs_int])
-			these_vols = self.ug_vols[these_inds]
-			# these_users_resilience = -1 * np.sum((user_latencies - pre_user_latencies[these_inds]) *\
-			# 	these_vols) / total_vol #/ self.n_popps
+			these_vols = np.array([ui_to_vol[ui] * self.ug_vols[ui] for ui,_ in these_uis_vols])
 			these_users_resilience = -1 * np.sum(user_latencies *\
-				these_vols) / total_vol #/ self.n_popps
+				these_vols) / total_vol 
+
+			popp_changes[self.popp_to_ind[popp]] =  -these_users_resilience
+			current_res[popp] = these_users_resilience
+
 			benefit += these_users_resilience
-
-			# other_inds = np.array(get_difference(range(self.n_ug), these_inds))
-			# if len(other_inds) > 0:
-			# 	other_vols = self.ug_vols[other_inds]
-			# 	other_users_resilience = -1 * np.sum(pre_user_latencies[other_inds] *\
-			# 		other_vols) / total_vol
-			# 	benefit += other_users_resilience
-
 			tmp[self.popp_to_ind[popp],:] = 1
-		
-		if kwargs.get('save_metrics', False):
-			try:
-				self.metrics['important_ug_failure_latencies'].append(ug_failure_latencies)
-			except AttributeError:
-				pass
+
 
 		return benefit
 
 	def calculate_user_choice(self, a, mode = 'lp', **kwargs):
 		"""Calculates UG -> popp assuming they act according to decision mode 'mode'."""
 		## returns user latencies (np array) and ug_ingress_decisions maps ugi to [(poppi, vol)]
+		self.enforce_loaded_rwmw()
 		ugs = kwargs.get('ugs', self.ugs)
 		if mode == 'best':
 			# every user visits their best popp
@@ -668,42 +928,48 @@ class Optimal_Adv_Wrapper:
 					if routed_ingress is None:
 						latency = NO_ROUTE_LATENCY
 					else:
-						latency = self.ug_perfs[ug][self.popps[routed_ingress]]
+						latency = self.ug_perfs[ug][routed_ingress]
 					if latency < user_latencies[ugi]: 
-						ug_ingress_decisions[ugi] = [(routed_ingress,1)]
+						ug_ingress_decisions[ugi] = [(self.popp_to_ind[routed_ingress],1)]
 						user_latencies[ugi] = latency
 		elif mode == 'lp':
-			ret = self.solve_lp_with_failure_catch(threshold_a(a), ugs=ugs)
-			if not ret['solved']:
-				## no valid capacity constraining solution, just go with 
-				## each user chooses their best
-				return self.calculate_user_choice(a, mode='best', **kwargs)
+			ret = self.solve_lp_with_failure_catch(threshold_a(a))
+
+			ugs = get_intersection(self.ugs, ugs) ### Might have changed after this call
+
 			user_latencies = ret['lats_by_ug']
 			ug_ingress_decisions_tmp = ret['paths_by_ug']
 
+
 			### Need to update this knowing that some ugs may be fixed !!
 			## for now, just solving for anything and limiting to the ones I want
-			ug_ingress_decisions = {self.ug_to_ind[ug]: ug_ingress_decisions_tmp[self.ug_to_ind[ug]] for ug in ugs}
+			ug_ingress_decisions = {self.ug_to_ind[ug]: ug_ingress_decisions_tmp.get(self.ug_to_ind[ug],[]) for ug in ugs}
 			if len(ugs) != self.n_ug:
 				ug_inds = np.array([self.ug_to_ind[ug] for ug in ugs])
 				user_latencies = user_latencies[ug_inds]
 
 		if kwargs.get('get_ug_catchments', False):
+			try:
+				if np.random.random() > .9:
+					## occasionally recompute these
+					del self.rb_backups
+			except AttributeError:
+				pass
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
 		if kwargs.get('verb'):
 			for ui,poppipcts in ug_ingress_decisions.items():
 				for poppi,pct in poppipcts:
 					self.log("benefit_estimate,{},{},{},{},{}\n".format(
-						self.iter,ui,poppi,pct,self.mlbs[poppi,ui]))
+						self.iter,ui,poppi,pct,self.measured_latency_benefits[poppi,ui]))
 
 		return user_latencies, ug_ingress_decisions
 
 	def log(self,s):
-		self.log_ptr = open(os.path.join(CACHE_DIR, 'main_thread_log-{}.txt'.format(DPSIZE)),'a')
+		self.log_ptr = open(os.path.join(LOG_DIR, 'main_thread_log-{}.txt'.format(self.dpsize)),'a')
 		self.log_ptr.write(s)
 		self.log_ptr.close()
 
-	def update_ug_ingress_decisions(self, ug_catchments):
+	def update_ug_ingress_decisions(self, ug_catchments=None):
 		"""For updating variables that only change with ug catchments."""
 		# pairing popps with popps
 		# popp -> users -> benefit
@@ -711,38 +977,140 @@ class Optimal_Adv_Wrapper:
 		# support (popp1 -> popp2) is sum_over_users( potential backup popp1 can provide to popp2 for that user)
 		# backup is ~ how good that option is compared to user's other options
 		# lots of backup for very good relative option
-		self.ug_catchments = ug_catchments
 
 		poppi_to_ugi = {}
-		for ugi,poppipcts in self.ug_catchments.items():
-			for poppi,pct in poppipcts:
-				try:
-					poppi_to_ugi[poppi].append(ugi)
-				except KeyError:
-					poppi_to_ugi[poppi] = [ugi]
+		if ug_catchments is None:
+			for ug,popps in self.ug_perfs.items():
+				for popp in popps:
+					try:
+						poppi_to_ugi[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
+					except KeyError:
+						poppi_to_ugi[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
+		else:
+			for ugi,poppipcts in ug_catchments.items():
+				for poppi,pct in poppipcts:
+					try:
+						poppi_to_ugi[poppi].append(ugi)
+					except KeyError:
+						poppi_to_ugi[poppi] = [ugi]
+		try:
+			self.rb_backups
+		except AttributeError:
+			### Resilience benefit backup pre-calcs
+			self.rb_backups = {}
+			for ug in tqdm.tqdm(self.ug_perfs,desc="Calculating RB backups"):
+				for popp1 in self.ug_perfs[ug]:
+					for popp2 in self.ug_perfs[ug]:
+						if popp1 == popp2: continue
+						# support popp2 provides to popp1
+						# if popp1 fails, popp2 should be really close to the latency
+						if self.ug_perfs[ug][popp2] < self.ug_perfs[ug][popp1]:
+							backup = 100
+						else:
+							# should multiply this by probability of user using this ingress anyway
+							delta = self.ug_perfs[ug][popp2] - self.ug_perfs[ug][popp1]
+							if delta > 50:
+								backup = 1
+							elif delta > 30:
+								backup = 10
+							elif delta > 10:
+								backup = 30
+							elif delta > 5:
+								backup = 50
+							else:
+								backup = 100
+						popp1i = self.popp_to_ind[popp1]
+						popp2i = self.popp_to_ind[popp2]
+						### proportional to latency difference, UG volume, ability of the backup link to handle the volume
+						self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup * self.ug_to_vol[ug] * self.link_capacities[popp2i]
 
 		self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
 		for popp1i in poppi_to_ugi:
 			for ugi in poppi_to_ugi[popp1i]:
 				for popp2i in range(self.n_popps):
-					self.rb_popp_support[popp1i,popp2i] += np.sum(self.rb_backups[ugi,popp1i,popp2i])
+					self.rb_popp_support[popp1i,popp2i] += self.rb_backups.get((ugi,popp1i,popp2i), 0)
 
-		self.rb_popp_support += .0001
-		self.popp_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T
+		self.rb_popp_support += .01
+		self.popp_backup_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T
+
+	def check_update_calls_to_update_deployment(self, calls_to_update_deployment):
+		if len(calls_to_update_deployment) > 0:
+			for call in calls_to_update_deployment:
+				args = call[1:]
+				getattr(self, call[0])(*args)
+			self.check_update_deployment_upon_modify()
+			self.restart_workers()
+
+	def get_realworld_measure_wrapper(self):
+		if self.simulated: return
+
+		## Useful to bootstrap from past runs, but could lead to false understandings of convergence time
+		if self.dpsize == 'actual_first_prototype':
+			info_prds = ['1712340117-actual_first_prototype-sparse']
+		elif self.dpsize == 'actual_second_prototype':
+			info_prds = []
+			
+		base_save_run_dirs = list([os.path.join(RUN_DIR, prd) for prd in info_prds])
+
+		try:
+			srd = self.save_run_dir
+			prds = [self.save_run_dir]
+		except AttributeError:
+			srd = None
+			prds = [os.path.join(RUN_DIR, '')]
+		prds = base_save_run_dirs + prds
+		try:
+			dep = self.og_deployment
+		except AttributeError:
+			dep = self.output_deployment()
+		from realworld_measure_wrapper import RealWorld_Measure_Wrapper
+		self.rw_measure_wrapper = RealWorld_Measure_Wrapper(srd, dep, past_rundirs=prds)
+
+		### The real world measure wrapper uses real UG information, while this object uses pseudo-UG information
+		### So we need to do the conversion correctly
+		self.og_ugs_to_new_ugs = {}
+		for ug in self.ugs:
+			og_ug = (ug[0], int(ug[1]))
+			try:
+				self.og_ugs_to_new_ugs[og_ug].append(ug)
+			except KeyError:
+				self.og_ugs_to_new_ugs[og_ug] = [ug]
+		routed_through_ingress, actives, calls_to_update_deployment = self.rw_measure_wrapper.reload_info()
+		## Convert to using pseudo-UGs
+		converted_ret_routed_through_ingress = {}
+		for prefix_i,this_routed_through_ingress in routed_through_ingress.items():
+			converted_ret_routed_through_ingress[prefix_i] = {}
+			for ug,popp in this_routed_through_ingress.items():
+				# This might be empty if we're loading state from future iterations where we've already deleted a UG
+				# So we do "get"
+				for pseudo_ug in self.og_ugs_to_new_ugs.get(ug, []): 
+					converted_ret_routed_through_ingress[prefix_i][pseudo_ug] = popp
+		self.check_update_calls_to_update_deployment(calls_to_update_deployment)
+		for prefix_i in actives:
+			actives[prefix_i] = get_intersection(actives[prefix_i], self.popps)
+
+		self.enforce_measured_prefs(converted_ret_routed_through_ingress, actives)
+
+	def check_load_rw_measure_wrapper(self):
+		try:
+			self.rw_measure_wrapper
+		except AttributeError:
+			### Communication with the real-world deployment
+			self.get_realworld_measure_wrapper()
 
 	def calculate_ground_truth_ingress(self, a, **kwargs):
 		### Returns routed_through_ingress: prefix -> ug -> popp_i
 		## and actives prefix -> [active popp indices]
 
+		self.enforce_loaded_rwmw()
 		routed_through_ingress = {} # prefix -> UG -> ingress index
-		actives = {} # prefix -> indices where we adv
+		actives = {} # prefix -> popps where we adv
 		ugs = kwargs.get('ugs', self.whole_deployment_ugs)
-		ug_inds = np.array([self.whole_deployment_ug_to_ind[ug] for ug in ugs])
 		n_ug = len(ugs)
 
 		a = threshold_a(a)
 
-		if SIMULATED:
+		if self.simulated:
 			### Somewhat efficient implementation using matrix logic
 			for prefix_i in range(a.shape[1]):
 				cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
@@ -751,38 +1119,55 @@ class Optimal_Adv_Wrapper:
 					continue
 				except KeyError:
 					pass
-				this_actives = np.where(a[:,prefix_i])[0]
+				this_actives = list([self.popps[poppi] for poppi in np.where(a[:,prefix_i])[0]])
 				actives[prefix_i] = this_actives
 				this_routed_through_ingress = {}
 				if np.sum(a[:,prefix_i]) == 0:
+					## Trivial, no route for everyone
 					routed_through_ingress[prefix_i] = this_routed_through_ingress
-					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+					if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
+						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 					continue
-				active_popp_indicator = np.tile(np.expand_dims(a[:,prefix_i],axis=1), (1,n_ug))
-				active_popp_ug_indicator = self.popp_by_ug_indicator[:,ug_inds] * active_popp_indicator
-				best_available_options = np.argmax(active_popp_ug_indicator,axis=0)
-				for ui, bao in zip(range(n_ug), best_available_options):
-					if active_popp_ug_indicator[bao,ui] == 0: continue # no route
-					this_routed_through_ingress[ugs[ui]] = bao
-				routed_through_ingress[prefix_i] = this_routed_through_ingress
-				if n_ug == self.whole_deployment_n_ug:
+				elif np.sum(a[:,prefix_i]) == 1:
+					## Trivial, one route for users who have that option
+					popp_active = self.popps[np.where(a[:,prefix_i])[0][0]]
+					for ug in ugs:
+						try:
+							self.whole_deployment_ug_perfs[ug][popp_active]
+							this_routed_through_ingress[ug] = popp_active
+						except KeyError:
+							pass
+				else:
+					for ug in ugs:
+						ui = self.whole_deployment_ug_to_ind[ug]
+						try:
+							active_popp_ug_indicator = self.popp_by_ug_indicator[:,ui].multiply(np.expand_dims(a[:,prefix_i],axis=1)).toarray()
+						except:
+							import traceback
+							traceback.print_exc()
+							print(a[:,prefix_i].shape)
+							print(self.popp_by_ug_indicator[:,ui].shape)
+							print(self.n_popp)
+							active_popp_ug_indicator = np.zeros(self.n_popp)
+							for i in range(self.n_popp):
+								try:
+									if a[i,prefix_i]:
+										active_popp_ug_indicator[i] = self.n_popp + 1 - self.ingress_priority_inds[ug][i]
+								except KeyError:
+									pass
+						best_available_option = np.argmax(active_popp_ug_indicator)
+						if active_popp_ug_indicator[best_available_option] == 0: continue # no route
+						this_routed_through_ingress[ug] = self.popps[best_available_option]
+				if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
 					## not a subset of user groups, cache result for general utility
 					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
-
+				routed_through_ingress[prefix_i] = this_routed_through_ingress
 		else:
 			#### ACTUALLY MEASURE THINGS IN THE REAL INTERNET
 			### also would make sense for, at least at first, to have some sort of caching of results so that I
 			### can recover from errors, restart from iterations and given state, etc..
 			## like given algorithm, deployment, current advertisement, iteration, continue optimizing
-			try:
-				self.rw_measure_wrapper
-			except AttributeError:
-				### Communication with the real-world deployment
-				try:
-					past_rundirs = [self.save_run_dir]
-				except AttributeError:
-					past_rundirs = []
-				self.rw_measure_wrapper = RealWorld_Measure_Wrapper(self.save_run_dir, self.output_deployment(), past_rundirs=past_rundirs)
+			
 			cols_to_measure = []
 			for prefix_i in range(a.shape[1]):
 				cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
@@ -791,21 +1176,69 @@ class Optimal_Adv_Wrapper:
 					continue
 				except KeyError:
 					pass
-				this_actives = np.where(a[:,prefix_i])[0]
+				this_actives = list([self.popps[poppi] for poppi in np.where(a[:,prefix_i])[0]])
 				actives[prefix_i] = this_actives
 				this_routed_through_ingress = {}
 				if np.sum(a[:,prefix_i]) == 0:
 					routed_through_ingress[prefix_i] = this_routed_through_ingress
-					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+					if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
+						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress, this_actives)
 					continue
-				cols_to_measure.append((prefix_i,this_actives))
+				elif np.sum(a[:,prefix_i]) == 1:
+					## Trivial, one route for users who have that option
+					popp_active = self.popps[np.where(a[:,prefix_i])[0][0]]
+					for ug in ugs:
+						try:
+							self.whole_deployment_ug_perfs[ug][popp_active]
+							this_routed_through_ingress[ug] = popp_active
+						except KeyError:
+							pass
+					routed_through_ingress[prefix_i] = this_routed_through_ingress
+					continue
+				cols_to_measure.append((prefix_i, this_actives))
+
 			if len(cols_to_measure) > 0:
 				### output is routed_through_ingress (prefix_i -> ug -> poppi)
-				for prefix_i,this_routed_through_ingress in self.rw_measure_wrapper.measure_advs(cols_to_measure).items():
+				ret_routed_through_ingress, calls_to_update_deployment = self.rw_measure_wrapper.measure_advs(cols_to_measure)
+				
+				## Convert to using pseudo-UGs
+				converted_ret_routed_through_ingress = {}
+				for prefix_i,this_routed_through_ingress in ret_routed_through_ingress.items():
+					converted_ret_routed_through_ingress[prefix_i] = {}
+					for ug,popp in this_routed_through_ingress.items():
+						# This might be empty if we're loading state from future iterations where we've already deleted a UG
+						# So we do "get"
+						for pseudo_ug in self.og_ugs_to_new_ugs.get(ug, []): 
+							converted_ret_routed_through_ingress[prefix_i][pseudo_ug] = popp
+
+				ret_routed_through_ingress = converted_ret_routed_through_ingress
+
+				self.check_update_calls_to_update_deployment(calls_to_update_deployment)
+
+				for prefix_i, this_routed_through_ingress in ret_routed_through_ingress.items():
+					## Actives may have changed, recompute
+					actives[prefix_i] = get_intersection(actives[prefix_i], self.popps)
 					routed_through_ingress[prefix_i] = this_routed_through_ingress
-					if n_ug == self.n_ug:
+					if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
 						## not a subset of user groups, cache result for general utility
-						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
+						cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
+						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress, this_actives)
+
+				## Check if we need to set link capacities
+				if self.link_capacities_arr[0] == NON_SIMULATED_LINK_CAPACITY:
+					print("Setting link capacities using anycast measurements")
+					# get the anycast announcement, if this fails then something is wrong since we should always be advertising
+					# anycast on the first iteration
+					anycast_prefix = [prefix_i for prefix_i, this_actives in actives.items() if len(this_actives) == self.n_popps][0]
+					anycast_catchments = routed_through_ingress[anycast_prefix]
+					from deployment_setup import get_link_capacities_actual_deployment
+					deployment = self.output_deployment()
+					deployment['link_capacities'] = get_link_capacities_actual_deployment(deployment, anycast_catchments)
+					self.update_deployment(deployment)
+					try:
+						self.og_deployment['link_capacities'] = deployment['link_capacities']
+					except AttributeError:
+						pass
 
 		return routed_through_ingress, actives
 
@@ -813,7 +1246,7 @@ class Optimal_Adv_Wrapper:
 		### Saves information about which ingresses beat other ingresses for each user
 		### Sends this information to worker bees
 		for ui, ug in enumerate(self.ugs):
-			for prefix_i in range(self.n_prefixes):
+			for prefix_i in routed_through_ingress:
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
 				if routed_ingress is None:
 					# no path, nothing learned
@@ -821,38 +1254,49 @@ class Optimal_Adv_Wrapper:
 				else:
 					# observation indidates for this user group what the winning ingress was, 
 					# and what the active&available ingresses were
-					other_available = get_intersection(actives[prefix_i], self.ingress_priority_inds[ug])
+					other_available = get_intersection(self.ug_perfs[ug], actives[prefix_i])
 					other_available = get_difference(other_available, [routed_ingress])
-					routed_ingress_obj = self.measured_prefs[ui].get(routed_ingress)
+
+					# print(routed_ingress)
+					# print(other_available)
+					routed_ingress_obj = self.measured_prefs[ug].get(routed_ingress)
+
+					# routed_ingress_obj.print()
 					for beaten_ingress in other_available:
-						beaten_ingress_obj = self.measured_prefs[ui].get(beaten_ingress)
+						beaten_ingress_obj = self.measured_prefs[ug].get(beaten_ingress)
+						# beaten_ingress_obj.print()	
 						beaten_ingress_obj.add_parent(routed_ingress_obj)
 						routed_ingress_obj.add_child(beaten_ingress_obj)
-						self.parent_tracker[ui,beaten_ingress,routed_ingress] = True
+						self.parent_tracker[ug,beaten_ingress,routed_ingress] = True
 						try:
-							self.calc_cache.all_caches['parents_on'][ui][beaten_ingress,routed_ingress] = None
+							self.calc_cache.all_caches['parents_on'][ug][beaten_ingress,routed_ingress] = None
 						except KeyError:
-							self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
+							self.calc_cache.all_caches['parents_on'][ug] = {(beaten_ingress,routed_ingress): None}
 		self.update_parent_tracker_workers()
 	
 	def update_parent_tracker_workers(self):	
 		## Update workers about new parent tracker information
-		for worker, worker_socket in self.worker_manager.worker_sockets.items():
+		try:
+			self.worker_manager
+		except AttributeError:
+			return # no workers to update
+		msgs = {}
+		for worker in self.worker_manager.worker_sockets:
 			this_deployment_ugs = self.worker_manager.worker_to_deployments[worker]['ugs']
-			uis_of_interest = list([self.ug_to_ind[ug] for ug in this_deployment_ugs])
 			sub_cache = {}
-			for worker_ui, global_ui in enumerate(uis_of_interest):
+			for this_deployment_ug in this_deployment_ugs:
 				try:
-					sub_cache[worker_ui] = self.calc_cache.all_caches['parents_on'][global_ui] 
+					sub_cache[this_deployment_ug] = self.calc_cache.all_caches['parents_on'][this_deployment_ug] 
 				except KeyError:
 					pass
-			msg = pickle.dumps(('update_parent_tracker', sub_cache))
-			worker_socket.send(msg)
-			worker_socket.recv()
+			msgs[worker] = pickle.dumps(('update_parent_tracker', sub_cache))
+		self.worker_manager.send_messages_workers(msgs)
 
 	def measure_ingresses(self, a):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
 		### i.e., this is an actual advertisement measurement, we should aim to limit these :)
+		self.enforce_loaded_rwmw()
+
 		try:
 			self.measured
 		except AttributeError:
@@ -867,7 +1311,7 @@ class Optimal_Adv_Wrapper:
 		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
-		self.calculate_user_choice(a,get_ug_catchments=True)
+		self.calculate_user_choice(a, get_ug_catchments=True)
 
 		a = threshold_a(a)
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a,verb=True)
@@ -879,6 +1323,8 @@ class Optimal_Adv_Wrapper:
 		overall_best = 0
 		overall_worst = 0
 		overall_average = 0
+
+		self.enforce_loaded_rwmw()
 
 		if ugs is None:
 			ugs = list(self.ug_to_vol)
@@ -913,7 +1359,9 @@ class Optimal_Adv_Wrapper:
 
 	def actual_nonconvex_objective(self, a, **kwargs):
 		# Don't approximate the L0 norm with anything
-		# Use actual latencies as if we were to really measure all the paths		
+		# Use actual latencies as if we were to really measure all the paths
+
+		self.enforce_loaded_rwmw()		
 
 		c_peering = 1
 		has_peering = (np.sum(a,axis=1) > 0).astype(np.int32)
@@ -935,6 +1383,7 @@ class Optimal_Adv_Wrapper:
 		## Approximate L0 norm with whatever approximation we're using
 		## Use actual latencies as if we were to really measure all the paths		
 		## (Here we actually execute the advertisement)
+		self.enforce_loaded_rwmw()
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
 		if self.gamma > 0 and kwargs.get('use_resilience', True):
@@ -954,5 +1403,21 @@ class Optimal_Adv_Wrapper:
 				round(resilience_benefit,2),round(benefit,2), round(obj,2)))
 		
 		return obj
+
+	def set_save_run_dir(self, **kwargs):
+		if kwargs.get('save_run_dir', None) is None:
+			## initialize save dir
+			t_start = int(time.time())
+			self.save_run_dir = os.path.join(RUN_DIR, '{}-{}-sparse'.format(t_start, self.dpsize))
+			if not os.path.exists(self.save_run_dir):
+				call("mkdir {}".format(self.save_run_dir), shell=True)
+			if not self.simulated:
+				self.get_realworld_measure_wrapper()
+		else:
+			if RUN_DIR not in kwargs.get('save_run_dir'):
+				self.save_run_dir = os.path.join(RUN_DIR, kwargs.get('save_run_dir'))
+			else:
+				self.save_run_dir = kwargs.get('save_run_dir')
+		self.optimal_under_failure_cache_fn = os.path.join(self.save_run_dir, 'optimal_solution_under_failure.pkl')
 
 

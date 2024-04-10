@@ -1,12 +1,12 @@
 import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, zmq, copy
 from bisect import bisect_left
+from constants import *
 
 try:
 	import geopy.distance
 	import geoip2.database
 	from azure.kusto.data import KustoClient, KustoConnectionStringBuilder
 	from azure.kusto.data.helpers import dataframe_from_result_table
-	from constants import *
 except:
 	pass
 
@@ -18,13 +18,24 @@ def pref_to_ip(pref):
 	return ".".join(pref.split(".")[0:3]) + ".1"
 
 def deployment_to_prefixes(deployment):
-	n_prefixes = np.maximum(4,4 * int(np.log2(len(deployment['popps']))))
+	if deployment['dpsize'] == 'small':
+		return 6
+	if deployment['dpsize'] in ACTUAL_DEPLOYMENT_SIZES:
+		return 6
+
+	n_prefixes = np.maximum(4,2 * int(np.log2(len(deployment['popps']))))
 	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
-	return 2 * n_prefixes
+	n_prefixes = 3*n_prefixes
+	n_prefixes = np.maximum(int(len(deployment['popps'])/10), n_prefixes)
+
+	return n_prefixes
 
 def parse_lat(lat_str):
 	lat = float(lat_str) * 1000
-	lat = np.maximum(MIN_LATENCY, np.minimum(MAX_LATENCY, lat))
+	if lat < MIN_LATENCY:
+		lat = MIN_LATENCY
+	elif lat > MAX_LATENCY:
+		lat = MAX_LATENCY
 	return lat
 
 def ip32_to_24(ip):
@@ -39,12 +50,21 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 
 	deployments = []
 	for ug_chunk in ug_chunks:
-		deployments.append({
-			'ugs': ug_chunk,
-			'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
-			'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
-			'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
-		})
+		try:
+			deployments.append({
+				# simulated
+				'ugs': ug_chunk,
+				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
+				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
+				'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
+			})
+		except KeyError:
+			# not simulated
+			deployments.append({
+				'ugs': ug_chunk,
+				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
+				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
+			})
 		for k in get_difference(deployment, deployments[-1]):
 			deployments[-1][k] = copy.deepcopy(deployment[k])
 
@@ -58,7 +78,7 @@ class Ing_Obj:
 		self.alive = True
 
 	def is_leaf(self):
-		return len(self.children) == []
+		return len(self.children) == 0
 
 	def add_parent(self, parent):
 		self.parents[parent.id] = parent

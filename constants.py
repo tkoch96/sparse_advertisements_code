@@ -4,6 +4,7 @@ GRAPH_DIR = "graphs"
 FIG_DIR = 'figures'
 RUN_DIR = 'runs'
 KM_TO_MS = .01
+LOG_DIR = 'logs'
 cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','darkseagreen','palegoldenrod',
 	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
 	'lightsteelblue']
@@ -14,56 +15,83 @@ GRAD_CLIP_VAL = 10
 
 LBX_DENSITY = 50
 
-BASE_SOCKET = 31415
-
-# simulating routing preferences or not
-SIMULATED = True
-
 ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
-# DPSIZE = 'actual'
-# DPSIZE = 'actual-large'
-# DPSIZE = 'small'	
-# DPSIZE = 'really_friggin_small'
-DPSIZE = 'actual_first_prototype'
-PRINT_FREQUENCY = {
-	'really_friggin_small': 20,
-	'actual-large': 15,
-	'actual': 30,
-	'actual_first_prototype': 10,
-	'small': 10,
-	'decent': 1,
-	'med': 1,
-	'large': 1
-}[DPSIZE]
 
-# ## The point of the actual first prototype is to not simulate shit
-# if DPSIZE == 'actual_first_prototype':
-# 	assert not SIMULATED
+
+UGS_OF_INTEREST = []
+
+
+
+## to identify when we're looking at an actual deployment
+ACTUAL_DEPLOYMENT_SIZES = ["actual_first_prototype", "actual_second_prototype"]
+DEBUG_CLIENT_INFO_ADDING = False
+
+
+CONSIDERING_POPS_ACTUAL_DEPLOYMENT = {
+	"actual_first_prototype": ['vtrnewyork', 'vtratlanta', 'vtrmiami'],
+	"actual_second_prototype": ['vtrnewyork', 'vtratlanta', 'vtrmiami', 'vtrparis', 'vtrlondon'],
+}
+
+NON_SIMULATED_LINK_CAPACITY = 100000
 
 N_POPS_ACTUAL_DEPLOYMENT = 10
 
-if DPSIZE == "really_friggin_small":
-	MIN_LATENCY = 1
-	MAX_LATENCY = 20
-else:
-	MIN_LATENCY = 1
-	MAX_LATENCY = 300
+MIN_LATENCY = 1
+MAX_LATENCY = 300
 NO_ROUTE_LATENCY = 1.5*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
-N_WORKERS = {
-	'really_friggin_small': 1,
-	'actual': 12,
-	'actual-large': 1,
-	'actual_first_prototype': 4,
-	'small': 4,
-	'decent': 8,
-	'med': 1,
-}.get(DPSIZE, 8)
+import re
+def n_pops_from_dpsize(deployment_size):
+	if deployment_size in ACTUAL_DEPLOYMENT_SIZES:
+		return len(CONSIDERING_POPS_ACTUAL_DEPLOYMENT[deployment_size])
+	elif 'actual' in deployment_size:
+		return int(re.search('actual\-(.+)',deployment_size).group(1))
+	elif deployment_size == 'small':
+		return 2
+
+def PRINT_FREQUENCY(dpsize):
+	### How often we make plots, often slow to create
+	if dpsize in ACTUAL_DEPLOYMENT_SIZES:
+		return 2
+	dpsize = n_pops_from_dpsize(dpsize)
+	if dpsize <= 5:
+		return 50
+	elif dpsize <= 15:
+		return 30
+	else:
+		return 15
+
+def get_n_workers(deployment_size):
+	return 24
+	n_workers = {
+		'really_friggin_small': 1,
+		'actual': 4,
+		'actual-small': 4,
+		'actual-large': 28,
+		'actual_first_prototype': 2,
+		'actual_second_prototype': 2,
+		'small': 2,
+		'decent': 8,
+		'med': 1,
+	}.get(deployment_size)
+	if n_workers is None:
+		n_pops = n_pops_from_dpsize(deployment_size)
+		if n_pops < 5:
+			n_workers = 4
+		elif n_pops < 15:
+			n_workers = 8
+		elif n_pops < 20:
+			n_workers = 16
+		else:
+			n_workers = 24
+
+	return n_workers
+
 RESILIENCE_DIFFICULTY = 'hard'
 
 
@@ -78,32 +106,37 @@ POP_TO_LOC = {
 	'peering':{
 		'amsterdam01': (52.359,4.933),
 	}, 'vultr': {
-		'amsterdam': (52.359,4.933),
-		'atlanta': (33.749, -84.388),
-		'bangalore': (12.940, 77.782),
-		'chicago': (41.803,-87.710),
-		'dallas': (32.831,-96.641),
-		'delhi': (28.674,77.099),
-		'frankfurt': (50.074, 8.643),
-		'johannesburg': (-26.181, 27.993),
-		'london' : (51.452,-.110),
-		'losangelas': (34.165,-118.489),
-		'madrid': (40.396,-3.678),
-		'melbourne': (-37.858, 145.028),
-		'mexico': (19.388, -99.138),
-		'miami' : (25.786, -80.229),
-		'mumbai' : (19.101, 72.869),
-		'newyork': (40.802,-73.970),
-		'paris': (48.836,2.308),
-		'saopaulo' : (-23.561, -46.532),
-		'seattle': (47.577, -122.373),
-		'seoul': (37.683,126.942),
-		'silicon': (37.312,-121.816),
-		'singapore': (1.322,103.962),
-		'stockholm': (59.365,17.943),
-		'sydney': (-33.858,151.068),
-		'tokyo': (35.650,139.619),
-		'toronto': (43.679, -79.305),
-		'warsaw': (52.248,21.027),
+		'vtramsterdam': (52.359,4.933),
+		'vtratlanta': (33.749, -84.388),
+		'vtrbangalore': (12.940, 77.782),
+		'vtrchicago': (41.803,-87.710),
+		'vtrdallas': (32.831,-96.641),
+		'vtrdelhi': (28.674,77.099),
+		'vtrfrankfurt': (50.074, 8.643),
+		'vtrhonolulu': (21.354, -157.854),
+		'vtrjohannesburg': (-26.181, 27.993),
+		'vtrlondon' : (51.452,-.110),
+		'vtrlosangelas': (34.165,-118.489),
+		'vtrmadrid': (40.396,-3.678),
+	 	'vtrmanchester': (53.48,-2.265),
+		'vtrmelbourne': (-37.858, 145.028),
+		'vtrmexico': (19.388, -99.138),
+		'vtrmiami' : (25.786, -80.229),
+		'vtrmumbai' : (19.101, 72.869),
+		'vtrnewyork': (40.802,-73.970),
+	 	'vtrosaka': (34.677,135.48),
+	 	'vtrsantiago': (-33.487, -70.683),
+		'vtrparis': (48.836,2.308),
+		'vtrsaopaulo' : (-23.561, -46.532),
+		'vtrseattle': (47.577, -122.373),
+		'vtrseoul': (37.683,126.942),
+		'vtrsilicon': (37.312,-121.816),
+		'vtrsingapore': (1.322,103.962),
+		'vtrstockholm': (59.365,17.943),
+		'vtrsydney': (-33.858,151.068),
+	 	'vtrtelaviv': (32.086,34.782),
+		'vtrtokyo': (35.650,139.619),
+		'vtrtoronto': (43.679, -79.305),
+		'vtrwarsaw': (52.248,21.027),
 	},
 }

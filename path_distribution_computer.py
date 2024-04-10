@@ -5,9 +5,10 @@ import random
 random.seed(31415)
 from constants import *
 from helpers import *
+from test_polyphase import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
-from test_polyphase import rescale_pdf
 
+from scipy.sparse import lil_matrix, csr_matrix
 
 remeasure_a = None
 try:
@@ -19,8 +20,16 @@ USER_OF_INTEREST = None
 
 # dont make this too big or you'll break the VM
 # 2000 for lots of workers / smaller VMs. 15000 for fewer workers / large VMs
-MAX_CACHE_SIZE = 5000
+MAX_CACHE_SIZE = 8000
 
+PROB_TOLERANCE = .05 ## if probabilities differ by more than this much, we have to recalculate things
+
+def get_a_cache_rep(a):
+	tups = []
+	a = threshold_a(a)
+	for x,y in zip(*np.where(a)):
+		tups.append((x,y))
+	return tuple(sorted(tups))
 
 #### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
 @nb.njit(fastmath=True,parallel=True)
@@ -28,20 +37,27 @@ def large_logical_and(arr1,arr2):
 	return np.logical_and(arr1,arr2)
 
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
-	def __init__(self, worker_i):
+	def __init__(self, worker_i, base_port, **kwargs):
 		self.worker_i = worker_i
+		self.port = base_port
+		self.logging_iter = 0
+		self.with_capacity = kwargs.get('with_capacity', False)
+		self.pdf_sum_function = sum_pdf_fixed_point
 
 
+		if kwargs.get('debug', False):
+			self.n_prefixes = None
+			return
 		args, kwargs = self.start_connection()
 		super().__init__(*args, **kwargs)
 
-		self.with_capacity = kwargs.get('with_capacity', False)
-		with open(os.path.join(CACHE_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, DPSIZE)),'w') as f:
+		with open(os.path.join(LOG_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, self.dpsize)),'w') as f:
 			pass
 		self.init_all_vars()
 		self.run()
 		print('started in worker {}'.format(self.worker_i))
-	
+
+
 	def init_all_vars(self):
 		self.calculate_user_latency_by_peer()
 
@@ -51,7 +67,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
 
-		min_lbx = -1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume
+		min_lbx = np.maximum(-1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
 		max_lbx = 0
 
 		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
@@ -59,7 +75,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for i in range(self.n_ug):
 			self.big_lbx[:,i] = copy.copy(self.lbx)
 		self.lb_range_trackers = {ui: [min_lbx,max_lbx] for ui in range(self.n_ug)}
-		self.lb_range_alpha = .005
+		self.lb_range_alpha = .005 ## EWMA for update LB range definitions
 
 		self.stop = False
 		self.calc_cache = Calc_Cache()
@@ -73,7 +89,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		context = zmq.Context()
 		self.main_socket = context.socket(zmq.REP)
 		self.main_socket.setsockopt(zmq.RCVTIMEO, 1000)
-		self.main_socket.bind('tcp://*:{}'.format(BASE_SOCKET+self.worker_i))
+		self.main_socket.bind('tcp://*:{}'.format(self.worker_i+self.port))
 		while True:
 			try:
 				init_msg = self.main_socket.recv()
@@ -89,80 +105,104 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter += 1
 
 	def get_limited_cap_latency_multiplier(self):
-		LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
-		power = 1.03
+		LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
+		power = 1.02
 		# LIMITED_CAP_LATENCY_MULTIPLIER = 5
 		# power = 1.05
 		# return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
-		return np.minimum(2, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
+		return np.minimum(1.5, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
 
 	def clear_caches(self):
 		self.this_time_ip_cache = {}
 		self.calc_cache.clear_all_caches()
 
-	def get_ingress_probabilities_by_a_matmul(self, a, verb=False, **kwargs):
+	def get_ingress_probabilities_by_dict(self, a, verb=False, **kwargs):
+		## Uses dictionaries to do the job
 		# if tuple(a.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
 		# 	verb = True
 		# 	print("\n\nREMEASURING\n\n")
 		a_log = threshold_a(a).astype(bool)
 
-		self.ingress_probabilities[:,:,:] = 0
-		for pref_i in range(self.n_prefixes):
+
+		sum_a = np.sum(a,axis=0)
+
+		timers = {
+			'cache_hits': 0,
+			'cache_lookups': 0,
+			'api': 0,
+			'dpi': 0,
+			'apugi': 0,
+			'vpugi': 0,
+			'sort_calc': 0,
+			'final_calc': 0,
+			'total': 0,
+		}
+
+		self.ingress_probabilities = {ui:{} for ui in range(self.n_ug)}
+		for pref_i in np.where(sum_a)[0]:
+			ts_loop = time.time()
 			tloga = tuple(a_log[:,pref_i].flatten())
 			##### WARNING -- if number of UGs and number of popps is the same, there could be ambiguity with the broadcasting
 			##### but the likelihood of that event is pretty small
 			if np.sum(a[:,pref_i]) == 0:
 				continue
 			try:
-				self.ingress_probabilities[:,pref_i,:] = self.calc_cache.all_caches['ing_prob'][tloga]
+				for (poppi,ui), prob in self.this_time_ip_cache[tloga].items():
+					# will need a more complicated caching mechanism if ever non-uniform
+					self.ingress_probabilities[ui][poppi,pref_i] = 1.0/prob 
+				timers['cache_hits'] += 1
+				timers['cache_lookups'] += time.time() - ts_loop
 				continue
 			except KeyError:
-				try:
-					for (i,k), prob in self.this_time_ip_cache[tloga].items():
-						# will need a more complicated caching mechanism if ever non-uniform
-						self.ingress_probabilities[i,pref_i,k] = 1.0/prob 
-					continue
-				except KeyError:
-					pass
-			these_active_popps = np.expand_dims(a_log[:,pref_i],axis=1)
-			# a[:,pref_i] is active popps
-			### This step takes the longest by far, but I can't figure out how to speed it up
-			### perhaps when popp gets large, it makes more sense to store a sparse representation of parent_tracker
-			active_parent_indicator = np.logical_and(a_log[:,pref_i], self.parent_tracker)
-			# holds ug,popps to delete since they get beaten
-			delete_popp_ug_indicator = np.logical_and(these_active_popps, np.any(active_parent_indicator, axis=2).T)
-			# UG has route and popp active
-			active_popp_ug_indicator = np.logical_and(self.popp_by_ug_indicator_no_rank, these_active_popps)
-			# remove popp,ug's that would get beaten #1,0->1 1,1->0,0,1->0,0,0->0
-			valid_popp_ug_indicator = np.logical_and(active_popp_ug_indicator,np.logical_not(delete_popp_ug_indicator))
-			# now sort based on likelihood
-			sortf_arr = {ug:[] for ug in self.ugs}
-			for poppi,ugi in zip(*np.where(valid_popp_ug_indicator)):
-				ug = self.ugs[ugi]
-				popp = self.popps[poppi]
-				try:
-					d = self.calc_cache.all_caches['distance'][poppi,ug]
-				except KeyError:
-					ingress = self.popps[poppi]
-					d = int(geopy.distance.geodesic(self.pop_to_loc[popp[0]], 
-						self.metro_loc[ug[0]]).km)
-					self.calc_cache.all_caches['distance'][poppi,ug] = d
-				sortf_arr[ug].append((poppi,d))
-			### Cache the entries that have non-zero probability
-			self.this_time_ip_cache[tloga] = {}
-			for ug,ds in sortf_arr.items():
-				if len(ds) == 0:
-					continue
+				pass
+
+			## i.e, for each user and for each popp. compute whether a parent of that popp is currently active
+			active_parent_indicator = {}
+			poppis_active = {poppi:None for poppi in np.where(a_log[:,pref_i])[0]}
+			for ug,child,parent in self.parent_tracker: ### we should modify parent tracker to map parent to children
 				ui = self.ug_to_ind[ug]
-				most_likely_peers = sorted(ds,key=lambda el : el[1])
-				### TODO -- possibly introduce actual likelihoods here
-				nmlp = len(most_likely_peers)
-				for mlp,_ in most_likely_peers:
-					self.ingress_probabilities[mlp,pref_i,ui] = 1 / nmlp
+				parenti = self.popp_to_ind[parent]
+				childi = self.popp_to_ind[child]
+				try:
+					poppis_active[parenti]
+					active_parent_indicator[ui,childi] = 1
+				except KeyError:
+					continue
+			timers['api'] += time.time() - ts_loop; ts_loop=time.time()
+
+			## For active poppi in active_poppis, for user in poppi to users, if not parent active for poppi -> tabulate
+
+			## Group by user
+			self.this_time_ip_cache[tloga] = {}
+			cacheref = self.this_time_ip_cache[tloga]
+			for ui in range(self.n_ug):
+				these_poppis = []
+				ref = self.ui_to_poppi[ui]
+				for poppi in poppis_active:
+					try:
+						ref[poppi]
+					except KeyError:
+						continue ### user doesn't have this popp
+					try:
+						active_parent_indicator[ui,poppi] ### We have an active parent, ignore
+						continue
+					except KeyError:
+						these_poppis.append(poppi)
+
+				if len(these_poppis) == 0:
+					continue
+				npoppis = len(these_poppis)
+				likelihood = 1.0 / npoppis
+				for poppi in these_poppis:
+					self.ingress_probabilities[ui][poppi,pref_i] = likelihood
 					### Cache the entries that have non-zero probability
-					self.this_time_ip_cache[tloga][mlp,ui] = nmlp
-			### This simple caching mechanism requires too much memory
-			# self.calc_cache.all_caches['ing_prob'][tuple(a_log[:,pref_i].flatten())] = copy.copy(self.ingress_probabilities[:,pref_i,:])
+					cacheref[poppi,ui] = npoppis
+			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
+
+		# if np.random.random() > 0 and self.worker_i == 0:
+		# 	print('\n')
+		# 	for k,v in timers.items():
+		# 		print("{} -- {} s".format(k,round(v,5)))
 
 	def init_user_px_cache(self):
 		self.user_px = np.zeros((len(self.lbx), self.n_ug))
@@ -216,16 +256,34 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if not verb:
 			## don't rely on caching if we want to log / print statistics
 			try:
-				ret = self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())]
+				cache_rep = get_a_cache_rep(a_effective)
+				benefit, (xsumx_cache_rep, psumx_cache_rep) = self.calc_cache.all_caches['lb'][cache_rep]
+				xsumx = np.linspace(xsumx_cache_rep[0], xsumx_cache_rep[1], num=LBX_DENSITY)
+				psumx = np.zeros(LBX_DENSITY)
+				for i,d in psumx_cache_rep.items():
+					psumx[i] = d
+				ret = (benefit, (xsumx,psumx))
+
 				return ret
 			except KeyError:
 				pass
+		# else:
+		# 	pickle.dump(self.calc_cache.all_caches['lb'], open("worker_{}_cache.pkl".format(self.worker_i), 'wb'))
+
+		super_verbose=False
+		# if os.path.exists('interesting_cache_rep_{}.pkl'.format(self.worker_i)):
+		# 	cache_rep = pickle.load(open('interesting_cache_rep_{}.pkl'.format(self.worker_i),'rb'))
+
+		# 	if get_a_cache_rep(a_effective) == cache_rep:
+		# 		super_verbose=True
+
 
 		USER_OF_INTEREST = None #### UI is respect to the whole deployment
 		WORKER_OF_INTEREST = None
 
 
 		timers = {
+			'cache_lookup': 0,
 			'capacity_1': 0,
 			'capacity_2': 0,
 			'capacity_3': 0,
@@ -237,11 +295,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		}
 
 		## Dims are path, prefix, user
-		self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
+		# self.get_ingress_probabilities_by_a_matmul(a_effective, **kwargs)
+		self.get_ingress_probabilities_by_dict(a_effective, **kwargs)
 		p_mat = self.ingress_probabilities
-		p_mat = p_mat / (np.sum(p_mat,axis=0) + 1e-8)
 		benefits = self.measured_latency_benefits
 		lbx = self.lbx
+
+		if super_verbose:
+			print("Entering super verbose")
+			print(p_mat.get(USER_OF_INTEREST))
 
 		timers['probs'] = time.time()
 
@@ -270,8 +332,22 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# loop over users for which something is different
 		ug_inds_to_loop = {}
 		if self.user_ip_cache['init_ip'] is not None:
-			for _,_,ui in zip(*np.where(self.user_ip_cache['init_ip'] != p_mat)):
-				ug_inds_to_loop[ui] = None
+			for ui in range(self.n_ug):
+				refa = self.user_ip_cache['init_ip'][ui]
+				refb = p_mat[ui]
+				
+				for k in set(refa).union(set(refb)):
+					if np.abs(refa.get(k,0) - refb.get(k,0)) > PROB_TOLERANCE:
+						# print(ui)
+						# print(get_difference(refa,refb))
+						# print(get_difference(refb,refa))
+						# print(k)
+						# print(refa.get(k,0))
+						# print(refb.get(k,0))
+						# if np.random.random() > .99:exit(0)
+
+						ug_inds_to_loop[ui] = None
+						break
 			ug_inds_to_loop = np.array(sorted(list(ug_inds_to_loop)))
 			self.user_px = copy.copy(self.user_ip_cache['default_px'])
 			self.big_lbx = copy.copy(self.user_ip_cache['big_lbx'])
@@ -289,6 +365,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				for poppi,_ in zip(*np.where(tmp != self.ingress_px)):
 					changed_popps[poppi] = None
 
+		timers['cache_lookup'] = time.time()
+
+		if super_verbose:
+			print("Computing for user super verbose: {}".format(USER_OF_INTEREST in ug_inds_to_loop))
+
 
 		if self.with_capacity:
 			## holds P(ingress) for each user
@@ -297,9 +378,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			all_pref_inds = np.arange(self.n_prefixes)
 			recalc_popps = {} # tracks popps with new p link failure probability
 			for ui in ug_inds_to_loop:
-				all_pv_i = np.where(p_mat[:,:,ui])
+				all_pv_i = p_mat[ui]
 				# Holds prefix j, ingress poppi, benefit and probability
-				all_pv = [(prefj,benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui],poppi) for poppi,prefj in zip(*all_pv_i)]
+				all_pv = [(prefj,benefits[poppi,ui],all_pv_i[poppi,prefj],poppi) for poppi,prefj in all_pv_i]
 				if len(all_pv) == 0:
 					# this user has no paths
 					continue
@@ -372,7 +453,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# ~or~ pretend every link is 1/n_workers capacity and shuffle users
 				# ~or~ group all users with similar reachabilities in the same worker
 				old_p = self.p_link_fails[ingress_i]
-				if old_p != new_p:
+				if np.abs(old_p - new_p) > PROB_TOLERANCE:
 					recalc_popps[ingress_i] = None
 				self.p_link_fails[ingress_i] = new_p
 				self.link_failure_severities[ingress_i] = severity / self.link_capacities[ingress_i]
@@ -458,11 +539,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for ui in ug_inds_to_loop:
 
 			min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
-			all_pv_i = np.where(p_mat[:,:,ui])
+			all_pv_i = p_mat[ui]
 			## combine benefit with bernoulli link failure
-			all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
+			all_pv = [(prefj, benefits[poppi,ui], all_pv_i[poppi,prefj], self.p_link_fails[poppi], 
 				self.link_failure_severities[poppi]) \
-				for poppi,prefj in zip(*all_pv_i)]
+				for poppi,prefj in all_pv_i]
 			# if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
 			# 	self.print("PV : {}".format(all_pv))
 
@@ -485,9 +566,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					lbx_i = self.big_lbx.shape[0] - 1 
 				else:
 					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-				# if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
-				# 	self.print("LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
-				# 		self.big_lbx[-1,ui]))
+				if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
+					self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
+						self.big_lbx[-1,ui]))
 
 				self.user_px[lbx_i, ui] += p * (1 -  plf)
 				if plf > 0:
@@ -545,7 +626,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						lbx_i = self.big_lbx.shape[0] - 1 
 					else:
 						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-					if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
+					if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
 						self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
 							self.big_lbx[-1,ui]))
 
@@ -570,9 +651,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						
 						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
 
-
-
-
 			# static assignment to best possible
 			max_experienced_benefit = self.best_latency_benefits[ui] 	
 			# lower bound it a little more
@@ -588,9 +666,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				np.abs(self.lb_range_trackers[ui][1] - self.big_lbx[-1,ui]) > .01:
 				ug_benefit_updates.append(ui)
 
-			# if self.worker_i == WORKER_OF_INTEREST and ui == 3:
-			# 	print(all_pv)
-			# 	print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
+			if self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST and (super_verbose or verb):
+				print(self.lb_range_trackers[ui])
+				print(all_pv)
+				print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
 
 		
 		for ui in ug_inds_to_loop:
@@ -599,9 +678,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# no benefit means no path, so it's actually just the most 
 				# negative benefit we can give
 				self.user_px[0,ui] = 1
+				if verb or super_verbose:
+					log_str = "no_path_warning,{}\n".format(ui)
+					self.log(log_str)
 		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
 
-		if verb:
+		if verb or super_verbose:
 			total_b = 0
 			prnts = []
 			for bi,ui in zip(*np.where(self.user_px)):
@@ -609,26 +691,26 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				if p > .001:
 					prnts.append((ui,bi,self.big_lbx[bi,ui],p))
 					total_b += p*self.big_lbx[bi,ui]
-			if kwargs.get('failing_popp') is None:
+			if kwargs.get('failing_popp') is None or super_verbose:
 				for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
 					# get likely popps
 					likely_popps = np.where(self.ingress_px[:,ui]>.01)[0]
-					likely_popps_str = "-".join([str(el) for el in likely_popps])
+					likely_popps_str = ""
+					likely_popps_str = "-".join(["{} ({} ms)".format(poppi,round(self.ug_perfs[self.ugs[ui]][self.popps[poppi]],2)) for poppi in likely_popps])
 					ug = self.ugs[ui]
 					ui_global = self.whole_deployment_ug_to_ind[ug]
-					log_str = "benefit_estimate,{},{},{},{},{},{}\n".format(
-						self.iter,ui_global,bi,lb,round(p,2),likely_popps_str)
-					if verb and self.worker_i == WORKER_OF_INTEREST and ui_global == USER_OF_INTEREST:
-						all_pv = [(prefj, benefits[poppi,prefj,ui],p_mat[poppi,prefj,ui], self.p_link_fails[poppi], 
-							self.link_failure_severities[poppi]) \
-							for poppi,prefj in zip(*np.where(p_mat[:,:,ui]))]
-						self.print("PV : {}".format(sorted(all_pv, key=lambda el : -1 * el[1])))
+					log_str = "benefit_estimate,{},{},{},{},{},{},{}\n".format(
+						self.iter,ui_global,bi,lb,round(p,2),likely_popps_str,self.logging_iter)
+					if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui_global == USER_OF_INTEREST:
+						self.print("PV : {}".format(p_mat[ui]))
 						self.print(log_str)
 					self.log(log_str)
+				self.logging_iter += 1
 			# print("Total : {}".format(total_b))
 
 		## save calc cache for later if its not set
 		if self.user_ip_cache['init_ip'] is None:
+			# print("Setting cache variables")
 			self.user_ip_cache['init_ip'] = p_mat
 			self.user_ip_cache['default_px'] = copy.copy(self.user_px)
 			self.user_ip_cache['big_lbx'] = copy.copy(self.big_lbx)
@@ -645,12 +727,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
 		xsumx, psumx = self.pdf_sum_function(self.big_lbx, px)
-		benefit = np.sum(xsumx.flatten() * psumx.flatten())
+		xsumx = xsumx.flatten(); psumx = psumx.flatten()
+		benefit = np.sum(xsumx * psumx)
 
+		## Update the big LBX object
 		for ui in ug_benefit_updates:
-			# if self.worker_i == WORKER_OF_INTEREST and ui in [1,2,3,4,5]:
-				# self.print("Updating UG {} to be min {} max {}, was {} -> {}".format(ui,round(self.lb_range_trackers[ui][0],3),
-				# 	round(self.lb_range_trackers[ui][1],3), round(self.big_lbx[0,ui],3),round(self.big_lbx[-1,ui],3)))
 			self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
 				num=LBX_DENSITY)
 
@@ -664,22 +745,64 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.big_lbx = self.big_lbx * benefit_renorm
 
 		timers['convolution'] = time.time()
-		# if np.random.random() > .9:
-		# 	t_order = ['start','probs','capacity_1','capacity_2',
+		# if np.random.random() > 0:
+		# 	t_order = ['start','probs','cache_lookup','capacity_1','capacity_2',
 		# 		'capacity_3','capacity_4','benefit','convolution']
 		# 	t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
 		# 	time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],
 		# 		int(t_deltas[i]*1000)) for i in range(len(t_order)-1))
 		# 	print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
-		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),2))
+		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),3))
 		# 	print(time_str)
+		# 	print("{} seconds total".format(round(time.time() - timers['start'], 3)))
+		# 	print('\n')
 
-		self.calc_cache.all_caches['lb'][tuple(a_effective.flatten())] = (benefit, (xsumx.flatten(),psumx.flatten()))
+
+		### Store compressed versions of these variables
+		cache_rep = get_a_cache_rep(a_effective)
+		xsumx_cache_rep = (xsumx[0], xsumx[-1])
+		psumx_cache_rep = {}
+		for i in np.where(psumx)[0]:
+			psumx_cache_rep[i] = psumx[i]
+
+		# if kwargs.get('sanitycheck',True):
+		# 	for existing_cache_member in list(self.calc_cache.all_caches['lb']):
+		# 		if len(get_difference(cache_rep,existing_cache_member)) == 1 or len(get_difference(cache_rep,existing_cache_member)) == 1:
+		# 			_benefit, (_xsumx_cache_rep, _psumx_cache_rep) = self.calc_cache.all_caches['lb'][existing_cache_member]
+		# 			if np.abs(_benefit - benefit) > 1:
+		# 				print("Two very close cache members disagree by a lot: {} vs {}!".format(benefit,_benefit))
+		# 				pickle.dump(existing_cache_member, open('interesting_cache_rep_{}.pkl'.format(self.worker_i),'wb'))
+
+		# 				## Literally just reaches into the cache
+		# 				real1,_ = self.latency_benefit(a, sanitycheck=False)
+		# 				adv_in_cache = np.zeros((self.n_popps,self.n_prefixes))
+		# 				for poppi,prefi in existing_cache_member:
+		# 					adv_in_cache[poppi,prefi] = 1
+		# 				real2,_ = self.latency_benefit(adv_in_cache, sanitycheck=False)
+		# 				print("Recalc : {} vs {}".format(real1,real2))
+
+
+		# 				## No cache on cache_rep
+		# 				real1,_ = self.latency_benefit(a, verbose_workers=True, sanitycheck=False)
+		# 				adv_in_cache = np.zeros((self.n_popps,self.n_prefixes))
+		# 				for poppi,prefi in existing_cache_member:
+		# 					adv_in_cache[poppi,prefi] = 1
+		# 				real2,_ = self.latency_benefit(adv_in_cache, verbose_workers=True, sanitycheck=False)
+		# 				print("Recalc no cache : {} vs {}".format(real1,real2))
+
+
+		# 				exit(0)
+
+		self.calc_cache.all_caches['lb'][cache_rep] = (benefit, (xsumx_cache_rep, psumx_cache_rep))
 		
-		return benefit, (xsumx.flatten(),psumx.flatten())
+		if super_verbose:
+			print("Exiting super verbose")
+			self.print("Storing benefit {}".format(benefit))
+
+		return benefit, (xsumx, psumx)
 
 	def log(self,s):
-		self.log_ptr = open(os.path.join(CACHE_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, DPSIZE)),'a')
+		self.log_ptr = open(os.path.join(LOG_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, self.dpsize)),'a')
 		self.log_ptr.write(s)
 		self.log_ptr.close()
 
@@ -687,12 +810,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		print("Worker {} -- {}".format(self.worker_i, s))
 
 	def check_clear_cache(self):
-		if len(self.calc_cache.all_caches['lb']) > MAX_CACHE_SIZE:
+		cache_to_clear = self.calc_cache.all_caches['lb']
+
+		if len(cache_to_clear) > MAX_CACHE_SIZE:
 			# order of lbx_density + n_popps*n_prefixes per entry
 			# self.print("Clearing calc cache, currently size {}".format(
 			# 	len(pickle.dumps(self.calc_cache))/1e6))
-			# self.print("Clearing calc cache, current len {}".format(len(self.calc_cache.all_caches['lb'])))
-			self.clear_new_meas_caches()
+			# self.print("Clearing calc cache, current len {}".format(len(cache_to_clear)))
+			self.this_time_ip_cache = {}
+			self.calc_cache.all_caches['lb'] = {}
 
 	def clear_new_meas_caches(self):
 		# print("Clearing caches")
@@ -723,13 +849,30 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				ret.append(self.latency_benefit(*args, **kwargs))
 			del self.this_time_ip_cache
 		elif cmd == 'calc_compressed_lb':
-
+			# if len(data) > 1:
+			# 	if self.worker_i == 0:
+			# 		pickle.dump([data,self.output_deployment()], open('cache/tmp.pkl','wb'))
+			# 	exit(0)
 			ts = time.time()
 			tlp = time.time()
 			ret = []
 			base_args,base_kwa = data[0]
 			base_adv, = base_args
 			base_adv = base_adv.astype(bool)
+
+			if len(data[1:]) > 1:
+				### Prepopulate the cache with the "average" advertisement
+				self.init_user_px_cache()
+				avg_adv = np.zeros(base_adv.shape)
+				for diff, kwa in data[1:]:
+					for ind in zip(*diff):
+						base_adv[ind] = not base_adv[ind]
+					avg_adv += base_adv.astype(np.int32)
+					for ind in zip(*diff):
+						base_adv[ind] = not base_adv[ind]
+				avg_adv = avg_adv / len(data[1:])
+				avg_adv = avg_adv > .5
+				self.latency_benefit(avg_adv)
 			ret.append(self.latency_benefit(base_adv,**base_kwa))
 			i=0
 			for diff, kwa in data[1:]:
@@ -750,24 +893,32 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
 
 		elif cmd == "solve_lp":
-			try:
-				adv,deployment = data[self.worker_i]
-				deployment_save = self.output_deployment()
-				self.clear_caches()
-				self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
-				ret = self.solve_lp_with_failure_catch(adv)
-				self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
-			except IndexError:
-				## not enough to work on
-				ret = {}
+			ret = []
+			ts = time.time()
+			n_iters,t_per_iter = 0,0
+			for adv_i, adv, deployment, update_dep in sorted(data, key = lambda el : el[0]):
+				if update_dep:
+					deployment_save = self.output_deployment()
+					self.clear_caches()
+					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
+				this_ret = self.solve_lp_with_failure_catch(adv)
+				if update_dep:
+					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
+				ret.append((adv_i, this_ret))
+				n_iters += 1
+
+				t_per_iter = round((time.time() - ts)/n_iters,2)
+
 		elif cmd == 'reset_new_meas_cache':
 			self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
 			parents_on = data
-			for ui in parents_on:
-				for beaten_ingress, routed_ingress in parents_on[ui]:
-					self.parent_tracker[ui, beaten_ingress, routed_ingress] = True
+			for ug in parents_on:
+				for beaten_ingress, routed_ingress in parents_on[ug]:
+					self.parent_tracker[ug, beaten_ingress, routed_ingress] = True
+			if len(parents_on) > 0:
+				self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_deployment':
 			deployment = data
@@ -810,4 +961,5 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 if __name__ == "__main__":
 	worker_i = int(sys.argv[1])
-	pdc = Path_Distribution_Computer(worker_i)
+	base_port = int(sys.argv[2])
+	pdc = Path_Distribution_Computer(worker_i, base_port)

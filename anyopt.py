@@ -27,6 +27,8 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		choice_arr = list(range(self.n_provider_popps))
 
 		best_adv = None
+		
+		all_advs = []
 		for test_i in tqdm.tqdm(range(self.n_montecarlo),desc="Measuring anyopt providers."):
 			random_adv = np.zeros((self.n_popp, self.n_prefixes-1))
 			for prefi in range(self.n_prefixes-1):
@@ -36,8 +38,12 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 				randomly_active = np.array([self.popp_to_ind[ra] for ra in randomly_active])
 				random_adv[randomly_active, prefi] = 1
 			random_adv = np.concatenate([np.ones((self.n_popp,1)), random_adv],axis=1)
-			this_adv_obj = self.measured_objective(random_adv, use_resilience=False,
-				mode='best')
+			all_advs.append(random_adv)
+
+		dep = self.output_deployment()
+		dep['link_capacities'] = {popp:10000 for popp in dep['popps']}
+		all_rets = self.get_ground_truth_latency_benefit_mp(all_advs, dep)
+		for random_adv,this_adv_obj in zip(all_advs, all_rets):
 			if best_adv is None:
 				best_adv = random_adv
 				best_obj = this_adv_obj
