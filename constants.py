@@ -24,6 +24,7 @@ def threshold_a(a):
 
 UGS_OF_INTEREST = []
 
+DEFAULT_PORT = 31600
 
 
 ## to identify when we're looking at an actual deployment
@@ -67,7 +68,6 @@ def PRINT_FREQUENCY(dpsize):
 		return 15
 
 def get_n_workers(deployment_size):
-	return 24
 	n_workers = {
 		'really_friggin_small': 1,
 		'actual': 4,
@@ -96,7 +96,7 @@ RESILIENCE_DIFFICULTY = 'hard'
 
 
 #### minimuze MLU + ALPHA * LATENCY ;; so alpha is a tradeoff between congestion and latency (roughly)
-ALPHA = .00001
+ALPHA = .1
 
 
 DEFAULT_EXPLORE = 'entropy'
@@ -139,4 +139,35 @@ POP_TO_LOC = {
 		'vtrtoronto': (43.679, -79.305),
 		'vtrwarsaw': (52.248,21.027),
 	},
+}
+
+POP2TIMEZONE = {  # GMT
+	'vtramsterdam': 2,
+	'vtratlanta': -4,
+	'vtrbangalore': 5.5,
+	'vtrchicago': -5,
+	'vtrdallas': -5,
+	'vtrdelhi': 5.5,
+	'vtrfrankfurt': 2,
+	'vtrjohannesburg': 2,
+	'vtrlondon': 1,
+	'vtrlosangelas': -7,
+	'vtrmadrid': 2,
+	'vtrmelbourne': 10,
+	'vtrmexico': -6,
+	'vtrmiami': -4,
+	'vtrmumbai': 5.5,
+	'vtrnewyork': -4,
+	'vtrparis': 2,
+	'vtrsaopaulo': -3,
+	'vtrseattle': -7,
+	'vtrseoul': 9,
+	'vtrsilicon': -7,
+	'vtrsingapore': 8,
+	'vtrstockholm': 2,
+	'vtrsydney': 10,
+	'vtrtokyo': 9,
+	'vtrtoronto': -4,
+	'vtrwarsaw': 2,
+    'vtrosaka': 9
 }

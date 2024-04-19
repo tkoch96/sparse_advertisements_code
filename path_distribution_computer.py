@@ -66,8 +66,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		## important that every worker has the same lbx
 		min_vol,max_vol = np.min(self.whole_deployment_ug_vols), np.max(self.whole_deployment_ug_vols)
 		total_deployment_volume = np.sum(self.whole_deployment_ug_vols)
+		if self.simulated:
+			min_lbx = np.maximum(-1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
+		else:
+			min_lbx = np.maximum(-.1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
 
-		min_lbx = np.maximum(-1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
 		max_lbx = 0
 
 		self.lbx = np.linspace(min_lbx, max_lbx,num=LBX_DENSITY)
@@ -87,6 +90,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	def start_connection(self):
 		context = zmq.Context()
+		print("Worker {} starting on port {}".format(self.worker_i,self.worker_i+self.port))
 		self.main_socket = context.socket(zmq.REP)
 		self.main_socket.setsockopt(zmq.RCVTIMEO, 1000)
 		self.main_socket.bind('tcp://*:{}'.format(self.worker_i+self.port))
@@ -105,8 +109,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.iter += 1
 
 	def get_limited_cap_latency_multiplier(self):
-		LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
-		power = 1.02
+		if self.simulated:
+			LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
+			power = 1.02
+		else:
+			LIMITED_CAP_LATENCY_MULTIPLIER = 1.3
+			power = 1.04
 		# LIMITED_CAP_LATENCY_MULTIPLIER = 5
 		# power = 1.05
 		# return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
@@ -892,18 +900,52 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# if len(data)>10:
 			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
 
-		elif cmd == "solve_lp":
+		elif cmd == "solve_lp_lagrange":
 			ret = []
 			ts = time.time()
 			n_iters,t_per_iter = 0,0
-			for adv_i, adv, deployment, update_dep in sorted(data, key = lambda el : el[0]):
+			self.check_load_rw_measure_wrapper()
+			for fields in sorted(data, key = lambda el : el[0]):
+				if len(fields) == 4:
+					adv_i, adv, deployment, update_dep = fields
+				else:
+					adv_i, adv, opt_adv, deployment, update_dep = fields
 				if update_dep:
 					deployment_save = self.output_deployment()
 					self.clear_caches()
 					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
-				this_ret = self.solve_lp_with_failure_catch(adv)
+				self.check_load_rw_measure_wrapper()
+				this_ret = self.solve_lp_lagrange(adv)
 				if update_dep:
 					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
+					self.check_load_rw_measure_wrapper()
+				ret.append((adv_i, this_ret))
+				n_iters += 1
+
+				t_per_iter = round((time.time() - ts)/n_iters,2)
+
+		elif cmd == "solve_lp":
+			ret = []
+			ts = time.time()
+			n_iters,t_per_iter = 0,0
+			self.check_load_rw_measure_wrapper()
+			for fields in sorted(data, key = lambda el : el[0]):
+				if len(fields) == 4:
+					adv_i, adv, deployment, update_dep = fields
+				else:
+					adv_i, adv, opt_adv, deployment, update_dep = fields
+				if update_dep:
+					deployment_save = self.output_deployment()
+					self.clear_caches()
+					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
+				self.check_load_rw_measure_wrapper()
+				if len(fields) == 4:
+					this_ret = self.solve_lp_with_failure_catch(adv)
+				else:
+					this_ret = self.solve_lp_with_failure_catch_weighted_penalty(adv, opt_adv)
+				if update_dep:
+					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
+					self.check_load_rw_measure_wrapper()
 				ret.append((adv_i, this_ret))
 				n_iters += 1
 
@@ -936,6 +978,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = 'ACK'
 		elif cmd == 'increment_iter':
 			self.increment_iter()
+			ret = "ACK"
+		elif cmd == 'set_iter':
+			self.iter = data
 			ret = "ACK"
 		elif cmd == 'reset_cache':
 			self.clear_caches()

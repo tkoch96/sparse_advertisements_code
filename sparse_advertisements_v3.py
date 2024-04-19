@@ -435,6 +435,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		super().__init__(*args, **kwargs)
 
 	def solve_anycast(self, verbose=True, **kwargs):
+
+		self.solution_type = 'sparse' ## just use sparse measurements
+		self.get_realworld_measure_wrapper()
+
 		## Simple anycast
 		anycast_advertisement = np.zeros((self.n_popp, self.n_prefixes))
 		anycast_advertisement[:,0] = 1
@@ -447,6 +451,9 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'norm_penalty': self.advertisement_cost(anycast_advertisement),
 			'n_advs': 1,
 		}
+
+		self.solution_type = "None"
+		self.get_realworld_measure_wrapper()
 
 		return "ok"
 
@@ -523,11 +530,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		self.clear_caches()
 
 	def solve_sparse(self, **kwargs):
-		init_adv = kwargs.get('init_adv')
-		if init_adv is None:
-			adv = self.init_advertisement()
-		else:
-			adv = init_adv
 		deployment = self.output_deployment()
 		self.sas = Sparse_Advertisement_Solver(deployment, **self.get_init_kwa())
 		self.sas.set_worker_manager(self.get_worker_manager())
@@ -537,16 +539,20 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		except KeyError:
 			pass
 		self.sas.verbose=True		
-		self.sas.solve(init_adv=adv, **kwargs)
+		self.sas.solve(**kwargs)
 		try:
 			self.sas.make_plots()
 		except:
 			pass
-		final_adv = self.sas.get_last_advertisement()
+		final_adv = self.sas.optimization_advertisement
 		self.sas.reset_metrics()
 		self.sas.metrics['advertisements'].append(final_adv)
 
-		sparse_adv = threshold_a(self.sas.get_last_advertisement())
+
+		print(self.sas.n_popps)
+		print(final_adv.shape)
+
+		sparse_adv = threshold_a(final_adv)
 		sparse_objective = self.sas.measured_objective(sparse_adv)
 		self.solutions['sparse'] = {
 			'objective': sparse_objective,
@@ -616,7 +622,6 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 
 	def compare_different_solutions(self, **kwargs):
 		verbose = kwargs.get('verbose', True)
-		init_adv = kwargs.get('init_adv')
 		
 		if kwargs.get('soln_types') is not None:
 			solution_types = kwargs.get('soln_types')
@@ -661,10 +666,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 						metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
 
 
-						adv = self.solutions[solution_type]['advertisement']
-						metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
-						metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
-						metrics['normalized_sparse_benefit'][solution_type].append(self.get_normalized_benefit(adv))
+						# adv = self.solutions[solution_type]['advertisement']
+						# metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
+						# metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
+						# metrics['normalized_sparse_benefit'][solution_type].append(self.get_normalized_benefit(adv))
 					except:
 						import traceback
 						traceback.print_exc()
@@ -696,6 +701,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args, **kwargs)
+		self.solution_type = 'sparse'
 		self.beta = .3 # gradient momentum
 		self.sigmoid_k = 5.0 # heavisside gradient parameter
 
@@ -703,14 +709,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		if self.simulated:
 			self.gradient_support_settings = {
 				'lb_support_size': 30*self.n_pops,
-				'popp_rb_support_size': 100*self.n_pops,
+				'popp_rb_support_size': 120*self.n_pops,
 				'info_support_size': 5*self.n_pops,
 			}
 		else:
 			## we are severely rate limited by measurement speed, so we should aim to compute as much as possible
 			self.gradient_support_settings = {
-				'lb_support_size': int(.1*(self.n_popps * self.n_prefixes)),
-				'popp_rb_support_size': int(.3*(self.n_popps * self.n_prefixes)),
+				'lb_support_size': int(.2*(self.n_popps * self.n_prefixes)),
+				'popp_rb_support_size': int(.4*(self.n_popps * self.n_prefixes)),
 				'info_support_size': 10*self.n_pops,
 			}
 
@@ -1788,6 +1794,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def load_optimization_state(self, specific_iter=None):
 		self.clear_caches()
+		save_port = copy.deepcopy(self.port)
 		if specific_iter is None:
 			import glob
 			all_states = glob.glob(os.path.join(self.save_run_dir, '*'))
@@ -1804,8 +1811,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		## update deployment
 		self.og_deployment = save_state['deployment']
+		new_deployment_with_pseudo_users = save_state['ug_modified_deployment']
+		self.og_deployment['port'] = save_port
+		new_deployment_with_pseudo_users['port'] = save_port
 		self.old_optimal_expensive_solution = save_state['old_optimal_expensive_solution']
-		self.update_deployment(save_state['ug_modified_deployment'])
+		self.update_deployment(new_deployment_with_pseudo_users)
 
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
@@ -1834,7 +1844,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.get_ground_truth_latency_benefit(self.optimization_advertisement)
 		else:
 			self.update_ug_ingress_decisions()
-			
+
+		### Notify workers of current training iteration
+		for worker, worker_socket in self.worker_manager.worker_sockets.items():
+			msg = pickle.dumps(('set_iter', self.iter))
+			worker_socket.send(msg)
+			worker_socket.recv()
+
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
 
 	def init_optimization_vars(self):
@@ -2166,7 +2182,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# if not self.simulated:
 		# 	self.get_realworld_measure_wrapper()
 
-	def solve(self, init_adv=None, **kwargs):
+	def solve(self, **kwargs):
 
 		try:
 			## If we're hot-starting, load the optimization state. But this will throw an error if we're not
@@ -2176,10 +2192,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				return
 		except ValueError:
 			self.modify_ugs()
-			if init_adv is None:
-				self.optimization_advertisement = self.init_advertisement()
-			else:
-				self.optimization_advertisement = init_adv
+			self.optimization_advertisement = self.init_advertisement()
 			self.last_advertisement = copy.copy(self.optimization_advertisement)
 			if not self.simulated:
 				## This is our first measurement
@@ -2316,7 +2329,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff,
 					self.path_measures))
 
-				self.make_plots()
+				try:
+					self.make_plots()
+				except:
+					import traceback
+					traceback.print_exc()
 
 			for t,lab in zip(timers, ['grads','measure','info','stop','summarize_lats']):
 				print("Timer: {} -- {} s".format(lab, round(t,2)))
@@ -2342,13 +2359,12 @@ def main():
 		## useful for fixing the deployment between testing various settings
 		# deployment = pickle.load(open('runs/1710776224-small-sparse/state-0.pkl','rb'))['deployment']
 
-		### With VULTR measurements test
 		lambduh = .0001
 		gamma = 2.0
 		n_prefixes = deployment_to_prefixes(deployment)
 		sas = Sparse_Advertisement_Solver(deployment, 
 			lambduh=lambduh,verbose=True,with_capacity=True,n_prefixes=n_prefixes,
-			using_resilience_benefit=True, gamma=gamma, save_run_dir='1712535530-actual_second_prototype-sparse')
+			using_resilience_benefit=True, gamma=gamma)
 		wm = Worker_Manager(sas.get_init_kwa(), deployment)
 		wm.start_workers()
 		sas.set_worker_manager(wm)

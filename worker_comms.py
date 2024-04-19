@@ -85,6 +85,7 @@ class Worker_Manager:
 			self.worker_sockets[worker].connect('tcp://localhost:{}'.format(base_port+worker))
 			msg = pickle.dumps(('init',(args,kwargs)))
 			self.worker_sockets[worker].send(msg)
+		for worker in range(n_workers):
 			while True:
 				try:
 					msg = pickle.loads(self.worker_sockets[worker].recv())

@@ -222,27 +222,32 @@ def parse_and_plot():
 		# plt.ylabel("Load")
 		# plt.savefig('figures/ovh_load_by_links_over_time.pdf')
 		# plt.clf(); plt.close()
+
+
+		aggregated_daily_variance = {}
+		for lnk in structured_link_utilizations:
+			aggregated_daily_variance[lnk] = {}
+			for day,ls in daily_variance[lnk].items():
+				if len(ls) > 1:
+					aggregated_daily_variance[lnk][day] = np.max(ls) - np.min(ls)
+				else:
+					aggregated_daily_variance[lnk][day] = 0
+		del structured_link_utilizations
+
 		print("{} links total".format(len(sorted_ks)))
 		pickle.dump({
 			'daily_variance': daily_variance,
-			'structured_link_utilizations': structured_link_utilizations,
+			'aggregated_daily_variance': aggregated_daily_variance,
 			'peak_utils': peak_utils,
 			'days': days,
 		}, open(hlstats_save_fn, 'wb'))
 	else:
 		print("Loading precomputed high-level stats")
 		d = pickle.load(open(hlstats_save_fn, 'rb'))
-		daily_variance, structured_link_utilizations,peak_utils,days = d['daily_variance'],d['structured_link_utilizations'],d['peak_utils'],d['days']
+		daily_variance, aggregated_daily_variance, peak_utils,days = d['daily_variance'],d['aggregated_daily_variance'],d['peak_utils'],d['days']
 		print("Done loading precomputed high-level stats")
 	
-	aggregated_daily_variance = {}
-	for lnk in structured_link_utilizations:
-		aggregated_daily_variance[lnk] = {}
-		for day,ls in daily_variance[lnk].items():
-			if len(ls) > 1:
-				aggregated_daily_variance[lnk][day] = np.max(ls) - np.min(ls)#np.var(ls)
-			else:
-				aggregated_daily_variance[lnk][day] = 0
+	
 
 	days = sorted(list(days))
 	pctls = [99,99.9,99.99, 100]
@@ -304,7 +309,6 @@ def parse_and_plot():
 	plt.grid(True)
 	plt.savefig('figures/change_in_peak_util_over_periods.pdf')
 	plt.clf(); plt.close()
-
 
 
 	aggregated_daily_variance_by_day = {day:[] for day in days}

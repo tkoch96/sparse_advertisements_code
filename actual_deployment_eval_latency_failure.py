@@ -7,7 +7,7 @@ import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
 from eval_latency_failure import calc_pct_volume_within_latency
 
-def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
+def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# for each deployment, get different advertisement strategies
 	# look at latency under popp and link failures compared to optimal
 	# sparse should be simultaneously better in both normal and failure scenarios
@@ -19,9 +19,10 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 	sas = None
 
 	performance_metrics_fn = kwargs.get('use_performance_metrics_fn', global_performance_metrics_fn(dpsize))
-	soln_types = ['sparse', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
+	# soln_types = ['sparse', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
 	# soln_types = ['anycast', 'one_per_peering']
 	# soln_types = ['anycast', 'painter']
+	soln_types = ['sparse', 'anycast', 'painter', 'one_per_pop']
 
 	N_TO_SIM = kwargs.get('nsim',1)
 	if N_TO_SIM > 1:
@@ -43,6 +44,13 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 				if i not in metrics[k]:# and i in default_metrics[k]:
 					print("{} {}".format(k, i))
 					metrics[k][i] = copy.deepcopy(default_metrics[k][0])
+
+	## Add keys unique to the actual deployment
+	try:
+		metrics['deployment_by_solution']
+	except KeyError:
+		metrics['deployment_by_solution'] = {i:{solution: None for solution in soln_types} for i in range(N_TO_SIM)}
+
 	try:
 		for random_iter in range(N_TO_SIM):
 			try:
@@ -57,11 +65,13 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 				print("Loading from hotstart dir")
 				save_state = pickle.load(open(os.path.join(RUN_DIR, save_run_dir, 'state-0.pkl'), 'rb'))
 				deployment = save_state['deployment']
+				deployment['port'] = port
 				# deployment['link_capacities'] = save_state['ug_modified_deployment']['link_capacities']
 			else:
 				deployment = get_random_deployment(dpsize, **kwargs)
+				deployment['port'] = port
 			metrics['deployment'][random_iter] = deployment
-	
+
 			n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 	
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
@@ -90,7 +100,11 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 					print("No solution for {}".format(solution))
 					continue
 				print(solution)
-				lp_soln = sas.solve_lp_with_failure_catch(adv)
+
+				if metrics['deployment_by_solution'][random_iter][solution] is None:
+					print("Storing deployment for {}".format(solution))
+					metrics['deployment_by_solution'][random_iter][solution] = sas.output_specific_deployment(solution)
+				lp_soln = sas.solve_lp_with_failure_catch_actual_deployment(adv, solution)
 				lp_by_solution[solution] = lp_soln
 				pre_lats_by_ug = lp_soln['lats_by_ug']
 				print(pre_lats_by_ug)
@@ -103,75 +117,15 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 	except:
 		import traceback
 		traceback.print_exc()
-
-	# try:
-	# 	for random_iter in range(N_TO_SIM):
-	# 		try:
-	# 			if save_run_dir is not None:
-	# 				raise TypeError
-	# 			metrics['compare_rets'][random_iter]['n_advs']
-	# 			continue
-	# 		except TypeError:
-	# 			pass
-	# 		print("-----Deployment number = {} -------".format(random_iter))
-	# 		if save_run_dir is not None:
-	# 			print("Loading from hotstart dir")
-	# 			save_state = pickle.load(open(os.path.join(RUN_DIR, save_run_dir, 'state-0.pkl'), 'rb'))
-	# 			deployment = save_state['deployment']
-	# 			deployment['link_capacities'] = save_state['ug_modified_deployment']['link_capacities']
-	# 		else:
-	# 			deployment = get_random_deployment(dpsize, **kwargs)
-	# 		metrics['deployment'][random_iter] = deployment
-	
-	# 		n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-	
-	# 		sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-	# 			lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-	# 			using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes, save_run_dir=save_run_dir)
-
-	# 		metrics['settings'][random_iter] = sas.get_init_kwa()
-	# 		if wm is None:
-	# 			wm = Worker_Manager(sas.get_init_kwa(), deployment)
-	# 			wm.start_workers()
-	# 		sas.set_worker_manager(wm)
-	# 		sas.update_deployment(deployment)
-	# 		sas.get_realworld_measure_wrapper()
-	# 		### Solve the problem for each type of solution (sparse, painter, etc...)
-	# 		lp_by_solution_post = {}
-	# 		for solution in soln_types:
-	# 			try:
-	# 				adv = metrics['adv'][random_iter][solution]
-				
-	# 				print(solution)
-	# 				lp_soln = sas.solve_lp_with_failure_catch(adv)
-	# 				lp_by_solution_post[solution] = lp_soln
-	# 				pre_lats_by_ug = lp_soln['lats_by_ug']
-	# 				print(pre_lats_by_ug)
-
-	# 			except:
-	# 				print("No solution for {}".format(solution))
-	# 				continue
-
-	# 		pickle.dump(lp_by_solution_post, open('lp_by_solution_post.pkl','wb'))
-	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-
-	# except:
-	# 	import traceback
-	# 	traceback.print_exc()
-	# finally:
-	# 	if wm is not None:
-	# 		wm.stop_workers()
-
-	# for ui,(l1, l2) in enumerate(zip(metrics['latencies'][0]['one_per_pop'],metrics['latencies'][0]['anycast'])):
-	# 	ug = sas.ugs[ui]
-	# 	if l1 > l2:
-	# 		print("UG: {} ;; {} vs {}".format(ug,l1,l2))
-	# 		for prefix in range(n_prefixes):
-	# 			print("Prefix: {} Routes OPP: {}".format(prefix,lp_by_solution['one_per_pop']['routed_through_ingress'][prefix].get(ug,None)))
-	# 			print("Prefix: {} Routes Anycast: {}".format(prefix,lp_by_solution['anycast']['routed_through_ingress'][prefix].get(ug,None)))
-	# 		print('\n')		
-	# 	if l2 == NO_ROUTE_LATENCY:
-	# 		print("For anycast, {} has no route".format(ug))	
+	print(metrics.keys())
+	for solution in soln_types:
+		adv = metrics['adv'][0][solution]
+		this_solution_deployment = metrics['deployment_by_solution'][0][solution]
+		print("{} -- {}".format(solution, np.sum(adv, axis=0)))
+		if solution == 'sparse':
+			first_adv = adv[:,0]
+			not_on = np.where(first_adv==0)[0]
+			print("Not on : {}".format(list([this_solution_deployment['popps'][poppi] for poppi in not_on])))
 
 
 	RECALC_PCT_VOL_IN_LAT_MULTIPLIERS = False
@@ -197,11 +151,9 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 					deployment = metrics['deployment'][random_iter]
 					sas.update_deployment(deployment)
 				ug_vols = sas.ug_to_vol
-				ret = metrics['compare_rets'][random_iter]
 				for solution in soln_types:
-					try:
-						adv = ret['adv_solns'][solution][0]
-					except:
+					adv = metrics['adv'][random_iter][solution]
+					if len(adv) == 0:
 						print("No solution for {}".format(solution))
 						continue
 					print("Assessing pct volume within latency for {}".format(solution))
@@ -250,7 +202,7 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 						print("No solution for {}".format(solution))
 						continue
 						
-					ret = assess_failure_resilience(sas, adv, which='popps')
+					ret = assess_failure_resilience_real_deployment(sas, adv, which='popps')
 					metrics['popp_failures_congestion'][random_iter][solution] = ret['mutable']['congestion_delta']
 					metrics['popp_failures_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
 					metrics['popp_failures_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
@@ -261,7 +213,7 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 					metrics['popp_failures_sticky_latency_optimal_specific'][random_iter][solution] = ret['sticky']['latency_delta_specific']
 					metrics['popp_failures_sticky_latency_before'][random_iter][solution] = ret['sticky']['latency_delta_before']
 
-					ret = assess_failure_resilience(sas, adv, which='pops')
+					ret = assess_failure_resilience_real_deployment(sas, adv, which='pops')
 					metrics['pop_failures_congestion'][random_iter][solution] = ret['mutable']['congestion_delta']
 					metrics['pop_failures_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
 					metrics['pop_failures_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
@@ -335,14 +287,6 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 	## we plot the performance changes for a single flash crowd volume increase
 	SIM_INDS_TO_PLOT = list(range(N_TO_SIM))
 
-	if save_run_dir is not None:
-		all_state_files = glob.glob(os.path.join(RUN_DIR, save_run_dir, 'state-*.pkl'))
-		all_state_ns = sorted([int(re.search('state\-(.+)\.pkl', state_fn).group(1)) for state_fn in all_state_files])
-		current_state = pickle.load(open(os.path.join(RUN_DIR, save_run_dir, 'state-{}.pkl'.format(all_state_ns[-1])),'rb' ))
-		deployment = current_state['deployment']
-		gradient_calls = current_state['all_rb_calls_results_popps']
-		n_calls = {deployment['popps'][popp]: len(gradient_calls[popp]) for popp in gradient_calls}
-
 	def get_failure_metric_arr(k, solution, verb=False):
 		ret = []
 		avg_ret = []
@@ -378,31 +322,6 @@ def evaluate_all_metrics(dpsize, save_run_dir=None, **kwargs):
 						maxd=diff
 					if diff < mind:
 						mind=diff
-				if perf1-perf2 < -5 and verb:
-					perfs = metrics['deployment'][0]['ug_perfs'][ug]
-					this_ug_all_vol = metrics['deployment'][0]['ug_to_vol'][ug]
-					ip = metrics['deployment'][0]['ingress_priorities'][ug]
-					adv = threshold_a(metrics['adv'][0]['sparse'])
-					options = -1 * np.ones(adv.shape[1])
-					popps = sorted(metrics['deployment'][0]['popps'])
-					for prefix_i in range(adv.shape[1]):
-						actives = np.where(adv[:,prefix_i])[0]
-						winning_popp = sorted(actives, key = lambda el : ip.get(popps[int(el)],1000000))[0]
-						if ip.get(popps[int(winning_popp)],1000000) == 1000000: continue
-						options[prefix_i] = winning_popp
-					all_options = list(get_difference(set([popps[int(popp)] for popp in options if popp != -1]), [element]))
-					pretty_close = any(perfs[option] - perf2 < 2 for option in all_options)
-					try:
-						summaries_by_element[element] += vol
-					except KeyError:
-						summaries_by_element[element] = vol
-			
-					if pretty_close:
-						print("PRETTY FRRIGGIN CLOSE")
-					else:
-						print("PoPP {} failed, not close".format(element))
-						print("Perfs: {}\n".format(perfs))
-						print("{} ({} pct) {}, {} {}".format(ug, round(vol*100.0/this_ug_all_vol, 2), perf1, perf2, {popp: perfs[popp] for popp in all_options}))
 				
 				ret.append((perf1-perf2, vol))
 
@@ -799,6 +718,6 @@ if __name__ == "__main__":
 	if args.save_run_dir is not None:
 		## we could specify an array of hotstart dirs otherwise, but that's a task for another day
 		assert N_TO_SIM == 1
-		evaluate_all_metrics(args.dpsize, port=int(args.port), save_run_dir=args.save_run_dir)
+		evaluate_all_metrics(args.dpsize, int(args.port), save_run_dir=args.save_run_dir)
 	else:
-		evaluate_all_metrics(args.dpsize, port=int(args.port))
+		evaluate_all_metrics(args.dpsize, int(args.port))

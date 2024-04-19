@@ -7,6 +7,7 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 	## https://dl.acm.org/doi/pdf/10.1145/3452296.3472935
 	def __init__(self, *args, **kwargs):
 		super().__init__(*args,**kwargs)
+		self.solution_type = 'anyopt'
 
 		self.n_montecarlo = 100#1000
 

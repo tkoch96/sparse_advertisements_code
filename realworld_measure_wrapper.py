@@ -32,7 +32,6 @@ class Advertisement_Experiments_Wrapper:
 		self.conduct_measurements_to_prefix_popps = self.conduct_measurements_to_prefix_popps_ripe
 
 		self.rau = RIPE_Atlas_Utilities()
-		self.init_ae()
 
 		## Tracks whether each RIPE Atlas probe has at least one measurement that day
 		self.has_had_measurement = {}
@@ -64,6 +63,12 @@ class Advertisement_Experiments_Wrapper:
 			asn = self.sibling_to_peer.get(asn,asn) # convert siblings of known peers to just those known peers
 			as_path.append(asn)
 		return as_path
+
+	def check_init_ae(self):
+		try:
+			self.ae
+		except AttributeError:
+			self.init_ae()
 
 	def init_ae(self):
 		self.ae = Advertisement_Experiments('vultr','null', quickinit=False)
@@ -115,7 +120,6 @@ class Advertisement_Experiments_Wrapper:
 				f2.write("1709263120,{},{},{},-10000,{}\n".format(client, pop, ingress_peer, round(latency,4)))
 		if addcall:
 			self.calls_to_update_deployment.append(('add_ug_perf', ug, popp, latency))
-		self.check_update_deployment_upon_modify()
 
 	def del_ug_perf(self, ug, popp, addcall=True):
 		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
@@ -128,7 +132,6 @@ class Advertisement_Experiments_Wrapper:
 			if DEBUG_CLIENT_INFO_ADDING:
 				print("Deleted {} for UG, now has <= 1 performances. Deleting UG".format(ug))
 			self.del_ug(ug,addcall=Fale)
-		self.check_update_deployment_upon_modify()
 
 	def del_ug(self, ug, addcall=True):
 		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
@@ -136,7 +139,6 @@ class Advertisement_Experiments_Wrapper:
 		del self.ug_perfs[ug]
 		if addcall:
 			self.calls_to_update_deployment.append(('del_ug', ug))
-		self.check_update_deployment_upon_modify()
 
 	def del_client(self, client, addcall=True):
 		if DEBUG_CLIENT_INFO_ADDING:
@@ -164,7 +166,6 @@ class Advertisement_Experiments_Wrapper:
 					self.client_to_ripe_probe(client)
 				except KeyError:
 					self.del_client(client)
-		self.check_update_deployment_upon_modify()
 
 	def check_update_deployment_upon_modify(self):
 		### When we modify UG perfs, it could be that many data structures need to change, check that these are changed
@@ -258,7 +259,7 @@ class Advertisement_Experiments_Wrapper:
 				except KeyError:
 					rtts_by_pop[_pop] = [_rtt]
 			return rtts_by_pop
-
+		self.check_init_ae()
 		with open(popp_lat_fn, 'w') as f:
 			for popps, client_set, ripe_results_set, pinger_results_set in zip(prefix_popps, every_client_of_interest, ripe_results, pinger_results):
 				if DEBUG_CLIENT_INFO_ADDING:
@@ -281,10 +282,17 @@ class Advertisement_Experiments_Wrapper:
 					except KeyError:
 						# Since been removed as a client
 						continue
+					try:
+						possible_popps = get_intersection(popps, self.ug_perfs[ug])
+					except KeyError:
+						# since been removed as a ug
+						continue
 
-					possible_popps = get_intersection(popps, self.ug_perfs[ug])
-
-					ripe_probe = self.client_to_ripe_probe(client)
+					try:
+						ripe_probe = self.client_to_ripe_probe(client)
+					except KeyError:
+						# since been delted, continue
+						continue
 					try:
 						ripe_trace_result = ripe_results_set[0][ripe_probe]
 						self.has_had_measurement[ripe_probe] = None
@@ -338,6 +346,11 @@ class Advertisement_Experiments_Wrapper:
 					confident_inference = False
 					asn_path = self.ip_path_to_asn_path(ripe_trace_result)
 					full_asn_path = self.ip_path_to_asn_path_full(ripe_trace_result)
+					try:
+						asn_path[0]
+					except IndexError:
+						## bad traceroute, continue
+						continue
 					if asn_path[0] in self.disallowed_asns:
 						self.del_client(client)
 						continue
@@ -378,6 +391,10 @@ class Advertisement_Experiments_Wrapper:
 						# 	print("Probe: {}, Client: {}, UG: {}".format(ripe_probe, client, ug))
 						# 	for ip_hop,asn_hop in zip(ripe_trace_result, full_asn_path):
 						# 		print("{}->{}".format(ip_hop,asn_hop))
+						if len(get_intersection(popps,self.popps)) == len(self.popps):
+							self.del_client(client)
+						# else:
+						# 	print("Annoying traceroute for ug {}".format(ug))
 						continue
 
 					if self.ip_to_ug[client] in UGS_OF_INTEREST and len(popps) > 90:
@@ -439,6 +456,7 @@ class Advertisement_Experiments_Wrapper:
 							pass
 					f.write("{},{},{},{},{},{},{}\n".format(pref_to_ip(pref),int(time.time()),
 						client, winning_popp[0], winning_popp[1], 0, self.ug_perfs[self.ip_to_ug[client]][winning_popp]))
+		self.check_update_deployment_upon_modify()
 		return self.calls_to_update_deployment
 
 	def check_info_consistent(self):
@@ -469,6 +487,10 @@ class RealWorld_Measure_Wrapper:
 	#### Actually measure prefix advertisements in the wild, as opposed to simulating them
 	def __init__(self, run_dir, deployment_info, **kwargs):
 		self.run_dir = run_dir
+		if self.run_dir is not None:
+			if not os.path.exists(self.run_dir):
+				from subprocess import call
+				call("mkdir {}".format(self.run_dir), shell=True)
 		self.ugs = sorted(copy.deepcopy(deployment_info['ugs']))
 		self.n_ug = len(self.ugs)
 		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
@@ -601,13 +623,40 @@ class RealWorld_Measure_Wrapper:
 		self.calc_pop_to_popps()
 		self.calc_popp_to_clients()
 
+	def get_catchments(self, popps):
+		### Get's UG catchments assuming we advertise popps, or returns None if we don't exactly know the answer
+		popps_hash = self.popps_to_hash(popps)
+		try:
+			routed_through_ingress = self.prefix_popps_to_catchments[popps_hash]
+			for ug in self.ugs:
+				if routed_through_ingress.get(ug) is None:
+					print("Zero possible options for {}".format(ug))
+		except KeyError:
+			routed_through_ingress = {}
+			for ug in self.ugs:
+				possible_peers = self.limit_potential_popps(all_available_options, ug)
+				if len(possible_peers) > 1:
+					return None
+				elif len(possible_peers) == 1:
+					routed_through_ingress[ug] = possible_peers[0]
+				else:
+					print("Zero possible options for {}".format(ug))
+		if len(routed_through_ingress) > 0:
+			return routed_through_ingress
+		else:
+			return None
+
+
 	def limit_potential_popps(self, possible_popps, ug):
 		## Remove impossible options based on our known information
 		# print(available_popp_inds)
-		for popp in get_intersection(self.measured_prefs[ug], possible_popps):
+		for popp in sorted(get_intersection(self.measured_prefs[ug], possible_popps)):
 			node = self.measured_prefs[ug][popp]
 			if node.has_parent(possible_popps):
 				node.kill()
+			check_all_possible_popps = [popp for popp, node in self.measured_prefs[ug].items() if node.alive]
+			if len(check_all_possible_popps) == 1:
+				break
 		all_possible_popps = [popp for popp, node in self.measured_prefs[ug].items() if node.alive]
 		for popp in list(self.measured_prefs[ug]):
 			self.measured_prefs[ug][popp].alive = True
@@ -871,14 +920,15 @@ class RealWorld_Measure_Wrapper:
 		uid = 0 
 		actives = {}
 		routed_through_ingress = {}
+		all_calls_update_deployment = []
+		called_ae = False
 		for rundir in self.past_rundirs:
 			self.check_load_ae()
 			these_runfiles = sorted(glob.glob(os.path.join(rundir, "tmp_ripe_results*.pkl")))
-			print("Loading information from {} runfiles".format(len(these_runfiles)))
+			print("Loading information from {} runfiles in {}".format(len(these_runfiles), rundir))
 			for runfile in these_runfiles:
-				calls_to_update_deployment = self.ae.load_all_info(runfile, 'tmp.txt')
-				self.check_update_calls_to_update_deployment(calls_to_update_deployment)
-				self.check_update_deployment_upon_modify()
+				all_calls_update_deployment = all_calls_update_deployment + self.ae.load_all_info(runfile, 'tmp.txt')
+				called_ae = True
 
 				this_ug_to_popp = self.load_and_add_info('tmp.txt')
 				for global_poppset, ret in this_ug_to_popp.items():
@@ -886,9 +936,13 @@ class RealWorld_Measure_Wrapper:
 					actives[uid] = global_poppset
 					uid += 1
 
-		calls_to_update_deployment = self.ae.check_info_consistent()
-		self.check_update_calls_to_update_deployment(calls_to_update_deployment)
-		self.check_update_deployment_upon_modify()
+		if called_ae:
+			self.check_update_calls_to_update_deployment(all_calls_update_deployment)
+			self.check_update_deployment_upon_modify()
+
+			calls_to_update_deployment = self.ae.check_info_consistent()
+			self.check_update_calls_to_update_deployment(calls_to_update_deployment)
+			self.check_update_deployment_upon_modify()
 
 
 		return routed_through_ingress, actives, self.calls_to_update_deployment

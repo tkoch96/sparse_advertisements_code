@@ -1,6 +1,6 @@
 import numpy as np, tqdm, time
 ug_lats = {}
-for row in open('cache/no_provider_vultr_ingress_latencies_by_dst.csv'):
+for row in tqdm.tqdm(open('cache/no_provider_vultr_ingress_latencies_by_dst.csv'),desc="reading no provider meas"):
 	t,ip,pop,peer,_,lat = row.strip().split(',')
 	try:
 		ug_lats[ip]
@@ -15,9 +15,9 @@ for row in open('cache/vultr_provider_popps.csv','r'):
 
 print("Read {} clients from no provider ingress lats file".format(len(ug_lats)))
 included_ips = {}
-for row in tqdm.tqdm(open('cache/vultr_ingress_latencies_by_dst.csv','r'), 
+for row in tqdm.tqdm(open('cache/vultr_ingress_latencies_by_dst_bck.csv','r'), 
 	desc="Reading old provider lats..."):
-	t,ip,pop,peer,lat = row.strip().split(',')
+	t,ip,pop,peer,_,lat = row.strip().split(',')
 	try:
 		ug_lats[ip]
 	except KeyError:
@@ -32,7 +32,7 @@ print("Got provider latencies for {} ips".format(len(included_ips)))
 
 with open('cache/vultr_ingress_latencies_by_dst_filled_in.csv','w') as f:
 	tnow = int(time.time())
-	for ip in included_ips:
+	for ip in tqdm.tqdm(included_ips,desc='writing meas'):
 		for popp,lat in ug_lats[ip].items():
 			f.write("{},{},{},{},{},{}\n".format(t,ip,popp[0],popp[1],0,lat))
 

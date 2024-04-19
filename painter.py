@@ -96,6 +96,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 	def one_per_pop(self, **kwargs):
 		### Doesn't use actual hybridcast performance
+		self.solution_type = 'one_per_pop'
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
 		all_advs = []
@@ -136,6 +137,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 	def painter_v5(self, **kwargs):
 		### Wraps painter_v4 with learning preferences
 		print("Initial greedy advertisement comuptation")
+		self.solution_type = 'painter'
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
 		advs = self.painter_v4(**kwargs)

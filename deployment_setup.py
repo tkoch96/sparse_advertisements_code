@@ -99,7 +99,7 @@ def get_random_ingress_priorities(deployment):
 
 
 
-def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=1.3, verb=True, **kwargs):
+def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=2.0, verb=True, **kwargs):
 
 	popps = deployment['popps']
 	ug_perfs = deployment['ug_perfs']
@@ -225,7 +225,7 @@ def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_
 
 def get_link_capacities(deployment, scale_factor=1.3, verb=True, **kwargs):
 
-	if not deployment['simulated']:
+	if not deployment.get('simulated',True):
 		## we set these by actually measuring things
 		return {popp: NON_SIMULATED_LINK_CAPACITY for popp in deployment['popps']}
 
@@ -1215,12 +1215,10 @@ def load_actual_deployment(deployment_size, **kwargs):
 			closest_popp = ug_popps[np.argmin([ug_perfs[ug][popp] for popp in ug_popps])]
 			metro_loc[metro] = pop_to_loc[closest_popp[0]]
 
-
-
 		deployment = {
 			'ugs': ugs,
 			'simulated': deployment_size not in ACTUAL_DEPLOYMENT_SIZES,
-			'port': kwargs.get('port', 31415),
+			'port': kwargs.get('port', DEFAULT_PORT),
 			'dpsize': deployment_size,
 			'ug_to_ip': ug_to_ip,
 			'ug_perfs': ug_perfs,
@@ -1378,8 +1376,8 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 		'ugs': ugs,
 		'dpsize': problem_size,
 		'ug_to_ip': ug_to_ip,
-		'simulated': deployment_size not in ACTUAL_DEPLOYMENT_SIZES,
-		'port': kwargs.get('port', 31415),
+		'simulated': True,
+		'port': kwargs.get('port', DEFAULT_PORT),
 		'ug_perfs': ug_perfs,
 		'ug_to_vol': ug_to_vol,
 		'ug_anycast_perfs': ug_anycast_perfs,

@@ -20,8 +20,10 @@ def pref_to_ip(pref):
 def deployment_to_prefixes(deployment):
 	if deployment['dpsize'] == 'small':
 		return 6
-	if deployment['dpsize'] in ACTUAL_DEPLOYMENT_SIZES:
+	elif deployment['dpsize'] == 'actual_first_prototype':
 		return 6
+	elif deployment['dpsize'] == 'actual_second_prototype':
+		return 12
 
 	n_prefixes = np.maximum(4,2 * int(np.log2(len(deployment['popps']))))
 	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
