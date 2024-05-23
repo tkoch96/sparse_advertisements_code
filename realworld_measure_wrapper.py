@@ -1,4 +1,4 @@
-import os, numpy as np, time, glob, json, copy
+import os, numpy as np, time, glob, json, copy, tqdm
 # from advertisement_experiments import Advertisement_Experiments
 from helpers import *
 from constants import *
@@ -10,10 +10,27 @@ PROPAGATE_TIME = 60#60*10
 
 TO_POP = False # True = write pops to file (testing), False = write ingresses to file (working)
 
+CLIENTS_OF_INTEREST = ['170.39.226.128', '170.39.226.4']
+
 def measurement_noise_factor():
 	return 10 * np.random.uniform()
 
+def is_interesting_ug(ug):
+	return (ug[0], int(ug[1])) in UGS_OF_INTEREST
 
+def is_deletable_ug(ug):
+	return (ug[0], int(ug[1])) in UGS_TO_DELETE
+
+
+def popps_to_hash(popps):
+	popps = sorted(popps)
+	popps_str = ",".join(["-".join(el) for el in popps])
+	return popps_str
+
+def hash_to_popps(popps_hash):
+	popps = popps_hash.split(',')
+	popps = [tuple(popp.split('-')) for popp in popps]
+	return popps
 
 
 class Advertisement_Experiments_Wrapper:
@@ -31,10 +48,12 @@ class Advertisement_Experiments_Wrapper:
 		# self.conduct_measurements_to_prefix_popps = self.conduct_measurements_to_prefix_popps_fake
 		self.conduct_measurements_to_prefix_popps = self.conduct_measurements_to_prefix_popps_ripe
 
-		self.rau = RIPE_Atlas_Utilities()
+		self.rau = RIPE_Atlas_Utilities(deployment_info['dpsize'])
 
 		## Tracks whether each RIPE Atlas probe has at least one measurement that day
 		self.has_had_measurement = {}
+		## Tracks whether each RIPE Atlas probe has had a bad traceroute
+		self.has_had_bad_traceroute = {}
 
 		self.run_dir = run_dir
 
@@ -47,7 +66,7 @@ class Advertisement_Experiments_Wrapper:
 		for hop in ip_path:
 			if hop == "*": continue
 			asn = self.ae.utils.parse_asn(hop, with_siblings=False)
-			asn = self.sibling_to_peer.get(asn,asn) # convert siblings of known peers to just those known peers
+			# asn = self.sibling_to_peer.get(asn,asn) # convert siblings of known peers to just those known peers
 			if asn is None or asn == prev_hop: continue
 			as_path.append(asn)
 			prev_hop = asn
@@ -60,7 +79,7 @@ class Advertisement_Experiments_Wrapper:
 				as_path.append("*")
 				continue
 			asn = self.ae.utils.parse_asn(hop, with_siblings=False)
-			asn = self.sibling_to_peer.get(asn,asn) # convert siblings of known peers to just those known peers
+			# asn = self.sibling_to_peer.get(asn,asn) # convert siblings of known peers to just those known peers
 			as_path.append(asn)
 		return as_path
 
@@ -77,25 +96,33 @@ class Advertisement_Experiments_Wrapper:
 		## ASNs corresponding to PEERING and VUltr
 		self.IGNORE_ASNS = ['47065','61574', '61575', '61576', '263842', '263843', '263844', '33207', '20473']
 		self.disallowed_asns = self.IGNORE_ASNS
-		bad_data = False
-		seen_peers = {}
-		for pop,peer in self.popps:
-			org = self.ae.utils.parse_asn(peer)
-			# Peer 32787 and 20940 in vultr peers are siblings but identifed as separate ASes...
-			try:
-				if peer != seen_peers[org]:
-					# print("\n\nWARNING")
-					# print("Peer {} and {} in vultr peers are siblings but identifed as separate ASes...".format(peer, seen_peers[org]))
-					# print("\n\n")
-					bad_data = True
-			except KeyError:
-				seen_peers[org] = peer
-		self.sibling_to_peer = {} ## easy for converting observed ASNs to our peers
-		for popp in self.ae.popps:
-			pop,peer = popp
-			org = self.ae.utils.parse_asn(peer)
-			for sibling_asn in self.ae.utils.org_to_as.get(org,[]):
-				self.sibling_to_peer[sibling_asn] = peer
+		self.peer_to_siblings = {}
+		peers = sorted(list(set(peer for pop,peer in self.popps)))
+		## Lots of peers are siblings of each other, which can cause confusion when we try to see
+		## which ingress something comes in on. So just tabulate all the possibilities
+		for peeri in peers:
+			orgi = self.ae.utils.parse_asn(peeri)
+			for peerj in peers:
+				if peeri==peerj: break
+				orgj = self.ae.utils.parse_asn(peerj)
+				if orgi == orgj:
+					try:
+						self.peer_to_siblings[peeri].append(peerj)
+					except KeyError:
+						self.peer_to_siblings[peeri] = [peerj]
+					try:
+						self.peer_to_siblings[peerj].append(peeri)
+					except KeyError:
+						self.peer_to_siblings[peerj] = [peeri]
+		for peer,siblings in self.peer_to_siblings.items():
+			self.peer_to_siblings[peer] = sorted(list(set(siblings)))
+
+		# self.sibling_to_peer = {} ## easy for converting observed ASNs to our peers
+		# for popp in self.ae.popps:
+		# 	pop,peer = popp
+		# 	org = self.ae.utils.parse_asn(peer)
+		# 	for sibling_asn in self.ae.utils.org_to_as.get(org,[]):
+		# 		self.sibling_to_peer[sibling_asn] = peer
 
 	def add_popp_to_ae(self, popp):
 		if DEBUG_CLIENT_INFO_ADDING:
@@ -107,7 +134,7 @@ class Advertisement_Experiments_Wrapper:
 		### Add performance to UG
 		if DEBUG_CLIENT_INFO_ADDING:
 			print("Adding {}->{} : {}ms".format(ug,popp,latency))
-		if ug in UGS_OF_INTEREST:
+		if is_interesting_ug(ug):
 			print("Adding {}->{} : {}ms".format(ug,popp,latency))
 
 		self.ug_perfs[ug][popp] = latency
@@ -122,7 +149,7 @@ class Advertisement_Experiments_Wrapper:
 			self.calls_to_update_deployment.append(('add_ug_perf', ug, popp, latency))
 
 	def del_ug_perf(self, ug, popp, addcall=True):
-		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
+		if DEBUG_CLIENT_INFO_ADDING or is_interesting_ug(ug):
 			print("Deleting {}->{}".format(ug,popp))
 		del self.ug_perfs[ug][popp]
 		if addcall:
@@ -134,7 +161,7 @@ class Advertisement_Experiments_Wrapper:
 			self.del_ug(ug,addcall=Fale)
 
 	def del_ug(self, ug, addcall=True):
-		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
+		if DEBUG_CLIENT_INFO_ADDING or is_interesting_ug(ug):
 			print("Deleting UG {}, clients: {}".format(ug, self.ug_to_ip[ug]))
 		del self.ug_perfs[ug]
 		if addcall:
@@ -230,18 +257,47 @@ class Advertisement_Experiments_Wrapper:
 	def client_to_ripe_probe(self, client_addr):
 		return int(self.rau.atlas_24_to_probe_ids[ip32_to_24(client_addr)][0])
 
-	def conduct_measurements_to_prefix_popps_ripe(self, prefix_popps, every_client_of_interest, 
+	def remove_dups(self, call_prefix_popps, call_every_client_of_interest):
+		pruned_prefix_popps, pruned_every_client_of_interest = [], []
+		seen_already = {}
+		for pp, c in zip(call_prefix_popps, call_every_client_of_interest):
+			pp_hash = popps_to_hash(pp)
+			try:
+				seen_already[pp_hash]
+				continue
+			except KeyError:
+				pass
+			pruned_prefix_popps.append(pp)
+			pruned_every_client_of_interest.append(c)
+			seen_already[pp_hash] = None
+		return pruned_prefix_popps, pruned_every_client_of_interest
+
+	def conduct_measurements_to_prefix_popps_ripe(self, call_prefix_popps, call_every_client_of_interest, 
 		popp_lat_fn, **kwargs):
 		### Conducts measurements by instrumenting RIPE Atlas probes
 
+		prefix_popps, every_client_of_interest = self.remove_dups(call_prefix_popps, call_every_client_of_interest)
 
-		# print("ABOUT TO MEASURE")
-		# exit(0)
-		cache_fn = os.path.join(self.run_dir, 'tmp_ripe_results-{}.pkl'.format(int(time.time())))
-		atlas_probes = list([[self.client_to_ripe_probe(addr) for addr in sub_every_client_of_interest] for sub_every_client_of_interest in every_client_of_interest])
-		ripe_results_info, ripe_results, pinger_results = self.ae.conduct_measurements_to_prefix_popps_ripe(prefix_popps, every_client_of_interest, atlas_probes,
-			popp_lat_fn, **kwargs)
-		pickle.dump([prefix_popps, every_client_of_interest, ripe_results_info, ripe_results, pinger_results], open(cache_fn,'wb'))
+		
+		self.check_init_ae()
+		if kwargs.get('measurement_file_prefix', None) is not None:
+			cache_fn = os.path.join(self.run_dir, "{}_ripe_results.pkl".format(kwargs.get('measurement_file_prefix')))
+		else:
+			cache_fn = os.path.join(self.run_dir, 'tmp_ripe_results-{}.pkl'.format(int(time.time())))
+
+		if not (os.path.exists(popp_lat_fn) and os.path.exists(cache_fn)):
+			atlas_probes = list([[self.client_to_ripe_probe(addr) for addr in sub_every_client_of_interest] for sub_every_client_of_interest in every_client_of_interest])
+			total_n_probe_measurements = sum(len(probe_set) for probe_set in atlas_probes)
+			print("About to conduct measurements using {} probes...".format(total_n_probe_measurements))
+			time.sleep(20) # give me a chance to exit if this seems wrong
+
+
+			# print(len(prefix_popps))
+			# print("ABOUT TO MEASURE and store results in {}, {}".format(popp_lat_fn, cache_fn))
+			# exit(0)
+			ripe_results_info, ripe_results, pinger_results = self.ae.conduct_measurements_to_prefix_popps_ripe(prefix_popps, every_client_of_interest, atlas_probes,
+				popp_lat_fn, **kwargs)
+			pickle.dump([prefix_popps, every_client_of_interest, ripe_results_info, ripe_results, pinger_results], open(cache_fn,'wb'))
 
 		self.calls_to_update_deployment = []
 		self.parse_from_results_fn(popp_lat_fn, cache_fn)
@@ -268,6 +324,8 @@ class Advertisement_Experiments_Wrapper:
 				popps_str = "--".join(["-".join(popp)for popp in popps])
 				f.write("{},{}\n".format(pref,popps_str))
 
+				popps_with_siblings = list(sorted(list([(pop,sibling) for pop,peer in popps for sibling in self.peer_to_siblings.get(peer,[peer])])))
+
 				popps_by_pop = {}
 				for popp in popps:
 					try:
@@ -282,16 +340,19 @@ class Advertisement_Experiments_Wrapper:
 					except KeyError:
 						# Since been removed as a client
 						continue
+					if is_deletable_ug(ug): #### TMP!!!#*&!^*&$^!*&#^*&!^#*&!*
+						print("DELETING CLIENT FOR NO REASON --- SHOULD BE TEMPORARY")
+						self.del_client(client)
+						continue
 					try:
 						possible_popps = get_intersection(popps, self.ug_perfs[ug])
 					except KeyError:
 						# since been removed as a ug
 						continue
-
 					try:
 						ripe_probe = self.client_to_ripe_probe(client)
 					except KeyError:
-						# since been delted, continue
+						# since been deleted, continue
 						continue
 					try:
 						ripe_trace_result = ripe_results_set[0][ripe_probe]
@@ -301,6 +362,8 @@ class Advertisement_Experiments_Wrapper:
 							self.has_had_measurement[ripe_probe]
 							## It's possibly active, so just guess based on the popp
 							ripe_trace_result = ["*"]
+							if is_interesting_ug(ug):
+								print("Missed traceroute result for {} on {}, skipping...".format(ug, popps))
 
 						except KeyError:
 							# print("No results for probe {}, possibly remove".format(ripe_probe))
@@ -309,6 +372,8 @@ class Advertisement_Experiments_Wrapper:
 					if client not in pinger_results_set:
 						try:
 							self.has_had_measurement[client]
+							if is_interesting_ug(ug):
+								print("Missed pinger result for {} on {}, skipping...".format(ug, popps))
 							continue
 						except KeyError:
 							self.del_client(client)
@@ -349,7 +414,13 @@ class Advertisement_Experiments_Wrapper:
 					try:
 						asn_path[0]
 					except IndexError:
-						## bad traceroute, continue
+						try:
+							self.has_had_bad_traceroute[ripe_probe]
+							self.del_client(client) # too many bad traceroutes
+						except KeyError:
+							self.has_had_bad_traceroute[ripe_probe] = None # you get one chance
+						if is_interesting_ug(ug):
+							print("Bad traceroute result for {} on {}, skipping...".format(ug, popps))
 						continue
 					if asn_path[0] in self.disallowed_asns:
 						self.del_client(client)
@@ -365,7 +436,7 @@ class Advertisement_Experiments_Wrapper:
 							prev_asn = asn
 					except IndexError:
 						pass
-					if (pop,ingress_peer) not in popps: ## we wouldn't expect this peer, for whatever reason.  So be more strict
+					if (pop, ingress_peer) not in popps_with_siblings: ## we wouldn't expect this peer, for whatever reason.  So be more strict
 						## Convert Traceroute to peer ASN. We are very strict here, only allowing direct observable connections. Absolutely no unresponsive hops
 						ingress_peer = None
 						prev_asn = full_asn_path[0]
@@ -379,12 +450,19 @@ class Advertisement_Experiments_Wrapper:
 							prev_asn = asn
 					winning_popp = (pop, ingress_peer)
 
+					if winning_popp not in popps and winning_popp in popps_with_siblings:
+						## Need to convert to corresponding sibling we expect
+						print("Converting {}".format(winning_popp))
+						winning_org = self.ae.utils.parse_asn(winning_popp[1])
+						winning_popp = list([popp for popp in popps_with_siblings if popp[0] == winning_popp[0] and self.ae.utils.parse_asn(popp[1]) == winning_org])[0]
+						print("Converted to {}".format(winning_popp))
+
 					if len(popps_by_pop[pop]) == 1 and not confident_inference:
 						## If there's only one possible option, then we know the answer
 						## This assumes that our BGP limiting works perfectly, but that's ok because I think it does 99.9% of the time
 						winning_popp = popps_by_pop[pop][0]
 
-					if winning_popp not in popps and winning_popp in self.ae.popps and confident_inference:
+					if winning_popp not in popps_with_siblings and winning_popp in self.ae.popps and confident_inference:
 						# if winning_popp[1] not in ['199524', '137409']:
 						# 	print("Note --- ingress peer was {}, but we shouldn't be advertising to them. You need to update BGP limiter.".format(
 						# 		winning_popp))
@@ -395,15 +473,23 @@ class Advertisement_Experiments_Wrapper:
 							self.del_client(client)
 						# else:
 						# 	print("Annoying traceroute for ug {}".format(ug))
+						if is_interesting_ug(ug):
+							print("Weird oddly confident traceroute result for {} on {}, skipping...".format(ug, popps))
+							print("Note --- ingress peer was {}, but we shouldn't be advertising to them. You need to update BGP limiter.".format(
+								winning_popp))
+							print("Probe: {}, Client: {}, UG: {}".format(ripe_probe, client, ug))
+							for ip_hop,asn_hop in zip(ripe_trace_result, full_asn_path):
+								print("{}->{}".format(ip_hop,asn_hop))
 						continue
 
-					if self.ip_to_ug[client] in UGS_OF_INTEREST and len(popps) > 90:
-						self.print_client_description(client)
-						print(winning_popp)
-						print(popps_by_pop[pop])
-						print(confident_inference)
-						for ip_hop,asn_hop in zip(ripe_trace_result, full_asn_path):
-							print("{}->{}".format(ip_hop,asn_hop))
+					# if is_interesting_ug(self.ip_to_ug[client]) and len(popps) > 90:
+					# 	self.print_client_description(client)
+					# 	print(winning_popp)
+					# 	print(popps_by_pop[pop])
+					# 	print(confident_inference)
+					# 	for ip_hop,asn_hop in zip(ripe_trace_result, full_asn_path):
+					# 		print("{}->{}".format(ip_hop,asn_hop))
+
 
 					if len(this_pop_possible_popps) == 0:
 						if winning_popp in self.ae.popps:
@@ -486,6 +572,7 @@ class Advertisement_Experiments_Wrapper:
 class RealWorld_Measure_Wrapper:
 	#### Actually measure prefix advertisements in the wild, as opposed to simulating them
 	def __init__(self, run_dir, deployment_info, **kwargs):
+		self.dpsize = deployment_info['dpsize']
 		self.run_dir = run_dir
 		if self.run_dir is not None:
 			if not os.path.exists(self.run_dir):
@@ -534,28 +621,31 @@ class RealWorld_Measure_Wrapper:
 		if DEBUG_CLIENT_INFO_ADDING:
 			print("RWMW, Adding {}->{}:{}".format(ug,popp,round(latency)))
 		self.ug_perfs[ug][popp] = latency
+		self.measured_prefs[ug][popp] = Ing_Obj(popp)
 		if addcall:
 			self.calls_to_update_deployment.append(('add_ug_perf', ug, popp, latency))
-		self.check_update_deployment_upon_modify()
+		# self.check_update_deployment_upon_modify()
 
 	def del_ug_perf(self, ug, popp, addcall=True):
 		if DEBUG_CLIENT_INFO_ADDING:
 			print("RWMW, Deleting {}->{}".format(ug,popp))
 		del self.ug_perfs[ug][popp]
+		del self.measured_prefs[ug][popp]
 		if addcall:
 			self.calls_to_update_deployment.append(('del_ug_perf', ug, popp))
 
 		if len(self.ug_perfs[ug]) <= 1:
 			self.del_ug(ug,addcall=False)
-		self.check_update_deployment_upon_modify()
+		# self.check_update_deployment_upon_modify()
 
 	def del_ug(self, ug, addcall=True):
-		if DEBUG_CLIENT_INFO_ADDING or ug in UGS_OF_INTEREST:
+		if DEBUG_CLIENT_INFO_ADDING or is_interesting_ug(ug):
 			print("RWMW, Deleting {}".format(ug))
 		del self.ug_perfs[ug]
+		del self.measured_prefs[ug]
 		if addcall:
 			self.calls_to_update_deployment.append(('del_ug', ug))
-		self.check_update_deployment_upon_modify()
+		# self.check_update_deployment_upon_modify()
 
 	def del_client(self, client, addcall=True):
 		if DEBUG_CLIENT_INFO_ADDING:
@@ -613,9 +703,9 @@ class RealWorld_Measure_Wrapper:
 
 		## Possibly update our results cache to new keys if we've removed popps
 		for popps_hash in list(self.prefix_popps_to_catchments):
-			popps = self.hash_to_popps(popps_hash)
+			popps = hash_to_popps(popps_hash)
 			new_popps = get_intersection(self.popps, popps)
-			new_popps_hash = self.popps_to_hash(new_popps)
+			new_popps_hash = popps_to_hash(new_popps)
 			if new_popps_hash != popps_hash:
 				self.prefix_popps_to_catchments[new_popps_hash] = self.prefix_popps_to_catchments[popps_hash]
 				del self.prefix_popps_to_catchments[popps_hash]
@@ -625,43 +715,54 @@ class RealWorld_Measure_Wrapper:
 
 	def get_catchments(self, popps):
 		### Get's UG catchments assuming we advertise popps, or returns None if we don't exactly know the answer
-		popps_hash = self.popps_to_hash(popps)
+		popps_hash = popps_to_hash(popps)
 		try:
 			routed_through_ingress = self.prefix_popps_to_catchments[popps_hash]
 			for ug in self.ugs:
 				if routed_through_ingress.get(ug) is None:
-					print("Zero possible options for {}".format(ug))
+					print("Cached, in get catchemnts, zero possible options for {}".format(ug))
 		except KeyError:
 			routed_through_ingress = {}
 			for ug in self.ugs:
-				possible_peers = self.limit_potential_popps(all_available_options, ug)
+				possible_peers = self.limit_potential_popps(popps, ug)
 				if len(possible_peers) > 1:
 					return None
 				elif len(possible_peers) == 1:
 					routed_through_ingress[ug] = possible_peers[0]
 				else:
-					print("Zero possible options for {}".format(ug))
+					print("Not cached, in get catchments, zero possible options for {}".format(ug))
 		if len(routed_through_ingress) > 0:
 			return routed_through_ingress
 		else:
 			return None
 
-
-	def limit_potential_popps(self, possible_popps, ug):
+	def limit_potential_popps(self, advertised_popps, ug):
 		## Remove impossible options based on our known information
 		# print(available_popp_inds)
-		for popp in sorted(get_intersection(self.measured_prefs[ug], possible_popps)):
+
+		advertised_and_has_route = get_intersection(self.ug_perfs[ug], advertised_popps)
+		if len(advertised_and_has_route) == 1: ## only 1 possibility
+			return advertised_and_has_route
+
+		for i,popp in enumerate(sorted(advertised_and_has_route)):
 			node = self.measured_prefs[ug][popp]
-			if node.has_parent(possible_popps):
+			if node.has_parent(advertised_popps):
 				node.kill()
-			check_all_possible_popps = [popp for popp, node in self.measured_prefs[ug].items() if node.alive]
+			check_all_possible_popps = list([_popp for _popp, node in self.measured_prefs[ug].items() if node.alive and _popp in advertised_popps])
 			if len(check_all_possible_popps) == 1:
 				break
 		all_possible_popps = [popp for popp, node in self.measured_prefs[ug].items() if node.alive]
 		for popp in list(self.measured_prefs[ug]):
 			self.measured_prefs[ug][popp].alive = True
-		possible_popps = get_intersection(all_possible_popps, possible_popps)
-		return possible_popps
+		intersect_possible_popps = get_intersection(all_possible_popps, advertised_popps)
+
+		# if is_interesting_ug(ug):
+		# 	print("Advertised popps: {}, \nhas route and advertised popps: {}, \nacccounting for preferences popps: {}".format(
+		# 		advertised_popps, advertised_and_has_route, intersect_possible_popps))
+		# 	print('\n')
+
+
+		return intersect_possible_popps
 
 	def infer_ingress(self, possible_popps, ug, rtt, method='performance'):
 		"""
@@ -675,7 +776,7 @@ class RealWorld_Measure_Wrapper:
 		if len(possible_popps) == 1:
 			return possible_popps[0]
 		if len(possible_popps) == 0:
-			### Likely an incongruence in our logic which needs to be fixed
+			### Likely an incongruence in our logic which needs to be fixed (would throw an error)
 			pass
 
 		if method == 'performance':
@@ -688,17 +789,6 @@ class RealWorld_Measure_Wrapper:
 		else:
 			raise ValueError("Method {} for infering ingress not implemented".format(method))
 
-
-	def popps_to_hash(self, popps):
-		popps = sorted(popps)
-		popps_str = ",".join(["-".join(el) for el in popps])
-		return popps_str
-
-	def hash_to_popps(self, popps_hash):
-		popps = popps_hash.split(',')
-		popps = [tuple(popp.split('-')) for popp in popps]
-		return popps
-
 	def check_load_ae(self):
 		try:
 			self.ae
@@ -709,10 +799,31 @@ class RealWorld_Measure_Wrapper:
 				'ug_to_ip': self.ug_to_ip,
 				'popps': self.popps,
 				'ug_perfs': self.ug_perfs,
+				'dpsize': self.dpsize,
 			}
 			self.ae = Advertisement_Experiments_Wrapper('vultr', 'null', self.run_dir, deployment_info)
 
-	def measure_advs(self, advs):
+	def check_need_measure(self, advs):
+		self.check_load_ae()
+
+		self.check_update_deployment_upon_modify()
+
+		filtered_advs = []
+		for prefix_i, all_available_options in advs:
+			need_meas = False
+			try:
+				self.prefix_popps_to_catchments[popps_to_hash(all_available_options)]
+			except KeyError:
+				for ug in self.ugs:
+					possible_peers = self.limit_potential_popps(all_available_options, ug)
+					if len(possible_peers) > 1:
+						need_meas = True
+						break
+			if need_meas:
+				filtered_advs.append((prefix_i, all_available_options))
+		return filtered_advs
+
+	def measure_advs(self, advs, **kwargs):
 		#### advs is a list of (prefix_i, integer) tuples, each integer tuple corresponds to a PoPP tuple
 		#### return prefix_i -> ug -> PoPP for all relevant UGs
 
@@ -722,6 +833,14 @@ class RealWorld_Measure_Wrapper:
 
 		routed_through_ingress = {}
 		self.calls_to_update_deployment = []
+
+		if kwargs.get('measurement_file_prefix', None) is not None:
+			popp_lat_fn = os.path.join(self.run_dir, '{}_measure_output.csv'.format(kwargs.get('measurement_file_prefix')))
+			verb=True
+		else:
+			popp_lat_fn = os.path.join(self.run_dir, 'measure-output-{}.csv'.format(
+				int(time.time())))
+			verb=False
 
 		### First, filter advs to remove any cases for which we already know the answer
 		### We might already know the answer if it's a singleton advertisement
@@ -735,20 +854,28 @@ class RealWorld_Measure_Wrapper:
 			ugs_need_meas_by_prefix[prefix_i] = {}
 			need_meas = False
 			if DEBUG_CLIENT_INFO_ADDING:
-				print(self.popps_to_hash(all_available_options))
+				print(popps_to_hash(all_available_options))
 			try:
-				routed_through_ingress[prefix_i] = self.prefix_popps_to_catchments[self.popps_to_hash(all_available_options)]
+				routed_through_ingress[prefix_i] = self.prefix_popps_to_catchments[popps_to_hash(all_available_options)]
+				for ug in self.ugs:
+					if routed_through_ingress[prefix_i].get(ug) is None:
+						possible_peers = self.limit_potential_popps(all_available_options, ug)
+						if len(possible_peers) == 1:
+							routed_through_ingress[prefix_i][ug] = possible_peers[0]
+					if is_interesting_ug(ug):
+						print("Pulled from cache for {} ( {} available ): {}".format(all_available_options,
+							get_intersection(all_available_options, self.ug_perfs[ug]), routed_through_ingress[prefix_i].get(ug)))
 			except KeyError:
-				if DEBUG_CLIENT_INFO_ADDING:
+				if DEBUG_CLIENT_INFO_ADDING or verb:
 					dists = {}
 					for existing_popps_hash in self.prefix_popps_to_catchments:
-						amb = get_difference(self.hash_to_popps(existing_popps_hash),all_available_options)
-						bma = get_difference(all_available_options, self.hash_to_popps(existing_popps_hash))
+						amb = get_difference(hash_to_popps(existing_popps_hash),all_available_options)
+						bma = get_difference(all_available_options, hash_to_popps(existing_popps_hash))
 						dists[existing_popps_hash] = len(amb) + len(bma)
 					sdists = sorted(dists.items(), key = lambda el : el[1])
 					closest_option,_ = sdists[0]
-					amb = get_difference(self.hash_to_popps(closest_option),all_available_options)
-					bma = get_difference(all_available_options, self.hash_to_popps(closest_option))
+					amb = get_difference(hash_to_popps(closest_option),all_available_options)
+					bma = get_difference(all_available_options, hash_to_popps(closest_option))
 					print("Popps: {}".format(all_available_options))
 					print("Closest option difference A-B: {} B-A: {}".format(amb,bma))
 					print("Not in cache...")
@@ -759,7 +886,7 @@ class RealWorld_Measure_Wrapper:
 						ugs_need_meas_by_prefix[prefix_i][ug] = None
 					elif len(possible_peers) == 1:
 						routed_through_ingress[prefix_i][ug] = possible_peers[0]
-			print(ugs_need_meas_by_prefix[prefix_i])
+			# print(ugs_need_meas_by_prefix[prefix_i])
 			if need_meas:
 				filtered_advs.append((prefix_i, all_available_options))
 
@@ -779,36 +906,48 @@ class RealWorld_Measure_Wrapper:
 			for ug in ugs_need_meas_by_prefix[prefix_i]:
 				these_clients = these_clients.union(set(self.ug_to_ip[ug]))
 			every_client_of_interest.append(these_clients)
-
-		popp_lat_fn = os.path.join(self.run_dir, 'measure-output-{}.csv'.format(
-			int(time.time())))
-		i=0
-		while os.path.exists(popp_lat_fn):
-			popp_lat_fn = os.path.join(self.run_dir, 'measure-output-{}-{}.csv'.format(
-				int(time.time()), i))
-			i+=1
-		### TODO -- when we find new popps, we also just advertised to those. So I need to add those to the prefix_popps objects
+		
 		calls_to_update_deployment = self.ae.conduct_measurements_to_prefix_popps(prefix_popps, every_client_of_interest, 
 			popp_lat_fn, using_manual_clients = True, propagate_time = PROPAGATE_TIME,
-			logcomplete = False)
+			logcomplete = False, **kwargs)
 
 		self.check_update_calls_to_update_deployment(calls_to_update_deployment)
 
 
 		## Read results and update our model
 		this_ug_to_popp = self.load_and_add_info(popp_lat_fn)
-		for global_poppset, ret in this_ug_to_popp.items():
-			prefix_i = [prefix_i for prefix_i, adv in filtered_advs if \
-				set(adv) == set(global_poppset)][0]
+
+		## Now load the answers from cache
+		for prefix_i, all_available_options in filtered_advs:
+			ptoh = popps_to_hash(all_available_options)
 			try:
 				routed_through_ingress[prefix_i]
 			except KeyError:
 				routed_through_ingress[prefix_i] = {}
-			for ug,popp in ret.items():
+			if DEBUG_CLIENT_INFO_ADDING or verb:
+				dists = {}
+				for existing_popps_hash in self.prefix_popps_to_catchments:
+					amb = get_difference(hash_to_popps(existing_popps_hash),all_available_options)
+					bma = get_difference(all_available_options, hash_to_popps(existing_popps_hash))
+					dists[existing_popps_hash] = len(amb) + len(bma)
+				sdists = sorted(dists.items(), key = lambda el : el[1])
+				closest_option,_ = sdists[0]
+				amb = get_difference(hash_to_popps(closest_option),all_available_options)
+				bma = get_difference(all_available_options, hash_to_popps(closest_option))
+				print("Popps: {}".format(all_available_options))
+				print("Closest option difference A-B: {} B-A: {}".format(amb,bma))
+				print("Not in cache...")
+			for ug,popp in self.prefix_popps_to_catchments.get(ptoh, {}).items():
 				routed_through_ingress[prefix_i][ug] = popp
-
+			## Make sure the cash is also up to date on the users
+			for ug,popp in routed_through_ingress[prefix_i].items():
+				try:
+					self.prefix_popps_to_catchments[ptoh]
+				except KeyError:
+					self.prefix_popps_to_catchments[ptoh] = {}
+				self.prefix_popps_to_catchments[ptoh][ug] = popp
+		
 		self.check_update_deployment_upon_modify()
-
 		return routed_through_ingress, self.calls_to_update_deployment
 
 	def check_update_calls_to_update_deployment(self, calls_to_update_deployment):
@@ -832,6 +971,11 @@ class RealWorld_Measure_Wrapper:
 				uid += 1
 				pref_to_uid[pref_to_ip(pref)] = uid
 				uid_to_popps[uid] = popps
+
+				try:
+					tmp_parse_by_ug[tuple(sorted(popps))]
+				except KeyError:
+					tmp_parse_by_ug[tuple(sorted(popps))] = {}
 			else:
 				if TO_POP:
 					pref,t_meas,client_dst,dst_pop,_,rtt = fields
@@ -854,18 +998,34 @@ class RealWorld_Measure_Wrapper:
 						self.add_ug_perf(ug, (dst_pop,dst_peer), rtt)
 				## Possible ingresses given the user
 				possible_popps = get_intersection(self.ug_perfs[ug], popps_this_pop)
-
-				try:
-					tmp_parse_by_ug[tuple(sorted(popps_this_experiment))]
-				except KeyError:
-					tmp_parse_by_ug[tuple(sorted(popps_this_experiment))] = {}
 				try:
 					tmp_parse_by_ug[tuple(sorted(popps_this_experiment))][ug].append((possible_popps, rtt))
 				except KeyError:
 					tmp_parse_by_ug[tuple(sorted(popps_this_experiment))][ug] = [(possible_popps, rtt)]
 
-
 		for global_popp_set in tmp_parse_by_ug:
+
+			# ## TMP CHECK
+			# for ug in self.ugs:
+			# 	if is_interesting_ug(ug):
+			# 		has_route_and_advertised = get_intersection(self.ug_perfs[ug], global_popp_set)
+			# 		if len(has_route_and_advertised) > 0:
+			# 			possible_options = self.limit_potential_popps(global_popp_set, ug)
+			# 			if len(possible_options) > 1:
+			# 				try:
+			# 					tmp_parse_by_ug[global_popp_set][ug]
+			# 				except KeyError:
+			# 						print(popp_lat_fn)
+			# 						print("UG {} no measured route to {} but should be measuring !!!".format(ug, global_popp_set))
+			# 						exit(0)	
+			# 			elif len(possible_options) == 1:
+			# 				# easy
+			# 				continue
+			# 			else:
+			# 				print("UG {} Nonzero options for {} ({}), but 0 in possible options...".format(ug,
+			# 					global_popp_set,  has_route_and_advertised))
+
+
 			ret[global_popp_set] = {}
 			for ug, this_ug_results in tmp_parse_by_ug[global_popp_set].items():
 				## Due to our clustering, it's possible that two clients have different routing
@@ -897,8 +1057,8 @@ class RealWorld_Measure_Wrapper:
 				winning_popp = self.infer_ingress(possible_popps, ug, rtt)
 				ret[global_popp_set][ug] = winning_popp
 
-				if ug in UGS_OF_INTEREST:
-					print("{} {} {} {}".format(self.ug_to_ip[ug], len(global_popp_set), possible_popps, winning_popp))
+				# if is_interesting_ug(ug):
+				# 	print("{} {} {} {}".format(self.ug_to_ip[ug], len(global_popp_set), get_intersection(global_popp_set,self.ug_perfs[ug]), winning_popp))
 
 				### Update the model
 				routed_ingress_obj = self.measured_prefs[ug].get(winning_popp)
@@ -908,12 +1068,34 @@ class RealWorld_Measure_Wrapper:
 					beaten_ingress_obj.add_parent(routed_ingress_obj)
 					routed_ingress_obj.add_child(beaten_ingress_obj)
 			
-			# cache for later
-			self.prefix_popps_to_catchments[self.popps_to_hash(global_popp_set)] = ret[global_popp_set]
+			# # cache for later
+			# if np.abs(len(global_popp_set) - len(self.popps)) < 10:
+			# 	print(ret[global_popp_set])
+			ptoh = popps_to_hash(global_popp_set)
+			try:
+				self.prefix_popps_to_catchments[ptoh]
+			except KeyError:
+				self.prefix_popps_to_catchments[ptoh] = {}
+			for ug in ret[global_popp_set]:
+				self.prefix_popps_to_catchments[ptoh][ug] = ret[global_popp_set][ug]
+
+			# for ug in self.ugs:
+			# 	if is_interesting_ug(ug):
+			# 		possible_options = self.limit_potential_popps(global_popp_set, ug)
+			# 		print("In here, {} routable and {} possible options".format(len(get_intersection(self.ug_perfs[ug], global_popp_set)), len(possible_options)))
+			# 		if len(possible_options) == 1:
+			# 			print(possible_options)
+			# 			print(self.prefix_popps_to_catchments[popps_to_hash(global_popp_set)].get(ug))
+			# 		if len(possible_options) > 1:
+			# 			if self.prefix_popps_to_catchments[popps_to_hash(global_popp_set)].get(ug) is None:
+			# 				print("{} {} {}".format(len(global_popp_set), global_popp_set, possible_options))
+			# 				print("{} available but None stored".format(possible_options))
+			# 				exit(0)
+
 
 		return ret
 
-	def reload_info(self):
+	def reload_info(self, **kwargs):
 		### Bootstrap information about priorities that we know from previous experiments / measurements
 		
 		self.calls_to_update_deployment = []
@@ -922,19 +1104,23 @@ class RealWorld_Measure_Wrapper:
 		routed_through_ingress = {}
 		all_calls_update_deployment = []
 		called_ae = False
+
+		match_patterns = kwargs.get('match_file_patterns', ['tmp_ripe_results*.pkl'])
+
 		for rundir in self.past_rundirs:
 			self.check_load_ae()
-			these_runfiles = sorted(glob.glob(os.path.join(rundir, "tmp_ripe_results*.pkl")))
-			print("Loading information from {} runfiles in {}".format(len(these_runfiles), rundir))
-			for runfile in these_runfiles:
-				all_calls_update_deployment = all_calls_update_deployment + self.ae.load_all_info(runfile, 'tmp.txt')
-				called_ae = True
+			for match_pattern in match_patterns:
+				these_runfiles = sorted(glob.glob(os.path.join(rundir, match_pattern)))
+				print("Loading information from {} runfiles in {}".format(len(these_runfiles), rundir))
+				for runfile in these_runfiles:
+					all_calls_update_deployment = all_calls_update_deployment + self.ae.load_all_info(runfile, 'tmp.txt')
+					called_ae = True
 
-				this_ug_to_popp = self.load_and_add_info('tmp.txt')
-				for global_poppset, ret in this_ug_to_popp.items():
-					routed_through_ingress[uid] = ret
-					actives[uid] = global_poppset
-					uid += 1
+					this_ug_to_popp = self.load_and_add_info('tmp.txt')
+					for global_poppset, ret in this_ug_to_popp.items():
+						routed_through_ingress[uid] = ret
+						actives[uid] = global_poppset
+						uid += 1
 
 		if called_ae:
 			self.check_update_calls_to_update_deployment(all_calls_update_deployment)
@@ -948,9 +1134,11 @@ class RealWorld_Measure_Wrapper:
 		return routed_through_ingress, actives, self.calls_to_update_deployment
 
 class RIPE_Atlas_Utilities:
-	def __init__(self):
+	def __init__(self, dpsize):
+		self.deployment_of_interest = dpsize
 		self.ignore_probes = []
 		self.init_vars()
+
 
 	def init_vars(self):
 		self.atlas_24s = {}
@@ -959,8 +1147,14 @@ class RIPE_Atlas_Utilities:
 		self.atlas_24_to_asn = {}
 		self.atlas_24_to_probe_ids = {}
 
+
+		if self.deployment_of_interest == 'actual_second_prototype':
+			probes_fn = 'active_probes_20240331.json'
+		elif self.deployment_of_interest == 'actual_third_prototype':
+			probes_fn = 'active_probes_20240426.json'
+
 		### From here: https://ftp.ripe.net/ripe/atlas/probes/archive
-		for row in json.load(open(os.path.join(CACHE_DIR, 'active_probes_20240331.json'),'r'))['objects']:
+		for row in json.load(open(os.path.join(CACHE_DIR, probes_fn),'r'))['objects']:
 			if row['address_v4'] is None or row['status_name'] != "Connected": continue
 
 			probe_id = int(row['id'])
@@ -980,7 +1174,7 @@ class RIPE_Atlas_Utilities:
 			self.atlas_24_to_asn[ip32_to_24(addr)] = asn
 
 	def load_probe_perfs(self, **kwargs):
-		cache_fn = os.path.join(CACHE_DIR, 'ripe_atlas_perfs.pkl')
+		cache_fn = os.path.join(CACHE_DIR, 'ripe_atlas_perfs_{}.pkl'.format(self.deployment_of_interest))
 		if not os.path.exists(cache_fn):
 
 			pingable_targets = {}
@@ -1025,7 +1219,7 @@ class RIPE_Atlas_Utilities:
 
 			pickle.dump([these_addresses_perfs, these_addresses_anycast_perfs], open(cache_fn,'wb'))
 		else:
-			these_addresses_perfs, these_addresses_anycast_perfs = pickle.load(open(os.path.join(CACHE_DIR, 'ripe_atlas_perfs.pkl'), 'rb'))
+			these_addresses_perfs, these_addresses_anycast_perfs = pickle.load(open(cache_fn, 'rb'))
 		all_n_ingresses = list([len(v) for v in these_addresses_perfs.values()])
 
 		#### To get a sense of how many it should have
@@ -1033,8 +1227,7 @@ class RIPE_Atlas_Utilities:
 		# plt.plot(x,cdf_x)
 		# plt.savefig('tmp.pdf')
 
-		include_pops = kwargs.get('considering_pops')
-		assert include_pops is not None
+		include_pops = CONSIDERING_POPS_ACTUAL_DEPLOYMENT[self.deployment_of_interest]
 		pruned_these_addresses_perfs = {}
 		already_used = {}
 		for k,popps in these_addresses_perfs.items():
@@ -1059,9 +1252,9 @@ class RIPE_Atlas_Utilities:
 						pruned_these_addresses_perfs[ug] = {popp:these_addresses_perfs[k][popp]}
 						already_used[country,asn] = None
 
-		cutoff_n = 10 ## needs enough measurements
+		cutoff_n = 25 ## needs enough measurements
 		pruned_these_addresses_perfs = {k:v for k,v in pruned_these_addresses_perfs.items() if len(v) > cutoff_n}
-		min_lat = 30 ## has to be near enough
+		min_lat = 15 ## has to be near enough
 		pruned_these_addresses_perfs = {k:v for k,v in pruned_these_addresses_perfs.items() if min(list(pruned_these_addresses_perfs[k].values())) < min_lat}
 		for k,v in pruned_these_addresses_perfs.items():
 			print("{} (Probe ID {}) -- {}".format(k,self.atlas_24_to_probe_ids[ip32_to_24(k[2])], v))
@@ -1074,13 +1267,23 @@ class RIPE_Atlas_Utilities:
 		print("{} interesting probes after removing probes with 1 measurement".format(len(pruned_these_addresses_perfs)))
 
 
+		asns = list(set(asn for country,asn,_ in pruned_these_addresses_perfs))
+		countries = list(set(country for country,asn,_ in pruned_these_addresses_perfs))
+		# Probes are in 1992 ASNs and 121 countries
+		print("Probes are in {} ASNs and {} countries, have measurements to {} ingresses".format(len(asns), len(countries),
+			len(set(popp for ug in pruned_these_addresses_perfs for popp in pruned_these_addresses_perfs[ug]))))
+
 		these_addresses_anycast_perfs = {k:these_addresses_anycast_perfs[k[2]] for k in pruned_these_addresses_perfs}
 
 		return these_addresses_anycast_perfs, pruned_these_addresses_perfs
 
 
 if __name__ == "__main__":
-	rau = RIPE_Atlas_Utilities()
+	import argparse
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--dpsize", default=None, required=True)
+	args = parser.parse_args()
+	rau = RIPE_Atlas_Utilities(args.dpsize)
 	rau.load_probe_perfs()
 
 

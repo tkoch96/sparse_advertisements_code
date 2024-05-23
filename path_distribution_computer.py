@@ -55,7 +55,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			pass
 		self.init_all_vars()
 		self.run()
-		print('started in worker {}'.format(self.worker_i))
+		# print('started in worker {}'.format(self.worker_i))
 
 
 	def init_all_vars(self):
@@ -112,13 +112,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if self.simulated:
 			LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
 			power = 1.02
+			return np.minimum(2.4, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
 		else:
 			LIMITED_CAP_LATENCY_MULTIPLIER = 1.3
 			power = 1.04
+			return np.minimum(10.0, np.power(power,((self.iter+1)/3)) * LIMITED_CAP_LATENCY_MULTIPLIER)
 		# LIMITED_CAP_LATENCY_MULTIPLIER = 5
 		# power = 1.05
 		# return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
-		return np.minimum(1.5, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
 
 	def clear_caches(self):
 		self.this_time_ip_cache = {}
@@ -827,6 +828,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# self.print("Clearing calc cache, current len {}".format(len(cache_to_clear)))
 			self.this_time_ip_cache = {}
 			self.calc_cache.all_caches['lb'] = {}
+		if not self.simulated:
+			if np.random.random() > .9999:
+				## Just randomly clear it since we don't measure often
+				self.this_time_ip_cache = {}
+				self.calc_cache.all_caches['lb'] = {}
+
 
 	def clear_new_meas_caches(self):
 		# print("Clearing caches")

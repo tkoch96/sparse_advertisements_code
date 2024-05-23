@@ -24,6 +24,8 @@ def deployment_to_prefixes(deployment):
 		return 6
 	elif deployment['dpsize'] == 'actual_second_prototype':
 		return 12
+	elif deployment['dpsize'] == 'actual_third_prototype':
+		return 12
 
 	n_prefixes = np.maximum(4,2 * int(np.log2(len(deployment['popps']))))
 	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)

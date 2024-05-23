@@ -1,7 +1,12 @@
-import glob, os, yamlloader,yaml, numpy as np, matplotlib.pyplot as plt, re, tqdm, time, pickle, re, zipfile
+import glob, os, yamlloader,yaml, numpy as np,  re, tqdm, time, pickle, re, zipfile
 from constants import *
 from helpers import *
+import matplotlib
+matplotlib.rcParams['pdf.fonttype'] = 42
+matplotlib.rcParams['ps.fonttype'] = 42
+import matplotlib.pyplot as plt
 
+from paper_plotting_functions import *
 import multiprocessing
 
 def strip_digs(s):
@@ -105,7 +110,7 @@ def mp_parse(*args):
 									n_links_by_uid[k][link['label']] = None
 									i+=1
 					if np.random.random() > .9999:
-						pickle.dump([loads_by_loc_over_time, loads_by_link_over_time, loads_by_router_over_time,n_links_by_uid], open(save_fn,'wb'))
+						pickle.dump([loads_by_loc_over_time, loads_by_link_over_time, loads_by_router_over_time, n_links_by_uid], open(save_fn,'wb'))
 	except:
 		import traceback
 		traceback.print_exc()
@@ -172,7 +177,7 @@ def parse_and_plot():
 						
 			pickle.dump(global_rets, open(parsed_yaml_save_fn,'wb'))
 		else:
-			loads_by_loc_over_time, loads_by_link_over_time, loads_by_router_over_time,n_links_by_uid = pickle.load(open(parsed_yaml_save_fn,'rb'))
+			loads_by_loc_over_time, loads_by_link_over_time, loads_by_router_over_time, n_links_by_uid = pickle.load(open(parsed_yaml_save_fn,'rb'))
 		overall_min_t = min([t_report for k in loads_by_loc_over_time for t_report in loads_by_loc_over_time[k]])
 		n_links_by_uid = {k:len(v) for k,v in n_links_by_uid.items()}
 
@@ -266,10 +271,11 @@ def parse_and_plot():
 	plt.savefig('figures/ovh_peakutil_over_time_distribution.pdf')
 	plt.clf(); plt.close()
 
-	ns = [7,30,60,90,120]
+	ns = [7,30,60,90,120,240]
 	max_period_num_by_n = {n:np.max([day//n for day in days])+1 for n in ns}
 	print(max_period_num_by_n)
 	peak_utils_n_day_period = {n:{lnk:{i:[] for i in range(max_period_num_by_n[n])} for lnk in peak_utils} for n in ns}
+	avg_utils_n_day_period = {n:{lnk:{i:[] for i in range(max_period_num_by_n[n])} for lnk in peak_utils} for n in ns}
 	pctl_of_interest = 95
 	for n in ns:
 		for day in days:
@@ -281,34 +287,15 @@ def parse_and_plot():
 			for period_num,vs in peak_utils_n_day_period[n][lnk].items():
 				try:
 					peak_utils_n_day_period[n][lnk][period_num] = np.percentile(vs,pctl_of_interest)
+					avg_utils_n_day_period[n][lnk][period_num] = np.mean(vs)
 				except IndexError:
 					if len(vs) == 1:
 						peak_utils_n_day_period[n][lnk][period_num] = vs[0]
+						avg_utils_n_day_period[n][lnk][period_num] = vs[0]
 					else:
 						peak_utils_n_day_period[n][lnk][period_num] = 0
-		# if n == 120:
-		# 	for lnk in peak_utils:
-		# 		print(peak_utils_n_day_period[n][lnk])
-		# 		if np.random.random() > .9:
-		# 			exit(0)
-	for n in ns:
-		deltas = []
-		for lnk in peak_utils_n_day_period[n]:
-			max_delta = 0
-			for period_num in range(1,max_period_num_by_n[n]):
-				if peak_utils_n_day_period[n][lnk][period_num] == 0 or peak_utils_n_day_period[n][lnk][period_num-1] == 0:
-					continue
-				delta = peak_utils_n_day_period[n][lnk][period_num] - peak_utils_n_day_period[n][lnk][period_num-1]
-				max_delta = np.maximum(delta,max_delta)
-			deltas.append(max_delta)
-		x,cdf_x = get_cdf_xy(deltas)
-		plt.plot(x,cdf_x,label="Agg over {} days".format(n))
-	plt.legend()
-	plt.xlabel('Max Change in Peak Utilization Over Period')
-	plt.ylabel("CDF of Links")
-	plt.grid(True)
-	plt.savefig('figures/change_in_peak_util_over_periods.pdf')
-	plt.clf(); plt.close()
+						avg_utils_n_day_period[n][lnk][period_num] = 0
+	pickle.dump([avg_utils_n_day_period, peak_utils_n_day_period], open(os.path.join('cache','ovh_cache','peak_utils_n_day_period.pkl'),'wb'))
 
 
 	aggregated_daily_variance_by_day = {day:[] for day in days}
@@ -339,9 +326,392 @@ def parse_and_plot():
 	plt.clf(); plt.close()
 
 
+
+def paper_plots():
+	avg_utils_n_day_period, peak_utils_n_day_period = pickle.load(open(os.path.join('cache','ovh_cache','peak_utils_n_day_period.pkl'), 'rb'))
+	periods_to_plot = [60,120, 240]
+	f,ax = get_figure(h=2)
+	for ni,n in enumerate(sorted(peak_utils_n_day_period, reverse=True)):
+		if n not in periods_to_plot: continue
+		deltas = []
+		for lnk in peak_utils_n_day_period[n]:
+			max_delta = 0
+			for period_num in sorted(peak_utils_n_day_period[n][lnk]):
+				if period_num == 0: continue
+				if peak_utils_n_day_period[n][lnk][period_num] == 0 or peak_utils_n_day_period[n][lnk][period_num-1] == 0:
+					continue
+				delta = peak_utils_n_day_period[n][lnk][period_num] - peak_utils_n_day_period[n][lnk][period_num-1]
+				max_delta = np.maximum(delta,max_delta)
+			deltas.append(max_delta)
+		x,cdf_x = get_cdf_xy(deltas,n_points=30)
+		ax.plot(x,cdf_x,label="{} Day Period".format(n),marker=markers[ni])
+	ax.legend()
+	ax.set_xlabel('Change in 95th Pctl. Link Utilization Over N-Day Period')
+	ax.set_ylabel("CDF of \nOVH Cloud Links")
+	ax.grid(True)
+	save_figure('change_in_peak_util_over_periods.pdf')
+
+	over_provision_ratio = .5
+	f,ax = get_figure(h=2)
+	for ni,n in enumerate(sorted(peak_utils_n_day_period, reverse=True)):
+		if n not in periods_to_plot: continue
+		utilizations = []
+		for lnk in peak_utils_n_day_period[n]:
+			for period_num in sorted(peak_utils_n_day_period[n][lnk]):
+				if period_num == 0: continue
+				if peak_utils_n_day_period[n][lnk][period_num] == 0 or peak_utils_n_day_period[n][lnk][period_num-1] == 0:
+					continue
+				# over_provision_ratio = (peak_utils_n_day_period[n][lnk][period_num] - peak_utils_n_day_period[n][lnk][period_num-1]) / peak_utils_n_day_period[n][lnk][period_num-1]
+				new_cap = peak_utils_n_day_period[n][lnk][period_num-1] * (1 + over_provision_ratio)
+				avg_next = avg_utils_n_day_period[n][lnk][period_num]
+				utilization_next = avg_next/new_cap
+				if utilization_next > 1: continue ## numerical precision problems
+				utilizations.append(utilization_next)
+
+		x,cdf_x = get_cdf_xy(utilizations,n_points=50)
+		ax.plot(x,cdf_x,label="{} Day Period".format(n),marker=markers[ni])
+	ax.legend()
+	ax.set_xlim([0,1])
+	ax.set_xlabel('Utilization in Next N-Days With N-Day Planning Period')
+	ax.set_ylabel("CDF of OVH Cloud\n Links,Periods")
+	ax.grid(True)
+	save_figure('utilization_over_periods.pdf')
+
+
+
+	periods_to_plot = [120]
+	over_provision_ratios = np.linspace(.1,.7,num=20)
+	median_utilizations = {}
+	congestive_events = {}
+	for over_provision_ratio in over_provision_ratios:
+		for ni,n in enumerate(sorted(peak_utils_n_day_period, reverse=True)):
+			if n not in periods_to_plot: continue
+			utilizations = []
+			congestive_periods = 0
+			for lnk in peak_utils_n_day_period[n]:
+				for period_num in sorted(peak_utils_n_day_period[n][lnk]):
+					if period_num == 0: continue
+					if peak_utils_n_day_period[n][lnk][period_num] == 0 or peak_utils_n_day_period[n][lnk][period_num-1] == 0:
+						continue
+					# over_provision_ratio = (peak_utils_n_day_period[n][lnk][period_num] - peak_utils_n_day_period[n][lnk][period_num-1]) / peak_utils_n_day_period[n][lnk][period_num-1]
+					new_cap = peak_utils_n_day_period[n][lnk][period_num-1] * (1 + over_provision_ratio)
+					avg_next = avg_utils_n_day_period[n][lnk][period_num]
+					if peak_utils_n_day_period[n][lnk][period_num] / new_cap > 1:
+						congestive_periods += 1
+					utilization_next = avg_next/new_cap
+					if utilization_next > 1: continue ## numerical precision problems
+					utilizations.append(utilization_next)
+
+			try:
+				median_utilizations[n].append(np.median(utilizations))
+				congestive_events[n].append(congestive_periods)
+			except KeyError:
+				median_utilizations[n] = [np.median(utilizations)]
+				congestive_events[n] = [congestive_periods]
+	
+	f,ax = get_figure(h=2)
+	for ni,n in enumerate(sorted(median_utilizations)):
+		ax.plot(100*over_provision_ratios,median_utilizations[n],linestyle='dotted', label="{} Day Planning Period".format(n),marker=markers[ni])
+	ax.annotate("Link Utilization", (40,.6))
+
+	ax2 = ax.twinx()
+	for ni,n in enumerate(sorted(median_utilizations)):
+		ax2.plot(100*over_provision_ratios,congestive_events[n],marker=markers[ni])
+	ax2.set_ylabel("Congestion Events")
+	ax2.set_ylim([0,7000])
+	ax2.annotate("Congestion", (20,2100))
+
+	ax.set_xlabel("Link Over Provisioning Factor (Pct)")
+	ax.set_ylabel("Future Median \nLink Utilization")
+	# ax.legend(fontsize=12)
+	ax.set_ylim([0,1.0])
+	ax.grid(True)
+	
+	save_figure('median_utilization_over_overprovisioning.pdf')
+
+def find_flash_crowd(data, threshold_mt, location):
+	crowds_arr_x = []
+	crowds_arr_y = []
+	sorted_data = {k: v for k,v in sorted(data.items())}
+	sorted_data = list(sorted(data.items(), key = lambda el : el[0]))
+	initial_time = sorted_data[0][0]
+
+	crowd_start = 0
+	crowd_end = 0
+	crowd_started = False
+
+	times = list([el[0] for el in sorted_data])
+	loads = list([el[1] for el in sorted_data])
+
+	crowds = []
+	critical_n_ended = 3 ## minimum number to end a flash crowd
+	critical_n_started = 3 ## minimum number to start a flash crowd
+	n_ended = 0
+	n_started = 0
+	print("total number of times {}".format(len(times)))
+	n_avg_over = 100 ## ~5N minutes
+	for i in range(len(times)):
+		avg_start,avg_end = i-n_avg_over,i+n_avg_over
+		if i < n_avg_over:
+			avg_start = 0
+		elif i + n_avg_over > len(loads) - 1:
+			avg_end = len(loads) - 1
+		recent_threshold = np.mean(loads[avg_start:avg_end]) * threshold_mt
+		if recent_threshold < 500: continue ## trivial
+		if loads[i] > recent_threshold:
+			n_started += 1
+			if n_started >= critical_n_started:
+				if not crowd_started:
+					crowd_start = i - critical_n_started
+					crowd_started = True
+					flash_intensity = loads[i] / np.mean(loads[avg_start:avg_end])
+			n_ended = 0
+		else:
+			n_started = 0
+			if crowd_started:
+				n_ended += 1
+			if n_ended >= critical_n_ended:
+				crowd_end = i-critical_n_ended
+				crowd_started = False
+				print("Crowd Detected for around ", (crowd_end - crowd_start)/12, " hours")
+
+				print("{} {} {}".format(crowd_start, crowd_end, flash_intensity))
+				print(loads[crowd_start-5:crowd_end+5])
+
+				# plt.plot(loads[crowd_start-n_avg_over:crowd_end+n_avg_over])
+				# plt.savefig('example_loads.pdf')
+				# plt.clf(); plt.close()
+
+
+				crowds.append((crowd_start, crowd_end, flash_intensity))
+				crowd_start = 0
+				crowd_end = 0   
+				n_ended = 0
+				flash_intensity = 0
+
+	return times, loads, crowds      
+
+def smooth_ewma(arr, alpha=.1):
+	return arr
+	new_arr = [arr[0]]
+	for i in range(1,len(arr)):
+		new_arr.append(alpha * new_arr[i-1] + (1 - alpha) * arr[i])
+	new_arr.append(new_arr[-1])
+	return np.array(new_arr) 
+
+def ilgar_flashcrowd_analysis():
+
+	# #### FOR SPLITTING DATA INTO PER LOCATION, EASIER TO DEBUG
+	# all_data = pickle.load(open(os.path.join(DATA_DIR ,'weathermap_parsed_stats.pkl'),'rb'))
+	# link_to_load = all_data[1]
+	# links = list(all_data[1])
+	# locations = {}
+	# all_times = {}
+	# for link in tqdm.tqdm(links,desc="aggregating all times"):
+	# 	location = link.split('-')[0]
+	# 	locations[location] = None
+	# 	for t in link_to_load[link]:
+	# 		all_times[t] = None
+	# new_link_by_location = {}
+	# all_times = sorted(list(all_times))
+	# for link in tqdm.tqdm(links,desc="Filling in missing link time series data"):
+	# 	location = link.split('-')[0]
+	# 	try:
+	# 		new_link_by_location[location]
+	# 	except KeyError:
+	# 		new_link_by_location[location] = {}
+	# 	prev_v = None
+	# 	for t in all_times:
+	# 		try:
+	# 			this_v = link_to_load[link][t]
+	# 		except KeyError:
+	# 			if prev_v is None: continue
+	# 			this_v = prev_v
+	# 		try:
+	# 			new_link_by_location[location][t] += this_v
+	# 		except KeyError:
+	# 			new_link_by_location[location][t] = this_v
+	# 		prev_v = this_v
+
+	# for location in locations:
+	# 	fn = os.path.join(CACHE_DIR, 'ovh_cache', 'by_location', '{}_data.pkl'.format(location))
+	# 	pickle.dump(new_link_by_location[location], open(fn,'wb'))
+
+	cache_fn = os.path.join(CACHE_DIR, 'ovh_cache', 'location_crowds_data.pkl')
+	#### FOR FINDING FLASH CROWDS	
+	if False:
+		flash_crowd_data = pickle.load(open(cache_fn,'rb'))
+		locations = sorted(list(flash_crowd_data))
+
+		flash_crowd_data = {}
+		for location in tqdm.tqdm(locations, desc="Finding flash crowds in each location..."):
+			print(location)
+			fn = os.path.join(CACHE_DIR, 'ovh_cache', 'by_location', '{}_data.pkl'.format(location))
+			data = pickle.load(open(fn,'rb'))
+			threshold = 1.5
+			flash_crowd_data[location] = find_flash_crowd(data, threshold, location)
+		pickle.dump(flash_crowd_data, open(cache_fn, "wb")) #Format: dictionary, keys are location names, values are arrays of [x_arr, y_arr and [(crowd_start, crowd_end)]]
+	
+	
+
+	flash_crowd_data = pickle.load(open(cache_fn,'rb'))
+	locations = sorted(list(flash_crowd_data))
+	locations_of_interest = ['nyc', 'chi', 'zrh', 'syd', 'mil', 'mia','par','pao','sea','sin','vie', 'fra', 'nwk', 'lax', 'mad', 'yto', 'ldn', 'sgp', 'mrs', 'ymq']
+	# ['ams', 'ash', 'atl', 'bhs', 'bom', 'bru', 'chi', 'dfw', 'equinix', 'eur', 'europe', 'fra', 'france', 'google', 
+	# 'gra', 'gsw', 'jastel', 'las', 'lax', 'ldn', 'lej', 'lon', 'mad', 'mia', 'mil', 'mrs', 'north america', 'nwk', 
+	# 'nyc', 'online', 'orange', 'oti', 'pao', 'par', 'pdx', 'prg', 'rbx', 'sbg', 'sea', 'seabone', 'sfr', 'sgp', 'sin', 
+	# 'sjc', 'sjo', 'sxb', 'syd', 'telefonica', 'th', 'var', 'verizon', 'vie', 'vodafone', 'was', 'waw', 'ymq', 'yto', 'zrh']
+	if False:
+		all_times = {}
+		for location in tqdm.tqdm(locations, desc="Finding overlapping flash crowds"):
+			if location not in locations_of_interest: continue
+			time_arr = flash_crowd_data[location][0]
+			load_arr = flash_crowd_data[location][1]
+			crowds_arr = flash_crowd_data[location][2]
+		
+			# print("Location: {}, crowds: {}".format(location, len(crowds_arr)))
+			sorted_crowds = list(sorted(crowds_arr, key = lambda el : el[0]))
+			for i,(crowd_start,crowd_stop,_) in enumerate(sorted_crowds):
+				for t in range(crowd_start,crowd_stop):
+					## t is an index
+					actual_time = time_arr[t]
+					try:
+						all_times[actual_time].append((location, i))
+					except KeyError:
+						all_times[actual_time] = [(location, i)]
+		print("Finding overlaps...")
+		ranked_times = list(sorted(all_times.items(), key = lambda el : -1 * len(el[1])))
+
+		
+		used_fc_ids = {}
+		all_n_events = []
+		for plti,(t,events) in tqdm.tqdm(enumerate(ranked_times), desc="Plotting each FC event.."):
+			used = False
+			for k in events:
+				try:
+					used_fc_ids[k]
+					used = True
+					break
+				except KeyError:
+					pass
+			if used:
+				continue
+			for loci,(location, _id) in enumerate(events):
+				used_fc_ids[location,_id] = None
+			all_n_events.append(len(events))
+			
+		x,cdf_x = get_cdf_xy(all_n_events)
+		plt.plot(x,cdf_x)
+		plt.xlabel("Number of Sites a Flash Crowd Affects")
+		plt.ylabel("CDF of Flash Crowds")
+		plt.grid(True)
+		plt.savefig('figures/number_sites_per_flash_crowd.pdf')
+
+
+		n_to_plot,n_plotted = 50,0
+		f,ax = plt.subplots(n_to_plot,1)
+		f.set_size_inches(7,4*n_to_plot)
+		colors = ['red','blue','black','salmon','maroon', 'tan', 'coral','lawngreen', 'grey', 'peru','darkgoldenrod','violet','crimson']
+		used_fc_ids = {}
+		for plti,(t,events) in tqdm.tqdm(enumerate(ranked_times), desc="Plotting each FC event.."):
+			used = False
+			for k in events:
+				try:
+					used_fc_ids[k]
+					used = True
+					break
+				except KeyError:
+					pass
+			if used:
+				continue
+
+			max_val = 0
+			for loci,(location, _id) in enumerate(events):
+				time_arr = np.array(flash_crowd_data[location][0])
+				load_arr = np.array(flash_crowd_data[location][1])
+				index_of_interest = np.argmin(np.abs(time_arr-t))
+				indices_of_interest = np.array(list(range(index_of_interest-100,index_of_interest+100)))
+				load_arr = smooth_ewma(load_arr)
+				max_val = np.maximum(max_val, np.max(load_arr[indices_of_interest]))
+			for loci,(location, _id) in enumerate(events):
+				time_arr = np.array(flash_crowd_data[location][0])
+				load_arr = np.array(flash_crowd_data[location][1])
+
+				index_of_interest = np.argmin(np.abs(time_arr-t))
+				print("{} {} {}".format(location, index_of_interest, time_arr[index_of_interest]))
+				indices_of_interest = np.array(list(range(index_of_interest-100,index_of_interest+100)))
+
+				load_arr = smooth_ewma(load_arr)
+				tplot = (time_arr[indices_of_interest]-np.min(time_arr[indices_of_interest])) / 3600
+
+				lplot = load_arr[indices_of_interest] / max_val
+				ax[n_plotted].plot(tplot, lplot, label=location, color=colors[loci%len(colors)])
+				ax[n_plotted].axvline((time_arr[index_of_interest]-np.min(time_arr[indices_of_interest])) / 3600,0,1.0,color=colors[loci%len(colors)])
+
+				used_fc_ids[location,_id] = None
+			
+			ax[n_plotted].set_xlabel("Time (h)")
+			ax[n_plotted].set_ylabel("Normalized Load")
+			ax[n_plotted].legend()
+
+			n_plotted += 1
+			if n_plotted == n_to_plot: 
+				break
+		plt.savefig('figures/flashcrowd_investigation.pdf')
+
+
+
+
+	crowds_intensities = []
+	for location in tqdm.tqdm(locations, desc="Finding intense flash crowds"):
+		if location not in locations_of_interest: continue
+		time_arr = flash_crowd_data[location][0]
+		load_arr = flash_crowd_data[location][1]
+		crowds_arr = flash_crowd_data[location][2]
+	
+		# print("Location: {}, crowds: {}".format(location, len(crowds_arr)))
+		sorted_crowds = list(sorted(crowds_arr, key = lambda el : el[0]))
+		for i,(crowd_start,crowd_stop,intensity) in enumerate(sorted_crowds):
+			## t is an index
+			crowds_intensities.append((intensity,location,i))
+	ranked_fcs = sorted(crowds_intensities, key = lambda el : -1 * el[0])
+	
+	n_to_plot,n_plotted = 50,0
+	f,ax = plt.subplots(n_to_plot,1)
+	f.set_size_inches(7,4*n_to_plot)
+	colors = ['red','blue','black','salmon','maroon', 'tan', 'coral','lawngreen', 'grey', 'peru','darkgoldenrod','violet','crimson']
+	for plti,(intensity,location,i) in enumerate(ranked_fcs):
+		crowd_start,crowd_stop,_ = flash_crowd_data[location][2][i]
+		time_arr = np.array(flash_crowd_data[location][0])
+		load_arr = np.array(flash_crowd_data[location][1])
+
+		index_of_interest_start = crowd_start
+		index_of_interest_stop = crowd_stop
+		indices_of_interest = np.array(list(range(index_of_interest_start-100,index_of_interest_stop+100)))
+
+		load_arr = smooth_ewma(load_arr)
+		tplot = (time_arr[indices_of_interest]-np.min(time_arr[indices_of_interest])) / 3600
+		lplot = load_arr[indices_of_interest] / np.max(load_arr[indices_of_interest])
+
+		ax[n_plotted].plot(tplot, lplot, label=location, color=colors[0])
+		ax[n_plotted].axvline((time_arr[index_of_interest_start]-np.min(time_arr[indices_of_interest])) / 3600,0,1.0,color=colors[0])
+
+		ax[n_plotted].set_xlabel("Time (h)")
+		ax[n_plotted].set_ylabel("Intensity: {} Normalized Load".format(round(intensity,2)))
+		ax[n_plotted].legend()
+
+		n_plotted += 1
+		if n_plotted == n_to_plot: 
+			break
+	plt.savefig('figures/flashcrowd_investigation_by_intensity.pdf')
+
+
+
 if __name__ == "__main__":
 	# fetch_files()
-	parse_and_plot()
+	# parse_and_plot()
+	# paper_plots()
+	ilgar_flashcrowd_analysis()
 
 
 

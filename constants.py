@@ -15,6 +15,8 @@ GRAD_CLIP_VAL = 10
 
 LBX_DENSITY = 50
 
+N_PREFIXES = 10
+
 ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
 def threshold_a(a):
@@ -23,18 +25,21 @@ def threshold_a(a):
 
 
 UGS_OF_INTEREST = []
+# UGS_TO_DELETE = [('vtrnewyork', 459)]
+UGS_TO_DELETE = []
 
 DEFAULT_PORT = 31600
 
 
 ## to identify when we're looking at an actual deployment
-ACTUAL_DEPLOYMENT_SIZES = ["actual_first_prototype", "actual_second_prototype"]
+ACTUAL_DEPLOYMENT_SIZES = ["actual_first_prototype", "actual_second_prototype", "actual_third_prototype"]
 DEBUG_CLIENT_INFO_ADDING = False
 
 
 CONSIDERING_POPS_ACTUAL_DEPLOYMENT = {
 	"actual_first_prototype": ['vtrnewyork', 'vtratlanta', 'vtrmiami'],
 	"actual_second_prototype": ['vtrnewyork', 'vtratlanta', 'vtrmiami', 'vtrparis', 'vtrlondon'],
+	"actual_third_prototype": ['vtrnewyork', 'vtratlanta', 'vtrmiami', 'vtrparis', 'vtrlondon', 'vtrsaopaulo', 'vtrchicago', 'vtrdallas', 'vtrmadrid', 'vtrstockholm']
 }
 
 NON_SIMULATED_LINK_CAPACITY = 100000
@@ -75,6 +80,7 @@ def get_n_workers(deployment_size):
 		'actual-large': 28,
 		'actual_first_prototype': 2,
 		'actual_second_prototype': 2,
+		'actual_third_prototype': 2,
 		'small': 2,
 		'decent': 8,
 		'med': 1,

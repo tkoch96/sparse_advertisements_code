@@ -1,18 +1,18 @@
 from constants import *
 from eval_latency_failure import evaluate_all_metrics
 import numpy as np, os, pickle
-np.random.seed(31700)
+np.random.seed(31705)
 import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
 import matplotlib.pyplot as plt
 
-# todo -- selectively compute each element of metrics_by_dpsize
+from paper_plotting_functions import *
 
 def pull_results(cache_fn):
 	cache_fn = os.path.join(CACHE_DIR, 'evaluate_over_deployment_sizes_cache_fn.pkl')
 
-	only_recalc = [3] ## recalc these deployment sizes
+	only_recalc = [25] ## recalc these deployment sizes
 	metrics_by_dpsize = {}
 	if os.path.exists(cache_fn):
 		metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
@@ -21,20 +21,18 @@ def pull_results(cache_fn):
 		parser = argparse.ArgumentParser()
 		parser.add_argument("--port", required=True)
 		args = parser.parse_args()
-		# n_sim_by_dpsize = [15,20,10,16,4,5,6] # running now
-		# n_sim_by_dpsize = [15,20,10,16,4,2,4] # already done
-		n_sim_by_dpsize = [1,20,10,16,4,2,4] # testing
+		n_sim_by_dpsize = [15,20,10,16,10,10,6] # running now
+		# n_sim_by_dpsize = [15,20,10,16,8,5,6] # done
 		for dpsize, nsim in zip([3,5,10,15,20,25,len(POP_TO_LOC['vultr'])], n_sim_by_dpsize):
 			if only_recalc is not None:
 				if dpsize not in only_recalc: continue
 			print("Evaluating over deployment size {} Sites".format(dpsize))
 			dpsize_str = "actual-{}".format(dpsize)
-			if dpsize == 32:
-				save_run_dir = [None, None, None, None, '1713454873-actual-32-sparse', None]
-			elif dpsize == 25:
-				save_run_dir = [None, None, '1713486580-actual-25-sparse', None, None]
-			else:
-				save_run_dir = None
+			# if dpsize == 32:
+			# 	save_run_dir = [None, None, None, None, None, '1713700098-actual-32-sparse']
+			# else:
+			# 	save_run_dir = None
+			save_run_dir = None
 			metrics = evaluate_all_metrics(dpsize_str, int(args.port), save_run_dir=save_run_dir, nsim=nsim)
 			metrics_by_dpsize[dpsize] = {}
 			for k in metrics:
@@ -42,192 +40,73 @@ def pull_results(cache_fn):
 					metrics_by_dpsize[dpsize][k] = metrics[k]
 		pickle.dump(metrics_by_dpsize, open(cache_fn, 'wb'))
 
-
-	## second one is 4 keys * 3 latency thresholds per key
-	n_subs = 5 + 6*3 + 1 + 1
-	f,ax = plt.subplots(n_subs)
-	f.set_size_inches(6,4*n_subs)
-	dpsizes = sorted(list(metrics_by_dpsize))
-	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
-
-	ks = ['stats_popp_failures_latency_optimal_specific', 'stats_pop_failures_latency_optimal_specific']
-
-	for solution in solutions:
-		avg_latency_diff_normal = []
-		agg_metrics = {k:{lab:[] for lab in ['latency','congestion']} for k in ks}
-		for dpsize in dpsizes:
-			avg_latency_diff_normal.append(-1*metrics_by_dpsize[dpsize]['stats_best_latencies'][solution])
-
-			for k in ks:
-				these_metrics = metrics_by_dpsize[dpsize][k][solution]
-				agg_metrics[k]['latency'].append(-1*these_metrics['avg_latency_difference'])
-				agg_metrics[k]['congestion'].append(these_metrics['frac_vol_congested'])
-		ax[0].plot(dpsizes,avg_latency_diff_normal, label=solution)
-		
-		for i,k in enumerate(ks):
-			ax[1+2*i].plot(dpsizes,agg_metrics[k]['latency'], label=solution)
-			ax[1+2*i+1].plot(dpsizes,agg_metrics[k]['congestion'], label=solution)
-	
-	ax[0].set_xlabel("Deployment Size (Num Sites)")
-	ax[0].set_ylabel("Average Latency Suboptimality\nNormal Operation (ms)")
-	ax[0].legend()
-
-	for i,lab in enumerate(['Ingress', 'Site']):
-		ax[1+2*i].set_xlabel("Deployment Size (Num Sites)")
-		ax[1+2*i].set_ylabel("Average Latency Suboptimality\n During {} Failure (ms)".format(lab))
-		ax[1+2*i].legend()
-		
-		ax[1+2*i+1].set_xlabel("Deployment Size (Num Sites)")
-		ax[1+2*i+1].set_ylabel("Fraction Volume Congested\nDuring {} Failure".format(lab))
-		ax[1+2*i+1].legend()
-
-	ax_start = 5
-	ks = ['stats_latency_thresholds_normal', 'stats_latency_thresholds_fail_popp', 'stats_latency_thresholds_fail_pop',
-		'stats_latency_penalty_thresholds_normal', 'stats_latency_penalty_thresholds_fail_popp', 'stats_latency_penalty_thresholds_fail_pop']
-	parsed_metrics = {}
-	for solution in solutions:
-		lat_thresholds = {}
-		agg_metrics = {k:{dpsize:{} for dpsize in dpsizes} for k in ks}
-		for dpsize in dpsizes:
-			for k in ks:
-				try:
-					these_metrics = metrics_by_dpsize[dpsize][k][solution]
-				except KeyError:
-					pass					
-				for soln_i in these_metrics:
-					for lat_threshold in these_metrics[soln_i]:
-						lat_thresholds[lat_threshold] = None
-						try:
-							agg_metrics[k][dpsize][lat_threshold].append(these_metrics[soln_i][lat_threshold])
-						except KeyError:
-							agg_metrics[k][dpsize][lat_threshold] = [these_metrics[soln_i][lat_threshold]]
-		parsed_metrics[solution] = agg_metrics
-	n_lat_thresholds = len(lat_thresholds)
-	for i,k in enumerate(ks):
-		for j,lat_threshold in enumerate(sorted(lat_thresholds,reverse=True)):
-			for solution in solutions:
-				arr = list([100-100*np.mean(parsed_metrics[solution][k][dpsize][lat_threshold]) for dpsize in dpsizes])
-				ax[ax_start+i*n_lat_thresholds+j].plot(dpsizes, arr, label="{}".format(solution))
-			lab = ['Percent of Traffic Within\n {} ms of Optimal Normally'.format(int(np.abs(lat_threshold))), 'Percent of Traffic Within\n {} ms of Optimal Link Failure'.format(int(np.abs(lat_threshold))),
-				 'Percent of Traffic Within\n {} ms of Optimal Site Failure'.format(int(np.abs(lat_threshold))),
-				 'Percent of Traffic Within\n {} ms of Optimal Normally (Penalty)'.format(int(np.abs(lat_threshold))), 'Percent of Traffic Within\n {} ms of Optimal Link Failure (Penalty)'.format(int(np.abs(lat_threshold))),
-				 'Percent of Traffic Within\n {} ms of Optimal Site Failure (Penalty)'.format(int(np.abs(lat_threshold))),][i]
-			ax[ax_start+i*n_lat_thresholds+j].set_xlabel("Deployment Size (Num Sites)")
-			ax[ax_start+i*n_lat_thresholds+j].set_ylabel(lab)
-			ax[ax_start+i*n_lat_thresholds+j].legend()
-
-	ax_start = 5 + 6*3
-	for solution in solutions:
-		this_resiliences = []
-		for dpsize in dpsizes:
-			try:
-				avg_resilience = np.average(list(metrics_by_dpsize[dpsize]['stats_resilience_to_congestion'][solution].values()))
-				this_resiliences.append(avg_resilience)
-			except KeyError:
-				pass
-		ax[ax_start].plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution)
-	ax[ax_start].set_xlabel("Deployment Size (Num Sites)")
-	ax[ax_start].set_ylabel("Flash Crowd Volume Blowup\nBefore Congestion")
-	ax[ax_start].legend()
-
-
-
-	ax_start = 5 + 6*3 + 1
-	for solution in solutions:
-		this_resiliences = list([metrics_by_dpsize[dpsize]['stats_volume_multipliers'][solution] for dpsize in dpsizes])
-		ax[ax_start].plot(dpsizes, this_resiliences, label=solution)
-	ax[ax_start].set_xlabel("Deployment Size (Num Sites)")
-	ax[ax_start].set_ylabel("Average Latency over \nOne per Ingress (ms)")
-	ax[ax_start].legend()
-
-
-
-	plt.savefig('figures/stats_over_deployment_size.pdf')
-
-
-def get_figure(l=7,h=3):
-	plt.clf()
-	plt.close()
-
-	font = {'size'   : 14}
-	matplotlib.rc('font', **font)
-	f,ax = plt.subplots(1)
-	f.set_size_inches(l,h)
-	return f,ax
-
-def save_figure(fn):
-	plt.savefig(os.path.join('figures', 'paper', fn), bbox_inches='tight')
-	plt.clf()
-	plt.close()
-
-def make_paper_plots(cache_fn):
+def make_paper_plots(cache_fn, **kwargs):
 	metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
 	dpsizes = sorted(list(metrics_by_dpsize))
 	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
 
-	solution_to_plot_label = {
-		'sparse': 'SCULPTOR',
-		'painter': 'PAINTER',
-		'anyopt': 'AnyOpt',
-		'anycast': 'Anycast',
-		'one_per_pop': 'Unicast',
-		'one_per_peering': 'One per Peering'
-	}
-
-	solution_to_line_color = {
-		'sparse': 'magenta',
-		'painter': 'black',
-		'anyopt': 'orange',
-		'anycast': 'midnightblue',
-		'one_per_pop': 'red', 
-		'one_per_peering': 'lawngreen',
-	}
-	solution_to_marker = {
-		'sparse': '*',
-		'painter': 'o',
-		'anyopt': '>',
-		'anycast': 'D',
-		'one_per_pop': '+',
-		'one_per_peering': '_',
-	}
-
-
 	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
+
+	xlab = kwargs.get('xlab', "Deployment Size (Num Sites)")
+	evaluate_over = kwargs.get('evaluate_over', 'deployment_size')
+
 	f,ax = get_figure()
+	metric_by_solution = {}
 	for solution in solutions:
 		avg_latency_diff_normal = []
 		for dpsize in dpsizes:
 			avg_latency_diff_normal.append(-1*metrics_by_dpsize[dpsize]['stats_best_latencies'][solution])
 		ax.plot(dpsizes,avg_latency_diff_normal, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
-	ax.set_xlabel("Deployment Size (Num Sites)")
+		metric_by_solution[solution] = np.array(avg_latency_diff_normal)
+	
+	print("Painter - Sparse Normal: {}".format(metric_by_solution['painter'] - metric_by_solution['sparse']))
+	print("Sparse - OPP Normal: {}".format(metric_by_solution['sparse'] - metric_by_solution['one_per_peering']))
+	for solution in solutions:
+		print("{} average over all deployments: {}".format(solution,np.average(metric_by_solution[solution])))
+	print('\n')
+
+	ax.set_xlabel(xlab)
 	ax.set_ylabel("Avg Suboptimality\nNormal Operation (ms)")
 	ax.legend(fontsize=12)
-	save_figure('average_latency_over_deployment_size_normal.pdf')
-	
+	save_figure('average_latency_over_{}_normal.pdf'.format(evaluate_over))
 
-	xlab = "Deployment Size (Num Sites)"
-
-	for tp, tp_k in zip(['Ingress', 'Site'],['stats_popp_failures_latency_optimal_specific', 'stats_pop_failures_latency_optimal_specific']):
+	for lp_tp, tp, tp_k in zip(['mlu','mlu','lagrange','lagrange'], ['Ingress', 'Site', 'Ingress', 'Site'],['stats_popp_failures_latency_optimal_specific', 'stats_pop_failures_latency_optimal_specific',
+		'stats_popp_failures_latency_lagrange_optimal_specific', 'stats_pop_failures_latency_lagrange_optimal_specific']):
 		for metric_k, outer_k, ylab in zip(['avg_latency_difference', 'frac_vol_congested'], ['latency', 'congestion'], 
 			['Avg Suboptimality\n During {} Failure (ms)'.format(tp), 'Pct Volume Congested\nDuring {} Failure'.format(tp)]):
 			f,ax = get_figure()
-			fig_fn = 'average_{}_over_deployment_size_fail_{}.pdf'.format(outer_k, tp.lower())
+			fig_fn = 'average_{}_over_{}_fail_{}_{}.pdf'.format(outer_k, evaluate_over, tp.lower(), lp_tp)
+			metric_by_solution = {}
 			for solution in solutions:
 				agg_metrics =[]
 				for dpsize in dpsizes:
-					these_metrics = metrics_by_dpsize[dpsize][tp_k][solution]
-					agg_metrics.append(-1*these_metrics[metric_k])
-					if outer_k == 'congestion':
-						agg_metrics[-1] *= 100
-				ax.plot(dpsizes, agg_metrics, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+					try:
+						these_metrics = metrics_by_dpsize[dpsize][tp_k][solution]
+						if outer_k == 'congestion':
+							agg_metrics.append(100*these_metrics[metric_k])
+						else:
+							agg_metrics.append(-1*these_metrics[metric_k])
+					except KeyError:
+						continue
+				ax.plot(dpsizes[0:len(agg_metrics)], agg_metrics, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+				metric_by_solution[solution] = np.array(agg_metrics)
 			ax.set_xlabel(xlab)
 			ax.set_ylabel(ylab)
 			ax.legend(fontsize=12)
 			save_figure(fig_fn)
 
+			if lp_tp == 'mlu':
+				print("{} -- {}".format(tp, outer_k))
+				print("Painter - Sparse: {}".format(metric_by_solution['painter'] - metric_by_solution['sparse']))
+				print("Sparse - OPP: {}".format(metric_by_solution['sparse'] - metric_by_solution['one_per_peering']))
+				for solution in solutions:
+					print("{} average over all deployments: {}".format(solution,np.average(metric_by_solution[solution])))
+				print('\n')
+
 
 	metric_access_ks = ['stats_latency_thresholds_normal', 'stats_latency_thresholds_fail_popp', 'stats_latency_thresholds_fail_pop',
-		'stats_latency_penalty_thresholds_normal', 'stats_latency_penalty_thresholds_fail_popp', 'stats_latency_penalty_thresholds_fail_pop']
+		'stats_latency_penalty_thresholds_normal', 'stats_latency_penalty_thresholds_fail_popp', 'stats_latency_penalty_thresholds_fail_pop',
+		'stats_latency_lagrange_thresholds_normal', 'stats_latency_lagrange_thresholds_fail_popp', 'stats_latency_lagrange_thresholds_fail_pop']
 
 	solutions = list(reversed(solutions))
 	plot_metrics= {solution:{k:{} for k in metric_access_ks} for solution in solutions}
@@ -252,28 +131,47 @@ def make_paper_plots(cache_fn):
 		n_lat_thresholds = len(lat_thresholds)
 		for i,k in enumerate(metric_access_ks):
 			for j,lat_threshold in enumerate(sorted(lat_thresholds,reverse=True)):
-				arr = list([100-100*np.mean(parsed_metrics[solution][k][dpsize][lat_threshold]) for dpsize in dpsizes])		
-				plot_metrics[solution][k][lat_threshold] = arr
+				try:
+					arr = list([100-100*np.mean(parsed_metrics[solution][k][dpsize][lat_threshold]) for dpsize in dpsizes])		
+					plot_metrics[solution][k][lat_threshold] = arr
+				except KeyError:
+					continue
 
 	for lat_threshold in sorted(lat_thresholds):
-		all_ylabs = ['Pct Traffic Within {} ms\n of Optimal Normally'.format(int(np.abs(lat_threshold))), 'Pct Traffic Within {} ms\n of Optimal Link Failure'.format(int(np.abs(lat_threshold))),
-			 'Pct Traffic Within {} ms\n of Optimal Site Failure'.format(int(np.abs(lat_threshold))),
-			 'Pct Traffic Within {} ms\n of Optimal Normally (Penalty)'.format(int(np.abs(lat_threshold))), 'Pct Traffic Within {} ms\n of Optimal Link Failure (Penalty)'.format(int(np.abs(lat_threshold))),
-			 'Pct Traffic Within {} ms\n of Optimal Site Failure (Penalty)'.format(int(np.abs(lat_threshold)))]
-		fns = ['normal','link_failure', 'site_failure', 'normal_penalty', 'link_failure_penalty', 'site_failure_penalty']
+		all_ylabs = ['Pct Traffic Within {} ms\n of Optimal (Normally)'.format(int(np.abs(lat_threshold))), 'Pct Traffic Within {} ms\n of Optimal (Link Failure)'.format(int(np.abs(lat_threshold))),
+			 'Pct Traffic Within {} ms\n of Optimal (Site Failure)'.format(int(np.abs(lat_threshold))),
+			 'Pct Traffic Within {} ms\n of Optimal (Normally) (Penalty)'.format(int(np.abs(lat_threshold))), 'Pct Traffic Within {} ms\n of Optimal (Link Failure) (Penalty)'.format(int(np.abs(lat_threshold))),
+			 'Pct Traffic Within {} ms\n of Optimal (Site Failure) (Penalty)'.format(int(np.abs(lat_threshold))),
+			 'Pct Traffic Within {} ms\n of Optimal (Normally)'.format(int(np.abs(lat_threshold))), 'Pct Traffic Within {} ms\n of Optimal (Link Failure)'.format(int(np.abs(lat_threshold))),
+			 'Pct Traffic Within {} ms\n of Optimal (Site Failure)'.format(int(np.abs(lat_threshold))),]
+		fns = ['normal','link_failure', 'site_failure', 'normal_penalty', 'link_failure_penalty', 'site_failure_penalty', 'normal_lagrange', 'link_failure_lagrange',' site_failure_lagrange']
 		for k, ylab, fn in zip(metric_access_ks, all_ylabs, fns):
 			if 'penalty' in fn: continue ## ignore for now
 			f,ax = get_figure()
+			metric_by_solution = {}
 			for solution in solutions:
-				ax.plot(dpsizes, plot_metrics[solution][k][lat_threshold], label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+				try:
+					metric_by_solution[solution] = np.array(plot_metrics[solution][k][lat_threshold])
+					ax.plot(dpsizes, plot_metrics[solution][k][lat_threshold], label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+				except KeyError:
+					continue
 			ax.set_xlabel(xlab)
 			ax.set_ylabel(ylab)
 			ax.legend(fontsize=12)
-			fig_fn = "percent_traffic_within_{}_ms_{}.pdf".format(int(np.abs(lat_threshold)), fn)
+			fig_fn = "percent_traffic_within_{}_ms_{}_over_{}.pdf".format(int(np.abs(lat_threshold)), fn, evaluate_over)
 			save_figure(fig_fn)
+
+			if 'lagrange' not in fn and 'penalty' not in fn:
+				print("Within {} ms during {}".format(int(np.abs(lat_threshold)), fn))
+				print("OPP - Painter: {}".format(np.round(100 - (metric_by_solution['one_per_peering'] - metric_by_solution['painter']),2)))
+				print("OPP - Sparse: {}".format(np.round(100-(metric_by_solution['one_per_peering'] - metric_by_solution['sparse']),2)))
+				for solution in solutions:
+					print("{} average over all deployments: {}".format(solution,100-(np.average(metric_by_solution['one_per_peering']) - np.average(metric_by_solution[solution]))))
+				print('\n')
 
 
 	f,ax = get_figure()
+	metric_by_solution = {}
 	for solution in solutions:
 		this_resiliences = []
 		for dpsize in dpsizes:
@@ -283,20 +181,58 @@ def make_paper_plots(cache_fn):
 			except KeyError:
 				pass
 		ax.plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
-	ax.set_ylabel("Flash Crowd Volume Blowup\nBefore Congestion (Pct.)")
+	ax.set_ylabel("Flash Crowd Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
+	ax.set_ylim([0,300])
+	ax.set_yticks([0,60,120,180,240,300])
 	ax.legend(fontsize=12)
-	save_figure('flash_crowd_blowup_before_congestion.pdf')
+	save_figure('flash_crowd_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
+	print("--Flash Crowd--")
+	print("Sparse / Painter: {}".format(100 * metric_by_solution['sparse'] / metric_by_solution['painter']))
+	print("OPP - Sparse: {}".format(metric_by_solution['one_per_peering'] - metric_by_solution['sparse']))
+	print("------------------------")
+	for solution in solutions:
+		print("{} : {}".format(solution,metric_by_solution[solution]))
+	print('\n')
 
 
+	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
 	f,ax = get_figure()
 	for solution in solutions:
-		this_resiliences = list([metrics_by_dpsize[dpsize]['stats_volume_multipliers'][solution] for dpsize in dpsizes])
+		this_resiliences = list([metrics_by_dpsize[dpsize]['stats_volume_multipliers'][solution][-1] - metrics_by_dpsize[dpsize]['stats_volume_multipliers'][solution][0] for dpsize in dpsizes])
 		ax.plot(dpsizes, this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 	ax.set_xlabel(xlab)
-	ax.set_ylabel("Worst Latency Compared to \nOne per Peering (ms)")
+	ax.set_ylabel("Rate of\nLatency Increase (ms/byte)")
 	ax.legend(fontsize=12)
-	save_figure('latency_increase_up_to_threshold.pdf')
+	save_figure('latency_increase_up_to_threshold_over_{}.pdf'.format(evaluate_over))
+
+	solutions = list(reversed(solutions))
+	f,ax = get_figure()
+	metric_by_solution = {}
+	for solution in solutions:
+		this_resiliences = []
+		for dpsize in dpsizes:
+			try:
+				avg_resilience = np.average(list(metrics_by_dpsize[dpsize]['stats_diurnal'][solution].values()))
+				this_resiliences.append(avg_resilience)
+			except KeyError:
+				pass
+		ax.plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+		metric_by_solution[solution] = np.array(this_resiliences)
+	ax.set_xlabel(xlab)
+	ax.set_ylabel("Diurnal Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
+	ax.set_ylim([0,120])
+	ax.set_yticks([0,40,80,120])
+	ax.legend(fontsize=12)
+	save_figure('diurnal_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
+	print("--Diurnal--")
+	print("sparse / painter: {}".format(100 * metric_by_solution['sparse'] / metric_by_solution['painter']))
+	print("OPP - Sparse: {}".format(metric_by_solution['one_per_peering'] - metric_by_solution['sparse']))
+	print("------------------------")
+	for solution in solutions:
+		print("{} : {}".format(solution,metric_by_solution[solution]))
+	print('\n')
 
 
 

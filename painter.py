@@ -79,11 +79,11 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				painter_adv[self.popp_to_ind[popp],prefix_i] = 1
 		return painter_adv
 
-	def stop_tracker(self, advs):
+	def stop_tracker(self, **kwargs):
 		delta_alpha = .7
 		self.last_objective = self.obj
-		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
-			use_resilience=False, mode='best')
+		self.obj = self.measured_objective(self.optimization_advertisement,
+			use_resilience=False, mode='best', **kwargs)
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
 		print("PAINTER ITER {}, RD {}".format(self.iter, self.rolling_delta))
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
@@ -96,7 +96,7 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 
 	def one_per_pop(self, **kwargs):
 		### Doesn't use actual hybridcast performance
-		self.solution_type = 'one_per_pop'
+		self.solution_type = 'sparse'
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
 		all_advs = []
@@ -132,6 +132,12 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 			ret_advs_obj[prefix_i + 1] = {}
 			for pfx, popps in advs_by_pfxi.items():
 				ret_advs_obj[prefix_i + 1][pfx] = copy.copy(popps)
+
+		self.optimization_advertisement = self.painter_advs_to_sparse_advs(ret_advs_obj)
+		self.optimization_advertisement_representation = {}
+		for poppi,prefi in zip(*np.where(threshold_a(self.optimization_advertisement))):
+			self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+				
 		self.advs = ret_advs_obj
 
 	def painter_v5(self, **kwargs):
@@ -142,15 +148,29 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 			self.get_realworld_measure_wrapper()
 		advs = self.painter_v4(**kwargs)
 		self.advs = advs
-		
+		self.optimization_advertisement = self.painter_advs_to_sparse_advs(advs)
+		# if os.path.exists('painter_solution.pkl'):
+		# 	old_painter_solution = pickle.load(open('painter_solution.pkl','rb'))
+		# 	print(self.optimization_advertisement.shape)
+		# 	print(old_painter_solution.shape)
+		# 	print(np.array_equal(old_painter_solution, self.optimization_advertisement))
+		# 	print(np.where(old_painter_solution-self.optimization_advertisement))
+		# 	exit(0)
+		# else:
+		# 	pickle.dump(self.optimization_advertisement, open('painter_solution.pkl','wb'))
+
+		self.last_advertisement = self.painter_advs_to_sparse_advs(advs)
+
 		save_verb = copy.copy(self.verbose)
 		self.verbose = False
 
-		self.obj = self.measured_objective(self.painter_advs_to_sparse_advs(advs),
-			use_resilience=False, mode='best') # technically this is a measurement, uncounted
+		self.iter = 0
+		if not self.simulated:
+			self.calculate_ground_truth_ingress(self.optimization_advertisement, measurement_file_prefix='painter_{}'.format(self.iter))
+		self.obj = self.measured_objective(self.optimization_advertisement,
+			use_resilience=False, mode='best', measurement_file_prefix='painter_{}'.format(self.iter)) # technically this is a measurement, uncounted
 		self.stop = False
 		self.rolling_delta = 10
-		self.iter = 0
 		self.path_measures = 0 
 		self.clear_caches()
 		ts = time.time()
@@ -158,11 +178,18 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		while not self.stop:
 			# print("Measuring ingresses")
 			## conduct measurement with this advertisement strategy
-			self.measure_ingresses(self.painter_advs_to_sparse_advs(advs))
+			if not self.simulated:
+				self.calculate_ground_truth_ingress(self.optimization_advertisement, measurement_file_prefix='painter_{}'.format(self.iter))
+			self.measure_ingresses(self.optimization_advertisement, measurement_file_prefix='painter_{}'.format(self.iter))
 			## recalc painter decision with new information
 			# print("Solving greedy allocation")
 			advs = self.painter_v4(**kwargs)
-			self.stop_tracker(advs)
+			self.last_advertisement = copy.deepcopy(self.optimization_advertisement)
+			self.optimization_advertisement = self.painter_advs_to_sparse_advs(advs)
+			self.optimization_advertisement_representation = {}
+			for poppi,prefi in zip(*np.where(threshold_a(self.optimization_advertisement))):
+				self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+			self.stop_tracker(measurement_file_prefix='painter_{}'.format(self.iter))
 			self.iter += 1
 
 			print("Painter iteration {}, {}s per iter".format(self.iter,
@@ -173,8 +200,10 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				if self.iter == 10:
 					break
 			else:
-				if self.iter == 3:
+				if self.iter == 7:
 					break
+		if not self.simulated:
+			self.calculate_ground_truth_ingress(self.optimization_advertisement, measurement_file_prefix='painter_{}'.format(self.iter))
 
 		self.verbose = save_verb
 

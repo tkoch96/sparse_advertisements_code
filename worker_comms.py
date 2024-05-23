@@ -33,15 +33,15 @@ class Worker_Manager:
 		self.deployment = new_deployment
 		self.worker_to_deployments = {}
 		n_workers = self.get_n_workers()
-		print("Splitting deployment into subdeployments.")
+		# print("Splitting deployment into subdeployments.")
 		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
-		print("Done splitting deployment into subdeployments.")
+		# print("Done splitting deployment into subdeployments.")
 		
 		context = zmq.Context()
 		for worker in range(n_workers):
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
-			print("Updating deployment in worker {}".format(worker))
+			# print("Updating deployment in worker {}".format(worker))
 			assert len(subdeployments[worker]['ugs']) >= 1
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			# send worker startup information
@@ -63,19 +63,18 @@ class Worker_Manager:
 		# self.worker_to_uis = {}
 		self.worker_to_deployments = {}
 		n_workers = self.get_n_workers()
-		print("Splitting deployment into subdeployments.")
+		# print("Splitting deployment into subdeployments.")
 		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
-		print("Done splitting deployment into subdeployments.")
+		# print("Done splitting deployment into subdeployments.")
 		
 		context = zmq.Context()
 		for worker in range(n_workers):
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
-			print("Launching working {}".format(worker))
+			# print("Launching working {}".format(worker))
 			assert len(subdeployments[worker]['ugs']) >= 1
 			base_port = int(self.deployment.get('port', 31415))
 			call("{} path_distribution_computer.py {} {} &".format(PYTHON, worker, base_port), shell=True) # VMs
-			# call("../ingress_opt/venv/bin/python path_distribution_computer.py {} &".format(worker), shell=True) # home PC
 			# send worker startup information
 			args = [copy.deepcopy(subdeployments[worker])]
 			self.worker_to_deployments[worker] = subdeployments[worker]

@@ -575,72 +575,73 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
-	RECALC_FAILURE_LATENCY_PENALTY_METRICS = False
-	try:
-		changed=False
-		for random_iter in range(N_TO_SIM):
-			k_of_interest = 'popp_failures_latency_penalty_optimal_specific'
-			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-
-			if RECALC_FAILURE_LATENCY_PENALTY_METRICS or havent_calced_everything:
-				print("-----Failure calc with latency penalty for deployment number = {} -------".format(random_iter))
-				if sas is None:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
-
-					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
-					if wm is None:
-						wm = Worker_Manager(sas.get_init_kwa(), deployment)
-						wm.start_workers()
-					sas.set_worker_manager(wm)
-					sas.update_deployment(deployment)
-				else:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
-					sas.update_deployment(deployment)
-				changed=True
-
-				for solution in soln_types:
-					if not RECALC_FAILURE_LATENCY_PENALTY_METRICS:
-						if metrics[k_of_interest][random_iter][solution]  != \
-							default_metrics[k_of_interest][0][solution]:
-							print("Already calced {}".format(solution))
-							continue
-					print(solution)
-					adv = metrics['adv'][random_iter][solution]
-					if len(adv) == 0:
-						print("No solution for {}".format(solution))
-						continue
-					try:
-						ret = assess_failure_resilience(sas, adv, which='popps', penalty=True)
-						metrics['popp_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
-						metrics['popp_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-					
-						ret = assess_failure_resilience(sas, adv, which='pops', penalty=True)
-						metrics['pop_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
-						metrics['pop_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-					except:
-						import traceback
-						traceback.print_exc()
-						continue
-
-
-		if changed:
-			pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-
-	except:
-		import traceback
-		traceback.print_exc()
-
-	# RECALC_FAILURE_LATENCY_LAGRANGE_METRICS = True
+	# RECALC_FAILURE_LATENCY_PENALTY_METRICS = False
 	# try:
 	# 	changed=False
 	# 	for random_iter in range(N_TO_SIM):
+	# 		k_of_interest = 'popp_failures_latency_penalty_optimal_specific'
+	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
+
+	# 		if RECALC_FAILURE_LATENCY_PENALTY_METRICS or havent_calced_everything:
+	# 			print("-----Failure calc with latency penalty for deployment number = {} -------".format(random_iter))
+	# 			if sas is None:
+	# 				deployment = metrics['deployment'][random_iter]
+	# 				deployment['port'] = port
+
+	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
+	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
+	# 					using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
+	# 				if wm is None:
+	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+	# 					wm.start_workers()
+	# 				sas.set_worker_manager(wm)
+	# 				sas.update_deployment(deployment)
+	# 			else:
+	# 				deployment = metrics['deployment'][random_iter]
+	# 				deployment['port'] = port
+	# 				sas.update_deployment(deployment)
+	# 			changed=True
+
+	# 			for solution in soln_types:
+	# 				if not RECALC_FAILURE_LATENCY_PENALTY_METRICS:
+	# 					if metrics[k_of_interest][random_iter][solution]  != \
+	# 						default_metrics[k_of_interest][0][solution]:
+	# 						print("Already calced {}".format(solution))
+	# 						continue
+	# 				print(solution)
+	# 				adv = metrics['adv'][random_iter][solution]
+	# 				if len(adv) == 0:
+	# 					print("No solution for {}".format(solution))
+	# 					continue
+	# 				try:
+	# 					ret = assess_failure_resilience(sas, adv, which='popps', penalty=True)
+	# 					metrics['popp_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
+	# 					metrics['popp_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
+
+					
+	# 					ret = assess_failure_resilience(sas, adv, which='pops', penalty=True)
+	# 					metrics['pop_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
+	# 					metrics['pop_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
+
+	# 				except:
+	# 					import traceback
+	# 					traceback.print_exc()
+	# 					continue
+
+
+	# 	if changed:
+	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
+
+	# except:
+	# 	import traceback
+	# 	traceback.print_exc()
+
+	# RECALC_FAILURE_LATENCY_LAGRANGE_METRICS = False
+	# try:
+	# 	changed=False
+	# 	for random_iter in range(N_TO_SIM):
+	# 		break
 	# 		k_of_interest = 'popp_failures_latency_lagrange_optimal_specific'
 	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
 
@@ -694,60 +695,6 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 	# 	if changed:
 	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-
-	# except:
-	# 	import traceback
-	# 	traceback.print_exc()
-
-	# RECALC_FAILURE_METRICS_HIGH_CAP = False
-	# try:
-	# 	for random_iter in range(N_TO_SIM):
-	# 		k_of_interest = 'popp_failures_high_cap_latency_optimal'
-	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-
-	# 		if RECALC_FAILURE_METRICS or havent_calced_everything:
-	# 			if sas is None:
-	# 				deployment = metrics['deployment'][random_iter]
-
-	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-	# 					using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
-	# 				if wm is None:
-	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
-	# 					wm.start_workers()
-	# 				sas.set_worker_manager(wm)
-	# 				sas.update_deployment(deployment)
-	# 			else:
-	# 				deployment = metrics['deployment'][random_iter]
-	# 				sas.update_deployment(deployment)
-
-	# 			for solution in soln_types:
-	# 				if not RECALC_FAILURE_METRICS:
-	# 					if metrics[k_of_interest][random_iter][solution]  != \
-	# 						default_metrics[k_of_interest][0][solution]:
-	# 						print("Already calced {}".format(solution))
-	# 						continue
-	# 				print("Solving failure {} with infinite cap.".format(solution))
-	# 				save_caps = deployment['link_capacities'].copy()
-	# 				## solve the problem with infinite capacity
-	# 				deployment['link_capacities'] = 100000*np.ones(len(deployment['popps']))
-	# 				adv = metrics['adv'][random_iter][solution]
-	# 				if len(adv) == 0:
-	# 					print("No solution for {}".format(solution))
-	# 					continue
-						
-	# 				ret = assess_failure_resilience(sas, adv, which='popps')
-	# 				metrics['popp_failures_high_cap_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
-	# 				metrics['popp_failures_high_cap_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-	# 				ret = assess_failure_resilience(sas, adv, which='pops')
-	# 				metrics['pop_failures_high_cap_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
-	# 				metrics['pop_failures_high_cap_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-	# 				deployment['link_capacities'] = save_caps
-
-	# 				pickle.dump(metrics, open(performance_metrics_fn,'wb'))
 
 	# except:
 	# 	import traceback
@@ -811,7 +758,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 
 	RECALC_DIURNAL = False
-	diurnal_multipliers = [10,50,100,150,200,250,300,350,400]
+	diurnal_multipliers = [25,50,65,70,75,85,95,105,115,125,150]
 	try:
 		changed=False
 		for random_iter in range(N_TO_SIM):
@@ -852,8 +799,9 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					try:
 						print("Assessing diurnal effect for {}, sim number {}".format(solution,random_iter))
 						## can reuse the flash crowd function since its the same
-						m = assess_resilience_to_flash_crowds_mp(sas, adv, solution, diurnal_multipliers, Y_vals, diurnal_deployments)
-						metrics[k_of_interest][random_iter][solution] = m['metrics']
+						## "X_vals ~ hours of day 0 - 23"
+						## "Y_vals" ~ intensities
+						metrics[k_of_interest][random_iter][solution] = assess_resilience_to_flash_crowds_mp(sas, adv, solution, list(range(24)), diurnal_multipliers, diurnal_deployments)
 						changed=True
 					except:
 						import traceback
@@ -928,32 +876,6 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	finally:
 		if wm is not None:
 			wm.stop_workers()
-	
-
-	if False:
-		for solution in soln_types:
-			try:
-				all_n_prefs_by_popp = []
-				for i in range(N_TO_SIM):
-					adv = metrics['adv'][i][solution]
-					deployment = metrics['deployment'][i]
-					popps = sorted(list(set(deployment['popps'])))
-					# print("Solution {}".format(solution))
-					# adv_summary(popps,adv)
-					n_prefs_by_popp = np.sum(adv,axis=1)
-					all_n_prefs_by_popp = list(n_prefs_by_popp) + all_n_prefs_by_popp
-				
-				x,cdf_x = get_cdf_xy(all_n_prefs_by_popp)
-				plt.plot(x,cdf_x,label=solution)
-			except:
-				continue
-		plt.grid(True)
-		plt.xlabel("Number of Prefixes Being Advertised via Ingress")
-		plt.ylabel("CDF of PoPPs,Random Iters")
-		plt.legend()
-		plt.xlim([0,30])
-		plt.savefig("figures/n_prefs_by_popp_solutions.pdf")
-		plt.clf(); plt.close()
 
 	################################
 	### PLOTTING
@@ -982,23 +904,18 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	POP_FAILURE_HIGH_CAP_LATENCY_OPTIMAL_I = i;i+=1
 	POP_FAILURE_HIGH_CAP_LATENCY_OPTIMAL_SPECIFIC_I = i;i+=1
 
-	## Sticky
-	POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I = i;i+=1
-	POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I = i;i+=1
-	POPP_FAILURE_STICKY_LATENCY_BEFORE_I = i;i+=1
-	POPP_FAILURE_STICKY_CONGESTION_I = i;i+=1
-	POP_FAILURE_STICKY_LATENCY_OPTIMAL_I = i;i+=1
-	POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I = i;i+=1
-	POP_FAILURE_STICKY_LATENCY_BEFORE_I = i;i+=1
-	POP_FAILURE_STICKY_CONGESTION_I = i;i+=1
-
 	FLASH_CROWD_SINGLE_X_I = i;i+=1
 	FLASH_CROWD_LATENCY_VARY_X_I = i;i+=1
 	FLASH_CROWD_CONGESTION_VARY_X_I = i;i+=1
 	FLASH_CROWD_PREFIX_I = i;i+=1
 	FLASH_CROWD_LIMITING_FACTOR_LATENCY_I = i;i+=1
 	FLASH_CROWD_LIMITING_FACTOR_CONGESTION_I = i;i+=1
+	
 	VOLUME_GROWTH_I = i;i+=1
+
+	DIURNAL_LATENCY_VARY_I = i;i+=1
+	DIURNAL_CONGESTION_VARY_I = i;i+=1
+
 
 	n_subs = i
 	f,ax=plt.subplots(n_subs,1)
@@ -1020,6 +937,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			metrics[k] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
 	metrics['stats_resilience_to_congestion'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
 	metrics['stats_volume_multipliers'] = {solution:None for solution in soln_types}
+	metrics['stats_diurnal'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
 
 	def get_failure_metric_arr(k, solution, verb=False):
 		ret = []
@@ -1085,15 +1003,19 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		if vol_congested > 0:
 			x[0] = -1*100*NO_ROUTE_LATENCY
 
-		avg_latency_difference = np.average([el[0] for el in avg_ret], weights=[el[1] for el in avg_ret])
+		try:
+			avg_latency_difference = np.average([el[0] for el in avg_ret], weights=[el[1] for el in avg_ret])
+		except ZeroDivisionError:
+			print("Problem doing {} {}".format(k,solution))
+			avg_latency_difference = NO_ROUTE_LATENCY
 		print("Average latency difference {},{}: {}".format(solution, k, avg_latency_difference))
-		print("{} pct. volume congested".format(round(100 * vol_congested / actually_all_vol, 2)))
-		print("{} pct. optimally congested, all volume: {}".format(round(100 * vol_best_case_congested / actually_all_vol, 2), actually_all_vol))
+		print("{} pct. volume congested".format(round(100 * vol_congested / (actually_all_vol + .00001), 2)))
+		print("{} pct. optimally congested, all volume: {}".format(round(100 * vol_best_case_congested / (actually_all_vol+.00001), 2), actually_all_vol))
 
 		return ret, x, {
 			'avg_latency_difference': avg_latency_difference, 
-			'frac_vol_congested': vol_congested / all_vol, 
-			'frac_vol_bestcase_congested': vol_best_case_congested / actually_all_vol,
+			'frac_vol_congested': vol_congested / (all_vol+.0000001), 
+			'frac_vol_bestcase_congested': vol_best_case_congested / (actually_all_vol+.0000001),
 		}, threshold_stats
 
 
@@ -1175,7 +1097,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 			all_differences, x, stats, threshold_stats = get_failure_metric_arr('popp_failures_latency_lagrange_optimal_specific', solution)
 			metrics['stats_' + 'popp_failures_latency_lagrange_optimal_specific'][solution] = stats
-			metrics['stats_latency_penalty_thresholds_fail_popp'][solution] = threshold_stats
+			metrics['stats_latency_lagrange_thresholds_fail_popp'][solution] = threshold_stats
 			x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
 			ax[POPP_FAILURE_LATENCY_LAGRANGE_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
@@ -1266,21 +1188,6 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			ax[FLASH_CROWD_LIMITING_FACTOR_CONGESTION_I].plot(Y_vals, congestion_limits_over_Y, label=solution)
 
 
-			
-			# ##### Number of advertisements changed with flash crowds
-			# m = metrics['prefix_withdrawals']
-			# all_withdrawal_ns = []
-			# for ri in SIM_INDS_TO_PLOT:
-			# 	## Need to put try-catch here
-			# 	try:
-			# 		for metro_set in m[ri][solution][single_Y_of_interest][single_X_of_interest]:
-			# 			total_withdrawals = sum(len(el) for el in metro_set)
-			# 			all_withdrawal_ns.append(total_withdrawals)
-			# 	except:
-			# 		pass # Dont care
-
-			# x,cdf_x = get_cdf_xy(all_withdrawal_ns)
-			# ax[FLASH_CROWD_PREFIX_I].plot(x,cdf_x,label="{} Metro increase pct. = {}".format(solution,single_X_of_interest))
 
 
 			#### Ability to grow with volume
@@ -1289,10 +1196,14 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			for ri in SIM_INDS_TO_PLOT:
 				for X_val,avg_lat in m[ri][solution].items():
 					try:
+						# try:
+						# 	latency_increases_by_X[X_val].append(avg_lat - m[ri]['one_per_peering'][X_val])
+						# except KeyError:
+						# 	latency_increases_by_X[X_val] = [avg_lat  - m[ri]['one_per_peering'][X_val]]
 						try:
-							latency_increases_by_X[X_val].append(avg_lat - m[ri]['one_per_peering'][X_val])
+							latency_increases_by_X[X_val].append(avg_lat)
 						except KeyError:
-							latency_increases_by_X[X_val] = [avg_lat  - m[ri]['one_per_peering'][X_val]]
+							latency_increases_by_X[X_val] = [avg_lat]
 					except TypeError:
 						print("Weird error trying to access {} on {}".format(m[ri]['one_per_peering'], X_val))
 			avg_latency_increases_by_X = {X_val: np.mean(latency_increases_by_X[X_val]) for X_val in latency_increases_by_X}
@@ -1300,9 +1211,50 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			plot_mean_volume_multipliers = list([avg_latency_increases_by_X[X_val] for X_val in sorted_ks])
 			ax[VOLUME_GROWTH_I].plot(sorted_ks, plot_mean_volume_multipliers, label=solution)
 
-			metrics['stats_volume_multipliers'][solution] = np.max(plot_mean_volume_multipliers)
+			metrics['stats_volume_multipliers'][solution] = plot_mean_volume_multipliers
+
+			#### Diurnal Resilience
+			hours_of_day = np.array(list(range(24)))
+			## Want to track what diurnal multiplier causes congestion
+			avg_latency_by_sim_Y_val = {ri: [] for ri in SIM_INDS_TO_PLOT}
+			avg_congestion_by_sim_Y_val = {ri: [] for ri in SIM_INDS_TO_PLOT}
+
+			avg_latency_by_Y_val_sim = {dm: [] for dm in diurnal_multipliers}
+			avg_congestion_by_Y_val_sim = {dm: [] for dm in diurnal_multipliers}
+
+			for Y_val in diurnal_multipliers:
+				all_lats, all_congestions = {ri:[] for ri in SIM_INDS_TO_PLOT}, {ri:[] for ri in SIM_INDS_TO_PLOT}
+				for ri in SIM_INDS_TO_PLOT:
+					for X_val in hours_of_day:
+						try:
+							all_lats[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val])
+							all_congestions[ri].append(metrics['diurnal'][ri][solution]['fraction_congested_volume'][Y_val][X_val])
+						except KeyError:	
+							continue
+
+					lat_med = np.average(all_lats[ri])
+					con_med = np.average(all_congestions[ri])
+
+					avg_latency_by_sim_Y_val[ri].append(lat_med)
+					avg_congestion_by_sim_Y_val[ri].append(con_med)
+
+					avg_latency_by_Y_val_sim[Y_val].append(lat_med)
+					avg_congestion_by_Y_val_sim[Y_val].append(con_med)
+
+			ax[DIURNAL_LATENCY_VARY_I].plot(diurnal_multipliers, list([np.mean(avg_latency_by_Y_val_sim[dm]) for dm in diurnal_multipliers]), label=solution)
+			ax[DIURNAL_CONGESTION_VARY_I].plot(diurnal_multipliers, list([np.mean(avg_congestion_by_Y_val_sim[dm]) for dm in diurnal_multipliers]), label=solution)
+
+			
 
 
+			## High level stats
+			for ri in SIM_INDS_TO_PLOT:
+				try:
+					critical_Y = diurnal_multipliers[np.where(np.array(avg_congestion_by_sim_Y_val[ri]) > 0)[0][0]]
+				except IndexError:
+					## either never or always is congested
+					critical_Y = diurnal_multipliers[0]
+				metrics['stats_diurnal'][solution][ri] = critical_Y
 		except:
 			import traceback
 			traceback.print_exc()
@@ -1435,56 +1387,6 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	ax[POP_FAILURE_LATENCY_BEFORE_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 	ax[POP_FAILURE_LATENCY_BEFORE_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
 
-	## STICKY
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].legend(fontsize=8)
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].grid(True)
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_xlabel("Latency Change Under STICKY Single-Link Failure (best - actual) (ms)")
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_ylabel("CDF of Traffic,Links")
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].legend(fontsize=8)
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].grid(True)
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_xlabel("Latency Change Under STICKY Single-Link Failure (best - actual) (ms)")
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_ylabel("CDF of Affected Traffic,Links")
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POPP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].legend(fontsize=8)
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].grid(True)
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].set_xlabel("Latency Change Under STICKY Single-Link Failure (old - new) (ms)")
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].set_ylabel("CDF of Traffic,Links")
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POPP_FAILURE_STICKY_LATENCY_BEFORE_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-	ax[POPP_FAILURE_STICKY_CONGESTION_I].legend(fontsize=8)
-	ax[POPP_FAILURE_STICKY_CONGESTION_I].grid(True)
-	ax[POPP_FAILURE_STICKY_CONGESTION_I].set_xlabel("Fraction Congested Volume STICKY Single-Link Failure (best - actual) (ms)")
-	ax[POPP_FAILURE_STICKY_CONGESTION_I].set_ylabel("CDF of Traffic,Links")
-	ax[POPP_FAILURE_STICKY_CONGESTION_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].legend(fontsize=8)
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].grid(True)
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_xlabel("Latency Change Under STICKY Single-PoP Failure (best - actual) (ms)")
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_ylabel("CDF of Traffic,PoPs")
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].legend(fontsize=8)
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].grid(True)
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_xlabel("Latency Change Under STICKY Single-PoP Failure (best - actual) (ms)")
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_ylabel("CDF of Affected Traffic,PoPs")
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POP_FAILURE_STICKY_LATENCY_OPTIMAL_SPECIFIC_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].legend(fontsize=8)
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].grid(True)
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].set_xlabel("Latency Change Under STICKY Single-PoP Failure (old - new) (ms)")
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].set_ylabel("CDF of Traffic,PoPs")
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-	ax[POP_FAILURE_STICKY_LATENCY_BEFORE_I].set_xlim([-1*NO_ROUTE_LATENCY/2,0])
-
-
 	### FLASH CROWDS
 
 	ax[POP_FAILURE_CONGESTION_I].legend(fontsize=8)
@@ -1525,118 +1427,26 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	ax[FLASH_CROWD_LIMITING_FACTOR_CONGESTION_I].grid(True)
 	ax[FLASH_CROWD_LIMITING_FACTOR_CONGESTION_I].legend(fontsize=8)
 
-	
-
 	ax[VOLUME_GROWTH_I].legend(fontsize=8)
 	ax[VOLUME_GROWTH_I].grid(True)
 	ax[VOLUME_GROWTH_I].set_xlabel("Volume Inflation Amount (pct)")
 	ax[VOLUME_GROWTH_I].set_ylabel("Average Latency over \nOne per Ingress (ms)")
+
+	ax[DIURNAL_LATENCY_VARY_I].legend(fontsize=8)
+	ax[DIURNAL_LATENCY_VARY_I].grid(True)
+	ax[DIURNAL_LATENCY_VARY_I].set_xlabel("Diurnal Multiplier Amount (pct)")
+	ax[DIURNAL_LATENCY_VARY_I].set_ylabel("Average Latency Increase (ms)")
+
+	ax[DIURNAL_CONGESTION_VARY_I].legend(fontsize=8)
+	ax[DIURNAL_CONGESTION_VARY_I].grid(True)
+	ax[DIURNAL_CONGESTION_VARY_I].set_xlabel("Diurnal Multiplier Amount (pct)")
+	ax[DIURNAL_CONGESTION_VARY_I].set_ylabel("Average Congestion (ms)")
 
 	save_fig_fn = kwargs.get('save_fig_fn', "popp_latency_failure_comparison_{}.pdf".format(dpsize))
 
 	save_fig(save_fig_fn)
 
 	return metrics
-
-def plot_lats_from_adv(sas, advertisement, fn):
-	verb_copy = copy.copy(sas.verbose)
-	sas.verbose = False
-
-	f,ax=plt.subplots(2,1)
-	f.set_size_inches(6,12)
-
-	labs = ['yours', 'anycast']
-
-	ug_vols = sas.ug_to_vol
-	ug_vols_arr = sas.ug_vols
-
-	for i in range(2):
-		metrics = {}
-		if i ==0:
-			adv = threshold_a(advertisement)
-			# adv_summary(sas.popps, advertisement)
-		else: # anycast
-			adv = np.zeros(advertisement.shape)
-			adv[:,0] = 1
-
-		pre_soln = sas.solve_lp_with_failure_catch(adv)
-		pre_lats_by_ug = pre_soln['lats_by_ug']
-		pre_ug_decisions = pre_soln['paths_by_ug']
-
-		metrics['latencies'] = pre_lats_by_ug
-		if np.median(metrics['latencies']) > 300:
-			pickle.dump([adv, pre_soln], open('cache/weird_no_route.pkl','wb'))
-		metrics['best_latencies'] = copy.copy(sas.best_lats_by_ug)
-		metrics['popp_failures'] = []
-
-		diffs = list(metrics['best_latencies'] - metrics['latencies'])
-		x,cdf_x = get_cdf_xy(list(zip(diffs, ug_vols_arr)), weighted=True)
-		ax[1].plot(x,cdf_x, label=labs[i])
-
-		for popp in tqdm.tqdm(sas.popps, desc="Plotting lats from advs..."):
-			adv_cpy = np.copy(adv)
-			adv_cpy[sas.popp_to_ind[popp]] = 0
-			## q: what is latency experienced for these ugs compared to optimal?
-			one_per_ingress_adv = np.identity(sas.n_popps)
-			one_per_ingress_adv[sas.popp_to_ind[popp]] = 0
-			ret = sas.solve_lp_with_failure_catch(one_per_ingress_adv,
-				computing_best_lats=True)
-			failed_best_lats_by_ug = ret['lats_by_ug']
-
-			fail_soln = sas.solve_lp_with_failure_catch(adv_cpy)
-			post_ug_decisions = fail_soln['paths_by_ug']
-			post_lats_by_ug = fail_soln['lats_by_ug']
-
-			# ## Look at users whose catchment has changed
-			# these_ugs = [ugi for ugi in post_ug_decisions if \
-			# 	pre_ug_decisions[ugi] != post_ug_decisions[ugi]]
-			these_ugs = [sas.ug_to_ind[ug] for ug in sas.ugs]
-
-			### TODO -- what to do about failed users?
-
-			inundated=False
-			for ugi in list(set(these_ugs)):
-				metrics['popp_failures'].append((failed_best_lats_by_ug[ugi] - \
-					post_lats_by_ug[ugi], sas.ug_vols[ugi]))
-
-			# if inundated and i==0:
-			# 	recent_iter = sas.all_rb_calls_results[sas.popp_to_ind[popp]][-1][0]
-			# 	these_rb_calls = [call for call in sas.all_rb_calls_results[sas.popp_to_ind[popp]] if
-			# 		call[0] == recent_iter]
-			# 	print("{} recent grad calls".format(len(these_rb_calls)))
-			# 	recent_rb = these_rb_calls[-30:]
-			# 	recent_lb = sas.all_lb_calls_results[-1]
-			# 	# iter poppi popp prefix rbgrad lbgrad
-			# 	recent_rb = [(i,poppi,sas.popps[poppi],prefi,round(rbgrad,2),round(recent_lb[poppi,prefi],2),
-			# 		advertisement[poppi,prefi]) for i,poppi,prefi,rbgrad in 
-			# 		recent_rb]
-			# 	print("Popp {} fail causes inundation, recent resilience gradient calls were : {}".format(
-			# 		popp, recent_rb))
-
-
-		all_differences = metrics['popp_failures']
-		x,cdf_x = get_cdf_xy(all_differences, weighted=True)
-		ax[0].plot(x,cdf_x, label=labs[i])
-
-		metrics['adv'] = advertisement
-
-		if i == 0:
-			pickle.dump(metrics, open('cache/last_run_metrics.pkl','wb'))
-
-	ax[0].legend(fontsize=8)
-	ax[0].grid(True)
-	ax[0].set_xlabel("Best - Actual Latency Under Failure (ms)")
-	ax[0].set_ylabel("CDF of UGs")
-	ax[0].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-
-	ax[1].legend(fontsize=8)
-	ax[1].grid(True)
-	ax[1].set_xlabel("Best - Actual Latency Normally (ms)")
-	ax[1].set_ylabel("CDF of UGs")
-	ax[1].set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-
-	save_fig(fn)
-	sas.verbose = verb_copy
 
 if __name__ == "__main__":
 	import argparse

@@ -98,8 +98,7 @@ def get_random_ingress_priorities(deployment):
 	return ingress_priorities
 
 
-
-def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=2.0, verb=True, **kwargs):
+def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=1.3, verb=True, **kwargs):
 
 	popps = deployment['popps']
 	ug_perfs = deployment['ug_perfs']
@@ -407,7 +406,7 @@ def get_link_capacities(deployment, scale_factor=1.3, verb=True, **kwargs):
 
 def cluster_actual_users_actual_deployment(**kwargs):
 	from realworld_measure_wrapper import RIPE_Atlas_Utilities
-	rau = RIPE_Atlas_Utilities()
+	rau = RIPE_Atlas_Utilities(kwargs.get('deployment_size'))
 	anycast_latencies, ug_perfs = rau.load_probe_perfs(**kwargs)
 
 	ug_to_ip = {}
@@ -730,6 +729,9 @@ def cluster_actual_users(**kwargs):
 
 	return clustered_ug_perfs, clustered_anycast_perfs, ug_to_ip
 
+def characterize_measurements_from_deployment(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
+	load_actual_perfs(considering_pops, do_plot=False, **kwargs)
+
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	print("Loading performances, only considering pops: {}".format(considering_pops))
 	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
@@ -838,7 +840,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
-	print("{} UGs, {} popps".format(len(ugs), len(popps)))
+	print("{} UGs, {} popps after limiting to clients who have an anycast latency".format(len(ugs), len(popps)))
 
 
 	### delete any UGs for which latencies don't follow SOL rules
@@ -880,9 +882,6 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	for ug in to_del:
 		del ug_perfs[ug]
 
-	ugs = sorted(list(ug_perfs))
-	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
-	print("{} UGs, {} popps".format(len(ugs), len(popps)))
 	if changed:
 		with open(os.path.join(CACHE_DIR, 'addresses_violating_sol.csv'), 'w') as f:
 			for ug,violates in violate_sol.items():
@@ -896,10 +895,9 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
-	print("{} UGs, {} popps after intersecting latency".format(len(ugs), len(popps)))
+	print("{} UGs, {} popps after removing SOL and only considering anycast ones".format(len(ugs), len(popps)))
 
 	if kwargs.get('do_filter', True):
-
 		### Randomly limit to max_n_ug per popp, unless the popp is a provider
 		max_n_ug = kwargs.get('n_users_per_peer', 200)
 		provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
@@ -915,14 +913,17 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 				if kwargs.get('focus_on_peers',True):
 					if popp in provider_popps: continue
 				popp_to_ug[popp].append(ug)
-		
-		import matplotlib.pyplot as plt
-		x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
-		plt.plot(x,cdf_x)
-		plt.xlabel("Number of UGs per Ingress")
-		plt.ylabel("CDF of Ingresses")
-		plt.grid(True)
-		plt.savefig('figures/n_ugs_per_ingress.pdf')
+			
+		if kwargs.get('do_plot', True):
+			import matplotlib.pyplot as plt
+			x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
+			plt.plot(x,cdf_x)
+			plt.xlabel("Number of UGs per Ingress")
+			plt.ylabel("CDF of Ingresses")
+			plt.grid(True)
+			plt.savefig('figures/n_ugs_per_ingress.pdf')
+			plt.clf()
+			plt.close()
 
 		n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
 		for popp,_ugs in tqdm.tqdm(popp_to_ug.items(),desc="Limiting peers to be a max number of measurements..."):
@@ -976,16 +977,16 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		plt.clf()
-		plt.close()
-		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-		plt.plot(x,cdf_x,label="Frac UGs by Provider")
-		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-		plt.plot(x,cdf_x,label="Frac Providers by UG")
-		plt.legend()
-		plt.savefig('figures/provider_meas_description_preprune.pdf')
-		plt.clf()
-		plt.close()
+		
+		if kwargs.get('do_plot', True):
+			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+			plt.plot(x,cdf_x,label="Frac UGs by Provider")
+			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+			plt.plot(x,cdf_x,label="Frac Providers by UG")
+			plt.legend()
+			plt.savefig('figures/provider_meas_description_preprune.pdf')
+			plt.clf()
+			plt.close()
 
 		to_del_popps = []
 		for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
@@ -1011,16 +1012,16 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		plt.clf()
-		plt.close()
-		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-		plt.plot(x,cdf_x,label="Frac UGs by Provider")
-		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-		plt.plot(x,cdf_x,label="Frac Providers by UG")
-		plt.legend()
-		plt.savefig('figures/provider_meas_description_postprune.pdf')
-		plt.clf()
-		plt.close()
+		
+		if kwargs.get('do_plot', True):
+			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+			plt.plot(x,cdf_x,label="Frac UGs by Provider")
+			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+			plt.plot(x,cdf_x,label="Frac Providers by UG")
+			plt.legend()
+			plt.savefig('figures/provider_meas_description_postprune.pdf')
+			plt.clf()
+			plt.close()
 		
 		## Remove users have measurements to too few providers
 		cutoff_frac = .35
@@ -1040,16 +1041,16 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		plt.clf()
-		plt.close()
-		x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-		plt.plot(x,cdf_x,label="Frac UGs by Provider")
-		x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-		plt.plot(x,cdf_x,label="Frac Providers by UG")
-		plt.legend()
-		plt.savefig('figures/provider_meas_description_postprune2.pdf')
-		plt.clf()
-		plt.close()
+		
+		if kwargs.get('do_plot', True):
+			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
+			plt.plot(x,cdf_x,label="Frac UGs by Provider")
+			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
+			plt.plot(x,cdf_x,label="Frac Providers by UG")
+			plt.legend()
+			plt.savefig('figures/provider_meas_description_postprune2.pdf')
+			plt.clf()
+			plt.close()
 
 	anycast_latencies = {ug:anycast_latencies[ug] for ug in ug_perfs}
 
@@ -1168,7 +1169,7 @@ def load_actual_deployment(deployment_size, **kwargs):
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		if deployment_size in ACTUAL_DEPLOYMENT_SIZES:
-			ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users_actual_deployment(considering_pops=considering_pops)	
+			ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users_actual_deployment(considering_pops=considering_pops,deployment_size=deployment_size)	
 		else:
 			ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users(considering_pops=considering_pops, 
 				n_users_per_peer=10)
@@ -1401,6 +1402,7 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	return deployment
 
 if __name__ == "__main__":
-	export_interesting_measurements()
+	# export_interesting_measurements()
+	characterize_measurements_from_deployment(n_users_per_peer = 25)
 	# cluster_actual_users()
 

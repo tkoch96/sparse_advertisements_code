@@ -16,6 +16,7 @@ global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_fail
 default_metrics = {
 	'compare_rets': {i:None for i in range(N_TO_SIM)},
 	'adv': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
+	'adv_representation': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 	'deployment': {i:None for i in range(N_TO_SIM)},
 	'ug_to_vol': {i:None for i in range(N_TO_SIM)},
 	'settings': {i:None for i in range(N_TO_SIM)},
@@ -59,6 +60,7 @@ default_metrics = {
 	'prefix_withdrawals': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 	'fraction_congested_volume': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 	'volume_multipliers': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
+	'diurnal': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 }
 
 def check_calced_everything(metrics, random_iter, k_of_interest):
@@ -311,9 +313,13 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 
 	return ret
 
-def assess_failure_resilience_actual_deployment(sas, adv, which='popps'):
+def assess_failure_resilience_actual_deployment(sas, adv_rep, solution, which='popps'):
 	ret = {'congestion_delta': [], 'latency_delta_specific': []}
 
+	plain_deployment = sas.output_deployment()
+	sas.load_solution_realworld_measure_wrapper(solution, match_file_patterns=['tmp_ripe_results*.pkl', 'painter*ripe_results.pkl'])
+
+	adv = sas.adv_rep_to_adv(adv_rep)
 	dep = sas.output_deployment()
 	if which == 'popps':
 		iterover = sas.popps
@@ -361,8 +367,61 @@ def assess_failure_resilience_actual_deployment(sas, adv, which='popps'):
 		best_solutions[iteri] = lp_rets[i]
 	
 	## Measure everything we need to measure
+
+	def get_needs_measuring(sub_iterover):
+		all_cols_to_measure = []
+		for i,iteri in enumerate(sub_iterover): ## only measure up to a certain point
+			adv_cpy = np.copy(adv)
+			if which == 'popps':
+				adv_cpy[sas.popp_to_ind[iteri],:] = 0
+			else:
+				these_popps = np.array([sas.popp_to_ind[popp] for popp in sas.popps if popp[0] == iteri])
+				adv_cpy = np.copy(adv)
+				adv_cpy[these_popps,:] = 0
+			## get the subset of columns that need measuring
+			all_cols_to_measure = all_cols_to_measure + sas.check_need_measure_actual_deployment(adv_cpy)
+		## Remove dups
+		from realworld_measure_wrapper import popps_to_hash
+		filtered_all_cols_to_measure = []
+		already_in = {}
+		for _adv in all_cols_to_measure:
+			hash_adv = popps_to_hash(list([sas.popps[poppi] for poppi in np.where(_adv)[0]]))
+			try:
+				already_in[hash_adv]
+				continue
+			except KeyError:
+				already_in[hash_adv] = None
+			filtered_all_cols_to_measure.append(_adv)
+
+		return filtered_all_cols_to_measure
+
+	if which == 'popps':
+		popp_to_vol = {}
+		for popp, ugvols in iteri_to_ugs.items():
+			for ug,volfrac in ugvols:
+				try:
+					popp_to_vol[popp] += volfrac * sas.ug_to_vol[ug]
+				except KeyError:
+					popp_to_vol[popp] = volfrac * sas.ug_to_vol[ug]
+		sorted_popps = sorted(iterover, key = lambda popp : -1 * popp_to_vol.get(popp,0))
+		sorted_popp_vols = np.array([popp_to_vol.get(popp,0) for popp in sorted_popps])
+		csum_sorted_popp_vols = np.cumsum(sorted_popp_vols)
+
+		## Maybe automate this -- i.e., keep increasing the cutoff fraction until some critical threshold of num advertisements
+		for cutoff_frac in [.9, .95, .97, .99]:
+			cutoff_index = np.where(csum_sorted_popp_vols >= cutoff_frac*csum_sorted_popp_vols[-1])[0][0]
+
+			updated_iterover = iterover[0:cutoff_index]
+			print("Cutoff frac: {} Updated {} popps to {} popps".format(cutoff_frac, len(iterover), len(updated_iterover)))
+			n_measure = len(get_needs_measuring(updated_iterover))
+			print("{} columns to measure".format(n_measure))
+			if n_measure >= 0:
+				break
+		iterover = updated_iterover
+
+	## populate call args
 	call_args = []
-	for i,iteri in enumerate(iterover):
+	for i,iteri in enumerate(iterover): ## only measure up to a certain point
 		adv_cpy = np.copy(adv)
 		if which == 'popps':
 			adv_cpy[sas.popp_to_ind[iteri],:] = 0
@@ -370,24 +429,33 @@ def assess_failure_resilience_actual_deployment(sas, adv, which='popps'):
 			these_popps = np.array([sas.popp_to_ind[popp] for popp in sas.popps if popp[0] == iteri])
 			adv_cpy = np.copy(adv)
 			adv_cpy[these_popps,:] = 0
-		## q: what is latency experienced for these ugs compared to optimal?
-		sas.measure_ingresses(adv_cpy)
-		call_args.append((adv_cpy, dep, False))
+		call_args.append((adv_cpy,dep,False))
 
-	lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=True)
+	all_cols_to_measure = get_needs_measuring(iterover)
+	adv_round_i = 0
+	while len(all_cols_to_measure) > 0:
+		## Measure everything in the real Internet
+		print("{} advertisement columns left to measure in round {}".format(len(all_cols_to_measure), adv_round_i))
+		super_adv = np.concatenate(all_cols_to_measure, axis=1)
+		n_adv_batches = int(np.ceil(super_adv.shape[1] / N_PREFIXES))
+		for i in range(n_adv_batches):
+			sas.calculate_ground_truth_ingress(super_adv[:,i*N_PREFIXES:(i+1)*N_PREFIXES])
+			break
+		all_cols_to_measure = get_needs_measuring(iterover)
+		adv_round_i += 1
 
-	best_solutions = {}
+
+	## Now that we've measured everything, this should return without needing to measure
+	# lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=True) ## maybe get working if I care
+	lp_rets = []
+	for adv,_,_ in tqdm.tqdm(call_args,desc="Solving linear programs..."):
+		lp_rets.append(sas.solve_lp_with_failure_catch(adv, verb=True))
+
 	for i,iteri in enumerate(iterover):	
-		## best user latencies is not necessarily just lowest latency
-		## need to factor in capacity
-		best_solutions[iteri] = lp_rets[i]
-
-	for i,iteri in enumerate(iterover):	
 
 		## q: what is latency experienced for these ugs compared to optimal?
-		# this_soln = sas.
+		this_soln = lp_rets[i]
 		user_latencies = this_soln['lats_by_ug']
-
 
 		## best user latencies is not necessarily just lowest latency
 		## need to factor in capacity
@@ -411,6 +479,8 @@ def assess_failure_resilience_actual_deployment(sas, adv, which='popps'):
 					this_soln['paths_by_ug'][sas.ug_to_ind[ug]] ))
 			except KeyError:
 				pass
+
+	sas.deload_realworld_measure_wrapper(plain_deployment)
 
 	return ret
 
@@ -436,6 +506,31 @@ def get_inflated_metro_deployments(sas, X_vals, Y_vals):
 				## modify global link capacities
 				new_link_capacities = get_link_capacities(quick_deployment, scale_factor=Y, verb=False)
 				quick_deployment['link_capacities'] = new_link_capacities
+
+				## modify volume in a specific metro
+				for ug,v in quick_deployment['ug_to_vol'].items():
+					if ug[0] == metro:
+						quick_deployment['ug_to_vol'][ug] = v * (1 + X/100)
+						quick_deployment['whole_deployment_ug_to_vol'][ug] = v * (1 + X/100)
+				ret[Y][X][metro] = quick_deployment
+	return ret
+
+def get_inflated_metro_deployments_actual_deployment(sas, X_vals, Y_vals):
+	""" Gets deployments with modified user volumes and/or link capacities."""
+	#### X_vals: how much to inflate each metro by
+	#### we want to see how our ability to withstand flash crowds varies as we increase the global capacity of the deployment
+	ret = {Y_val: {X_val: {} for X_val in X_vals} for Y_val in Y_vals}
+	vol_by_metro = {}
+	for metro,asn in sas.ugs:
+		try:
+			vol_by_metro[metro] += sas.ug_to_vol[(metro,asn)]
+		except KeyError:
+			vol_by_metro[metro] = sas.ug_to_vol[(metro,asn)]
+	for Y in tqdm.tqdm(Y_vals, desc='populating multiprocessing call args...'):
+		for X in X_vals:
+			for metro in vol_by_metro:
+				# minimally copy the deployment to not cause memory errors
+				quick_deployment = sas.output_deployment(copykeys=['ug_to_vol','whole_deployment_ug_to_vol','link_capacities'])
 
 				## modify volume in a specific metro
 				for ug,v in quick_deployment['ug_to_vol'].items():
@@ -489,8 +584,106 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 					latency_deltas.append(new_lat - old_lat)
 					vols.append(vol)
 				fraction_congested_volumes[Y][X].append(soln_adv['fraction_congested_volume'])
-				metrics[Y][X].append(np.average(latency_deltas, weights=vols))
+				if len(latency_deltas) > 0:
+					metrics[Y][X].append(np.average(latency_deltas, weights=vols))
+				else:
+					metrics[Y][X].append(NO_ROUTE_LATENCY)
+	return {
+		'metrics': metrics,
+		'prefix_withdrawals':prefix_withdrawals, 
+		'fraction_congested_volume': fraction_congested_volumes,
+	}
 
+
+def assess_resilience_to_flash_crowds_actual_deployment(sas, adv_rep, solution, X_vals, Y_vals, which):
+	## X vals is flash crowd volume surge
+	## Y vals is link capacity multiplier
+
+	## !!!!!!for painter/TIPSY!!!!!!
+	## assume each metro's volume increases by X times on average
+	## see if there's a solution
+	## if there's a solution, do it and note the latency penalty compared to optimal
+
+	plain_deployment = sas.output_deployment()
+	sas.load_solution_realworld_measure_wrapper(solution, match_file_patterns=['tmp_ripe_results*.pkl', 'painter*ripe_results.pkl'])
+
+	## Need to get these separately for each solution type in actual_deployments
+	if which == 'diurnal':
+		inflated_deployments = get_diurnal_deployments(sas, Y_vals)
+	elif which == 'flash_crowd':
+		inflated_deployments = get_inflated_metro_deployments_actual_deployment(sas, X_vals, Y_vals)
+
+	adv = sas.adv_rep_to_adv(adv_rep)
+
+	# return cdf of latency penalties, possibly as a function of X
+	metrics = {Y:{X:[] for X in X_vals} for Y in Y_vals}
+	prefix_withdrawals = {Y:{X:[] for X in X_vals} for Y in Y_vals}
+	fraction_congested_volumes = {Y:{X:[] for X in X_vals} for Y in Y_vals}
+
+	adv = threshold_a(adv)
+
+	base_soln = sas.solve_lp_with_failure_catch(adv)
+
+	call_args = []
+	for Y_val in Y_vals:
+		for X_val in X_vals:
+			for metro in sorted(inflated_deployments[Y_val][X_val]):
+				d = inflated_deployments[Y_val][X_val][metro]
+				## always clear the deployment cache (True on third arg)
+				call_args.append((adv, d, True))
+
+	### Maybe multiprocess this one day if I care enough
+	dep = sas.output_deployment()
+	all_rets = []
+	for _adv,d,_ in tqdm.tqdm(call_args,desc="Evaluating linear programs..."):
+		# link_capacities_arr
+		# whole_deployment_ug_vols
+		# whole_deployment_ug_to_vol
+
+		#### COPYING the part of update_deployment that modifies these components, updating the entire deployment takes too long
+		sas.ug_to_vol = d['ug_to_vol']
+		sas.whole_deployment_ug_to_vol = d['whole_deployment_ug_to_vol']
+		sas.ug_vols = np.zeros(sas.n_ug)
+		sas.whole_deployment_ug_vols = np.zeros(sas.whole_deployment_n_ug)
+		for ug, v in sas.ug_to_vol.items():
+			sas.ug_vols[sas.ug_to_ind[ug]] = v
+		for ug, v in sas.whole_deployment_ug_to_vol.items():
+			sas.whole_deployment_ug_vols[sas.whole_deployment_ug_to_ind[ug]] = v
+
+		# use verb to ignore cache
+		all_rets.append(sas.solve_lp_with_failure_catch(_adv,verb=True,dont_update_deployment=True))
+	
+	sas.ug_to_vol = dep['ug_to_vol']
+	sas.whole_deployment_ug_to_vol = dep['whole_deployment_ug_to_vol']
+	sas.ug_vols = np.zeros(sas.n_ug)
+	sas.whole_deployment_ug_vols = np.zeros(sas.whole_deployment_n_ug)
+	for ug, v in sas.ug_to_vol.items():
+		sas.ug_vols[sas.ug_to_ind[ug]] = v
+	for ug, v in sas.whole_deployment_ug_to_vol.items():
+		sas.whole_deployment_ug_vols[sas.whole_deployment_ug_to_ind[ug]] = v
+
+	i=0
+	for Y in Y_vals:
+		for X in X_vals:
+			for metro in sorted(inflated_deployments[Y][X]):
+				prefix_withdrawals[Y][X].append([]) ## unused
+				
+				soln_adv = all_rets[i]
+				i += 1
+
+				latency_deltas = []
+				vols = []
+				for old_lat, new_lat, vol in zip(base_soln['lats_by_ug'], soln_adv['lats_by_ug'], sas.ug_vols):
+					if old_lat == NO_ROUTE_LATENCY or new_lat == NO_ROUTE_LATENCY: continue
+					old_lat = 0
+					latency_deltas.append(new_lat - old_lat)
+					vols.append(vol)
+				fraction_congested_volumes[Y][X].append(soln_adv['fraction_congested_volume'])
+				if len(latency_deltas) > 0:
+					metrics[Y][X].append(np.average(latency_deltas, weights=vols))
+				else:
+					metrics[Y][X].append(NO_ROUTE_LATENCY)
+	sas.deload_realworld_measure_wrapper(plain_deployment)
 	return {
 		'metrics': metrics,
 		'prefix_withdrawals':prefix_withdrawals, 
@@ -513,19 +706,30 @@ def get_inflated_total_deployments(sas, X_vals):
 		ret[X] = quick_deployment
 	return ret
 
+
 def metro_to_diurnal_factor(metro, hour):
-	diurnal_factors = {
-		0: 1,
-		1: 1,
-		2: 1, ## TODO
-	}
+	def diurnal_factor(hour_of_day):
+		## From https://dl.acm.org/doi/pdf/10.1145/3341301.3359655
+		## linear interpolation of purple line in figure 1
+		if hour_of_day < 2:
+			return 0.6
+		elif hour_of_day < 6:
+			return 0.1 * hour_of_day + 0.4 
+		elif hour_of_day < 10:
+			return -0.225 * hour_of_day + 2.35
+		elif hour_of_day < 14:
+			return 0.1
+		elif hour_of_day < 20:
+			return 0.5/6 * hour_of_day - 16/15
+		else:
+			return 0.6
+		
 	hour_of_day = (POP2TIMEZONE[metro] + 12 + hour) % 24
-	return diurnal_factors[hour_of_day]
+	return diurnal_factor(hour_of_day)
 
 def get_diurnal_deployments(sas, diurnal_intensities):
 	"""Gets deployments with modified user volumes and/or link capacities modeling a diurnal pattern."""
-	ret = {intensity: {hour:0 for i in range(24)} for intensity in diurnal_intensities}
-	deployment = sas.output_deployment(copykeys=None)
+	ret = {intensity: {hour:{} for hour in range(24)} for intensity in diurnal_intensities}
 	metros = list(sorted(list(set(metro for metro,asn in sas.ugs))))
 	for intensity in diurnal_intensities:
 		for hour in range(24): ## for each hour of the day
@@ -538,7 +742,7 @@ def get_diurnal_deployments(sas, diurnal_intensities):
 					if ug[0] == metro:
 						quick_deployment['ug_to_vol'][ug] = v * multiplier
 						quick_deployment['whole_deployment_ug_to_vol'][ug] = v * multiplier
-			ret[intensity][hour] = quick_deployment
+			ret[intensity][hour]['None'] = quick_deployment
 	return ret
 
 def assess_volume_multipliers(sas, adv, solution, inflated_deployments):
@@ -577,3 +781,5 @@ def assess_volume_multipliers(sas, adv, solution, inflated_deployments):
 	return {
 		'metrics': metrics,
 	}
+
+

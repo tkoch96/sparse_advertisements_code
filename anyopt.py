@@ -83,6 +83,11 @@ class Anyopt_Adv_Solver(Optimal_Adv_Wrapper):
 		self.obj = self.measured_objective(best_adv,
 			use_resilience=False) # technically this is a measurement, uncounted
 
+		self.optimization_advertisement = best_adv
+		self.optimization_advertisement_representation = {}
+		for poppi,prefi in zip(*np.where(threshold_a(self.optimization_advertisement))):
+			self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+
 		self.advs = best_adv
 
 

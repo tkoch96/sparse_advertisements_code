@@ -80,6 +80,17 @@ class Optimal_Adv_Wrapper:
 			'save_run_dir': self.save_run_dir,
 		}
 
+	def adv_rep_to_adv(self, adv_rep):
+		## Adv rep is a dictionary whose keys are popp,prefix pairs. Signifies which components are "on"
+
+		n_prefixes = max(list([prefix_i for _,prefix_i in adv_rep])) + 1
+		adv = np.zeros((self.n_popps, n_prefixes))
+		for popp,prefix_i in adv_rep:
+			if popp not in self.popps: continue
+			adv[self.popp_to_ind[popp], prefix_i] = .55
+
+		return adv
+
 	def solve_lp_assignment(self, adv, **kwargs):
 		self.enforce_loaded_rwmw()
 		cache_rep = tuple(np.where(threshold_a(adv).flatten())[0])
@@ -98,18 +109,38 @@ class Optimal_Adv_Wrapper:
 		self.linear_prog_soln_cache['regular'][cache_rep, computing_best_lats] = ret
 		return ret
 
-	def solve_lp_with_failure_catch_actual_deployment(self, adv, solution_type, **kwargs):
-		if solution_type == 'anycast':
-			solution_type = 'sparse'
-		self.solution_type = solution_type
-		self.get_realworld_measure_wrapper()
+	# def load_solution_realworld_measure_wrapper(self, solution_type, deployment):
+	# 	solution_type_to_need_load = { ### solution type -> information that needs loading
+	# 		'sparse': 'sparse',
+	# 		'painter': 'painter',
+	# 		'anycast': 'sparse',
+	# 		'one_per_pop': 'sparse',
+	# 		'one_per_peering': 'None',
+	# 	}
+	# 	if self.solution_type != solution_type_to_need_load[solution_type]:
+	# 		self.update_deployment(deployment)
+	# 		self.get_realworld_measure_wrapper()
+	# 		self.solution_type = solution_type_to_need_load[solution_type]
+	# 		self.get_realworld_measure_wrapper()
 
-		ret = self.solve_lp_with_failure_catch(adv, **kwargs)
+	def load_solution_realworld_measure_wrapper(self, solution_type, **kwargs):
+		solution_type_to_need_load = { ### solution type -> information that needs loading
+			'sparse': 'sparse',
+			'painter': 'painter',
+			'anycast': 'sparse',
+			'one_per_pop': 'sparse',
+			'one_per_peering': 'None',
+		}
+		if self.solution_type != solution_type_to_need_load[solution_type]:
+			self.get_realworld_measure_wrapper(**kwargs)
+			self.solution_type = solution_type_to_need_load[solution_type]
+			self.get_realworld_measure_wrapper(**kwargs)
 
+	def deload_realworld_measure_wrapper(self, deployment):
+		## Deloads the real world measure wrapper, and by setting solution_type to None, you don't load any information
 		self.solution_type = "None"
-		self.get_realworld_measure_wrapper()
-
-		return ret
+		deployment = copy.deepcopy(deployment) ## avoid annoying errors
+		self.update_deployment(deployment)
 
 	def solve_lp_with_failure_catch(self, adv, **kwargs):
 		self.enforce_loaded_rwmw()
@@ -124,7 +155,13 @@ class Optimal_Adv_Wrapper:
 		except KeyError:
 			pass
 		ret = solve_lp_with_failure_catch(self, adv, **kwargs)
-		self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats] = copy.deepcopy(ret)
+		try:
+			if kwargs.get('verb') or kwargs.get('smallverb') or kwargs.get('really_bad_fail'):
+				# print("Note, verbose is on so we're ignoring LP cache in WFC")
+				raise KeyError
+			self.linear_prog_soln_cache['failure_catch'][cache_rep, computing_best_lats] = copy.deepcopy(ret)
+		except KeyError:
+			pass
 		return ret
 
 	def solve_lp_lagrange(self, adv, **kwargs):
@@ -274,6 +311,13 @@ class Optimal_Adv_Wrapper:
 			if len(self.ug_to_ip[this_ug]) == 0:
 				self.del_ug(this_ug)
 
+	def reset_link_capacities(self):
+		anycast_catchments = self.rw_measure_wrapper.get_catchments(self.popps)
+		if anycast_catchments is not None: ## We possibly don't know them
+			anycast_catchments = self.convert_rti_to_pseudo_ugs({0:anycast_catchments})[0]
+			from deployment_setup import get_link_capacities_actual_deployment
+			self.link_capacities_by_popp = get_link_capacities_actual_deployment(self.output_deployment(), anycast_catchments)
+
 	def check_update_deployment_upon_modify(self):
 		### When we modify UG perfs, it could be that many data structures need to change, check that these are changed
 		try:
@@ -283,6 +327,7 @@ class Optimal_Adv_Wrapper:
 			pass
 
 		self.ugs = sorted(list(self.ug_perfs))
+		self.ug_perfs = {ug:self.ug_perfs[ug] for ug in self.ugs}
 		self.ug_to_vol = {ug:self.ug_to_vol[ug] for ug in self.ugs}
 		self.n_ug = len(self.ugs)
 		self.ug_to_ind = {ug:i for i,ug in enumerate(self.ugs)}
@@ -328,8 +373,6 @@ class Optimal_Adv_Wrapper:
 
 			# print("Post opt modify: {}".format(self.optimization_advertisement.shape))
 		except AttributeError:
-			import traceback
-			traceback.print_exc()
 			pass
 
 		self.popps = new_popps
@@ -349,7 +392,8 @@ class Optimal_Adv_Wrapper:
 					new_mp[ug][popp] = Ing_Obj(popp)
 			self.measured_prefs = new_mp
 		except AttributeError:
-			pass
+			import traceback
+			traceback.print_exc()
 
 		self.whole_deployment_ugs = self.ugs
 		self.whole_deployment_n_ug = len(self.whole_deployment_ugs)
@@ -401,15 +445,7 @@ class Optimal_Adv_Wrapper:
 			self.link_capacities_by_popp[popp] = self.link_capacities_by_popp[old_popps[np.random.choice(choices)]]
 		self.link_capacities_by_popp = {popp: self.link_capacities_by_popp[popp] for popp in self.popps}
 		## set new link capacities using updated catchment information
-		anycast_catchments = self.rw_measure_wrapper.get_catchments(self.popps)
-		if anycast_catchments is not None: ## We possibly don't know them
-			print("Setting link capacities using anycast measurements")
-			anycast_catchments = self.convert_rti_to_pseudo_ugs({0:anycast_catchments})[0]
-			from deployment_setup import get_link_capacities_actual_deployment
-			deployment = self.output_deployment()
-			self.link_capacities_by_popp = get_link_capacities_actual_deployment(self.output_deployment(), anycast_catchments)
-		else:
-			print("Note, not setting anycast catchments since we don't know them")
+		self.reset_link_capacities()
 
 		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
 
@@ -444,8 +480,6 @@ class Optimal_Adv_Wrapper:
 			self.og_deployment['ug_anycast_perfs'] = {ug: self.og_deployment['ug_anycast_perfs'][ug] for ug in still_existing_og_ugs}
 
 		except AttributeError:
-			import traceback
-			traceback.print_exc()
 			pass
 
 
@@ -514,8 +548,9 @@ class Optimal_Adv_Wrapper:
 			return
 		wm.deployment = self.output_deployment()
 		wm.stop_workers()
-		time.sleep(2)
+		time.sleep(5)
 		wm.start_workers()
+		time.sleep(5)
 
 		self.update_parent_tracker_workers()
 
@@ -524,17 +559,27 @@ class Optimal_Adv_Wrapper:
 			### You need to load realworld measure wrapper before calling this function
 			self.rw_measure_wrapper
 
-	def output_specific_deployment(self, solution_type):
-		if solution_type == 'anycast':
-			solution_type = 'sparse'
-		self.solution_type = solution_type
-		self.get_realworld_measure_wrapper()
+	def output_specific_deployment(self, solution_type, **kwargs):
+		
+		solution_type_to_need_load = { ### solution type -> information that needs loading
+			'sparse': 'sparse',
+			'painter': 'painter',
+			'anycast': 'sparse',
+			'one_per_pop': 'sparse',
+			'one_per_peering': 'None',
+		}
 
+		if self.solution_type != solution_type_to_need_load[solution_type]:
+			self.solution_type = 'None'
+			self.get_realworld_measure_wrapper()
+			self.solution_type = solution_type_to_need_load[solution_type]
+			self.get_realworld_measure_wrapper()
 
 		ret = self.output_deployment()
 
-		self.solution_type = "None"
-		self.get_realworld_measure_wrapper()
+		if kwargs.get('reset_on_exit', True):
+			self.solution_type = 'None'
+			self.get_realworld_measure_wrapper()
 
 		return ret
 
@@ -582,9 +627,9 @@ class Optimal_Adv_Wrapper:
 		self.simulated = deployment.get('simulated', True)
 		self.port = deployment.get('port', 31415)
 		if self.simulated:
-			self.max_n_iter = 200 # maximum number of learning iterations
+			self.max_n_iter = 150 # maximum number of learning iterations
 		else:
-			self.max_n_iter = 100 # maximum number of learning iterations
+			self.max_n_iter = 150 # maximum number of learning iterations
 
 		quick_update = kwargs.get('quick_update', False)
 
@@ -973,7 +1018,7 @@ class Optimal_Adv_Wrapper:
 			# if self.verbose and len(np.where(cap_violations)[0]) > 0:
 			# 	print([round(el,2) for el in user_latencies])
 		elif mode == 'lp':
-			ret = self.solve_lp_with_failure_catch(threshold_a(a))
+			ret = self.solve_lp_with_failure_catch(threshold_a(a), **kwargs)
 			if not ret['solved']:
 				print("In ground truth user latencies, didn't successfully solve LP")
 				return self.get_ground_truth_user_latencies(a, mode='best', **kwargs)
@@ -1060,7 +1105,8 @@ class Optimal_Adv_Wrapper:
 			# every user visits their best popp
 			a = threshold_a(a)
 			user_latencies = NO_ROUTE_LATENCY * np.ones((len(ugs)))
-			routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, ugs=ugs)
+			kwargs['ugs'] = ugs
+			routed_through_ingress, _ = self.calculate_ground_truth_ingress(a, **kwargs)
 			ug_ingress_decisions = {ugi:None for ugi in range(self.n_ug)}
 			for prefix_i in range(a.shape[1]):
 				for ugi,ug in enumerate(kwargs.get('ugs', ugs)):
@@ -1073,7 +1119,7 @@ class Optimal_Adv_Wrapper:
 						ug_ingress_decisions[ugi] = [(self.popp_to_ind[routed_ingress],1)]
 						user_latencies[ugi] = latency
 		elif mode == 'lp':
-			ret = self.solve_lp_with_failure_catch(threshold_a(a))
+			ret = self.solve_lp_with_failure_catch(threshold_a(a), **kwargs)
 
 			ugs = get_intersection(self.ugs, ugs) ### Might have changed after this call
 
@@ -1180,8 +1226,9 @@ class Optimal_Adv_Wrapper:
 				getattr(self, call[0])(*args)
 			self.check_update_deployment_upon_modify()
 			self.restart_workers()
+		self.check_update_deployment_upon_modify()
 
-	def get_realworld_measure_wrapper(self):
+	def get_realworld_measure_wrapper(self, **kwargs):
 		if self.simulated: return
 
 		## Useful to bootstrap from past runs, but could lead to false understandings of convergence time
@@ -1189,6 +1236,8 @@ class Optimal_Adv_Wrapper:
 			info_prds = list([os.path.join(d, self.solution_type) for d in ['1712340117-actual_first_prototype-sparse']])
 		elif self.dpsize == 'actual_second_prototype':
 			info_prds = list([os.path.join(d, self.solution_type) for d in ['1712535530-actual_second_prototype-sparse']])
+		elif self.dpsize == 'actual_third_prototype':
+			info_prds = list([os.path.join(d, self.solution_type) for d in ['1712535530-actual_second_prototype-sparse','1713752460-actual_second_prototype-sparse']])
 			
 		base_save_run_dirs = list([os.path.join(RUN_DIR, prd) for prd in info_prds])
 
@@ -1220,7 +1269,7 @@ class Optimal_Adv_Wrapper:
 				self.og_ugs_to_new_ugs[og_ug].append(ug)
 			except KeyError:
 				self.og_ugs_to_new_ugs[og_ug] = [ug]
-		routed_through_ingress, actives, calls_to_update_deployment = self.rw_measure_wrapper.reload_info()
+		routed_through_ingress, actives, calls_to_update_deployment = self.rw_measure_wrapper.reload_info(**kwargs)
 		## Convert to using pseudo-UGs
 		converted_ret_routed_through_ingress = {}
 		for prefix_i,this_routed_through_ingress in routed_through_ingress.items():
@@ -1236,12 +1285,38 @@ class Optimal_Adv_Wrapper:
 
 		self.enforce_measured_prefs(converted_ret_routed_through_ingress, actives)
 
+		self.reset_link_capacities()
+
 	def check_load_rw_measure_wrapper(self):
 		try:
 			self.rw_measure_wrapper
 		except AttributeError:
 			### Communication with the real-world deployment
 			self.get_realworld_measure_wrapper()
+
+	def check_need_measure_actual_deployment(self, a):
+		if self.simulated: return
+		self.enforce_loaded_rwmw()
+
+		a = threshold_a(a)
+	
+		cols_to_possibly_measure = []
+		for prefix_i in range(a.shape[1]):
+			if np.sum(a[:,prefix_i]) == 0:
+				continue
+			elif np.sum(a[:,prefix_i]) == 1:
+				continue
+			this_actives = list([self.popps[poppi] for poppi in np.where(a[:,prefix_i])[0]])
+			cols_to_possibly_measure.append((prefix_i, this_actives))
+
+		cols_to_measure = []
+		if len(cols_to_possibly_measure) > 0:
+			### output is routed_through_ingress (prefix_i -> ug -> poppi)
+			ret_cols_to_measure = self.rw_measure_wrapper.check_need_measure(cols_to_possibly_measure)
+			for prefix_i, popps in ret_cols_to_measure:
+				cols_to_measure.append(np.expand_dims(a[:,prefix_i],axis=1))
+
+		return cols_to_measure
 
 	def calculate_ground_truth_ingress(self, a, **kwargs):
 		### Returns routed_through_ingress: prefix -> ug -> popp_i
@@ -1319,19 +1394,11 @@ class Optimal_Adv_Wrapper:
 			
 			cols_to_measure = []
 			for prefix_i in range(a.shape[1]):
-				cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
-				try:
-					routed_through_ingress[prefix_i], actives[prefix_i] = self.calc_cache.all_caches['gti'][cache_rep]
-					continue
-				except KeyError:
-					pass
 				this_actives = list([self.popps[poppi] for poppi in np.where(a[:,prefix_i])[0]])
 				actives[prefix_i] = this_actives
 				this_routed_through_ingress = {}
 				if np.sum(a[:,prefix_i]) == 0:
 					routed_through_ingress[prefix_i] = this_routed_through_ingress
-					if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
-						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress, this_actives)
 					continue
 				elif np.sum(a[:,prefix_i]) == 1:
 					## Trivial, one route for users who have that option
@@ -1348,19 +1415,15 @@ class Optimal_Adv_Wrapper:
 
 			if len(cols_to_measure) > 0:
 				### output is routed_through_ingress (prefix_i -> ug -> poppi)
-				ret_routed_through_ingress, calls_to_update_deployment = self.rw_measure_wrapper.measure_advs(cols_to_measure)
+				ret_routed_through_ingress, calls_to_update_deployment = self.rw_measure_wrapper.measure_advs(cols_to_measure, **kwargs)
 				ret_routed_through_ingress = self.convert_rti_to_pseudo_ugs(ret_routed_through_ingress)
-
-				self.check_update_calls_to_update_deployment(calls_to_update_deployment)
+				if not kwargs.get('dont_update_deployment', False):
+					self.check_update_calls_to_update_deployment(calls_to_update_deployment)
 
 				for prefix_i, this_routed_through_ingress in ret_routed_through_ingress.items():
 					## Actives may have changed, recompute
 					actives[prefix_i] = get_intersection(actives[prefix_i], self.popps)
 					routed_through_ingress[prefix_i] = this_routed_through_ingress
-					if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
-						## not a subset of user groups, cache result for general utility
-						cache_rep = tuple(np.where(a[:,prefix_i])[0].flatten())
-						self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress, this_actives)
 
 		return routed_through_ingress, actives
 
@@ -1400,7 +1463,11 @@ class Optimal_Adv_Wrapper:
 					for beaten_ingress in other_available:
 						beaten_ingress_obj = self.measured_prefs[ug].get(beaten_ingress)
 						# beaten_ingress_obj.print()	
-						beaten_ingress_obj.add_parent(routed_ingress_obj)
+						try:
+							beaten_ingress_obj.add_parent(routed_ingress_obj)
+						except AttributeError:
+							print("UG {} trying to add parent {} to {} but not in measured prefs, perfs: {}. popps in MP :{}".format(ug, routed_ingress, beaten_ingress, self.ug_perfs[ug], list(self.measured_prefs[ug])))
+							exit(0)
 						routed_ingress_obj.add_child(beaten_ingress_obj)
 						self.parent_tracker[ug,beaten_ingress,routed_ingress] = True
 						try:
@@ -1427,7 +1494,7 @@ class Optimal_Adv_Wrapper:
 			msgs[worker] = pickle.dumps(('update_parent_tracker', sub_cache))
 		self.worker_manager.send_messages_workers(msgs)
 
-	def measure_ingresses(self, a):
+	def measure_ingresses(self, a, **kwargs):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
 		### i.e., this is an actual advertisement measurement, we should aim to limit these :)
 		self.enforce_loaded_rwmw()
@@ -1446,10 +1513,10 @@ class Optimal_Adv_Wrapper:
 		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
-		self.calculate_user_choice(a, get_ug_catchments=True)
+		self.calculate_user_choice(a, get_ug_catchments=True, **kwargs)
 
 		a = threshold_a(a)
-		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a,verb=True)
+		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a, verb=True, **kwargs)
 
 		self.enforce_measured_prefs(routed_through_ingress, actives)
 		self.measured[tuple(a.flatten())] = None

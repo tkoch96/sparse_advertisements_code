@@ -325,6 +325,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
 		return 0
+		if self.simulated or self.iter % 5 != 0:
+			return 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
 		cpkwargs['retnow'] = False
@@ -339,13 +341,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		rets = self.flush_latency_benefit_queue()
 
 		benefit = 0
-		base_b, _ = rets[0]
-		poppi=0
 		for b,_ in rets[1:]:
-			# this_resilience = (b - base_b) #/ self.n_popps
-			this_resilience = b
-			benefit += this_resilience
-			poppi += 1
+			benefit += b
 
 		return benefit
 
@@ -443,9 +440,14 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		anycast_advertisement = np.zeros((self.n_popp, self.n_prefixes))
 		anycast_advertisement[:,0] = 1
 
+		optimization_advertisement_representation = {}
+		for poppi,prefi in zip(*np.where(threshold_a(anycast_advertisement))):
+			optimization_advertisement_representation[self.popps[poppi], prefi] = None
+
 		self.solutions['anycast'] = {
 			'objective': self.measured_objective(anycast_advertisement),
 			'advertisement': anycast_advertisement,
+			'advertisement_representation': optimization_advertisement_representation,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(anycast_advertisement),
 			'prefix_cost': self.prefix_cost(anycast_advertisement),
 			'norm_penalty': self.advertisement_cost(anycast_advertisement),
@@ -460,12 +462,16 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 	def solve_one_per_peering(self, **kwargs):
 		## One per peering
 		one_per_peering_adv = np.eye(self.n_popps)
+		optimization_advertisement_representation = {}
+		for poppi,prefi in zip(*np.where(threshold_a(one_per_peering_adv))):
+			optimization_advertisement_representation[self.popps[poppi], prefi] = None
 		self.solutions['one_per_peering'] = {
 			'objective': self.measured_objective(one_per_peering_adv),
 			'advertisement': one_per_peering_adv,
 			'latency_benefit':  self.get_ground_truth_latency_benefit(one_per_peering_adv),
 			'prefix_cost': self.prefix_cost(one_per_peering_adv),
 			'norm_penalty': self.advertisement_cost(one_per_peering_adv),
+			'advertisement_representation': optimization_advertisement_representation,
 			'n_advs': 1,
 		}
 
@@ -525,6 +531,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'latency_benefit':  self.get_ground_truth_latency_benefit(anyopt_adv),
 			'prefix_cost': self.prefix_cost(anyopt_adv),
 			'norm_penalty': self.advertisement_cost(anyopt_adv),
+			'advertisement_representation': self.anyopt.optimization_advertisement_representation,
 			'n_advs': self.anyopt.path_measures,
 		}
 		self.clear_caches()
@@ -549,17 +556,17 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		self.sas.metrics['advertisements'].append(final_adv)
 
 
-		print(self.sas.n_popps)
-		print(final_adv.shape)
-
 		sparse_adv = threshold_a(final_adv)
 		sparse_objective = self.sas.measured_objective(sparse_adv)
+		print("In outer LB {}".format(self.sas.get_ground_truth_latency_benefit(sparse_adv)))
+		# pickle.dump(self.sas.output_deployment(), open('saving_working_sparse_deployment.pkl','wb'))
 		self.solutions['sparse'] = {
 			'objective': sparse_objective,
 			'latency_benefit':  self.sas.get_ground_truth_latency_benefit(sparse_adv),
 			'norm_penalty': self.sas.advertisement_cost(sparse_adv),
 			'prefix_cost': self.sas.prefix_cost(sparse_adv),
 			'advertisement': sparse_adv,
+			'advertisement_representation': self.sas.optimization_advertisement_representation,
 			'n_advs': self.sas.path_measures,
 		}
 
@@ -573,13 +580,14 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 
 		self.one_per_pop.one_per_pop()
 		one_per_pop_adv = self.one_per_pop.painter_advs_to_sparse_advs(self.one_per_pop.advs)
-		one_per_pop_obj = self.measured_objective(one_per_pop_adv)
+		one_per_pop_obj = self.one_per_pop.measured_objective(one_per_pop_adv)
 		self.solutions['one_per_pop'] = {
 			'objective': one_per_pop_obj,
-			'latency_benefit':  self.get_ground_truth_latency_benefit(one_per_pop_adv),
-			'norm_penalty': self.advertisement_cost(one_per_pop_adv),
-			'prefix_cost': self.prefix_cost(one_per_pop_adv),
+			'latency_benefit':  self.one_per_pop.get_ground_truth_latency_benefit(one_per_pop_adv),
+			'norm_penalty': self.one_per_pop.advertisement_cost(one_per_pop_adv),
+			'prefix_cost': self.one_per_pop.prefix_cost(one_per_pop_adv),
 			'advertisement': one_per_pop_adv,
+			'advertisement_representation': self.one_per_pop.optimization_advertisement_representation,
 			'n_advs': 1,
 		}
 
@@ -595,14 +603,15 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 
 		self.painter.painter_v5(cd=5000)
 		painter_adv = self.painter.painter_advs_to_sparse_advs(self.painter.advs)
-		painter_obj = self.measured_objective(painter_adv)
+		painter_obj = self.painter.measured_objective(painter_adv)
 		# print("Painter Adv, obj: {} {}".format(painter_adv, painter_obj))
 		self.solutions['painter'] = {
 			'objective': painter_obj,
-			'latency_benefit':  self.get_ground_truth_latency_benefit(painter_adv),
-			'norm_penalty': self.advertisement_cost(painter_adv),
-			'prefix_cost': self.prefix_cost(painter_adv),
+			'latency_benefit':  self.painter.get_ground_truth_latency_benefit(painter_adv),
+			'norm_penalty': self.painter.advertisement_cost(painter_adv),
+			'prefix_cost': self.painter.prefix_cost(painter_adv),
 			'advertisement': painter_adv,
+			'advertisement_representation': self.painter.optimization_advertisement_representation,
 			'n_advs': self.painter.path_measures,
 		}
 
@@ -639,6 +648,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'latency_benefit_diffs': {k:[]for k in solution_types},
 			'n_advs': {k:[] for k in solution_types},
 			'adv_solns': {k:[] for k in solution_types},
+			'adv_representation_solns': {k:[] for k in solution_types},
 			'max_sparse_benefits': [],
 			'max_painter_benefits': [],
 		}
@@ -661,6 +671,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 						metrics['sparse_objective_vals'][solution_type].append(self.solutions[solution_type]['objective'])
 						metrics['n_advs'][solution_type].append(self.solutions[solution_type]['n_advs'])
 						metrics['adv_solns'][solution_type].append(self.solutions[solution_type]['advertisement'])
+						metrics['adv_representation_solns'][solution_type].append(self.solutions[solution_type]['advertisement_representation'])
 						metrics['latency_benefits'][solution_type].append(self.solutions[solution_type]['latency_benefit'])
 						metrics['norm_penalties'][solution_type].append(self.solutions[solution_type]['norm_penalty'])
 						metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
@@ -708,15 +719,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.gradient_support = [(a_i,a_j) for a_i in range(self.n_popp) for a_j in range(self.n_prefixes)]
 		if self.simulated:
 			self.gradient_support_settings = {
-				'lb_support_size': 30*self.n_pops,
-				'popp_rb_support_size': 120*self.n_pops,
+				'lb_support_size': 20*self.n_pops,
+				'popp_rb_support_size': 60*self.n_pops,
 				'info_support_size': 5*self.n_pops,
 			}
 		else:
 			## we are severely rate limited by measurement speed, so we should aim to compute as much as possible
 			self.gradient_support_settings = {
-				'lb_support_size': int(.2*(self.n_popps * self.n_prefixes)),
-				'popp_rb_support_size': int(.4*(self.n_popps * self.n_prefixes)),
+				'lb_support_size': int(.3*(self.n_popps * self.n_prefixes)),
+				'popp_rb_support_size': int(.5*(self.n_popps * self.n_prefixes)),
 				'info_support_size': 10*self.n_pops,
 			}
 
@@ -1071,6 +1082,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_lb_rets = self.flush_latency_benefit_queue()
 		self.last_rb_calls_results_popp = {}
 		ind = 0
+
 		for call_popp, killed_popp, rand_outer_prefix in calls:
 			poppi = self.popp_to_ind[call_popp]
 			
@@ -1102,6 +1114,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			except KeyError:
 				self.n_resilience_benefit_popp_calls[poppi,poppj,pref] = 1
 
+		if not self.simulated:
+			max_val = np.max(np.abs(grad_rb.flatten()))
+			if max_val > 1:
+				grad_rb = grad_rb / max_val
 
 		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
@@ -1259,43 +1275,40 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		f,ax = plt.subplots(n_sp,2)
 
 		soln = self.get_last_advertisement()
-		# takes a while (compare anycast to solution)
-		# from eval_latency_failure import plot_lats_from_adv
-		# plot_lats_from_adv(self, soln, 'sparse-vs-anycast-{}-{}.pdf'.format(self.dpsize,self.iter))
-
 
 		# General convergence metrics plot
-		all_as = np.array(self.metrics['advertisements'])
-		all_grads = np.array(self.metrics['grads'])
-		all_cost_grads = np.array(self.metrics['cost_grads'])
-		all_l_benefit_grads = np.array(self.metrics['l_benefit_grads'])
-		all_res_benefit_grads = np.array(self.metrics['res_benefit_grads'])
-		linestyles = ['-','*','^','>','v']
-		colors = ['orange','brown','aqua','deeppink','peru','grey','k','tan']
-		for pref_i in range(self.n_prefixes):
-			pref_sty = linestyles[pref_i%len(linestyles)]
-			for popp_i in range(self.n_popp):
-				# if 'xlimupper' in kwargs: ### Dont plot the advertisements, they add nothing and make things slow
-				# 	ax[0,0].plot(kwargs['xlimupper'],all_as[::5,popp_i,pref_i], pref_sty, 
-				# 		c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				# else:
-				# 	ax[0,0].plot(all_as[::5,popp_i,pref_i], pref_sty, 
-				# 		c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				ax[1,0].plot(all_grads[:,popp_i,pref_i], 
-					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				ax[2,0].plot(all_cost_grads[:,popp_i,pref_i], 
-					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				ax[3,0].plot(all_l_benefit_grads[:,popp_i,pref_i], 
-					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-				ax[4,0].plot(all_res_benefit_grads[:,popp_i,pref_i], 
-					c=colors[popp_i%len(colors)], label="PoPP {} Prefix {}".format(self.popps[popp_i], pref_i))
-		if self.n_popp * self.n_prefixes < 20:
-			ax[0,0].legend(fontsize=6)
-		ax[0,0].set_ylabel("a")
-		ax[1,0].set_ylabel("Net Grad")
-		ax[2,0].set_ylabel("Cost Grad")
-		ax[3,0].set_ylabel("LB Grad")
-		ax[4,0].set_ylabel("Res Grad")
+		i=0
+		while True:
+			try:
+				all_as = np.array(self.metrics['advertisements'][i:])
+				all_grads = np.array(self.metrics['grads'][i:])
+				all_cost_grads = np.array(self.metrics['cost_grads'][i:])
+				all_l_benefit_grads = np.array(self.metrics['l_benefit_grads'][i:])
+				all_res_benefit_grads = np.array(self.metrics['res_benefit_grads'][i:])
+				linestyles = ['-','*','^','>','v']
+				colors = ['orange','brown','aqua','deeppink','peru','grey','k','tan']
+				for pref_i in range(self.n_prefixes):
+					pref_sty = linestyles[pref_i%len(linestyles)]
+					for popp_i in range(self.n_popp):
+						ax[1,0].plot(all_grads[:,popp_i,pref_i], 
+							c=colors[popp_i%len(colors)])
+						ax[2,0].plot(all_cost_grads[:,popp_i,pref_i], 
+							c=colors[popp_i%len(colors)])
+						ax[3,0].plot(all_l_benefit_grads[:,popp_i,pref_i], 
+							c=colors[popp_i%len(colors)])
+						ax[4,0].plot(all_res_benefit_grads[:,popp_i,pref_i], 
+							c=colors[popp_i%len(colors)])
+				ax[0,0].set_ylabel("a")
+				ax[1,0].set_ylabel("Net Grad")
+				ax[2,0].set_ylabel("Cost Grad")
+				ax[3,0].set_ylabel("LB Grad")
+				ax[4,0].set_ylabel("Res Grad")
+			except:
+				i += 1
+				if i >= len(self.metrics['grads']):
+					break
+				continue
+			break
 
 		start_iter = 0
 		if self.iter > 10:
@@ -1424,8 +1437,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def get_gamma(self):
 		### Idea is to increase gamma to our desired value as we become more confident about adjacent strategies
-		uncertainty_factor = np.maximum(1,np.abs(self.uncertainty_factor))
-		return self.gamma / uncertainty_factor * (1 / (1 + 3 / np.sqrt((self.iter+1))))
+		if self.simulated:
+			uncertainty_factor = np.maximum(1,np.abs(self.uncertainty_factor))
+			divider = uncertainty_factor * (1 / (1 + 3 / np.sqrt((self.iter+1))))
+		else:
+			## no uncertainty factor since we don't do max info (for now)
+			divider = (1 + 5 / np.sqrt((self.iter+1)))
+
+		return self.gamma / divider
 
 	def solve_max_information(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""
@@ -1756,6 +1775,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		if self.iter % self.save_state_every == 0:
 			### Save optimization state 
 			self.output_optimization_state()
+		self.output_small_stats()
 
 	def get_init_kwa(self):
 		return {
@@ -1770,6 +1790,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'save_run_dir': self.save_run_dir,
 		}
 
+	def output_small_stats(self):
+		print("Saving smaller stats every iteration, dont exit...")
+		self.optimization_vars = {}
+		for k in self.optimization_var_names:
+			self.optimization_vars[k] = getattr(self, k)
+		out_fn = os.path.join(self.save_run_dir, 'small-stats-{}.pkl'.format(self.iter))
+		save_state = {
+			'optimization_advertisement_representation': self.optimization_advertisement_representation,
+			'optimization_vars': self.optimization_vars, # related to when we're going to stop
+		}
+		pickle.dump(save_state, open(out_fn, 'wb'))
+		print("Done saving")
+
 	def output_optimization_state(self):
 		print("Saving optimization state, dont exit...")
 		self.optimization_vars = {}
@@ -1778,9 +1811,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		out_fn = os.path.join(self.save_run_dir, 'state-{}.pkl'.format(self.iter))
 		save_state = {
 			'deployment': self.og_deployment, # link caps, user performance, etc.
+			'optimization_advertisement_representation': self.optimization_advertisement_representation,
 			'ug_modified_deployment': self.output_deployment(), # link caps, user performance, etc.
 			'old_optimal_expensive_solution': self.old_optimal_expensive_solution,
 			'all_rb_calls_results_popps': self.all_rb_calls_results_popps,
+			'last_gti': self.last_gti,
 			'advertisement': self.get_last_advertisement(), # the optimization variable
 			'last_advertisement': self.last_advertisement,
 			'optimization_vars': self.optimization_vars, # related to when we're going to stop
@@ -1806,19 +1841,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		## update advertisement
 		self.metrics = save_state['metrics']
 		self.optimization_advertisement = save_state['advertisement']
+		self.optimization_advertisement_representation = save_state.get('optimization_advertisement_representation', {})
+		self.last_gti = save_state.get('last_gti',{})
 		self.last_advertisement = save_state['last_advertisement']
 		self.n_prefixes = self.optimization_advertisement.shape[1]
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
-		## update deployment
+		## update deployment from the OG deployment (currently loaded) to the pseudo-UG deployment
 		self.og_deployment = save_state['deployment']
 		new_deployment_with_pseudo_users = save_state['ug_modified_deployment']
 		self.og_deployment['port'] = save_port
 		new_deployment_with_pseudo_users['port'] = save_port
 		self.old_optimal_expensive_solution = save_state['old_optimal_expensive_solution']
 		self.update_deployment(new_deployment_with_pseudo_users)
-
-		if not self.simulated:
-			self.get_realworld_measure_wrapper()
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
 		## various optimization variables
 		for k,v in save_state['optimization_vars'].items():
@@ -1835,6 +1871,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			except KeyError:
 				self.calc_cache.all_caches['parents_on'][ui] = {(beaten_ingress,routed_ingress): None}
 		self.update_parent_tracker_workers()
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
 		self.measured = save_state['measured']
 		self.all_rb_calls_results_popps = save_state['all_rb_calls_results_popps']
@@ -1844,6 +1881,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.get_ground_truth_latency_benefit(self.optimization_advertisement)
 		else:
 			self.update_ug_ingress_decisions()
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
 		### Notify workers of current training iteration
 		for worker, worker_socket in self.worker_manager.worker_sockets.items():
@@ -1852,6 +1890,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			worker_socket.recv()
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
 	def init_optimization_vars(self):
 		self.clear_caches()
@@ -1860,6 +1899,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.measured = {}
 		self.path_measures = 0 
+		self.last_gti = None
+
+		## Track which popps are on/off, helpful for use in the actual deployment
+		opt_adv_on_off = threshold_a(self.optimization_advertisement)
+		self.optimization_advertisement_representation = {}
+		for poppi,prefi in zip(*np.where(opt_adv_on_off)):
+			self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
 		
 		if self.verbose:
 			# self.print_adv(advertisement)
@@ -2179,6 +2225,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def reset_ugs(self):
 		self.update_deployment(self.og_deployment)
+		print(np.sum(self.optimization_advertisement>.5,axis=0))
 		# if not self.simulated:
 		# 	self.get_realworld_measure_wrapper()
 
@@ -2255,6 +2302,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						print("Gradient stepped to a new advertisement, issuing measurement.")
 						print("Changed Indices: {}".format(np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_advertisement)))))
 					self.measure_ingresses(self.optimization_advertisement)
+					opt_adv_on_off = threshold_a(self.optimization_advertisement)
+					self.optimization_advertisement_representation = {}
+					for poppi,prefi in zip(*np.where(opt_adv_on_off)):
+						self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
 			else:
 				NUM_PREFS_TRIGGER_CHANGE = 2 # N prefixes change
 				NUM_TOTAL_TRIGGER_CHANGE = 4 # N popps change
@@ -2262,11 +2313,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				differences = np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_measured_advertisement)))
 				print("Differences in advertisement so far : {}".format(differences))
 				prefs_changed = {}
+				if len(differences) > 0:
+					## Change in the advertisement, update the actual-deployment-specific tracker
+					opt_adv_on_off = threshold_a(self.optimization_advertisement)
+					self.optimization_advertisement_representation = {}
+					for poppi,prefi in zip(*np.where(opt_adv_on_off)):
+						self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+
 				for poppi,prefi in zip(*differences):
 					prefs_changed[prefi] = None
 				if len(prefs_changed) >= NUM_PREFS_TRIGGER_CHANGE or len(differences[0]) >= NUM_TOTAL_TRIGGER_CHANGE:
 					print("Indices: {}, Prefixes : {} changed, so measuring now...".format(differences, list(prefs_changed)))
 					self.measure_ingresses(self.optimization_advertisement)
+					self.last_gti = self.calculate_ground_truth_ingress(self.optimization_advertisement)
 					measured_this_round = True
 					self.last_measured_advertisement = self.optimization_advertisement.copy()
 				

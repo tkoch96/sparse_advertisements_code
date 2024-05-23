@@ -6,9 +6,9 @@ import gurobipy as gp
 def NO_PATH_INGRESS(sas):
 	return sas.n_popps
 
-def get_paths_by_ug(sas, adv):
+def get_paths_by_ug(sas, adv, **kwargs):
 	# First, get winning ingresses from available prefixes and the priority model
-	routed_through_ingress, _ = sas.calculate_ground_truth_ingress(adv)
+	routed_through_ingress, _ = sas.calculate_ground_truth_ingress(adv, **kwargs)
 
 	paths_by_ug = {}
 	for prefixi in sorted(routed_through_ingress):
@@ -24,8 +24,7 @@ def get_paths_by_ug(sas, adv):
 		if not sas.simulated:
 			print("UG {} has no path, clients: {}".format(ug, sas.ug_to_ip.get(ug)))
 	# if len(ugs_with_no_path) > 0:
-	# 	print(ugs_with_no_path)
-	# 	print(routed_through_ingress)
+	# 	pickle.dump([ugs_with_no_path, adv, routed_through_ingress, sas.output_deployment()], open('ugs_with_no_path.pkl','wb'))
 	# 	exit(0)
 	### As an approximation, only consider the best N paths per UG. Otherwise computation is too expensive
 	all_ug_lat_ingresses = {}
@@ -48,14 +47,10 @@ def get_paths_by_ug(sas, adv):
 def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	### minimizes average latency, but if that fails it instead 
 	### minimizes MLU
-	ts = time.time()
 	verb = False
 	ret_min_latency = solve_lp_assignment(sas, adv, **kwargs)
-	if verb:
-		print("Trying first without MLU took {} s".format(round(time.time() - ts,2)))
-		ts = time.time()
 	if ret_min_latency['solved']:
-		if kwargs.get('smallverb'):
+		if kwargs.get('smallverb') or verb:
 			print("Solved LP just minimizing latency")
 		return ret_min_latency
 	elif kwargs.get('smallverb') or verb:
@@ -67,9 +62,9 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	ugs = sas.whole_deployment_ugs
 
 	## get vector of latency of all users to all (available) ingresses
-	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv)
-	if not sas.simulated:
-		print(paths_by_ug)
+	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv, **kwargs)
+	# if not sas.simulated:
+	# 	print(paths_by_ug)
 
 	n_paths = len(available_paths)
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
@@ -124,10 +119,6 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_entries_vol_conservation))
 	conservation_b = sas.whole_deployment_ug_vols.flatten()
 
-	if verb:
-		print("Setup took {} s".format(round(time.time() - ts,2)))
-		ts = time.time()
-
 	# res = scipy.optimize.linprog(dummy_minimizer, 
 	# 	A_eq = volume_conservation_A, b_eq = conservation_b,
 	# 	A_ub = A_util, b_ub = b_ub,
@@ -143,10 +134,6 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	model.addConstr(volume_conservation_A @ x == conservation_b)
 	model.optimize()
 
-
-	if verb:
-		print("Solving took {} s".format(round(time.time() - ts,2)))
-		ts = time.time()
 
 	if model.status != 2:
 		### infeasible problem, likely no route for some users
@@ -197,8 +184,8 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 					these_lats.append((NO_ROUTE_LATENCY*100, vol))
 				else:
 					these_lats.append((NO_ROUTE_LATENCY, vol))
-				if not sas.simulated:
-					print("In min MLU, UG {} experiencing congestion".format(sas.whole_deployment_ugs[ugi]))
+				# if not sas.simulated:
+				# 	print("In min MLU, UG {} experiencing congestion".format(sas.whole_deployment_ugs[ugi]))
 				congested_volume += sas.whole_deployment_ug_vols[ugi] * vol
 			except KeyError:
 				popp = sas.popps[poppi]
@@ -212,11 +199,6 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 
 
 	fraction_congested_volume = congested_volume / all_volume
-
-	if verb:
-		print("postprocess took {} s".format(round(time.time() - ts,2)))
-		ts = time.time()
-		print(lats_by_ug_arr[0])
 
 	return {
 		"objective": model.objVal,
@@ -238,7 +220,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 
 	ugs = sas.whole_deployment_ugs
 
-	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv)
+	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv, **kwargs)
 	n_paths = len(available_paths)
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
@@ -301,8 +283,8 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 		# print("Didnt solve")
 		return {'solved': False}
 	path_distribution = x.X
-	if verb:
-		print("Solved distribution without any congestion")
+	# if verb:
+	# 	print("Solved distribution without any congestion")
 
 	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
 	paths_by_ug = {}
@@ -379,7 +361,7 @@ def solve_lp_assignment_lagrange(sas, adv, verb=False, **kwargs):
 
 	ugs = sas.whole_deployment_ugs
 
-	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv)
+	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv, **kwargs)
 	n_paths = len(available_paths)
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
@@ -469,9 +451,14 @@ def solve_lp_assignment_lagrange(sas, adv, verb=False, **kwargs):
 		exit(0)
 		return {'solved': False}
 	path_distribution = x.X
-	print("Slacks: {}".format(lamdbuh.X))
-	if verb:
-		print("Solved distribution without any congestion")
+	# print("Slacks: {}".format(lamdbuh.X))
+	# if verb:
+	# 	print("Solved distribution without any congestion")
+
+	caps = caps.flatten()
+	available_latencies = available_latencies.flatten()
+	path_distribution = path_distribution.flatten()
+
 
 	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
 	paths_by_ug = {}
@@ -491,24 +478,7 @@ def solve_lp_assignment_lagrange(sas, adv, verb=False, **kwargs):
 
 	# Convert to poppi utilizations
 	vols_by_poppi = {poppi:round(v/float(caps[poppi]),2) for poppi,v in vols_by_poppi.items()}
-
-	#### Inundated popps here happen due to numerical precision errors, not a big deal
-	# inundated_popps = {poppi:v for poppi,v in vols_by_poppi.items() if v > 1}
-	# if len(inundated_popps) > 0:
-	# 	print("Weird that this is happening. Inundated popps {} ({}), \n caps/vols by poppi: {} // {}".format(inundated_popps, list([sas.popps[poppi] for poppi in inundated_popps]),
-	# 		list([caps[poppi] for poppi in inundated_popps]), vols_by_poppi))
-	# 	for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
-	# 		if poppi == NO_PATH_INGRESS(sas): 
-	# 			continue # no path
-	# 		if poppi not in inundated_popps: continue
-	# 		if vol_amt > 0:
-	# 			ugi = sas.whole_deployment_ug_to_ind[ug]
-	# 			vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
-	# 			try:
-	# 				paths_by_ug[ugi].append((poppi, vol_pct))
-	# 			except KeyError:
-	# 				paths_by_ug[ugi] = [(poppi, vol_pct)]
-	# 		print("{} {} {}".format(ugi, sas.whole_deployment_ug_to_vol[ug], paths_by_ug[ugi]))
+	inundated_popps = {poppi:v for poppi,v in vols_by_poppi.items() if v > 1.0001}
 
 	lats_by_ug = {}
 	all_volume, congested_volume = 0, 0
@@ -517,8 +487,16 @@ def solve_lp_assignment_lagrange(sas, adv, verb=False, **kwargs):
 		these_lats = []
 		cum_vol = 0
 		for poppi,vol in pathvols:
-			popp = sas.popps[poppi]
-			these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
+			try:
+				inundated_popps[poppi]
+				if kwargs.get('really_bad_fail',False):
+					these_lats.append((NO_ROUTE_LATENCY*100, vol))
+				else:
+					these_lats.append((NO_ROUTE_LATENCY, vol))
+				congested_volume += sas.whole_deployment_ug_vols[ugi] * vol
+			except KeyError:
+				popp = sas.popps[poppi]
+				these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
 			cum_vol += vol
 			all_volume += sas.whole_deployment_ug_vols[ugi]
 		avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
@@ -556,7 +534,7 @@ def solve_lp_assignment_variable_weighted_latency(sas, adv, optimal_latencies, v
 
 	ugs = sas.whole_deployment_ugs
 
-	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv)
+	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv, **kwargs)
 	n_paths = len(available_paths)
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
@@ -632,8 +610,8 @@ def solve_lp_assignment_variable_weighted_latency(sas, adv, optimal_latencies, v
 		# print("Didnt solve")
 		return solve_lp_with_failure_catch(sas,adv,**kwargs)
 	path_distribution = x.X
-	if verb:
-		print("Solved distribution without any congestion")
+	# if verb:
+	# 	print("Solved distribution without any congestion")
 
 	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
 	paths_by_ug = {}
@@ -712,7 +690,7 @@ def solve_lp_min_max_latency(sas, adv, optimal_latencies, **kwargs):
 	n_ugs = len(ugs)
 
 	## get vector of latency of all users to all (available) ingresses
-	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv)
+	routed_through_ingress, available_paths, paths_by_ug = get_paths_by_ug(sas, adv, **kwargs)
 
 	n_paths = len(available_paths)
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
