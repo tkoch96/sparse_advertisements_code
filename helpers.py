@@ -161,11 +161,15 @@ class Calc_Cache():
 		print("\n")
 
 
-def save_fig(fn, lgd=None):
-	if lgd is None:
-		plt.savefig(os.path.join("figures",fn), bbox_inches='tight')
+def save_fig(fn, lgd=None, abs_path=False):
+	if abs_path:
+		save_fn = fn
 	else:
-		plt.savefig(os.path.join("figures", fn), bbox_extra_artists=(lgd,), bbox_inches='tight')
+		save_fn = os.path.join("figures", fn)
+	if lgd is None:
+		plt.savefig(save_fn, bbox_inches='tight')
+	else:
+		plt.savefig(save_fn, bbox_extra_artists=(lgd,), bbox_inches='tight')
 	plt.clf()
 	plt.close()
 

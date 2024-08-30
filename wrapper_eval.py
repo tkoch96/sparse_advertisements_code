@@ -544,7 +544,6 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 	## X vals is flash crowd volume surge
 	## Y vals is link capacity multiplier
 
-	## !!!!!!for painter/TIPSY!!!!!!
 	## assume each metro's volume increases by X times on average
 	## see if there's a solution
 	## if there's a solution, do it and note the latency penalty compared to optimal
@@ -570,6 +569,7 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 	i=0
 	print("Done, parsing return values from workers")
 	for Y in Y_vals:
+		previous_hour_solution = None
 		for X in X_vals:
 			for metro in inflated_deployments[Y][X]:
 				prefix_withdrawals[Y][X].append([]) ## unused
@@ -583,11 +583,26 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 					if old_lat == NO_ROUTE_LATENCY or new_lat == NO_ROUTE_LATENCY: continue
 					latency_deltas.append(new_lat - old_lat)
 					vols.append(vol)
+				### structure this as ug,poppi -> val
+				path_to_path_val = {}
+				for path_val, (ug,poppi) in zip(soln_adv['raw_solution'], soln_adv['available_paths']):
+					path_to_path_val[ug,poppi] = path_val
+				if previous_hour_solution is not None:
+					## sqrt mean squared difference in traffic assignments
+					total_diff = 0
+					all_paths = set(list(path_to_path_val)).union(set(list(previous_hour_solution)))
+					for path in all_paths:
+						total_diff += (previous_hour_solution.get(path,0) - path_to_path_val.get(path,0))**2
+					assignment_delta = np.sqrt(total_diff / len(all_paths))
+				else:
+					assignment_delta = 0
+				previous_hour_solution = path_to_path_val
+
 				fraction_congested_volumes[Y][X].append(soln_adv['fraction_congested_volume'])
 				if len(latency_deltas) > 0:
-					metrics[Y][X].append(np.average(latency_deltas, weights=vols))
+					metrics[Y][X].append((np.average(latency_deltas, weights=vols), assignment_delta))
 				else:
-					metrics[Y][X].append(NO_ROUTE_LATENCY)
+					metrics[Y][X].append((NO_ROUTE_LATENCY, assignment_delta))
 	return {
 		'metrics': metrics,
 		'prefix_withdrawals':prefix_withdrawals, 

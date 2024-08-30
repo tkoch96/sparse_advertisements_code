@@ -15,7 +15,185 @@ from paper_plotting_functions import *
 def apply_con_latency(lat,con):
 	return (1-con) * lat + con * NO_ROUTE_LATENCY
 
+def make_hotnets_plots(cache_fn):
+	### for thesis defense
+	metrics = pickle.load(open(cache_fn, 'rb'))
+
+	################################
+	### PLOTTING
+	################################
+
+
+	SIM_INDS_TO_PLOT = list(sorted(list(metrics['best_latencies'])))
+	soln_types = list(metrics['latencies'][SIM_INDS_TO_PLOT[0]])
+
+	plot_every = 2
+
+	#### Plotting everything
+	for k in list(metrics):
+		if 'latency' in k or 'latencies' in k:
+			metrics['stats_' + k] = {}
+	interesting_latency_suboptimalities = [-10,-50,-100]
+	for add_str in ["", "_penalty", "_lagrange"]:
+		for k in ['stats_latency{}_thresholds_normal'.format(add_str), 'stats_latency{}_thresholds_fail_popp'.format(add_str), 
+			'stats_latency{}_thresholds_fail_pop'.format(add_str)]:
+			metrics[k] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
+	metrics['stats_resilience_to_congestion'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
+	metrics['stats_volume_multipliers'] = {solution:None for solution in soln_types}
+	metrics['stats_diurnal'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
+
+	def get_failure_metric_arr(k, solution, verb=False):
+		ret = []
+		avg_ret = []
+		mind,maxd = np.inf,-1*np.inf
+		all_vol = 0
+		actually_all_vol = 0
+		vol_congested = 0
+		vol_best_case_congested = 0
+		## storing latency threshold statistics
+		threshold_stats = {i:{} for i in SIM_INDS_TO_PLOT}
+
+		for ri in SIM_INDS_TO_PLOT:
+			these_metrics = metrics[k][ri][solution]
+			ugs={}
+
+			summaries_by_element = {}
+			this_diffs,this_vols = [],[]
+			this_sim_total_volume_congested = 0
+			this_sim_total_volume = 0
+			for fields in these_metrics:
+				if len(fields) == 6:
+					diff,vol,ug,element,perf1,perf2 = fields
+				else:
+					diff,vol,ug,element,perf1,perf2,_ = fields
+				ugs[ug] = None
+				actually_all_vol += vol
+				if perf1 == NO_ROUTE_LATENCY: ## the best-case scenario is congested
+					vol_best_case_congested += vol
+					perf2 = perf1
+				else:
+					this_sim_total_volume += vol
+					if perf2 != NO_ROUTE_LATENCY and perf1 != NO_ROUTE_LATENCY:
+						avg_ret.append((perf1-perf2,vol))
+						this_diffs.append(perf1-perf2)
+						this_vols.append(vol)
+					if perf2 == NO_ROUTE_LATENCY:
+						vol_congested += vol
+						this_sim_total_volume_congested += vol
+						perf2=perf2*100
+					all_vol += vol
+					if diff > maxd:
+						maxd=diff
+					if diff < mind:
+						mind=diff
+				ret.append((-1 * (perf1-perf2), vol))
+
+			### Store the fraction of users that DONT satisfy a latency objective
+			this_sim_fraction_volume_congested = this_sim_total_volume_congested / (this_sim_total_volume + .0000001)
+			try:
+				this_x,this_cdf_x = get_cdf_xy(list(zip(this_diffs,this_vols)), weighted=True)
+				for lat_threshold in interesting_latency_suboptimalities:
+					xi = np.argmin(np.abs(this_x- (-1*lat_threshold)))
+					threshold_stats[ri][lat_threshold] = (1-this_sim_fraction_volume_congested) * this_cdf_x[xi] + this_sim_fraction_volume_congested
+			except IndexError: # no good data
+				for lat_threshold in interesting_latency_suboptimalities:
+					threshold_stats[ri][lat_threshold] = this_sim_fraction_volume_congested ## all users are within the latency
+
+			
+
+
+		x=np.linspace(mind,maxd,num=200)
+		if vol_congested > 0:
+			x[-1] = 100*NO_ROUTE_LATENCY
+
+		try:
+			avg_latency_difference = np.average([el[0] for el in avg_ret], weights=[el[1] for el in avg_ret])
+		except ZeroDivisionError:
+			print("Problem doing {} {}".format(k,solution))
+			avg_latency_difference = NO_ROUTE_LATENCY
+		print("Average latency difference {},{}: {}".format(solution, k, avg_latency_difference))
+		print("{} pct. volume congested".format(round(100 * vol_congested / (actually_all_vol + .00001), 2)))
+		print("{} pct. optimally congested, all volume: {}".format(round(100 * vol_best_case_congested / (actually_all_vol+.00001), 2), actually_all_vol))
+
+		return ret, x, {
+			'avg_latency_difference': avg_latency_difference, 
+			'frac_vol_congested': vol_congested / (all_vol+.0000001), 
+			'frac_vol_bestcase_congested': vol_best_case_congested / (actually_all_vol+.0000001),
+		}, threshold_stats
+
+
+	###### STEADY STATE LATENCY
+	soln_types = ['sparse', 'painter', 'anycast', 'one_per_peering']
+	solution_to_plot_label = {
+		'sparse': 'Gradient Descent Prototype',
+		'anycast': "Anycast",
+		'painter':'PAINTER',
+		'one_per_peering':"Configure All Routes"
+	}
+	f,ax = get_figure()
+	for solution in soln_types:
+		diffs = []
+		wts = []
+		for random_iter in SIM_INDS_TO_PLOT:
+			this_diffs = []
+			this_wts = []
+			if solution == 'one_per_peering': 
+				metrics['latencies'][random_iter][solution] = metrics['best_latencies'][random_iter]
+			for ug in metrics['best_latencies'][random_iter]:
+				try:
+					metrics['latencies'][random_iter][solution][ug]
+				except KeyError:
+					## deleted, don't include
+					continue
+				vol = metrics['deployment'][random_iter]['ug_to_vol'][ug]
+				diffs.append(-1 * (metrics['best_latencies'][random_iter][ug] - metrics['latencies'][random_iter][solution][ug]))
+				this_diffs.append(-1 * (metrics['best_latencies'][random_iter][ug] - metrics['latencies'][random_iter][solution][ug]))
+				wts.append(vol)
+				this_wts.append(vol)
+
+			this_x,this_cdf_x = get_cdf_xy(list(zip(this_diffs,this_wts)), weighted=True)
+			for lat_threshold in interesting_latency_suboptimalities:
+				xi = np.argmin(np.abs(this_x- (-1*lat_threshold)))
+				metrics['stats_latency_thresholds_normal'][solution][random_iter][lat_threshold] = this_cdf_x[xi]
+		for lat_threshold in interesting_latency_suboptimalities:
+			avg_suboptimality = np.mean(list([metrics['stats_latency_thresholds_normal'][solution][random_iter][lat_threshold] for random_iter in SIM_INDS_TO_PLOT]))
+			print("({}) {} pct of traffic within {} ms of optimal for normal LP".format(solution, 100*round(1-avg_suboptimality,4), lat_threshold))
+		x,cdf_x = get_cdf_xy(list(zip(diffs,wts)), weighted=True)
+		ax.plot(x[::plot_every*5],cdf_x[::plot_every*5], label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+		avg_latency_diff = np.average(diffs, weights=wts)
+		print("Average latency compared to optimal : {}".format(avg_latency_diff))
+		metrics['stats_best_latencies'][solution] = avg_latency_diff
+	ax.legend()
+	ax.grid(True)
+	ax.set_xlabel("Actual - Optimal Latency (ms)")
+	ax.set_ylabel("CDF of Traffic")
+	ax.set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
+	ax.set_xlim([0,30])
+	save_figure('hotnets/steady_state_latency_actual_deployment.pdf')
+
+
+	####### SINGLE INGRESS/SITE FAILURES
+	for metric_k, lab in zip(['popp', 'pop'], ['Link', 'Site']):
+		f,ax = get_figure()
+		for solution in soln_types:
+			all_differences, x, stats, threshold_stats = get_failure_metric_arr('{}_failures_latency_optimal_specific'.format(metric_k), solution)
+			metrics['stats_' + '{}_failures_latency_optimal_specific'.format(metric_k)][solution] = stats
+			metrics['stats_latency_thresholds_fail_{}'.format(metric_k)][solution] = threshold_stats
+			x, cdf_x = get_cdf_xy(all_differences, weighted=True, x=x)
+			ax.plot(x[::plot_every],cdf_x[::plot_every],label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+
+		ax.legend()
+		ax.grid(True)
+		ax.set_xlabel("Actual - Optimal Latency Single-{} Failure (ms)".format(lab))
+		ax.set_ylabel("CDF of Traffic")
+		ax.set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
+		ax.set_xlim([0,100])
+
+		save_figure('hotnets/{}_failure_latency_actual_deployment.pdf'.format(lab.lower()))
+
+
 def make_ppt_plots(cache_fn):
+	### for thesis defense
 	metrics = pickle.load(open(cache_fn, 'rb'))
 
 	################################
@@ -582,7 +760,8 @@ if __name__ == "__main__":
 
 	cache_fn = os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(dpsize))
 
-	make_ppt_plots(cache_fn)
+	make_hotnets_plots(cache_fn)
+	# make_ppt_plots(cache_fn)
 	# create_diurnal_shape_figure()
 	# make_paper_plots(cache_fn)
 	# create_uncertainty_over_convergence_figure()

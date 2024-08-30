@@ -592,9 +592,9 @@ def cluster_actual_users(**kwargs):
 	considering_pops = kwargs.get('considering_pops')
 	cpstr = pops_to_fn(considering_pops)
 	cluster_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'clustered_perfs_{}.pkl'.format(cpstr))
-	if not os.path.exists(cluster_cache_fn):
+	if not os.path.exists(cluster_cache_fn) or len(considering_pops) >= 30:
 		pruned_performance_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'pruned_performances_{}.pkl'.format(cpstr))
-		if not os.path.exists(pruned_performance_cache_fn):
+		if not os.path.exists(pruned_performance_cache_fn) or len(considering_pops) >= 30:
 			anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
 			pickle.dump([anycast_latencies, ug_perfs], open(pruned_performance_cache_fn,'wb'))
 		else:
@@ -1165,7 +1165,8 @@ def load_actual_deployment(deployment_size, **kwargs):
 	else:
 		deployment_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'actual_deployment_cache_{}.pkl'.format(cpstr))
 
-	if not os.path.exists(deployment_cache_fn):
+	### completely re-randomly generate large deployments since the combination of possible pops is relatively small
+	if not os.path.exists(deployment_cache_fn) or len(considering_pops) >= 30:
 		pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}
 
 		if deployment_size in ACTUAL_DEPLOYMENT_SIZES:

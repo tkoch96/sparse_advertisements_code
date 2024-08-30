@@ -18,8 +18,9 @@ class Optimal_Adv_Wrapper:
 		self.ts_loop = time.time()
 		self.advertisement_cost = self.l1_norm
 		self.epsilon = .005 # change in objective less than this -> stop
-		self.lambduh = lambduh # sparsity cost
+		self.lambduh = lambduh # sparsity cost (unused really)
 		self.gamma = gamma # resilience cost
+		self.using_generic_objective = False
 		self.with_capacity = kwargs.get('with_capacity', False)
 		self.n_prefixes = kwargs.get('n_prefixes')
 
@@ -318,6 +319,42 @@ class Optimal_Adv_Wrapper:
 			from deployment_setup import get_link_capacities_actual_deployment
 			self.link_capacities_by_popp = get_link_capacities_actual_deployment(self.output_deployment(), anycast_catchments)
 
+	def compute_one_per_peering_solution(self, **kwargs):
+		try:
+			self.worker_manager
+		except AttributeError: # not ready
+			return
+		if kwargs.get('verb',True):
+			print("Getting best lats by UG")
+
+		one_per_ingress_adv = np.identity(self.n_popps)
+		if self.using_generic_objective:
+			ret_overall = self.generic_objective.get_latency_benefit_adv(one_per_ingress_adv)
+			objective_lat = ret_overall['objective']
+			objective_res = self.generic_objective.get_ground_truth_resilience_benefit(one_per_ingress_adv)
+		else:
+			ret_overall = self.solve_lp_assignment(one_per_ingress_adv,
+				computing_best_lats=True)
+			objective_lat = ret_overall['objective']
+			objective_res = self.get_ground_truth_resilience_benefit(one_per_ingress_adv)
+		overall_objective = self.actual_nonconvex_objective(one_per_ingress_adv, 
+			latency_benefit_precalc=objective_lat, resilience_benefit_precalc=objective_res)
+
+		if not ret_overall['solved'] and kwargs.get('exit_on_impossible', True):
+			raise ValueError("Cant solve problem in the best case, increase caps.")
+		elif not kwargs.get('exit_on_impossible', True):
+			pass
+		else:
+			self.best_lats_by_ug = ret_overall['lats_by_ug']
+
+		self.optimal_expensive_solution = {
+			'obj': ret_overall,
+			'latency': objective_lat,
+			'resilience': objective_res,
+			'overall': overall_objective,
+		}
+
+
 	def check_update_deployment_upon_modify(self):
 		### When we modify UG perfs, it could be that many data structures need to change, check that these are changed
 		try:
@@ -414,20 +451,7 @@ class Optimal_Adv_Wrapper:
 				self.pop_to_popps[popp[0]] = [popp]
 		self.pop_to_popp_inds = {pop:np.array([self.popp_to_ind[popp] for popp in self.pop_to_popps[pop]]) for pop in self.pops}
 
-		self.ui_to_poppi = {}
-		for ug in self.ug_perfs:
-			self.ui_to_poppi[self.ug_to_ind[ug]] = {}
-			for popp in self.ug_perfs[ug]:
-				self.ui_to_poppi[self.ug_to_ind[ug]][self.popp_to_ind[popp]] = None
-		self.poppi_to_ui = {}
-		for ug in self.ug_perfs:
-			for popp in self.ug_perfs[ug]:
-				try:
-					self.poppi_to_ui[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
-				except KeyError:
-					self.poppi_to_ui[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
-		for poppi in get_difference(list(range(self.n_popps)), self.poppi_to_ui):
-			self.poppi_to_ui[poppi] = []
+		self.make_ui_to_poppi()
 
 		self.provider_popps = get_intersection(self.provider_popps, self.popps)
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
@@ -519,12 +543,7 @@ class Optimal_Adv_Wrapper:
 			pass
 		self.parent_tracker = {}
 
-		print("Getting best lats by UG")
-		one_per_ingress_adv = np.identity(self.n_popps)
-		ret = self.solve_lp_assignment(one_per_ingress_adv,
-			computing_best_lats=True)
-		self.optimal_expensive_solution = ret
-		self.best_lats_by_ug = ret['lats_by_ug']
+		self.compute_one_per_peering_solution()
 		
 		try:					
 			del self.rb_backups
@@ -623,11 +642,44 @@ class Optimal_Adv_Wrapper:
 
 		return ret
 
+	def make_ui_to_poppi(self):
+		self.ui_to_poppi = {}
+		for ug in self.ug_perfs:
+			self.ui_to_poppi[self.ug_to_ind[ug]] = {}
+			for popp in self.ug_perfs[ug]:
+				self.ui_to_poppi[self.ug_to_ind[ug]][self.popp_to_ind[popp]] = None
+		self.poppi_to_ui = {}
+		for ug in self.ug_perfs:
+			for popp in self.ug_perfs[ug]:
+				try:
+					self.poppi_to_ui[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
+				except KeyError:
+					self.poppi_to_ui[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
+		for poppi in get_difference(list(range(self.n_popps)), self.poppi_to_ui):
+			self.poppi_to_ui[poppi] = []
+
+		self.whole_deployment_ui_to_poppi = {}
+		for ug in self.whole_deployment_ug_perfs:
+			self.whole_deployment_ui_to_poppi[self.whole_deployment_ug_to_ind[ug]] = {}
+			for popp in self.whole_deployment_ug_perfs[ug]:
+				self.whole_deployment_ui_to_poppi[self.whole_deployment_ug_to_ind[ug]][self.popp_to_ind[popp]] = None
+		self.whole_deployment_poppi_to_ui = {}
+		for ug in self.whole_deployment_ug_perfs:
+			for popp in self.whole_deployment_ug_perfs[ug]:
+				try:
+					self.whole_deployment_poppi_to_ui[self.popp_to_ind[popp]].append(self.whole_deployment_ug_to_ind[ug])
+				except KeyError:
+					self.whole_deployment_poppi_to_ui[self.popp_to_ind[popp]] = [self.whole_deployment_ug_to_ind[ug]]
+		for poppi in get_difference(list(range(self.n_popps)), self.whole_deployment_poppi_to_ui):
+			self.whole_deployment_poppi_to_ui[poppi] = []
+
 	def update_deployment(self, deployment, **kwargs):
 		self.simulated = deployment.get('simulated', True)
 		self.port = deployment.get('port', 31415)
-		if self.simulated:
-			self.max_n_iter = 150 # maximum number of learning iterations
+		if deployment.get('dpsize') == 'small':
+			self.max_n_iter = 50
+		elif self.simulated:
+			self.max_n_iter = 250 # maximum number of learning iterations
 		else:
 			self.max_n_iter = 150 # maximum number of learning iterations
 
@@ -665,20 +717,7 @@ class Optimal_Adv_Wrapper:
 		except:
 			pass
 
-		self.ui_to_poppi = {}
-		for ug in self.ug_perfs:
-			self.ui_to_poppi[self.ug_to_ind[ug]] = {}
-			for popp in self.ug_perfs[ug]:
-				self.ui_to_poppi[self.ug_to_ind[ug]][self.popp_to_ind[popp]] = None
-		self.poppi_to_ui = {}
-		for ug in self.ug_perfs:
-			for popp in self.ug_perfs[ug]:
-				try:
-					self.poppi_to_ui[self.popp_to_ind[popp]].append(self.ug_to_ind[ug])
-				except KeyError:
-					self.poppi_to_ui[self.popp_to_ind[popp]] = [self.ug_to_ind[ug]]
-		for poppi in get_difference(list(range(self.n_popps)), self.poppi_to_ui):
-			self.poppi_to_ui[poppi] = []
+		self.make_ui_to_poppi()
 
 		self.provider_popps = deployment['provider_popps']
 		self.n_provider_popps = len(self.provider_popps) # number of provider PoPps
@@ -803,20 +842,6 @@ class Optimal_Adv_Wrapper:
 				except AttributeError:
 					pass
 			self.get_realworld_measure_wrapper()
-
-			if not quick_update:
-				if kwargs.get('verb',True):
-					print("Getting best lats by UG")
-				one_per_ingress_adv = np.identity(self.n_popps)
-				ret = self.solve_lp_assignment(one_per_ingress_adv,
-					computing_best_lats=True)
-				self.optimal_expensive_solution = ret
-				if not ret['solved'] and kwargs.get('exit_on_impossible', True):
-					raise ValueError("Cant solve problem in the best case, increase caps.")
-				elif not kwargs.get('exit_on_impossible', True):
-					pass
-				else:
-					self.best_lats_by_ug = ret['lats_by_ug']
 					
 		try:
 			if quick_update:
@@ -835,6 +860,7 @@ class Optimal_Adv_Wrapper:
 
 				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 				self.send_receive_worker(worker, msg)
+			self.compute_one_per_peering_solution()
 		except AttributeError:
 			pass
 
@@ -890,13 +916,15 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_latency_benefit(self, a, **kwargs):
 		### Measures actual latency benefit as if we were to advertise 'a'
+		if self.using_generic_objective:
+			return self.generic_objective.get_ground_truth_latency_benefit(a, **kwargs)
 		self.enforce_loaded_rwmw()
 		a_effective = threshold_a(a)
 		
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
 
 		ugs = kwargs.get('ugs',self.ugs)
-		benefit = self.benefit_from_user_latencies(user_latencies,ugs)
+		benefit = self.benefit_from_user_latencies(user_latencies, ugs)
 		return benefit
 
 	def get_ground_truth_latency_benefit_mp(self, advs, dep, **kwargs):
@@ -912,67 +940,6 @@ class Optimal_Adv_Wrapper:
 			benefit = self.benefit_from_user_latencies(user_latencies,ugs)
 			all_rets.append(benefit)
 		return all_rets
-
-	def get_max_painter_benefit(self):
-		max_improve_over_anycast = 0
-		for ug in self.ugs:
-			best_user_latency = np.min(list(self.ug_perfs[ug].values()))
-			max_improve_over_anycast += (self.ug_anycast_perfs[ug] - best_user_latency) * self.ug_to_vol[ug]
-		max_improve_over_anycast = max_improve_over_anycast / np.sum(self.ug_vols)
-		return max_improve_over_anycast
-
-	def get_max_overall_benefit(self):
-		## benefit is between MIN_LATENCY_FOR_EVERYONE and NO_ROUTE_FOR_EVERYONE
-		## scaled to be minimized is -1*NO_ROUTE_FOR_EVERYONE -> -1 * MIN_LATENCY_FOR_EVERYONE
-		## made positive is 0 -> -1 * (MIN_LATENCY_FOR_EVERYONE - NO_ROUTE_FOR_EVERYONE)
-
-		normalized_best_overall_benefit = 0
-		for ug in self.ugs:
-			best_user_latency = np.min(list(self.ug_perfs[ug].values()))
-			normalized_best_overall_benefit += (-1 * (best_user_latency - NO_ROUTE_LATENCY) * self.ug_to_vol[ug])
-		normalized_best_overall_benefit /= np.sum(self.ug_vols)
-		return normalized_best_overall_benefit
-
-	def get_normalized_benefit(self, a, **kwargs):
-		self.enforce_loaded_rwmw()
-		a_effective = threshold_a(a)
-		user_latencies = self.get_ground_truth_user_latencies(a_effective, **kwargs)
-		# print([(ug,user_latencies[self.ug_to_ind[ug]]) for ug in self.ugs])
-		normalized_benefit = 0
-		for ug in self.ugs:
-			user_latency = user_latencies[self.ug_to_ind[ug]]
-			normalized_benefit += (-1 * (user_latency - NO_ROUTE_LATENCY) * self.ug_to_vol[ug])
-		normalized_benefit /= np.sum(self.ug_vols)
-		return normalized_benefit
-
-	def summarize_user_latencies(self, a):
-		### Summarizes which users are getting good latency and bad latency, peers that would benefit them
-		return
-		self.enforce_loaded_rwmw()
-		user_latencies = self.get_ground_truth_user_latencies(a)
-		cum_by_peer = {}
-		help_ug_by_peer = {}
-		for ug in self.ug_perfs:
-			these_perfs = list(sorted(self.ug_perfs[ug].items(), key = lambda el : el[1]))
-			best_peer, best_perf = these_perfs[0]
-			current_perf = user_latencies[self.ug_to_ind[ug]]
-			if best_perf < current_perf:
-				# print("UG {} would see {} ms improvement through {}".format(
-				# 	self.ug_to_ind[ug], current_perf - best_perf, self.popp_to_ind[best_peer]))
-				try:
-					cum_by_peer[self.popp_to_ind[best_peer]] += (current_perf - best_perf)
-					help_ug_by_peer[self.popp_to_ind[best_peer]].append(self.ug_to_ind[ug])
-				except KeyError:
-					cum_by_peer[self.popp_to_ind[best_peer]] = current_perf - best_perf
-					help_ug_by_peer[self.popp_to_ind[best_peer]] = [self.ug_to_ind[ug]]
-
-		sorted_cum_by_peer = list(sorted(cum_by_peer.items(), key = lambda el : -1 * el[1]))
-		print(sorted_cum_by_peer)
-		best_overall_peers = sorted_cum_by_peer[0:3]
-		for bop,diff in best_overall_peers:
-			print("{} -- {} ms, UGs {} would see corresponding lats {}".format(bop,diff,help_ug_by_peer[bop],
-				[round(self.ug_perfs[self.ugs[ui]][self.popps[bop]],2) for ui in help_ug_by_peer[bop]]))
-			print([round(el,2) for el in self.recent_grads[bop,:]])
 
 	def get_ground_truth_user_latencies(self, a, mode='lp', **kwargs):
 		#### Measures actual user latencies as if we were to advertise 'a'
@@ -1024,6 +991,14 @@ class Optimal_Adv_Wrapper:
 				return self.get_ground_truth_user_latencies(a, mode='best', **kwargs)
 			user_latencies = ret['lats_by_ug']
 			ug_ingress_decisions = ret['paths_by_ug']
+			if kwargs.get('save_ug_ingress_decisions'):
+				self.popp_to_users = {}
+				for ugi in ug_ingress_decisions:
+					for poppi,v in ug_ingress_decisions[ugi]:
+						try:
+							self.popp_to_users[poppi].append(self.ugs[ugi])
+						except KeyError:
+							self.popp_to_users[poppi] = [self.ugs[ugi]]
 		else:
 			raise ValueError("Unknown mode {}".format(mode))
 		
@@ -1044,6 +1019,9 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_resilience_benefit(self, advertisement, **kwargs):
 		#### NOTE -- this calculation does not factor in capacity, since that would take a long time
+
+		if self.using_generic_objective:
+			return self.generic_objective.get_ground_truth_resilience_benefit(advertisement, **kwargs)
 
 		benefit = 0
 		if not self.simulated: ## Too expensive to compute if we're not simulating
@@ -1382,7 +1360,7 @@ class Optimal_Adv_Wrapper:
 						# if active_popp_ug_indicator[best_available_option] == 0: continue # no route
 
 						this_routed_through_ingress[ug] = self.popps[best_available_option]
-				if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes:
+				if n_ug == self.whole_deployment_n_ug and a.shape[1] == self.n_prefixes and kwargs.get('do_cache', True):
 					## not a subset of user groups, cache result for general utility
 					self.calc_cache.all_caches['gti'][cache_rep] = (this_routed_through_ingress,this_actives)
 				routed_through_ingress[prefix_i] = this_routed_through_ingress
@@ -1484,7 +1462,10 @@ class Optimal_Adv_Wrapper:
 			return # no workers to update
 		msgs = {}
 		for worker in self.worker_manager.worker_sockets:
-			this_deployment_ugs = self.worker_manager.worker_to_deployments[worker]['ugs']
+			if self.using_generic_objective: ### for generic objective, each worker has all the users
+				this_deployment_ugs = self.ugs
+			else:
+				this_deployment_ugs = self.worker_manager.worker_to_deployments[worker]['ugs']
 			sub_cache = {}
 			for this_deployment_ug in this_deployment_ugs:
 				try:
@@ -1520,45 +1501,7 @@ class Optimal_Adv_Wrapper:
 
 		self.enforce_measured_prefs(routed_through_ingress, actives)
 		self.measured[tuple(a.flatten())] = None
-
-	def get_naive_range(self, a, ugs=None):
-		overall_best = 0
-		overall_worst = 0
-		overall_average = 0
-
-		self.enforce_loaded_rwmw()
-
-		if ugs is None:
-			ugs = list(self.ug_to_vol)
-
-		total_ug_vol = sum(list(self.ug_to_vol[ug] for ug in ugs))
-
-		for ug in ugs:
-			perfs = self.ug_perfs[ug]
-			worst_case_perf = MAX_LATENCY
-			best_case_perf = MAX_LATENCY
-			has_perf = [self.popp_to_ind[popp] for popp in perfs]
-			for prefix_i in range(self.n_prefixes):
-				is_on = np.where(a[:,prefix_i])[0]
-				is_on_and_route = get_intersection(is_on, has_perf)
-				if len(is_on_and_route) > 0:
-					these_perfs = [perfs[self.popps[popp]] for popp in is_on_and_route]
-					# at the best case, user gets routed to lowest latency "on" probe
-					best_case_perf = np.minimum(np.min(these_perfs), best_case_perf)
-					# at the worst case, every max hits and the user picks the best of those maxes
-					worst_case_perf = np.minimum(np.max(these_perfs), worst_case_perf)
-
-			overall_best += ((-1 * best_case_perf) * self.ug_to_vol[ug])
-			overall_worst += ((-1 * worst_case_perf) * self.ug_to_vol[ug])
-			overall_average += ((-1 * (best_case_perf + worst_case_perf) / 2) * self.ug_to_vol[ug])
-
-		return {
-			'best': overall_best / total_ug_vol,
-			'worst': overall_worst / total_ug_vol,
-			'avg': overall_average / total_ug_vol,
-		}
 			
-
 	def actual_nonconvex_objective(self, a, **kwargs):
 		# Don't approximate the L0 norm with anything
 		# Use actual latencies as if we were to really measure all the paths
@@ -1573,13 +1516,20 @@ class Optimal_Adv_Wrapper:
 		# cost for different prefs likely not different
 		cost_prefs = self.prefix_cost(a)
 		norm_penalty = cost_peerings + cost_prefs
-		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
+		latency_benefit = kwargs.get('latency_benefit_precalc', self.get_ground_truth_latency_benefit(a, **kwargs))
 		if self.gamma > 0:
-			resilience_benefit = self.get_ground_truth_resilience_benefit(a, **kwargs)
+			resilience_benefit = kwargs.get('resilience_benefit_precalc', self.get_ground_truth_resilience_benefit(a, **kwargs))
 		else:
 			resilience_benefit = 0
 
-		return self.lambduh * norm_penalty - (latency_benefit + self.gamma * resilience_benefit)
+		if self.gamma <= 1:
+			benefit = latency_benefit + self.gamma * resilience_benefit
+		else:
+			benefit = 1 / self.gamma * latency_benefit + resilience_benefit
+
+		obj = self.lambduh * norm_penalty - benefit
+
+		return obj
 
 	def measured_objective(self, a, **kwargs):
 		## Approximate L0 norm with whatever approximation we're using
@@ -1587,9 +1537,9 @@ class Optimal_Adv_Wrapper:
 		## (Here we actually execute the advertisement)
 		self.enforce_loaded_rwmw()
 		norm_penalty = self.advertisement_cost(a)
-		latency_benefit = self.get_ground_truth_latency_benefit(a, **kwargs)
+		latency_benefit = kwargs.get('latency_benefit_precalc', self.get_ground_truth_latency_benefit(a, **kwargs))
 		if self.gamma > 0 and kwargs.get('use_resilience', True):
-			resilience_benefit = self.get_ground_truth_resilience_benefit(a, **kwargs)
+			resilience_benefit = kwargs.get('resilience_benefit_precalc', self.get_ground_truth_resilience_benefit(a, **kwargs))
 		else:
 			resilience_benefit = 0
 		if self.gamma <= 1:

@@ -6,265 +6,6 @@ from solve_lp_assignment import *
 import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
 
-def adv_summary(popps,adv):
-	adv = threshold_a(adv)
-	print("\n")
-	print("\n")
-	print(adv)
-	for pref in range(adv.shape[1]):
-		if np.sum(adv[:,pref]) == adv.shape[0]:
-			print("Prefix {} is anycast".format(pref))
-		else:
-			for poppi in np.where(adv[:,pref])[0]:
-				print("Prefix {} has {}".format(pref, popps[poppi]))
-		print("\n")
-
-def compute_optimal_prefix_withdrawals(sas, adv, popp, pre_soln, **kwargs):
-
-	#### Computes the set of prefix withdrawals that results in the least amount of latency hit while 
-	#### solving the congestion problem
-
-	## for a given popp, there's technically power_set(number of advertisement to popp) that we could turn off
-	## so if that's intractable, might need to sample it or something
-	# print("SOLVING PRE SOLN")
-	# pre_soln = sas.solve_lp_with_failure_catch(adv)
-
-
-	pre_lats_by_ug = pre_soln['lats_by_ug']
-	pre_paths_by_ug = pre_soln['paths_by_ug']
-
-	# save_cap = copy.copy(sas.link_capacities_arr[sas.popp_to_ind[popp]])
-	# sas.link_capacities_arr[sas.popp_to_ind[popp]] = new_link_capacity
-
-
-	if kwargs.get('allow_congestion', False):
-		solvlpfn = sas.solve_lp_with_failure_catch
-	else:
-		solvlpfn = sas.solve_lp_assignment
-
-
-	poppi = sas.popp_to_ind[popp]
-	prefis = np.where(adv[poppi,:])[0]
-	valid_solutions = []
-	ts = time.time()
-	max_time = 600
-
-	## First, try solving without withdrawing any prefix
-	soln = solvlpfn(adv)
-	if soln['solved'] and kwargs.get('can_withdraw_none', True): 
-		valid_solutions.append(([], soln['lats_by_ug'] - pre_lats_by_ug,
-		 sas.ug_vols, 0))
-	else:
-		for withdrawal_number in range(1,len(prefis) + 1):
-			if withdrawal_number > 2: break
-			for prefi_set in itertools.combinations(prefis,withdrawal_number):
-				adv[poppi,np.array(prefi_set)] = 0
-				## unclear exactly how to handle this --- we should allow > 1 util, just the best one
-				soln = solvlpfn(adv)
-				if not soln['solved']: 
-					adv[poppi,np.array(prefi_set)] = 1
-					continue
-
-				# ## Get UG inds of interest (i.e., those who've changed)
-				# ugis_of_interest = np.array([ugi for ugi in soln['paths_by_ug'] if 
-				# 	soln['paths_by_ug'][ugi] != pre_paths_by_ug[ugi]])
-
-				# if len(ugis_of_interest) == 0: 
-				# 	## nothing changed, doesn't matter
-				# 	continue
-
-				# valid_solutions.append((prefi_set, soln['lats_by_ug'][ugis_of_interest] - pre_lats_by_ug[ugis_of_interest],
-				#  sas.ug_vols[ugis_of_interest]))
-				valid_solutions.append((prefi_set, soln['lats_by_ug'] - pre_lats_by_ug,
-				 	sas.ug_vols, soln['fraction_congested_volume']))
-
-				adv[poppi,np.array(prefi_set)] = 1
-			if len(valid_solutions) > 0 or time.time() - ts > max_time or np.sum(adv.flatten()) == 0:
-				# greedily stop
-				break
-	if len(valid_solutions) > 0:
-		## pick the best one w.r.t. latency
-		best_solution,best_deltas,best_vols,best_cv = valid_solutions[0]
-		best_metric = np.sum(best_deltas * best_vols)
-		for solution in valid_solutions:
-			pref_solution, performance_deltas, vols, cv = solution
-			if np.sum(performance_deltas * vols) < best_metric:
-				best_solution = pref_solution
-				best_metric = np.sum(performance_deltas * vols)
-				best_deltas = performance_deltas
-				best_vols = vols
-				best_cv = cv
-		best_solution = {
-			'prefix_withdrawals': best_solution,
-			'latency_deltas': (best_deltas, best_vols),
-			'congested_volume':  best_cv,
-		}
-	else:
-		best_solution = None
-	
-	return best_solution
-
-def assess_resilience_to_flash_crowds(sas, adv, solution, X_vals):
-	## !!!!!!for painter/TIPSY!!!!!!
-	## assume each metro's volume increases by X times on average
-	## see if there's a solution
-	## if there's a solution, do it and note the latency penalty compared to optimal
-
-	# return cdf of latency penalties, possibly as a function of X
-	metrics = {X:[] for X in X_vals}
-	prefix_withdrawals = {X:[] for X in X_vals}
-	fraction_congested_volumes = {X:[] for X in X_vals}
-
-	adv = threshold_a(adv)
-
-	base_soln = sas.solve_lp_with_failure_catch(adv)
-	for X in X_vals:
-		vol_by_metro = {}
-		for metro,asn in sas.ugs:
-			try:
-				vol_by_metro[metro] += sas.ug_to_vol[(metro,asn)]
-			except KeyError:
-				vol_by_metro[metro] = sas.ug_to_vol[(metro,asn)]
-
-		for metro,vol in tqdm.tqdm(vol_by_metro.items(), 
-			desc="Assessing resilience to flash crowds by metro for {},X={}".format(solution,X)):
-			prefix_withdrawals[X].append([])
-			deployment = sas.output_deployment()
-			save_deployment = copy.deepcopy(deployment)
-			for ug,v in deployment['ug_to_vol'].items():
-				if ug[0] == metro:
-					deployment['ug_to_vol'][ug] = v * (1 + X/100)
-			# print(deployment['ug_to_vol'])
-			# print(deployment['link_capacities'])
-			# exit(0)
-			sas.update_deployment(deployment, verb=False, exit_on_impossible=False,
-				quick_update=True)
-			pre_soln = sas.solve_lp_with_failure_catch(adv)
-
-			inundated_popps = [sas.popps[poppi] for poppi,v in pre_soln['vols_by_poppi'].items() if v > 1]
-			# doprnt = False
-			# if len(inundated_popps) > 0:
-			# 	doprnt = True
-			# 	print("{} inundated popps".format(len(inundated_popps)))
-			soln = None
-			soln_adv = copy.deepcopy(adv)
-			ts, max_time, max_n_tries = time.time(), 10, 100 # seconds
-			n = 0
-			if dpsize == 'really_friggin_small':
-				max_time = 1
-			if False:
-
-				#### Would make multiprocesing quite annoying
-				while len(inundated_popps) > 0:
-					### Greedily search to find a solution to the problem with TIPSY
-					popp = inundated_popps[np.random.choice(list(range(len(inundated_popps))))]
-					# print("trying drawing to withdraw a prefix from {}".format(popp))
-					soln = compute_optimal_prefix_withdrawals(sas, soln_adv, popp, pre_soln,
-						allow_congestion=True, can_withdraw_none=False)
-					n+=1
-					if soln is not None:
-						# print("withdrawing {}".format(soln['prefix_withdrawals']))
-						soln_adv[sas.popp_to_ind[popp], soln['prefix_withdrawals']] = 0
-						prefix_withdrawals[X][-1].append(soln['prefix_withdrawals'])
-						new_soln = sas.solve_lp_with_failure_catch(soln_adv)
-						inundated_popps = [sas.popps[poppi] for poppi,v in new_soln['vols_by_poppi'].items() if v > 1]
-						# print("{} inundated popps after withdrawal".format(len(inundated_popps)))
-					if time.time() - ts > max_time or n > max_n_tries:
-						break
-			# if doprnt:
-			# 	print("After termination, {} inundated popps".format(len(inundated_popps)))
-			## characterize net latency changes after all the prefix withdrawals,
-			## note that there is potentially no change at all
-			## affected users get really bad latency
-			latency_deltas = []
-			vols = []
-			new_soln = sas.solve_lp_with_failure_catch(soln_adv)
-			ugi=0
-			# print(new_soln['vols_by_poppi'][79])
-			for old_lat, new_lat, vol in zip(base_soln['lats_by_ug'], new_soln['lats_by_ug'], sas.ug_vols):
-				latency_deltas.append(new_lat - old_lat)
-				# if new_lat - old_lat > 200:
-				# 	print("{} {} {} {}".format(sas.ugs[ugi], new_lat - old_lat, base_soln['paths_by_ug'][ugi],
-				# 		new_soln['paths_by_ug'][ugi]))
-				vols.append(vol)
-				ugi += 1
-			fraction_congested_volumes[X].append(new_soln['fraction_congested_volume'] - base_soln['fraction_congested_volume'])
-			metrics[X].append((latency_deltas, vols))
-			# print(fraction_congested_volumes[X])
-
-			sas.update_deployment(save_deployment, verb=False, exit_on_impossible=False,
-				quick_update=True)
-
-	return {
-		'metrics': metrics,
-		'prefix_withdrawals':prefix_withdrawals, 
-		'fraction_congested_volume': fraction_congested_volumes,
-	}
-
-def assess_resilience_to_congestion(sas, adv, solution, X_vals):
-	## !!!!!!for painter/TIPSY!!!!!!
-	## assume each link is congested by X% (i.e., need to move X% of capacity's traffic off of it)
-	## see if there's a solution
-	## if there's a solution, do it and note the latency penalty compared to optimal
-
-	# return cdf of latency penalties, possibly as a function of X
-	metrics = {X:[] for X in X_vals}
-
-	adv = threshold_a(adv)
-
-	for X in X_vals:
-		_, pre_ug_catchments = sas.calculate_user_choice(adv)
-		# pre_lats_by_ug = solve_lp_with_failure_catch(sas, adv)['lats_by_ug']
-		popp_to_ug_vols = {}
-		for ugi, catchivols in pre_ug_catchments.items():
-			for catchi,vol in catchivols:
-				try:
-					popp_to_ug_vols[catchi].append((ugi,vol))
-				except KeyError:
-					popp_to_ug_vols[catchi] = [(ugi,vol)]
-		for popp in sas.popps:
-			poppi = sas.popp_to_ind[popp]
-			ugivols = popp_to_ug_vols.get(poppi,[])
-			these_ugis = np.array(list(set(ugi for ugi,_ in ugivols)))
-			if len(these_ugis) == 0 or len(np.where(adv[poppi,:])[0]) == 0:
-				# nothing to solve
-				continue
-			current_link_volume = sum(vol for _,vol in ugivols)
-			new_link_cap = current_link_volume * (1- X/100)
-			
-			pre_soln = sas.solve_lp_with_failure_catch(adv)
-			save_cap = copy.copy(sas.link_capacities_arr[sas.popp_to_ind[popp]])
-			sas.link_capacities_arr[sas.popp_to_ind[popp]] = new_link_capacity
-			soln = compute_optimal_prefix_withdrawals(sas, adv, popp, pre_soln)
-			sas.link_capacities_arr[sas.popp_to_ind[popp]] = save_cap
-
-			if soln is None:
-				print("Didn't get solution for popp {}, soln type {}, allowing overutilization".format(popp,solution))
-				soln = compute_optimal_prefix_withdrawals(sas,adv,popp,new_link_cap,
-					allow_congestion=True)
-				if soln is None:
-					raise ValueError("Still no solution even when we allow overutilization..")
-			elif soln is None:
-				## assign badness
-				print("Didn't get solution for popp {}, soln type {}".format(popp,solution))
-				metrics[X].append(list(NO_ROUTE_LATENCY * np.ones((len(these_ugis)))))
-				continue
-
-			## summarize solutions
-			pfx_withdrawals = soln['prefix_withdrawals']
-			if len(pfx_withdrawals) > 0:
-				adv[poppi,np.array(pfx_withdrawals)] = 0
-				_, post_ug_catchments = sas.calculate_user_choice(adv)
-				users_of_interest = [ui for ui,catch in post_ug_catchments.items() if catch != pre_ug_catchments[ui]]
-				adv[poppi,np.array(pfx_withdrawals)] = 1
-
-			#### Each element of the list is (delta, volume) 
-			metrics[X].append(list(soln['latency_deltas']))
-
-	return {
-		'metrics': metrics,
-	}
-
 def calc_pct_volume_within_latency(sas, adv):
 	routed_through_ingress, _ = sas.calculate_ground_truth_ingress(adv)
 	## want latency -> amt of volume that can reach popp within that latency / amt of volume that could possibly reach it
@@ -304,10 +45,10 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# np.random.seed(31413)
 	metrics = {}
 
+	### scale individual metro/thing volume
 	X_vals = np.linspace(10,500,num=20)#[10,40,80,100,130,150,180,200,210,220,250]#[10,20,30,40,50,60,70,80,90,100]
+	### overprovisioning factor (1.3 = 30%)
 	Y_vals = [1.3]
-	# if dpsize == 'really_friggin_small':
-		# X_vals = [10,15,30,35,40,45,50,55,60,65,70]
 
 	wm = None
 	sas = None
@@ -346,9 +87,9 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	try:
 		for random_iter in range(N_TO_SIM):
 			try:
-				if save_run_dirs[random_iter] is not None:
+				if save_run_dirs[random_iter] is not None: ## we want to hotstart on a save run dir and continue training
 					raise TypeError
-				metrics['compare_rets'][random_iter]['n_advs']
+				metrics['compare_rets'][random_iter]['n_advs'] ## if this field is populated, we've already computed this iteration's solution
 				continue
 			except TypeError:
 				pass
@@ -757,7 +498,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		traceback.print_exc()
 
 
-	RECALC_DIURNAL = False
+	RECALC_DIURNAL = True
 	diurnal_multipliers = [25,50,65,70,75,85,95,105,115,125,150]
 	try:
 		changed=False
@@ -915,6 +656,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 	DIURNAL_LATENCY_VARY_I = i;i+=1
 	DIURNAL_CONGESTION_VARY_I = i;i+=1
+	DIURNAL_ASSIGNMENT_DELTA_VARY_I = i;i+=1
 
 
 	n_subs = i
@@ -1213,6 +955,8 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 			metrics['stats_volume_multipliers'][solution] = plot_mean_volume_multipliers
 
+
+
 			#### Diurnal Resilience
 			hours_of_day = np.array(list(range(24)))
 			## Want to track what diurnal multiplier causes congestion
@@ -1221,30 +965,35 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 			avg_latency_by_Y_val_sim = {dm: [] for dm in diurnal_multipliers}
 			avg_congestion_by_Y_val_sim = {dm: [] for dm in diurnal_multipliers}
+			avg_churn_by_Y_val_sim = {dm: [] for dm in diurnal_multipliers}
 
 			for Y_val in diurnal_multipliers:
 				all_lats, all_congestions = {ri:[] for ri in SIM_INDS_TO_PLOT}, {ri:[] for ri in SIM_INDS_TO_PLOT}
+				all_churns = {ri:[] for ri in SIM_INDS_TO_PLOT}
 				for ri in SIM_INDS_TO_PLOT:
 					for X_val in hours_of_day:
 						try:
-							all_lats[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val])
+							all_lats[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val][0][0])
+							all_churns[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val][0][1])
 							all_congestions[ri].append(metrics['diurnal'][ri][solution]['fraction_congested_volume'][Y_val][X_val])
 						except KeyError:	
 							continue
 
 					lat_med = np.average(all_lats[ri])
 					con_med = np.average(all_congestions[ri])
+					churn_med = 100 * np.average(all_churns[ri])
+
 
 					avg_latency_by_sim_Y_val[ri].append(lat_med)
 					avg_congestion_by_sim_Y_val[ri].append(con_med)
 
 					avg_latency_by_Y_val_sim[Y_val].append(lat_med)
 					avg_congestion_by_Y_val_sim[Y_val].append(con_med)
+					avg_churn_by_Y_val_sim[Y_val].append(churn_med)
 
 			ax[DIURNAL_LATENCY_VARY_I].plot(diurnal_multipliers, list([np.mean(avg_latency_by_Y_val_sim[dm]) for dm in diurnal_multipliers]), label=solution)
 			ax[DIURNAL_CONGESTION_VARY_I].plot(diurnal_multipliers, list([np.mean(avg_congestion_by_Y_val_sim[dm]) for dm in diurnal_multipliers]), label=solution)
-
-			
+			ax[DIURNAL_ASSIGNMENT_DELTA_VARY_I].plot(diurnal_multipliers, list([np.mean(avg_churn_by_Y_val_sim[dm]) for dm in diurnal_multipliers]), label=solution)
 
 
 			## High level stats
@@ -1441,6 +1190,11 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	ax[DIURNAL_CONGESTION_VARY_I].grid(True)
 	ax[DIURNAL_CONGESTION_VARY_I].set_xlabel("Diurnal Multiplier Amount (pct)")
 	ax[DIURNAL_CONGESTION_VARY_I].set_ylabel("Average Congestion (ms)")
+
+	ax[DIURNAL_ASSIGNMENT_DELTA_VARY_I].legend(fontsize=8)
+	ax[DIURNAL_ASSIGNMENT_DELTA_VARY_I].grid(True)
+	ax[DIURNAL_ASSIGNMENT_DELTA_VARY_I].set_xlabel("Diurnal Multiplier Amount (pct)")
+	ax[DIURNAL_ASSIGNMENT_DELTA_VARY_I].set_ylabel("Average Daily Traffic Churn (pct)")
 
 	save_fig_fn = kwargs.get('save_fig_fn', "popp_latency_failure_comparison_{}.pdf".format(dpsize))
 

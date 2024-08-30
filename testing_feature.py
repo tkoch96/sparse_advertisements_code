@@ -1,7 +1,7 @@
 from constants import *
 from eval_latency_failure import evaluate_all_metrics
 import numpy as np, os, pickle
-np.random.seed(31705)
+np.random.seed(37000)
 import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
@@ -9,9 +9,10 @@ import matplotlib.pyplot as plt
 
 from paper_plotting_functions import *
 
-def pull_results_new(cache_fn):
+def pull_results(cache_fn):
+	cache_fn = os.path.join(CACHE_DIR, 'testing_feature_cache_fn.pkl')
 
-	only_recalc = [3,5,10,15,20,25,32] ## recalc these deployment sizes
+	only_recalc = [20,25,32] ## recalc these deployment sizes
 	metrics_by_dpsize = {}
 	if os.path.exists(cache_fn):
 		metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
@@ -21,8 +22,7 @@ def pull_results_new(cache_fn):
 		parser.add_argument("--port", required=True)
 		args = parser.parse_args()
 		dpsizes = [3,5,10,15,20,25,len(POP_TO_LOC['vultr'])]
-		n_sim_by_dpsize = [15,20,10,16,15,15,12] # running now
-		# n_sim_by_dpsize = [15,20,10,16,15,15,6] # done
+		n_sim_by_dpsize = [15,20,10,16,15,15,6] # done
 
 		for dpsize, nsim in zip(dpsizes, n_sim_by_dpsize):
 			if only_recalc is not None:
@@ -41,40 +41,7 @@ def pull_results_new(cache_fn):
 					metrics_by_dpsize[dpsize][k] = metrics[k]
 		pickle.dump(metrics_by_dpsize, open(cache_fn, 'wb'))
 
-def pull_results_old(cache_fn):
-	only_recalc = [3,5,10,15,20,25,32] ## recalc these deployment sizes
-	metrics_by_dpsize = {}
-	if os.path.exists(cache_fn):
-		metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
-	if not os.path.exists(cache_fn) or only_recalc is not None:
-		import argparse
-		parser = argparse.ArgumentParser()
-		parser.add_argument("--port", required=True)
-		args = parser.parse_args()
-		dpsizes = [3,5,10,15,20,25,len(POP_TO_LOC['vultr'])]
-		n_sim_by_dpsize = [15,20,10,16,9,9,6] # done
-
-		for dpsize, nsim in zip(dpsizes, n_sim_by_dpsize):
-			if only_recalc is not None:
-				if dpsize not in only_recalc: continue
-			print("Evaluating over deployment size {} Sites".format(dpsize))
-			dpsize_str = "actual-{}".format(dpsize)
-			# if dpsize == 32:
-			# 	save_run_dir = [None, None, None, None, None, '1713700098-actual-32-sparse']
-			# else:
-			# 	save_run_dir = None
-			save_run_dir = None
-			metrics = evaluate_all_metrics(dpsize_str, int(args.port), save_run_dir=save_run_dir, nsim=nsim)
-			metrics_by_dpsize[dpsize] = {}
-			for k in metrics:
-				if 'stats' in k:
-					metrics_by_dpsize[dpsize][k] = metrics[k]
-		pickle.dump(metrics_by_dpsize, open(cache_fn, 'wb'))
-
 def make_paper_plots(cache_fn, **kwargs):
-
-	print_metrics = {}
-
 	metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
 	dpsizes = sorted(list(metrics_by_dpsize))
 	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
@@ -89,8 +56,6 @@ def make_paper_plots(cache_fn, **kwargs):
 	for solution in solutions:
 		avg_latency_diff_normal = []
 		for dpsize in dpsizes:
-			print(dpsize)
-			print(metrics_by_dpsize[dpsize]['stats_best_latencies'].keys())
 			avg_latency_diff_normal.append(-1*metrics_by_dpsize[dpsize]['stats_best_latencies'][solution])
 		ax.plot(dpsizes,avg_latency_diff_normal, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 		metric_by_solution[solution] = np.array(avg_latency_diff_normal)
@@ -99,7 +64,6 @@ def make_paper_plots(cache_fn, **kwargs):
 	print("Sparse - OPP Normal: {}".format(metric_by_solution['sparse'] - metric_by_solution['one_per_peering']))
 	for solution in solutions:
 		print("{} average over all deployments: {}".format(solution,np.average(metric_by_solution[solution])))
-	print_metrics['normal_latency'] = metric_by_solution['sparse']
 	print('\n')
 
 	ax.set_xlabel(xlab)
@@ -138,7 +102,6 @@ def make_paper_plots(cache_fn, **kwargs):
 				print("Sparse - OPP: {}".format(metric_by_solution['sparse'] - metric_by_solution['one_per_peering']))
 				for solution in solutions:
 					print("{} average over all deployments: {}".format(solution,np.average(metric_by_solution[solution])))
-				print_metrics['single_{}_failure'.format(tp)] = metric_by_solution['sparse']
 				print('\n')
 
 
@@ -205,7 +168,6 @@ def make_paper_plots(cache_fn, **kwargs):
 				print("OPP - Sparse: {}".format(np.round(100-(metric_by_solution['one_per_peering'] - metric_by_solution['sparse']),2)))
 				for solution in solutions:
 					print("{} average over all deployments: {}".format(solution,100-(np.average(metric_by_solution['one_per_peering']) - np.average(metric_by_solution[solution]))))
-				print_metrics["{}_{}".format(lat_threshold, fn)] = metric_by_solution['sparse']
 				print('\n')
 
 
@@ -233,7 +195,6 @@ def make_paper_plots(cache_fn, **kwargs):
 	print("------------------------")
 	for solution in solutions:
 		print("{} : {}".format(solution,metric_by_solution[solution]))
-	print_metrics['flash_crowd'] = metric_by_solution['one_per_peering'] - metric_by_solution['sparse']
 	print('\n')
 
 
@@ -272,31 +233,16 @@ def make_paper_plots(cache_fn, **kwargs):
 	print("------------------------")
 	for solution in solutions:
 		print("{} : {}".format(solution,metric_by_solution[solution]))
-	print_metrics['diurnal'] = metric_by_solution['one_per_peering'] - metric_by_solution['sparse']
 	print('\n')
 
-	return print_metrics
 
-def compare_ab(old_metrics,new_metrics):
-	for k in old_metrics:
-		print(k)
-		print(old_metrics[k] < new_metrics[k])
-		print("{}\n{}".format(old_metrics[k],new_metrics[k]))
-		print("{} vs {}".format(np.mean(old_metrics[k]),np.mean(new_metrics[k])))
-		print('\n')
 
 
 if __name__ == '__main__':
-	# cache_fn = os.path.join(CACHE_DIR, 'evaluate_over_deployment_sizes_cache_fn.pkl')
-	# pull_results_old(cache_fn)
-	# high_level_metrics_old = make_paper_plots(cache_fn)
-
 	cache_fn = os.path.join(CACHE_DIR, 'testing_feature_cache_fn.pkl')
-	pull_results_new(cache_fn)
-	# high_level_metrics_new = make_paper_plots(cache_fn)
+	pull_results(cache_fn)
+	# make_paper_plots(cache_fn)
 
 
-
-	# compare_ab(high_level_metrics_old, high_level_metrics_new)
 
 

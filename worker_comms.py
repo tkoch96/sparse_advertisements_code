@@ -139,9 +139,9 @@ class Worker_Manager:
 			time.sleep(SLEEP_PERIOD)
 		return rets
 
-	def send_receive_messages_workers(self, msgs, L_TIMEOUT = 100*60):
+	def send_receive_messages_workers(self, msgs, L_TIMEOUT = 100*60, **kwargs):
 		# send unique message to each worker
-		n_workers = self.get_n_workers()
+		n_workers = kwargs.get('n_workers', self.get_n_workers())
 		assert len(msgs) == n_workers
 		
 		for i,msg in enumerate(msgs):

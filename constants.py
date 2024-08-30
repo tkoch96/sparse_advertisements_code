@@ -64,15 +64,20 @@ def PRINT_FREQUENCY(dpsize):
 	### How often we make plots, often slow to create
 	if dpsize in ACTUAL_DEPLOYMENT_SIZES:
 		return 2
-	dpsize = n_pops_from_dpsize(dpsize)
-	if dpsize <= 5:
+	dpsize_pops = n_pops_from_dpsize(dpsize)
+	if dpsize == 'small':
+		return 3#10
+	elif dpsize_pops <= 5:
 		return 50
-	elif dpsize <= 15:
+	elif dpsize_pops <= 15:
 		return 30
 	else:
 		return 15
 
+N_WORKERS_GENERIC = 1
+
 def get_n_workers(deployment_size):
+	return 16
 	n_workers = {
 		'really_friggin_small': 1,
 		'actual': 4,
@@ -81,14 +86,14 @@ def get_n_workers(deployment_size):
 		'actual_first_prototype': 2,
 		'actual_second_prototype': 2,
 		'actual_third_prototype': 2,
-		'small': 2,
+		'small': 16,
 		'decent': 8,
 		'med': 1,
 	}.get(deployment_size)
 	if n_workers is None:
 		n_pops = n_pops_from_dpsize(deployment_size)
-		if n_pops < 5:
-			n_workers = 4
+		if n_pops <= 5:
+			n_workers = 3
 		elif n_pops < 15:
 			n_workers = 8
 		elif n_pops < 20:
@@ -177,3 +182,4 @@ POP2TIMEZONE = {  # GMT
 	'vtrwarsaw': 2,
     'vtrosaka': 9
 }
+
