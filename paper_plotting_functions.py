@@ -37,6 +37,9 @@ solution_to_line_color = {
 	'one_per_pop': 'red', 
 	'one_per_peering': 'lawngreen',
 }
+
+some_colors = sorted(list(solution_to_line_color.values()))
+
 solution_to_marker = {
 	'sparse': '*',
 	'painter': 'o',

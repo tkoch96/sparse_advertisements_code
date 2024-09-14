@@ -12,7 +12,7 @@ from paper_plotting_functions import *
 def pull_results(cache_fn):
 	cache_fn = os.path.join(CACHE_DIR, 'testing_feature_cache_fn.pkl')
 
-	only_recalc = [20,25,32] ## recalc these deployment sizes
+	only_recalc = [3,5] ## recalc these deployment sizes
 	metrics_by_dpsize = {}
 	if os.path.exists(cache_fn):
 		metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
@@ -51,7 +51,7 @@ def make_paper_plots(cache_fn, **kwargs):
 	xlab = kwargs.get('xlab', "Deployment Size (Num Sites)")
 	evaluate_over = kwargs.get('evaluate_over', 'deployment_size')
 
-	f,ax = get_figure()
+	f,ax = get_figure(l=3.5)
 	metric_by_solution = {}
 	for solution in solutions:
 		avg_latency_diff_normal = []
@@ -171,7 +171,7 @@ def make_paper_plots(cache_fn, **kwargs):
 				print('\n')
 
 
-	f,ax = get_figure()
+	f,ax = get_figure(l=3.5)
 	metric_by_solution = {}
 	for solution in solutions:
 		this_resiliences = []
@@ -187,7 +187,7 @@ def make_paper_plots(cache_fn, **kwargs):
 	ax.set_ylabel("Flash Crowd Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
 	ax.set_ylim([0,300])
 	ax.set_yticks([0,60,120,180,240,300])
-	ax.legend(fontsize=12)
+	# ax.legend(fontsize=12, loc='upper left')
 	save_figure('flash_crowd_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Flash Crowd--")
 	print("Sparse / Painter: {}".format(100 * metric_by_solution['sparse'] / metric_by_solution['painter']))
@@ -209,23 +209,26 @@ def make_paper_plots(cache_fn, **kwargs):
 	save_figure('latency_increase_up_to_threshold_over_{}.pdf'.format(evaluate_over))
 
 	solutions = list(reversed(solutions))
-	f,ax = get_figure()
+	f,ax = get_figure(l=3.5)
 	metric_by_solution = {}
 	for solution in solutions:
 		this_resiliences = []
 		for dpsize in dpsizes:
 			try:
-				avg_resilience = np.average(list(metrics_by_dpsize[dpsize]['stats_diurnal'][solution].values()))
-				this_resiliences.append(avg_resilience)
-			except KeyError:
-				pass
+				try:
+					avg_resilience = np.average(list(metrics_by_dpsize[dpsize]['stats_diurnal'][solution].values()))
+					this_resiliences.append(avg_resilience)
+				except KeyError:
+					pass
+			except:
+				print("Problem with diurnal on {} {}".format(solution, dpsize))
 		ax.plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Diurnal Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
 	ax.set_ylim([0,120])
 	ax.set_yticks([0,40,80,120])
-	ax.legend(fontsize=12)
+	ax.legend(fontsize=10, loc='lower left', ncol=2)
 	save_figure('diurnal_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Diurnal--")
 	print("sparse / painter: {}".format(100 * metric_by_solution['sparse'] / metric_by_solution['painter']))
@@ -240,8 +243,8 @@ def make_paper_plots(cache_fn, **kwargs):
 
 if __name__ == '__main__':
 	cache_fn = os.path.join(CACHE_DIR, 'testing_feature_cache_fn.pkl')
-	pull_results(cache_fn)
-	# make_paper_plots(cache_fn)
+	# pull_results(cache_fn)
+	make_paper_plots(cache_fn)
 
 
 

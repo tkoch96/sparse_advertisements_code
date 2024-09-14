@@ -1060,6 +1060,10 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 
 	return anycast_latencies, ug_perfs
 
+def get_bulk_vol(deployment):
+	bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
+	return bulk_vol
+
 def get_random_ug_to_vol(deployment):
 	## Set UG vols to balance non-provider expected volume
 	ugs = deployment['ugs']
@@ -1238,6 +1242,10 @@ def load_actual_deployment(deployment_size, **kwargs):
 		deployment['ug_to_vol'] = ug_to_vol
 		deployment['whole_deployment_ug_to_vol'] = ug_to_vol
 
+		bulk_vol = get_bulk_vol(deployment)
+		deployment['ug_to_bulk_vol'] = bulk_vol
+		deployment['whole_deployment_ug_to_bulk_vol'] = bulk_vol
+
 		ingress_priorities = get_random_ingress_priorities(deployment)
 		deployment['ingress_priorities'] = ingress_priorities
 		deployment['whole_deployment_ingress_priorities'] = copy.deepcopy(deployment['ingress_priorities'])
@@ -1253,6 +1261,10 @@ def load_actual_deployment(deployment_size, **kwargs):
 		ug_to_vol = get_random_ug_to_vol(deployment)
 		deployment['ug_to_vol'] = ug_to_vol
 		deployment['whole_deployment_ug_to_vol'] = ug_to_vol
+
+		bulk_vol = get_bulk_vol(deployment)
+		deployment['ug_to_bulk_vol'] = bulk_vol
+		deployment['whole_deployment_ug_to_bulk_vol'] = bulk_vol
 
 		ingress_priorities = get_random_ingress_priorities(deployment)
 		deployment['ingress_priorities'] = ingress_priorities
@@ -1395,6 +1407,10 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	deployment['ingress_priorities'] = get_random_ingress_priorities(deployment)
 	deployment['whole_deployment_ingress_priorities'] = copy.deepcopy(deployment['ingress_priorities'])
 	deployment['link_capacities'] = get_link_capacities(deployment, **kwargs)
+
+	bulk_vol = get_bulk_vol(deployment)
+	deployment['ug_to_bulk_vol'] = bulk_vol
+	deployment['whole_deployment_ug_to_bulk_vol'] = bulk_vol
 
 	print("----Done Creating Random Deployment-----")
 	print("Deployment has {} users, {} popps, {} pops".format(

@@ -27,7 +27,11 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		return get_n_workers(self.dpsize)
+		return 4
+		if self.kwa_settings.get('generic_objective') is not None:
+			return multiprocessing.cpu_count()
+		else:
+			return get_n_workers(self.dpsize)
 
 	def update_worker_deployments(self, new_deployment):
 		self.deployment = new_deployment

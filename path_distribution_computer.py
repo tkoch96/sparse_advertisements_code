@@ -380,27 +380,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
 			tslp+=(time.time()-ts)
 			objs[i] = total_obj ## multiply by -1 since that's how we frame "benefit" (more = better)
-		print(objs)
-		print("{} {}".format(trti,tslp))
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
 		## so cut off the last edge
-		import warnings
-		warnings.filterwarnings("error")
-		try:
-			if max(objs) - min(objs) < .001:
-				## trivial distribution
-				x = np.linspace(objs[0],objs[0]+1,num=LBX_DENSITY)
-				pdfx = np.zeros(LBX_DENSITY)
-				pdfx[0] = 1.0
-			else:
-				pdfx, x = np.histogram(objs, bins=LBX_DENSITY, density=True)
-				x = x[:-1]
-				pdfx = pdfx / np.sum(pdfx)
-		except:
-			print("ERER")
-			print(objs)
-			exit(0)
+		if max(objs) - min(objs) < .001:
+			## trivial distribution
+			x = np.linspace(objs[0],objs[0]+1, num=LBX_DENSITY)
+			pdfx = np.zeros(LBX_DENSITY)
+			pdfx[0] = 1.0
+		else:
+			pdfx, x = np.histogram(objs, bins=LBX_DENSITY, density=True)
+			x = x[:-1]
+			pdfx = pdfx / np.sum(pdfx)
 		return x, pdfx
 
 	def generic_benefit(self, a, f_w, **kwargs):
@@ -476,9 +467,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		if kwargs.get('generic_obj') is not None:
 			return self.generic_benefit(a, kwargs.get('generic_obj'))
-		else:
-			print("EMPOEMPOEOPEON")
-			exit(0)
 
 		a_effective = threshold_a(a)
 		verb = kwargs.get('verbose_workers')
@@ -1021,7 +1009,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 
 	def clear_new_meas_caches(self):
-		# print("Clearing caches")
+		# print("Clearing caches in worker {}".format(self.worker_i))
 		self.this_time_ip_cache = {}
 		self.init_user_px_cache()
 		self.calc_cache.clear_new_measurement_caches()
@@ -1074,13 +1062,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				avg_adv = avg_adv / len(data[1:])
 				avg_adv = avg_adv > .5
 				self.latency_benefit(avg_adv, **base_kwa)
-			ret.append({'ans': self.latency_benefit(base_adv, **base_kwa), 'job_id': base_kwa['job_id']})
+			ret.append({'ans': self.latency_benefit(base_adv, **base_kwa), 'job_id': base_kwa.get('job_id', -1)})
 			i=0
 			for diff, kwa in data[1:]:
 				kwa['verbose_workers'] = base_kwa.get('verbose_workers',False) or kwa.get('verbose_workers',False)
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
-				ret.append({'ans': self.latency_benefit(base_adv, **kwa), 'job_id': kwa['job_id']})
+				ret.append({'ans': self.latency_benefit(base_adv, **kwa), 'job_id': kwa.get('job_id',-1)})
 				for ind in zip(*diff):
 					base_adv[ind] = not base_adv[ind]
 				i += 1
@@ -1161,9 +1149,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_deployment':
-			deployment = data
-			self.update_deployment(deployment)
-			self.this_time_ip_cache = {}
+			deployment, kwargs = data
+			self.update_deployment(deployment, **kwargs)
 			ret = "ACK"
 		elif cmd == 'update_kwa':
 			new_kwa = data

@@ -75,10 +75,240 @@ def get_obj_fn(model, minimizer_weight, opt_var, obj, n_paths, sas, using_mlu=Fa
 	else:
 		raise ValueError("Objective {} not implemented in solve_lp_assignment".format(obj))
 	return model, opt_var, obj_fn, obj_norm
+
+def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs):
+	## minimizes average latency for low latency traffic and (sorta) amount of congested low latency traffic
+
+
+	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency')
+	if not avg_latency_ret['solved']:
+		print("Didn't even solve low latency allocation ... ")
+		exit(0)
+
+
+	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
+	n_paths = len(available_paths)
+	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
+
+	available_latencies = np.ones(n_paths)
+	for i,(ug,poppi) in enumerate(available_paths):
+		if poppi == NO_PATH_INGRESS(sas):
+			available_latencies[i] = NO_ROUTE_LATENCY
+		else:
+			available_latencies[i] = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
 	
+	### Set up capacity constraint matrix
+	n_entries_cap_constraint = n_paths
+	cap_constraint_data = np.ones((n_entries_cap_constraint))
+	cap_constraint_row = np.zeros((n_entries_cap_constraint))
+	cap_constraint_col = np.zeros((n_entries_cap_constraint))
+
+	### Set up volume conservation matrix
+	n_entries_vol_conservation = n_paths
+	vol_conservation_data = np.ones((n_entries_vol_conservation))
+	vol_conservation_row = np.zeros((n_entries_vol_conservation))
+	vol_conservation_col = np.zeros((n_entries_vol_conservation))
+
+	## caps is usualy link capaciites, but then very "large" for users with no route
+	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+
+
+	for pli in range(n_paths):
+		poppi = available_paths[pli][1]
+		ugi = sas.whole_deployment_ug_to_ind[available_paths[pli][0]]
+		
+		cap_constraint_row[pli] = poppi
+		cap_constraint_col[pli] = pli
+
+		vol_conservation_row[pli] = ugi
+		vol_conservation_col[pli] = pli
+
+	cap_constraint_A = csr_matrix((cap_constraint_data, (cap_constraint_row, cap_constraint_col)), shape=(n_popps, n_paths))
+	volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_paths))
+
+	### Solve for volume on each popp,user
+	ts = time.time()
+
+	## TOO COMPLEX -- - CHANGE TO FIRST LL THEN BULK
+
+	### Gurobi solve
+	model = gp.Model()
+	model.Params.LogToConsole = 0
+	model.Params.TimeLimit = 15.0 # seconds, should be approx. double what it takes for a LP
+	model.Params.Threads = N_WORKERS_GENERIC
+		
+	# #### Low latency 
+	# x = model.addMVar(n_paths, name='low_latency_volume_each_path', lb=0)
+	# obj_norm = np.sum(sas.whole_deployment_ug_vols)
+	# model.addConstr(cap_constraint_A @ x <= caps)
+	# model.addConstr(volume_conservation_A @ x == conservation_b)
+	x = avg_latency_ret['raw_solution']
+	if len(x) > n_paths: ## cut off the MLU index
+		x = x[1:]
+
+
+	#### Bulk traffic
+	b = model.addMVar(n_paths, name='bulk_traffic_volume_each_path', lb=0)
+	oversubscribe = cap_constraint_A @ (b + x) - caps
+	significances = cap_constraint_A @ x
+
+
+	bulk_conservation_b = sas.whole_deployment_ug_bulk_vols
+	model.addConstr(volume_conservation_A @ b == bulk_conservation_b)
+	## another constraint could be like bulk oversubscription is at most N X normal capacity, where N can be 10 or something
+	model.addConstr(cap_constraint_A @ (b + x) <= BULK_CAP_LIMIT * caps)
+
+	obj_fn = oversubscribe @ significances
+	
+	model.setObjective(obj_fn)
+	model.optimize()
+
+	##### !!!!!!!!!!!!!!!!!!
+	## Distribution is the AMOUNT OF VOLUME (NOT PERCENT) placed on each path
+	## a path is specified by a <user, popp>
+	##### !!!!!!!!!!!!!!!!!!
+
+	if model.status != 2: ## 2 is optimal
+		print("Didnt solve")
+		exit(0)
+		return {'solved': False}
+	low_latency_path_distribution = x
+	bulk_path_distribution = b.X
+	# print("Solved!")
+	# print(x)
+	# print(b.X)
+	# exit(0)
+
+	# if verb:
+	# 	print("Solved distribution without any congestion")
+
+	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
+	paths_by_ug = {}
+	vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
+	for (ug,poppi),vol_amt in zip(available_paths, low_latency_path_distribution):
+		if poppi == NO_PATH_INGRESS(sas): 
+			lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
+			continue # no path
+		if vol_amt > 0:
+			ugi = sas.whole_deployment_ug_to_ind[ug]
+			vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
+			vols_by_poppi[poppi] += vol_amt
+			try:
+				paths_by_ug[ugi].append((poppi, vol_pct))
+			except KeyError:
+				paths_by_ug[ugi] = [(poppi, vol_pct)]
+
+	bulk_lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug)) ## assumes we're assigning bulk traffic && low latency traffic
+	bulk_paths_by_ug = {}
+	bulk_vols_by_poppi = {poppi:vols_by_poppi[poppi] for poppi in range(sas.n_popps)} ## start with the low-latency allocation
+	for (ug,poppi),vol_amt in zip(available_paths, bulk_path_distribution):
+		if poppi == NO_PATH_INGRESS(sas): 
+			bulk_lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
+			continue # no path
+		if vol_amt > 0:
+			ugi = sas.whole_deployment_ug_to_ind[ug]
+			vol_pct = vol_amt / sas.whole_deployment_ug_to_bulk_vol[ug]
+			bulk_vols_by_poppi[poppi] += vol_amt
+			try:
+				bulk_paths_by_ug[ugi].append((poppi, vol_pct))
+			except KeyError:
+				bulk_paths_by_ug[ugi] = [(poppi, vol_pct)]
+
+	# Convert to poppi utilizations (without bulk traffic)
+	vols_by_poppi = {poppi:round(v/float(caps[poppi]),2) for poppi,v in vols_by_poppi.items()}
+	# Convert to poppi utilizations (with bulk traffic)
+	bulk_vols_by_poppi = {poppi:round(v/float(caps[poppi]),2) for poppi,v in bulk_vols_by_poppi.items()}
+
+	lats_by_ug = {}
+	all_volume, congested_volume = 0, 0
+	for ugi, pathvols in paths_by_ug.items():
+		ug = sas.whole_deployment_ugs[ugi]
+		these_lats = []
+		cum_vol = 0
+		for poppi,vol in pathvols:
+			popp = sas.popps[poppi]
+			if vols_by_poppi.get(poppi, 0) > 1:
+				these_lats.append((NO_ROUTE_LATENCY, vol))
+				congested_volume += vol
+			else:
+				these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
+			cum_vol += vol
+			all_volume += sas.whole_deployment_ug_vols[ugi]
+		avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
+		lats_by_ug[ug] = avg_lat
+	for ug,lat in lats_by_ug.items():
+		lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
+
+	bulk_lats_by_ug = {} ## latency-sensitive latency, except preload all the links with bulk traffic
+	all_volume_with_bulk, congested_volume_with_bulk = 0, 0
+	for ugi, pathvols in paths_by_ug.items():
+		ug = sas.whole_deployment_ugs[ugi]
+		these_lats = []
+		cum_vol = 0
+		for poppi,vol in pathvols:
+			popp = sas.popps[poppi]
+			if bulk_vols_by_poppi.get(poppi,0) > 1:
+				these_lats.append((NO_ROUTE_LATENCY, sas.whole_deployment_ug_vols[ugi] * vol))
+				congested_volume_with_bulk += (sas.whole_deployment_ug_vols[ugi] * vol)
+			else:				
+				these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], sas.whole_deployment_ug_vols[ugi] * vol))
+			cum_vol += (sas.whole_deployment_ug_vols[ugi] * vol)
+			all_volume_with_bulk += (sas.whole_deployment_ug_vols[ugi] * vol)
+		avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
+		bulk_lats_by_ug[ug] = avg_lat
+	for ug,lat in bulk_lats_by_ug.items():
+		bulk_lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
+
+	fraction_congested_volume = congested_volume / all_volume
+	fraction_congested_volume_with_bulk = congested_volume_with_bulk / all_volume_with_bulk
+
+
+	## Actual objective value incorporates both average latency and bulk traffic
+	# multiply by -1 because of the way I legacy did the code
+	# objective_val = -1 * (np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + ALPHA_BULK * model.objVal / (np.sum(sas.whole_deployment_ug_vols) * (1 + BULK_MULTIPLIER)))
+
+	## we can return whatever nonsense we want to
+	# print("{} {}".format(np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols), congested_volume_with_bulk,ALPHA_BULK * congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols)))
+
+	random_ug = sas.whole_deployment_ugs[0]
+	# print("{} {} {} {} ".format(ug,sas.whole_deployment_ug_to_vol[random_ug],
+	# 	sas.whole_deployment_ug_to_bulk_vol[random_ug] / sas.whole_deployment_ug_to_vol[random_ug],
+	# 	fraction_congested_volume_with_bulk))
+
+
+	if ALPHA_BULK > 1:
+		objective_val = -1 * (1.0 / ALPHA_BULK * np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols))
+	else:
+		objective_val = -1 * (np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + ALPHA_BULK * congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols))
+
+	return {
+		"objective": objective_val,
+		"solved": model.status,
+		"raw_low_latency_solution": x,
+		"raw_bulk_traffic_solution": b.X,
+		"paths_by_ug": paths_by_ug,
+		"lats_by_ug" : lats_by_ug_arr,
+		"vols_by_poppi": vols_by_poppi,
+		"fraction_congested_volume": fraction_congested_volume,
+		"bulk_paths_by_ug": bulk_paths_by_ug,
+		"bulk_lats_by_ug" : bulk_lats_by_ug_arr,
+		"bulk_vols_by_poppi": bulk_vols_by_poppi,
+		"fraction_congested_volume_with_bulk": fraction_congested_volume_with_bulk,
+	}
+
+generic_lp_functions = {
+	'joint_latency_bulk_download': solve_joint_latency_bulk_download,
+}
+
 def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwargs):
 	### Minmizes f(w) subject to capacity and volume constraints
 	### w is the amount of volume to place on each path where a path is a <user, routed ingress>
+
+	try:
+		return generic_lp_functions[obj](sas, routed_through_ingress, obj, **kwargs)
+	except KeyError:
+		pass
+
 
 	verb = False
 	ret = solve_generic_lp(sas, routed_through_ingress, obj, **kwargs)
@@ -300,7 +530,7 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 
 	### Gurobi solve
 	model = gp.Model()
-	# model.Params.LogToConsole = 0
+	model.Params.LogToConsole = 0
 	model.Params.TimeLimit = 15.0 # seconds, should be approx. double what it takes for a LP
 	model.Params.Threads = N_WORKERS_GENERIC
 	
@@ -311,11 +541,6 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	model.addConstr(volume_conservation_A @ x == conservation_b)
 	model.setObjective(obj_fn)
 	model.optimize()
-
-	print(model.status)
-	print(x.X)
-	exit(0)
-
 
 
 	##### !!!!!!!!!!!!!!!!!!
@@ -533,8 +758,10 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	obj_norm = np.sum(np.sqrt(sas.whole_deployment_ug_vols))
+
 	return {
-		"objective": model.objVal,
+		"objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"available_paths": available_paths,
@@ -675,9 +902,12 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	obj_norm = np.sum(sas.whole_deployment_ug_vols)
+
 	return {
-		"objective": model.objVal,
+		"objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
+		"available_latencies": available_latencies,
 		"available_paths": available_paths,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,

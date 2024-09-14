@@ -74,10 +74,8 @@ def PRINT_FREQUENCY(dpsize):
 	else:
 		return 15
 
-N_WORKERS_GENERIC = 1
 
 def get_n_workers(deployment_size):
-	return 16
 	n_workers = {
 		'really_friggin_small': 1,
 		'actual': 4,
@@ -86,7 +84,7 @@ def get_n_workers(deployment_size):
 		'actual_first_prototype': 2,
 		'actual_second_prototype': 2,
 		'actual_third_prototype': 2,
-		'small': 16,
+		'small': 4,
 		'decent': 8,
 		'med': 1,
 	}.get(deployment_size)
@@ -106,8 +104,16 @@ def get_n_workers(deployment_size):
 RESILIENCE_DIFFICULTY = 'hard'
 
 
-#### minimuze MLU + ALPHA * LATENCY ;; so alpha is a tradeoff between congestion and latency (roughly)
+#### SOLVER SETTINGS
+## number of threads to allocate to one Gurobi solver
+N_WORKERS_GENERIC = 1 
+## minimuze MLU + ALPHA * LATENCY ;; so alpha is a tradeoff between congestion and latency (roughly)
 ALPHA = .1
+## minimize average latency + ALPHA_BULK * bulk_traffic_overuse
+ALPHA_BULK = 100.0
+## multiplier over regular volume for bulk volume
+BULK_MULTIPLIER = 2.0
+BULK_CAP_LIMIT = 10.0
 
 
 DEFAULT_EXPLORE = 'entropy'

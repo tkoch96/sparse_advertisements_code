@@ -60,6 +60,7 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 				'ugs': ug_chunk,
 				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
 				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
+				'ug_to_bulk_vol': copy.copy({ug:deployment['ug_to_bulk_vol'][ug] for ug in ug_chunk}),
 				'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
 			})
 		except KeyError:
@@ -68,6 +69,7 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 				'ugs': ug_chunk,
 				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
 				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
+				'ug_to_bulk_vol': copy.copy({ug:deployment['ug_to_bulk_vol'][ug] for ug in ug_chunk}),
 			})
 		for k in get_difference(deployment, deployments[-1]):
 			deployments[-1][k] = copy.deepcopy(deployment[k])

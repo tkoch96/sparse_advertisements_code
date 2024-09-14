@@ -1,10 +1,11 @@
-import numpy as np, time, tqdm
+import numpy as np, time, tqdm, multiprocessing
 np.setbufsize(262144*8)
 np.set_printoptions(precision=5)
 from constants import *
 from helpers import *
 from subprocess import call, check_output
 from test_polyphase import *
+from generic_objective import Generic_Objective
 from worker_comms import Worker_Manager
 from solve_lp_assignment import *
 from scipy.sparse import csr_matrix, lil_matrix
@@ -31,6 +32,13 @@ class Optimal_Adv_Wrapper:
 		self.update_deployment(deployment)	
 
 		self.set_save_run_dir(**kwargs)
+
+		if kwargs.get('generic_objective') is not None:
+			self.using_generic_objective = True
+			self.generic_objective = Generic_Objective(self, kwargs.get('generic_objective'), **kwargs)
+			self.compute_one_per_peering_solution()
+		else:
+			self.using_generic_objective = False
 
 	def set_worker_manager(self, wm):
 		self.worker_manager = wm
@@ -72,7 +80,7 @@ class Optimal_Adv_Wrapper:
 		return self.calc_cache.get_cache()
 
 	def get_init_kwa(self):
-		return {
+		kwa =  {
 			'lambduh': self.lambduh, 
 			'gamma': self.gamma, 
 			'verbose': False,
@@ -80,6 +88,9 @@ class Optimal_Adv_Wrapper:
 			'with_capacity': self.with_capacity,
 			'save_run_dir': self.save_run_dir,
 		}
+		if self.using_generic_objective:
+			kwa['generic_objective'] = self.generic_objective.obj
+		return kwa
 
 	def adv_rep_to_adv(self, adv_rep):
 		## Adv rep is a dictionary whose keys are popp,prefix pairs. Signifies which components are "on"
@@ -248,7 +259,7 @@ class Optimal_Adv_Wrapper:
 			max_n_in_flight = 350
 			n_advs = len(advs)
 			global_adv_chunks = split_seq(advs, int(np.ceil(n_advs/max_n_in_flight)))
-			for local_adv_chunk in tqdm.tqdm(global_adv_chunks, desc="Computing LP assignments using workers..."):
+			for local_adv_chunk in global_adv_chunks:
 				adv_chunks = split_seq(local_adv_chunk, self.get_n_workers())
 				msgs = []
 				for i in range(self.get_n_workers()):
@@ -324,8 +335,17 @@ class Optimal_Adv_Wrapper:
 			self.worker_manager
 		except AttributeError: # not ready
 			return
-		if kwargs.get('verb',True):
-			print("Getting best lats by UG")
+		# print("Computing best lats...")c
+		revert=False
+		try:
+			### Temporarily stop using pseudo-ugs
+			if self.og_deployment['ugs'] != self.ugs:
+				save_dep = self.output_deployment()
+				self.update_deployment(self.og_deployment, 
+					compute_best_lats=False, clear_caches=False)
+				revert=True
+		except AttributeError:
+			pass
 
 		one_per_ingress_adv = np.identity(self.n_popps)
 		if self.using_generic_objective:
@@ -334,11 +354,14 @@ class Optimal_Adv_Wrapper:
 			objective_res = self.generic_objective.get_ground_truth_resilience_benefit(one_per_ingress_adv)
 		else:
 			ret_overall = self.solve_lp_assignment(one_per_ingress_adv,
-				computing_best_lats=True)
+				computing_best_lats=True, verb=True)
 			objective_lat = ret_overall['objective']
 			objective_res = self.get_ground_truth_resilience_benefit(one_per_ingress_adv)
 		overall_objective = self.actual_nonconvex_objective(one_per_ingress_adv, 
 			latency_benefit_precalc=objective_lat, resilience_benefit_precalc=objective_res)
+
+		# print("{} {}".format(objective_lat, objective_res))
+		# exit(0)
 
 		if not ret_overall['solved'] and kwargs.get('exit_on_impossible', True):
 			raise ValueError("Cant solve problem in the best case, increase caps.")
@@ -347,6 +370,13 @@ class Optimal_Adv_Wrapper:
 		else:
 			self.best_lats_by_ug = ret_overall['lats_by_ug']
 
+		try:
+			# revert back
+			if revert:
+				self.update_deployment(save_dep, compute_best_lats=False,
+					clear_caches=False)
+		except AttributeError:
+			pass
 		self.optimal_expensive_solution = {
 			'obj': ret_overall,
 			'latency': objective_lat,
@@ -609,10 +639,12 @@ class Optimal_Adv_Wrapper:
 			'ug_to_ip': self.ug_to_ip,
 			'ug_perfs': self.ug_perfs,
 			'ug_to_vol': self.ug_to_vol,
+			'ug_to_bulk_vol': self.ug_to_bulk_vol,
 			'ug_anycast_perfs': self.ug_anycast_perfs,
 			'whole_deployment_ugs': self.whole_deployment_ugs,
 			'whole_deployment_ug_perfs': self.whole_deployment_ug_perfs,
 			'whole_deployment_ug_to_vol': self.whole_deployment_ug_to_vol,
+			'whole_deployment_ug_to_bulk_vol': self.whole_deployment_ug_to_bulk_vol,
 			'popps': self.popps,
 			'metro_loc': self.metro_loc,
 			'pop_to_loc': self.pop_to_loc,
@@ -675,15 +707,17 @@ class Optimal_Adv_Wrapper:
 
 	def update_deployment(self, deployment, **kwargs):
 		self.simulated = deployment.get('simulated', True)
+		if deployment.get('port') is None:
+			print("\n\nWARNING ---- NO PORT SPECIFIED\n\n")
+			time.sleep(5)
 		self.port = deployment.get('port', 31415)
 		if deployment.get('dpsize') == 'small':
-			self.max_n_iter = 50
+			self.max_n_iter = 100
 		elif self.simulated:
-			self.max_n_iter = 250 # maximum number of learning iterations
+			self.max_n_iter = 150 # maximum number of learning iterations
 		else:
 			self.max_n_iter = 150 # maximum number of learning iterations
 
-		quick_update = kwargs.get('quick_update', False)
 
 		self.dpsize = deployment['dpsize']
 		self.ugs = sorted(deployment['ugs'])
@@ -740,7 +774,9 @@ class Optimal_Adv_Wrapper:
 			self.link_capacities_arr[poppi] = cap
 
 		self.ug_to_vol = deployment['ug_to_vol']
+		self.ug_to_bulk_vol = deployment.get('ug_to_bulk_vol', None)
 		self.whole_deployment_ug_to_vol = deployment['whole_deployment_ug_to_vol']
+		self.whole_deployment_ug_to_bulk_vol = deployment.get('whole_deployment_ug_to_bulk_vol',None)
 		self.ug_vols = np.zeros(self.n_ug)
 		self.whole_deployment_ug_vols = np.zeros(self.whole_deployment_n_ug)
 		for ug, v in self.ug_to_vol.items():
@@ -756,6 +792,16 @@ class Optimal_Adv_Wrapper:
 		for ui in range(self.n_ug):
 			self.ui_to_vol_i[ui] = np.where(self.ug_to_vol[self.ugs[ui]] -\
 				self.vol_x <=0)[0][0]
+
+		## bulk volumes, if applicable
+		if self.ug_to_bulk_vol is not None:
+			self.ug_bulk_vols = np.zeros(self.n_ug)
+			self.whole_deployment_ug_bulk_vols = np.zeros(self.whole_deployment_n_ug)
+			for ug,v in self.ug_to_bulk_vol.items():
+				self.ug_bulk_vols[self.ug_to_ind[ug]] = v
+			for ug,v in self.whole_deployment_ug_to_bulk_vol.items():
+				self.whole_deployment_ug_bulk_vols[self.whole_deployment_ug_to_ind[ug]] = v
+
 
 		self.deployment = self.output_deployment()
 		try:
@@ -829,8 +875,10 @@ class Optimal_Adv_Wrapper:
 		try:
 			### Worker bee
 			self.worker_i
-			self.parent_tracker = {}
-			self.init_all_vars()
+			if kwargs.get("clear_caches", True):
+				self.parent_tracker = {}
+				self.init_all_vars()
+				self.clear_new_meas_caches()
 		except AttributeError:
 			### Main thread
 			with open(os.path.join(LOG_DIR, 'main_thread_log-{}.txt'.format(self.dpsize)),'w') as f:
@@ -843,9 +891,12 @@ class Optimal_Adv_Wrapper:
 					pass
 			self.get_realworld_measure_wrapper()
 					
+		quick_update = kwargs.get('quick_update', False)
 		try:
 			if quick_update:
 				raise AttributeError
+			if kwargs.get('compute_best_lats', True):
+				self.compute_one_per_peering_solution()
 			n_workers = self.get_n_workers()
 			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 			for worker in range(n_workers):
@@ -858,9 +909,9 @@ class Optimal_Adv_Wrapper:
 				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
 				self.send_receive_worker(worker, msg)
 
-				msg = pickle.dumps(('update_deployment', subdeployments[worker]))
+				msg = pickle.dumps(('update_deployment', (subdeployments[worker], kwargs)))
 				self.send_receive_worker(worker, msg)
-			self.compute_one_per_peering_solution()
+			
 		except AttributeError:
 			pass
 
@@ -870,7 +921,7 @@ class Optimal_Adv_Wrapper:
 		self.n_latency_benefit_calls = {}
 
 		self.all_lb_calls_results = []
-		if not quick_update:
+		if kwargs.get("clear_caches", True) and not quick_update:
 			#### TMP 
 			self.clear_caches()
 			self.calculate_user_latency_by_peer()
@@ -921,10 +972,28 @@ class Optimal_Adv_Wrapper:
 		self.enforce_loaded_rwmw()
 		a_effective = threshold_a(a)
 		
+		try:
+			revert = False
+			### Temporarily stop using pseudo-ugs
+			if self.og_deployment['ugs'] != self.ugs:
+				save_dep = self.output_deployment()
+				self.update_deployment(self.og_deployment, clear_caches=False)
+				revert = True
+		except AttributeError:
+			pass
+
 		user_latencies = self.get_ground_truth_user_latencies(a_effective,**kwargs)
 
 		ugs = kwargs.get('ugs',self.ugs)
 		benefit = self.benefit_from_user_latencies(user_latencies, ugs)
+
+		try:
+			if revert:
+				# revert back
+				self.update_deployment(save_dep, clear_caches=False)
+		except AttributeError:
+			pass
+
 		return benefit
 
 	def get_ground_truth_latency_benefit_mp(self, advs, dep, **kwargs):
@@ -1017,11 +1086,41 @@ class Optimal_Adv_Wrapper:
 		these_benefits = user_benefits[these_inds]
 		return np.sum(these_benefits * these_vols) / np.sum(these_vols)
 
+	def compute_actual_ground_truth_resilience(self):
+		return self.dpsize in ['small', 'actual-10']
+
 	def get_ground_truth_resilience_benefit(self, advertisement, **kwargs):
 		#### NOTE -- this calculation does not factor in capacity, since that would take a long time
 
+		if self.gamma == 0:
+			return 0
+
 		if self.using_generic_objective:
 			return self.generic_objective.get_ground_truth_resilience_benefit(advertisement, **kwargs)
+		elif self.compute_actual_ground_truth_resilience():
+			### Temporarily stop using pseudo-ugs
+			revert = False
+			try:
+				### Temporarily stop using pseudo-ugs
+				if self.og_deployment['ugs'] != self.ugs:
+					save_dep = self.output_deployment()
+					self.update_deployment(self.og_deployment, clear_caches=False)
+					revert=True
+			except AttributeError:
+				pass
+
+			go = Generic_Objective(self, 'avg_latency')
+			ret = go.get_ground_truth_resilience_benefit(advertisement, **kwargs)
+
+			# revert back
+			try:
+				if revert:
+					# revert back
+					self.update_deployment(save_dep, clear_caches=False)
+			except AttributeError:
+				pass
+
+			return ret
 
 		benefit = 0
 		if not self.simulated: ## Too expensive to compute if we're not simulating

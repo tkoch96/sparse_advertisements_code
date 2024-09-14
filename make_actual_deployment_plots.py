@@ -471,7 +471,7 @@ def make_paper_plots(cache_fn):
 
 	###### STEADY STATE LATENCY
 	soln_types = ['anycast', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
-	f,ax = get_figure()
+	f,ax = get_figure(l=3.5)
 	for solution in soln_types:
 		diffs = []
 		wts = []
@@ -710,11 +710,11 @@ def create_diurnal_shape_figure():
 
 def create_uncertainty_over_convergence_figure():
 	import re, glob
-	run_dir = os.path.join(RUN_DIR, '1714508601-actual-32-sparse')
+	# run_dir = os.path.join(RUN_DIR, '1714508601-actual-32-sparse')
+	run_dir = os.path.join(RUN_DIR, '1714909593-actual-32-sparse')
 	# run_dir = os.path.join(RUN_DIR, '1712338080-actual-3-sparse')
 	all_run_nums = list([int(re.search("small\-stats\-(.+)\.pkl", fn).group(1)) for fn in glob.glob(os.path.join(run_dir, "*")) if 'small' in fn])
 	all_run_nums = list(sorted(all_run_nums))
-	
 	iters = []
 	path_measures = []
 	uncertainty_measures = []
@@ -729,18 +729,18 @@ def create_uncertainty_over_convergence_figure():
 	uncertainty_measures = np.array(uncertainty_measures)
 	uncertainty_measures = uncertainty_measures / np.max(uncertainty_measures)
 
-	f,ax = get_figure(h=2)
+	f,ax = get_figure(h=1.5,l=3)
 	ax.plot(iters,uncertainty_measures,color='red')
 	ax2 = ax.twinx()
 	ax2.plot(iters,path_measures,color='blue')
 
-	ax.set_ylabel("Normalized\nEntropy")
-	ax2.set_ylabel("Advertisements")
+	ax.set_ylabel("Entropy")
+	ax2.set_ylabel("Advs.")
 	ax.set_xlabel("Gradient Step Iteration")
 
 
-	ax.annotate("Uncertainty", (8,.6), color='red')
-	ax2.annotate("Advertisements", (80,58), color='blue')
+	ax.annotate("Entropy", (6,.6), color='red')
+	ax2.annotate("Advertisements", (82,58), color='blue')
 	ax.yaxis.label.set_color('red')
 	ax.tick_params(axis='y', colors='red')
 
@@ -760,9 +760,9 @@ if __name__ == "__main__":
 
 	cache_fn = os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(dpsize))
 
-	make_hotnets_plots(cache_fn)
+	# make_hotnets_plots(cache_fn)
 	# make_ppt_plots(cache_fn)
 	# create_diurnal_shape_figure()
-	# make_paper_plots(cache_fn)
-	# create_uncertainty_over_convergence_figure()
+	make_paper_plots(cache_fn)
+	create_uncertainty_over_convergence_figure()
 

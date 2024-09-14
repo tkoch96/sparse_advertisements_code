@@ -134,6 +134,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			ret = sas.compare_different_solutions(n_run=1, verbose=True,
 				 dont_update_deployment=True, soln_types=soln_types, **kwargs)
 			metrics['compare_rets'][random_iter] = ret
+			metrics['save_run_dir'][random_iter] = sas.sas.save_run_dir # sparse's save run dir
 			ug_vols = sas.ug_to_vol
 			metrics['ug_to_vol'][random_iter] = sas.ug_vols
 			metrics['best_latencies'][random_iter] = copy.copy(sas.best_lats_by_ug)
@@ -498,7 +499,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		traceback.print_exc()
 
 
-	RECALC_DIURNAL = True
+	RECALC_DIURNAL = False
 	diurnal_multipliers = [25,50,65,70,75,85,95,105,115,125,150]
 	try:
 		changed=False

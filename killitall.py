@@ -8,7 +8,8 @@ time.sleep(5)
 for pyt in ['python','Python']:
 	out = check_output("ps aux | grep {}".format(pyt),shell=True).decode()
 	for row in out.split('\n'):
-		if "path_distribution_computer" in row and str(port) in row:
+		if ("path_distribution_computer" in row and str(port) in row) or \
+			("testing_priorities" in row and str(port) in row):
 			print(row)
 			try:
 				pnum = re.search("tom + (\d+) .+", row).group(1)

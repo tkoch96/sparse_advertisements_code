@@ -4,7 +4,7 @@ from constants import *
 import numpy as np
 
 class Generic_Objective:
-	def __init__(self, sas, obj):
+	def __init__(self, sas, obj, **kwargs):
 		self.sas = sas
 		self.obj = obj
 
@@ -40,6 +40,8 @@ class Generic_Objective:
 			Will be VERY slow, could consider multiprocessing.
 		"""
 		benefit = 0
+		if self.sas.gamma == 0:
+			return benefit
 
 		tmp = np.ones(a.shape)
 		a = threshold_a(a)
