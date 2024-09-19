@@ -45,7 +45,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.with_capacity = kwargs.get('with_capacity', False)
 		self.pdf_sum_function = sum_pdf_fixed_point
 
-		self.MC_NUM = 10 ## monte carlo simulations to determine distributions
+		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
 
 
 		if kwargs.get('debug', False):

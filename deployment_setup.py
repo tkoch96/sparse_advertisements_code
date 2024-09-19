@@ -592,7 +592,7 @@ def cluster_actual_users(**kwargs):
 	considering_pops = kwargs.get('considering_pops')
 	cpstr = pops_to_fn(considering_pops)
 	cluster_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'clustered_perfs_{}.pkl'.format(cpstr))
-	if not os.path.exists(cluster_cache_fn) or len(considering_pops) >= 30:
+	if not os.path.exists(cluster_cache_fn):# or len(considering_pops) >= 30:
 		pruned_performance_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'pruned_performances_{}.pkl'.format(cpstr))
 		if not os.path.exists(pruned_performance_cache_fn) or len(considering_pops) >= 30:
 			anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)

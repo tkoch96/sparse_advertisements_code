@@ -184,7 +184,7 @@ def make_hotnets_plots(cache_fn):
 
 		ax.legend()
 		ax.grid(True)
-		ax.set_xlabel("Actual - Optimal Latency Single-{} Failure (ms)".format(lab))
+		ax.set_xlabel("Actual - Optimal Latency After Single-{} Failure (ms)".format(lab))
 		ax.set_ylabel("CDF of Traffic")
 		ax.set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 		ax.set_xlim([0,100])
@@ -525,7 +525,7 @@ def make_paper_plots(cache_fn):
 
 		ax.legend()
 		ax.grid(True)
-		ax.set_xlabel("Optimal - Achieved Latency Single-{} Failure (ms)".format(lab))
+		ax.set_xlabel("Optimal - Achieved Latency After Single-{} Failure (ms)".format(lab))
 		ax.set_ylabel("CDF of Traffic")
 		ax.set_yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
 		ax.set_xlim([-100,0])
@@ -758,6 +758,7 @@ if __name__ == "__main__":
 	dpsize = args.dpsize
 
 
+	# python make_actual_deployment_plots.py --dpsize actual_third_prototype
 	cache_fn = os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(dpsize))
 
 	# make_hotnets_plots(cache_fn)

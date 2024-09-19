@@ -54,6 +54,7 @@ def get_obj_fn(model, minimizer_weight, opt_var, obj, n_paths, sas, using_mlu=Fa
 	if obj == 'avg_latency':
 		obj_fn = minimizer_weight @ opt_var
 		obj_norm = np.sum(sas.whole_deployment_ug_vols)
+		model.Params.MIPGap = .01 ## allow a little slack
 	elif obj == 'squaring':
 		if using_mlu:
 			obj_fn = minimizer_weight[0] * opt_var[0] + minimizer_weight[1:] @ (opt_var[1:] * opt_var[1:])

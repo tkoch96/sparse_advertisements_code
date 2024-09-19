@@ -409,23 +409,45 @@ def paper_plots():
 				median_utilizations[n] = [np.median(utilizations)]
 				congestive_events[n] = [congestive_periods]
 	
-	f,ax = get_figure(h=2)
+	f,ax = get_figure(h=1.2)
 	for ni,n in enumerate(sorted(median_utilizations)):
-		ax.plot(100*over_provision_ratios,median_utilizations[n],linestyle='dotted', label="{} Day Planning Period".format(n),marker=markers[ni])
-	ax.annotate("Link Utilization", (40,.6))
+		ax.plot(100*over_provision_ratios,median_utilizations[n],linestyle='dotted', marker=markers[ni], color='red')
+	ax.annotate("Link Utilization", (40,.62), color='red')
 
 	ax2 = ax.twinx()
 	for ni,n in enumerate(sorted(median_utilizations)):
 		ax2.plot(100*over_provision_ratios,congestive_events[n],marker=markers[ni])
-	ax2.set_ylabel("Congestion Events")
+	ax2.set_ylabel("Congestion\nEvents")
 	ax2.set_ylim([0,7000])
-	ax2.annotate("Congestion", (20,2100))
+	ax2.annotate("Congestion", (11,700))
+	ax2.yaxis.label.set_color('blue')
+	ax2.tick_params(axis='y', colors='blue')
 
-	ax.set_xlabel("Link Over Provisioning Factor (Pct)")
-	ax.set_ylabel("Future Median \nLink Utilization")
+	ax.set_xlabel("Link Overprovisioning Factor (Pct.)")
+	ax.set_ylabel("Future Median \nLink Utilization", fontsize=11)
+	ax.yaxis.label.set_color('red')
+	ax.tick_params(axis='y', colors='red')
 	# ax.legend(fontsize=12)
-	ax.set_ylim([0,1.0])
+	ax.set_ylim([0,1.3])
+	ax.set_yticks([0,.5,1.0])
 	ax.grid(True)
+
+
+	scl=10
+	arrowprops = {
+	    'facecolor':'green',
+	    'headwidth': .8*scl,
+	    'headlength': .8*scl,
+	    'alpha': .85,
+	    'linewidth': 0,
+	    'width': .5*scl,
+	    'headwidth': .8*scl,
+	}
+	ax.annotate("Cheaper", (13,1.0), color='green', fontsize=15)
+	ax.annotate("B",xy=(9,.89),xytext=(25,.90),color='white',arrowprops=arrowprops,rotation=0, fontsize=2)
+
+	ax.annotate("Safer", (57, 1.0), color='green', fontsize=15)
+	ax.annotate("B",xy=(66,.90),xytext=(50,.89),color='white',arrowprops=arrowprops,rotation=0, fontsize=2)
 	
 	save_figure('median_utilization_over_overprovisioning.pdf')
 
@@ -710,8 +732,8 @@ def ilgar_flashcrowd_analysis():
 if __name__ == "__main__":
 	# fetch_files()
 	# parse_and_plot()
-	# paper_plots()
-	ilgar_flashcrowd_analysis()
+	paper_plots()
+	# ilgar_flashcrowd_analysis()
 
 
 

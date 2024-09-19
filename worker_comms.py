@@ -27,7 +27,6 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		return 4
 		if self.kwa_settings.get('generic_objective') is not None:
 			return multiprocessing.cpu_count()
 		else:

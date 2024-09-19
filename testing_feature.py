@@ -67,7 +67,7 @@ def make_paper_plots(cache_fn, **kwargs):
 	print('\n')
 
 	ax.set_xlabel(xlab)
-	ax.set_ylabel("Avg Suboptimality\nNormal Operation (ms)")
+	ax.set_ylabel("Optimal - Actual\nLatency (ms)",fontsize=14)
 	ax.legend(fontsize=12)
 	save_figure('average_latency_over_{}_normal.pdf'.format(evaluate_over))
 
@@ -159,6 +159,8 @@ def make_paper_plots(cache_fn, **kwargs):
 			ax.set_xlabel(xlab)
 			ax.set_ylabel(ylab)
 			ax.legend(fontsize=12)
+			ax.set_ylim([0,100])
+			ax.set_yticks([0,25,50,75,100])
 			fig_fn = "percent_traffic_within_{}_ms_{}_over_{}.pdf".format(int(np.abs(lat_threshold)), fn, evaluate_over)
 			save_figure(fig_fn)
 
@@ -181,12 +183,12 @@ def make_paper_plots(cache_fn, **kwargs):
 				this_resiliences.append(avg_resilience)
 			except KeyError:
 				pass
-		ax.plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+		ax.plot(dpsizes[0:len(this_resiliences)], np.array(this_resiliences)+100, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Flash Crowd Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
-	ax.set_ylim([0,300])
-	ax.set_yticks([0,60,120,180,240,300])
+	ax.set_ylim([100,400])
+	ax.set_yticks([100,175,250,325,400])
 	# ax.legend(fontsize=12, loc='upper left')
 	save_figure('flash_crowd_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Flash Crowd--")
@@ -222,12 +224,12 @@ def make_paper_plots(cache_fn, **kwargs):
 					pass
 			except:
 				print("Problem with diurnal on {} {}".format(solution, dpsize))
-		ax.plot(dpsizes[0:len(this_resiliences)], this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
+		ax.plot(dpsizes[0:len(this_resiliences)], np.array(this_resiliences)+100, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Diurnal Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
-	ax.set_ylim([0,120])
-	ax.set_yticks([0,40,80,120])
+	ax.set_ylim([100,220])
+	ax.set_yticks([100,140,180,220])
 	ax.legend(fontsize=10, loc='lower left', ncol=2)
 	save_figure('diurnal_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Diurnal--")

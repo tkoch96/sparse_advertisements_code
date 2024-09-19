@@ -37,9 +37,10 @@ class Generic_Objective:
 			Computes an abstraction of 'resilience benefit'. Which just means 
 			the average of whatever pops out of the generic LP's objective function 
 			when you fail each popp.
-			Will be VERY slow, could consider multiprocessing.
+			(quite slow)
 		"""
 		benefit = 0
+		return 0 #### TMPPPPPPPP
 		if self.sas.gamma == 0:
 			return benefit
 

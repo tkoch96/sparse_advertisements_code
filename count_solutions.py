@@ -1,5 +1,17 @@
 import pickle, os
 from helpers import *
+import traceback
+
+i=0
+asns = {}
+for row in open('cache/studied_networks_apnic.csv','r'):
+	i += 1
+	if i == 1:
+		continue
+	asn,users,samps,pref,pct = row.strip().split(',')
+	asns[asn] = None
+print("{} ASNs total".format(len(asns)))
+exit(0)
 
 all_networks = {}
 all_popps = {}
@@ -30,6 +42,7 @@ for i in range(32):
 				for popp in popps:
 					all_popps[popp] = None
 			except TypeError: # error this sim
+				traceback.print_exc()
 				pass
 		except KeyError:
 			pass
@@ -38,4 +51,6 @@ for i in range(32):
 
 	print("{} -- {}".format(fn,sorted(list(has_sims))))
 print("{} /24s over all deployments, {} popps".format(len(all_networks), len(all_popps)))
+
+pickle.dump(all_networks, open('cache/studied_networks.pkl','wb'))
 
