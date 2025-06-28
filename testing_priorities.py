@@ -8,6 +8,7 @@ from wrapper_eval import *
 
 
 def gen_paper_plots():
+	# metrics_fn = os.path.join(CACHE_DIR, 'joint_latency_bulk_download_metrics_small.pkl')
 	metrics_fn = os.path.join(CACHE_DIR, 'joint_latency_bulk_download_metrics_actual-32.pkl')
 	metrics = pickle.load(open(metrics_fn, 'rb'))
 
@@ -416,7 +417,7 @@ def testing_priorities_one_pass(**kwargs):
 
 
 if __name__ == "__main__":
-	# testing_priorities_one_pass()
+	testing_priorities_one_pass()
 	gen_paper_plots()
 
 

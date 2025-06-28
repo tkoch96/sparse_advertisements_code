@@ -1371,6 +1371,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				for pref_i in range(self.n_prefixes):
 					pref_sty = linestyles[pref_i%len(linestyles)]
 					for popp_i in range(self.n_popp):
+						if self.dpsize == 'small':
+							ax[0,0].plot(all_as[:,popp_i,pref_i], 
+								c=colors[popp_i%len(colors)])	
 						ax[1,0].plot(all_grads[:,popp_i,pref_i], 
 							c=colors[popp_i%len(colors)])
 						ax[2,0].plot(all_cost_grads[:,popp_i,pref_i], 
@@ -1385,6 +1388,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				ax[3,0].set_ylabel("LB Grad")
 				ax[4,0].set_ylabel("Res Grad")
 			except:
+				import traceback
+				traceback.print_exc()
 				i += 1
 				if i >= len(self.metrics['grads']):
 					break
@@ -2289,6 +2294,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				for i,popp in enumerate(popp_prefs): ## permute the performances according to the desired preferences
 					new_deployment['ug_perfs'][newug][popp] = og_lats[i]
 				new_deployment['ug_to_vol'][newug] = vol * self.ug_to_vol[ug]
+				new_deployment['ug_to_bulk_vol'][newug] = vol * self.ug_to_bulk_vol[ug]
 				if self.simulated:
 					new_deployment['ingress_priorities'][newug] = new_deployment['ingress_priorities'][ug]
 				for k in get_difference(new_deployment['ug_perfs'][ug], new_deployment['ug_perfs'][newug]):
@@ -2296,6 +2302,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				new_deployment['ug_to_ip'][newug] = new_deployment['ug_to_ip'][ug]
 				new_deployment['ug_anycast_perfs'][newug] = new_deployment['ug_anycast_perfs'][ug]
 
+			del new_deployment['ug_to_bulk_vol'][ug]
 			del new_deployment['ug_perfs'][ug]
 			del new_deployment['ug_to_vol'][ug]
 			if self.simulated:
@@ -2303,7 +2310,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			del new_deployment['ug_to_ip'][ug]
 			del new_deployment['ug_anycast_perfs'][ug]
 		new_deployment['ugs'] = list(sorted(list(new_deployment['ug_perfs'])))
-		for k in ['ug_to_vol', 'ug_perfs', 'ugs']:
+		for k in ['ug_to_vol', 'ug_to_bulk_vol', 'ug_perfs', 'ugs']:
 			new_deployment["whole_deployment_" + k] = copy.deepcopy(new_deployment[k])
 		if self.simulated:
 			new_deployment['whole_deployment_ingress_priorities'] = copy.deepcopy(new_deployment['ingress_priorities'])

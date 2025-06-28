@@ -157,9 +157,10 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	bulk_conservation_b = sas.whole_deployment_ug_bulk_vols
 	model.addConstr(volume_conservation_A @ b == bulk_conservation_b)
 	## another constraint could be like bulk oversubscription is at most N X normal capacity, where N can be 10 or something
+	BULK_CAP_LIMIT = 3.0
 	model.addConstr(cap_constraint_A @ (b + x) <= BULK_CAP_LIMIT * caps)
 
-	obj_fn = oversubscribe @ significances
+	obj_fn = oversubscribe @ significances #+ 100 * oversubscribe @ np.ones(n_popps)
 	
 	model.setObjective(obj_fn)
 	model.optimize()

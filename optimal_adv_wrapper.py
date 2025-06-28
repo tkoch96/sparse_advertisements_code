@@ -712,7 +712,7 @@ class Optimal_Adv_Wrapper:
 			time.sleep(5)
 		self.port = deployment.get('port', 31415)
 		if deployment.get('dpsize') == 'small':
-			self.max_n_iter = 100
+			self.max_n_iter = 300
 		elif self.simulated:
 			self.max_n_iter = 150 # maximum number of learning iterations
 		else:

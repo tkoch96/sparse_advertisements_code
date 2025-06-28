@@ -383,24 +383,40 @@ def paper_plots():
 	over_provision_ratios = np.linspace(.1,.7,num=20)
 	median_utilizations = {}
 	congestive_events = {}
+
+	median_utilizations_by_link = {}
+	congestive_events_by_link = {}
+
 	for over_provision_ratio in over_provision_ratios:
 		for ni,n in enumerate(sorted(peak_utils_n_day_period, reverse=True)):
 			if n not in periods_to_plot: continue
 			utilizations = []
 			congestive_periods = 0
 			for lnk in peak_utils_n_day_period[n]:
+				congestive_periods_by_lnk = 0
+				utilizations_by_link = []
+				try:
+					median_utilizations_by_link[lnk]
+				except KeyError:
+					median_utilizations_by_link[lnk] = []
+					congestive_events_by_link[lnk] = []
 				for period_num in sorted(peak_utils_n_day_period[n][lnk]):
 					if period_num == 0: continue
 					if peak_utils_n_day_period[n][lnk][period_num] == 0 or peak_utils_n_day_period[n][lnk][period_num-1] == 0:
 						continue
-					# over_provision_ratio = (peak_utils_n_day_period[n][lnk][period_num] - peak_utils_n_day_period[n][lnk][period_num-1]) / peak_utils_n_day_period[n][lnk][period_num-1]
 					new_cap = peak_utils_n_day_period[n][lnk][period_num-1] * (1 + over_provision_ratio)
 					avg_next = avg_utils_n_day_period[n][lnk][period_num]
 					if peak_utils_n_day_period[n][lnk][period_num] / new_cap > 1:
 						congestive_periods += 1
+						congestive_periods_by_lnk += 1
 					utilization_next = avg_next/new_cap
 					if utilization_next > 1: continue ## numerical precision problems
 					utilizations.append(utilization_next)
+					utilizations_by_link.append(utilization_next)
+
+				if len(utilizations_by_link) > 0:
+					median_utilizations_by_link[lnk].append(np.median(utilizations_by_link))
+					congestive_events_by_link[lnk].append(congestive_periods_by_lnk)
 
 			try:
 				median_utilizations[n].append(np.median(utilizations))
@@ -409,6 +425,27 @@ def paper_plots():
 				median_utilizations[n] = [np.median(utilizations)]
 				congestive_events[n] = [congestive_periods]
 	
+	f,ax = get_figure()
+	all_lnks = list(median_utilizations_by_link)
+	pops_affected = {}
+	lnks_affected = {}
+	for lnk in all_lnks:
+		if len(median_utilizations_by_link[lnk]) == 0:
+			del median_utilizations_by_link[lnk]
+			del congestive_events_by_link[lnk]
+		elif congestive_events_by_link[lnk][0] > 0:
+			lnks_affected[lnk] = None
+			pops_affected[lnk.split('-')[0]] = None
+			print(lnk)
+	print("{} lnks and {} pops affected".format(len(lnks_affected), len(pops_affected)))
+
+	all_lnks = list(median_utilizations_by_link)
+	ax.scatter(list([median_utilizations_by_link[lnk][0] for lnk in all_lnks]), list([congestive_events_by_link[lnk][0] for lnk in all_lnks]))
+	ax.set_xlabel("Med Util at 10pct. overprovision")
+	ax.set_ylabel("Congestive Events at 10pct. overprovision")
+	ax.grid(True)
+	save_figure('all_links_util_vs_congestive_scatter.pdf')
+
 	f,ax = get_figure(h=1.2)
 	for ni,n in enumerate(sorted(median_utilizations)):
 		ax.plot(100*over_provision_ratios,median_utilizations[n],linestyle='dotted', marker=markers[ni], color='red')
