@@ -59,9 +59,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.run()
 		# print('started in worker {}'.format(self.worker_i))
 
-
-
-
 	def init_all_vars(self):
 		self.calculate_user_latency_by_peer()
 
