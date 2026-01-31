@@ -1,0 +1,9 @@
+numpy
+matplotlib
+scipy
+gurobipy
+tqdm
+geopy
+zmq
+cymruwhois
+sklearn

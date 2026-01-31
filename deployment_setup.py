@@ -6,7 +6,7 @@ def pops_to_fn(considering_pops):
 	considering_pops = [el.replace('vtr','') for el in considering_pops]
 	considering_pops = [el[0:3] for el in considering_pops]
 	if len(considering_pops) == len(POP_TO_LOC['vultr']):
-		cpstr = "all_poaps"
+		cpstr = "all_pops"
 	else:
 		cpstr = "-".join(sorted(considering_pops))
 	return cpstr
@@ -1467,8 +1467,5 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	return deployment
 
 if __name__ == "__main__":
-	# export_interesting_measurements()
-	# characterize_measurements_from_deployment(n_users_per_peer = 25)
-	np.random.seed(31415)
-	get_random_deployment('actual-32')
+	get_random_deployment("small")
 

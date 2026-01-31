@@ -133,4 +133,5 @@ dmypy.json
 sparse_advertisement_proposal
 sparse_advertisement_paper
 cache
+logs
 .DS_Store

@@ -1,8 +1,5 @@
-import numpy as np, numba as nb, pickle, copy, zmq, time
+import numpy as np, pickle, copy, zmq, time, random
 from collections import defaultdict
-np.setbufsize(262144*8)
-np.random.seed(31414)
-import random
 random.seed(31415)
 from constants import *
 from helpers import *
