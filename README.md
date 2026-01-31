@@ -145,3 +145,42 @@ This is what most of the scripts here fall under, and each has their own purpose
 
 
 
+## Specific Demos / Control Flows / Evaluations
+
+### Objective Functions
+
+Adding a new objective function consists of (a) defining the name of the objective function and (b) implementing that objective function in *solve_lp_assignment.py*. 
+
+Let's say our new objective function is "cool_objective". To implement this objective function, we add a function called *solve_cool_objective* that takes 3 arguments:
+1. an instance of sparse_advertisements_v3:Sparse_Advertisement_Solver (sas). sas provides us the properties of the deployment such as the user groups and their traffic volumes. 
+2. routed_through_ingress which is a dictionary mapping prefixes -> user indices -> path. The interpretation of this object is that it is one possible realization of how all the users route to the different prefixes. For the most part, this object should be passed to solve_lp_assignment:get_paths_by_ug which returns a list of all <UG, popp> pairs and a dictionary mapping users to all their available paths.
+3. objective function name string
+
+In addition to this new function, update the function mapping in generic_lp_functions. You may also be interested in updating 'get_obj_fn', although that is not necessary.
+
+
+Given these arguments, *solve_cool_objective* should return a dictionary of results containing:
+1. objective: the final objective function value
+2. solved: the status from the gurobi solver
+3. paths_by_ug: a dictionary mapping users to a list of (poppi, vol_pct) where poppi is a path the user takes and vol_pct is the percent of that users traffic volume allocated to a path. All vol_pcts for a given user should add to 1.
+4. other results
+
+The other results usually involve the "solution", i.e., how traffic should be allocated to paths. For example, this might be a user_group, prefix -> volume amount mapping or something similar. You can use the other functions in this file as examples.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

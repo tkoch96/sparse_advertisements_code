@@ -7,7 +7,13 @@ def NO_PATH_INGRESS(sas):
 	return sas.n_popps
 
 def get_paths_by_ug(sas, routed_through_ingress):
+	## sas is Sparse_Advertisement_Solver (i.e., deployment) object
+	## routed_through_ingress is one possible realization of routes. it is a dictionary maping prefixes -> user -> ingress
+	## returns available paths which is a list of all (users, ingresses)
+	## returns paths_by_ug which is a dictionary mapping ug -> [list of ingresses]
+
 	### Returns structured paths for downstream use
+	## availa
 	paths_by_ug = {}
 	for prefixi in sorted(routed_through_ingress):
 		for ug in sas.whole_deployment_ugs:
