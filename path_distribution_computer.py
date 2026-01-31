@@ -1,4 +1,5 @@
 import numpy as np, numba as nb, pickle, copy, zmq, time
+from collections import defaultdict
 np.setbufsize(262144*8)
 np.random.seed(31414)
 import random
@@ -8,7 +9,10 @@ from helpers import *
 from test_polyphase import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
-from solve_lp_assignment import solve_generic_lp_with_failure_catch
+from solve_lp_assignment import solve_generic_lp_with_failure_catch, get_paths_by_ug, NO_PATH_INGRESS
+
+import gurobipy as gp
+from scipy.sparse import csr_matrix
 
 
 remeasure_a = None
@@ -32,21 +36,15 @@ def get_a_cache_rep(a):
 		tups.append((x,y))
 	return tuple(sorted(tups))
 
-#### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
-@nb.njit(fastmath=True,parallel=True)
-def large_logical_and(arr1,arr2):
-	return np.logical_and(arr1,arr2)
-
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def __init__(self, worker_i, base_port, **kwargs):
 		self.worker_i = worker_i
 		self.port = base_port
 		self.logging_iter = 0
-		self.with_capacity = kwargs.get('with_capacity', False)
-		self.pdf_sum_function = sum_pdf_fixed_point
+		self.timing = { k:0 for k in ['solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug','organizing_results','get_ingress_probabilities_by_dict_generic', 'sim_rti']}
+		self.updated_ingress_probabilities = True
 
 		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
-
 
 		if kwargs.get('debug', False):
 			self.n_prefixes = None
@@ -61,11 +59,159 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 
+	def summarize_timing(self):
+		total_time = sum(list(self.timing.values()))
+		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
+		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
+			pct = round(self.timing[k] * 100.0 / total_time, 2)
+			print("{} - {} pct".format(k, pct))
+		print("==================\n\n")
 
+	def init_persistent_lp(self):
+		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""
+		self.model = gp.Model(f"Worker_{self.worker_i}_Persistent")
+		self.model.Params.LogToConsole = 0
+		self.model.Params.Method = 1  
+		self.model.Params.Threads = 1 
+
+		# 1. Permanent Dummy Variable for MLU (Y)
+		self.mlu_dummy = self.model.addVar(lb=0.0, obj=0.0, name="mlu_Y")
+
+		# 2. Permanent Rows (Constraints)
+		self.vol_constrs = {}
+		for ugi, ug in enumerate(self.whole_deployment_ugs):
+			# IMPORTANT: Gurobi addConstr needs an expression. 
+			# Since we haven't added columns yet, we set LHS to 0.0 explicitly
+			target_vol = float(self.whole_deployment_ug_vols[ugi])
+			
+			# We use a Linear Expression placeholder (0.0) 
+			# so Gurobi knows this is a constraint to be filled later.
+			self.vol_constrs[ug] = self.model.addLConstr(0.0, gp.GRB.EQUAL, target_vol, name=f"vol_{ug}")
+
+		self.static_caps = np.concatenate([self.link_capacities_arr.flatten(), [1000000.0]])
+		self.cap_constrs = {}
+		for pi in range(len(self.static_caps)):
+			target_cap = float(self.static_caps[pi])
+			# sum(paths) <= cap
+			self.cap_constrs[pi] = self.model.addLConstr(0.0, gp.GRB.LESS_EQUAL, target_cap, name=f"cap_{pi}")
+
+		self.var_pool = {} # Key: (ug, poppi) -> Gurobi Var Object
+
+	def solve_unified_lp(self, available_paths, obj_coeffs, using_mlu=False):
+		"""Core solve logic. Toggles between Standard and MLU."""
+		# 1. Deactivate all path variables
+		ts = time.time()
+		all_vars = list(self.var_pool.values())
+		self.model.setAttr("UB", all_vars, [0.0] * len(all_vars))
+
+		# 2. Configure MLU variable and Capacity RHS
+		if using_mlu:
+			self.mlu_dummy.Obj = 1.0 / ALPHA
+			self.mlu_dummy.UB = gp.GRB.INFINITY
+			for pi, constr in self.cap_constrs.items():
+				self.model.chgCoeff(constr, self.mlu_dummy, -1.0 * self.static_caps[pi])
+				constr.RHS = 0.0 # MLU mode uses RHS of 0
+		else:
+			self.mlu_dummy.Obj = 0.0
+			self.mlu_dummy.UB = 0.0
+			for pi, constr in self.cap_constrs.items():
+				self.model.chgCoeff(constr, self.mlu_dummy, 0.0)
+				constr.RHS = self.static_caps[pi] # Restore static capacity
+
+		# 3. Activate/Discover Columns (Volume RHS is already static)
+		for (ug, poppi), latency in zip(available_paths, obj_coeffs):
+			key = (ug, poppi)
+			if key not in self.var_pool:
+				col = gp.Column()
+				col.addTerms(1.0, self.vol_constrs[ug])
+				col.addTerms(1.0, self.cap_constrs[poppi])
+				self.var_pool[key] = self.model.addVar(lb=0.0, obj=latency, column=col)
+
+		active_vars = [self.var_pool[ug, poppi] for ug, poppi in available_paths]
+		self.model.setAttr("UB", active_vars, [gp.GRB.INFINITY] * len(active_vars))
+		self.model.setAttr("Obj", active_vars, obj_coeffs)
+
+		self.timing['solve_unified_lp_not_optimize'] = time.time() - ts
+		ts = time.time()
+		self.model.optimize()
+		self.timing['optimize'] = time.time() - ts
+		if self.model.status == 2:
+			return self.model
+		return None
+
+	def solve_generic_lp_persistent(self, routed_through_ingress, **kwargs):
+		"""The high-level wrapper that tries Standard first, then MLU."""
+		ts = time.time()
+		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
+		self.timing['get_paths_by_ug'] = time.time() - ts
+		
+		# Pre-calculate objective (latencies)
+		obj_coeffs = []
+		for ug, poppi in available_paths:
+			if poppi == NO_PATH_INGRESS(self):
+				obj_coeffs.append(NO_ROUTE_LATENCY)
+			else:
+				obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
+
+		# 1. Try Standard Solve
+		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+
+		# 2. Fallback to MLU if Standard is Infeasible
+		if model_res is None:
+			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
+
+		if model_res is None:
+			print("Infeasible problem, exiting")
+			exit(0)
+			return {'solved': False}
+
+		## Distribution is the amount of volume (not percent) placed on each path
+		## a path is specified by a <user, popp>
+		raw_x = {key: var.X for key, var in self.var_pool.items() if var.X > 1e-7}
+	
+		# Initialize result containers
+		lats_by_ug_arr = np.zeros(self.whole_deployment_n_ug)
+		vols_by_poppi = {pi: 0.0 for pi in range(len(self.static_caps))}
+		paths_by_ug_res = {}
+		congested_vol, total_vol = 0.0, 0.0
+
+		ts = time.time()
+		for (ug, poppi), vol_amt in raw_x.items():
+			ugi = self.whole_deployment_ug_to_ind[ug]
+			vols_by_poppi[poppi] += vol_amt
+			total_vol += vol_amt
+			
+			# Check congestion against STATIC caps
+			if vol_amt > self.static_caps[poppi] + 1e-6 and poppi != len(self.static_caps)-1:
+				congested_vol += vol_amt
+			
+			if ugi not in paths_by_ug_res:
+				paths_by_ug_res[ugi] = []
+			paths_by_ug_res[ugi].append((poppi, vol_amt / self.whole_deployment_ug_to_vol[ug]))
+
+			# Calculate latency for this specific <user, path> allocation
+			if poppi == NO_PATH_INGRESS(self):
+				path_lat = NO_ROUTE_LATENCY
+			else:
+				path_lat = self.whole_deployment_ug_perfs[ug][self.popps[poppi]]
+			
+			# Weighted average latency contribution
+			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
+
+		obj_norm = np.sum(self.whole_deployment_ug_vols)
+		self.timing['organizing_results'] = time.time()-ts
+		return {
+			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
+			"raw_solution": raw_x,
+			"paths_by_ug": paths_by_ug_res,
+			"lats_by_ug": lats_by_ug_arr,
+			"available_paths": available_paths,
+			"solved": True,
+			"vols_by_poppi": vols_by_poppi,
+			"fraction_congested_volume": congested_vol / (total_vol + 1e-9)
+		}
 
 	def init_all_vars(self):
-		self.calculate_user_latency_by_peer()
-
 		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
 		## divided by their contribution to the total volume (i.e., multiplied by a weight)
 		## important that every worker has the same lbx
@@ -89,9 +235,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.calc_cache = Calc_Cache()
 		self.this_time_ip_cache = {}
 
-		self.init_user_px_cache()
-
 		self.iter = 0
+		self.init_persistent_lp() # Setup the Gurobi shell
 
 	def start_connection(self):
 		context = zmq.Context()
@@ -208,9 +353,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
 
 		# if np.random.random() > 0 and self.worker_i == 0:
-		# 	print('\n')
-		# 	for k,v in timers.items():
-		# 		print("{} -- {} s".format(k,round(v,5)))
+		#   print('\n')
+		#   for k,v in timers.items():
+		#       print("{} -- {} s".format(k,round(v,5)))
 
 	def get_ingress_probabilities_by_dict(self, a, verb=False, **kwargs):
 		## Uses dictionaries to do the job
@@ -290,27 +435,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
 
 		# if np.random.random() > 0 and self.worker_i == 0:
-		# 	print('\n')
-		# 	for k,v in timers.items():
-		# 		print("{} -- {} s".format(k,round(v,5)))
-
-	def init_user_px_cache(self):
-		self.user_px = np.zeros((len(self.lbx), self.n_ug))
-		self.ingress_px = np.zeros((self.n_popp, self.n_ug))
-		self.p_link_fails = np.zeros(self.n_popp)
-		self.link_failure_severities = np.zeros(self.n_popp)
-		self.big_lbx = np.zeros((LBX_DENSITY, self.n_ug))
-		for ui in range(self.n_ug):
-			self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
-					num=LBX_DENSITY)
-		self.user_ip_cache = {
-			'init_ip': None,
-			'default_px': copy.copy(self.user_px),
-			'big_lbx': copy.copy(self.big_lbx),
-			'ingress_px': copy.copy(self.ingress_px),
-			'p_link_fails': copy.copy(self.p_link_fails),
-			'link_failure_severities': copy.copy(self.link_failure_severities),
-		}
+		#   print('\n')
+		#   for k,v in timers.items():
+		#       print("{} -- {} s".format(k,round(v,5)))
 
 	def summarize_cache_size(self):
 		## 
@@ -324,9 +451,99 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			But can't be too rough so that it's unstable."""
 		return np.power(lfs, .1)
 
+	def sim_rti_better(self):
+		if self.updated_ingress_probabilities:
+			# 1. Map (ui, pref_i) pairs to flat indices and build distributions
+			# This prepares the data for a single vectorized operation
+			self.all_uis_prefixes_poppis = [] # Stores (ui, pref_i, list_of_poppis)
+			all_probs = []
+			
+			# We group by (ui, pref_i) to form the distribution for each user-prefix pair
+			# If your input structure is ui -> {(poppi, pref_i): prob}
+			for ui, data in self.ingress_probabilities.items():
+				# Temporary group by prefix for this specific user
+				prefs_for_ui = defaultdict(list)
+				for (poppi, pref_i), p in data.items():
+					prefs_for_ui[pref_i].append((poppi, p))
+					
+				for pref_i, distributions in prefs_for_ui.items():
+					poppis = [d[0] for d in distributions]
+					probs = [d[1] for d in distributions]
+					self.all_uis_prefixes_poppis.append((ui, pref_i, poppis))
+					all_probs.append(probs)
+
+			num_dists = len(all_probs)
+			if num_dists == 0:
+				return {}
+
+			# 2. Create a Padded CDF Matrix
+			# Vectorization requires a rectangular matrix, but PoP counts may vary.
+			# We pad the rows with 1.0.
+			max_pops = max(len(p) for p in all_probs)
+			self.routing_cdf_matrix = np.zeros((num_dists, max_pops))
+			
+			for i, p in enumerate(all_probs):
+				row_cdf = np.cumsum(p)
+				row_cdf[-1] = 1.0  # Force exact 1.0 to prevent floating point drift
+				self.routing_cdf_matrix[i, :len(row_cdf)] = row_cdf
+				if len(row_cdf) < max_pops:
+					self.routing_cdf_matrix[i, len(row_cdf):] = 1.0
+
+			# 3. Generate ALL Randomness Apriori
+			# One single call to the random engine
+			# Shape: (number of distributions, number of simulations)
+			self.random_mc_routing_samples = np.random.random((num_dists, self.MC_NUM))
+			self.updated_ingress_probabilities = False
+		else:
+			self.random_mc_routing_samples = np.random.random(self.random_mc_routing_samples.shape)
+
+		# 4. Vectorized Sampling
+		# np.searchsorted finds which "bucket" the random number falls into.
+		sampled_indices = np.empty(self.random_mc_routing_samples.shape, dtype=int)
+		for i in range(self.random_mc_routing_samples.shape[0]):
+			sampled_indices[i] = np.searchsorted(self.routing_cdf_matrix[i], self.random_mc_routing_samples[i])
+
+		# 5. Reconstruct the Results
+		routed_through_ingress = {mci: defaultdict(dict) for mci in range(self.MC_NUM)}
+
+
+		for row_idx, (ui, pref_i, poppis) in enumerate(self.all_uis_prefixes_poppis):
+			ug = self.whole_deployment_ugs[ui]
+			# Get the poppi for every simulation for this (ui, pref_i)
+			chosen_poppi_indices = sampled_indices[row_idx]
+			
+			for mci in range(self.MC_NUM):
+				poppi = poppis[chosen_poppi_indices[mci]]
+				routed_through_ingress[mci][pref_i][ug] = self.popps[poppi]
+				try:
+					if not (self.ingress_probabilities[ui][poppi,pref_i] > 0):
+						print("{},{},{} has route but {} probability".format(ui,poppi,pref_i,self.ingress_probabilities[ui][poppi,pref_i]))
+				except KeyError:
+					if ui not in self.ingress_probabilities:
+						print("UI in not ingress probs")
+					elif (poppi,pref_i) not in self.ingress_probabilities[ui]:
+						print("{},{} not in inress probs for {}".format(poppi,pref_i,ui))
+					exit(0)
+
+		return routed_through_ingress	
+
 	def sim_rti(self):
 		### Randomly simulates routes and returns them according to our model of ingress probabilities
 		## routed_through_ingress: prefix -> ug -> popp
+
+		## helpful object to precompute
+		ts = time.time()
+		self.pmat_by_prefix = {}
+		for ui in self.ingress_probabilities:
+			self.pmat_by_prefix[ui] = {}
+			for (poppi, pref_i), p in self.ingress_probabilities[ui].items():
+				try:
+					self.pmat_by_prefix[ui][pref_i] 
+				except KeyError:
+					self.pmat_by_prefix[ui][pref_i] = [[],[]]
+				self.pmat_by_prefix[ui][pref_i][0].append(poppi)
+				self.pmat_by_prefix[ui][pref_i][1].append(p)
+		self.timing['pmat_organize'] = time.time() - ts
 
 		## Aggregate by prefix (since we're simulating routes)
 		routed_through_ingress = {}
@@ -355,31 +572,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""
 
 		### TODO -- maybe implement subset of users, but not really essential
-
-		## helpful object to precompute
-		self.pmat_by_prefix = {}
-		for ui in self.ingress_probabilities:
-			self.pmat_by_prefix[ui] = {}
-			for (poppi, pref_i), p in self.ingress_probabilities[ui].items():
-				try:
-					self.pmat_by_prefix[ui][pref_i]	
-				except KeyError:
-					self.pmat_by_prefix[ui][pref_i]	= [[],[]]
-				self.pmat_by_prefix[ui][pref_i][0].append(poppi)
-				self.pmat_by_prefix[ui][pref_i][1].append(p)
-
-		objs = np.zeros(self.MC_NUM)
-		trti=0
-		tslp=0
-		ts=time.time()
+		ts = time.time()
+		# all_routed_through_ingress = self.sim_rti_better()
 		all_routed_through_ingress = self.sim_rti()
-		trti+=(time.time() - ts)
+		self.timing['sim_rti'] = time.time() - ts
+		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
-			ts=time.time()
-			total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
-			tslp+=(time.time()-ts)
-			objs[i] = total_obj ## multiply by -1 since that's how we frame "benefit" (more = better)
+			total_obj = self.solve_generic_lp_persistent(routed_through_ingress)["objective"]
+			# total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
+			objs[i] = total_obj
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
 		## so cut off the last edge
@@ -429,7 +631,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		## Dims are path, prefix, user
+		ts = time.time()
 		self.get_ingress_probabilities_by_dict_generic(a_effective, **kwargs) ## populates self.ingress_probabilities
+		self.timing['get_ingress_probabilities_by_dict_generic'] = time.time() - ts
 
 		if subset_ugs: ##### REVISIT
 			which_ugs_this_worker = get_intersection(which_ugs, self.whole_deployment_ugs)
@@ -459,529 +663,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 			self.calc_cache.all_caches['lb'][cache_rep] = (benefit, (xsumx_cache_rep, psumx_cache_rep))
 		# print("Returning benefit : {}".format(benefit))
-		return benefit, (xsumx, psumx)	
+		return benefit, (xsumx, psumx)  
 
 	def latency_benefit(self, a, **kwargs):
 		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
 			benefits across all users. Closed form calculation."""
-
-		if kwargs.get('generic_obj') is not None:
-			return self.generic_benefit(a, kwargs.get('generic_obj'))
-
-		a_effective = threshold_a(a)
-		verb = kwargs.get('verbose_workers')
-		remeasure = False
-		if verb:
-			try:
-				remeasure_a = pickle.load(open('remeasure_a.pkl','rb'))
-				if tuple(a_effective.astype(bool).flatten()) == tuple(remeasure_a.astype(bool).flatten()): 
-					remeasure = True
-					print("\n\n\nREMEASURING\n\n\n")
-			except:
-				pass
-
-		### We may choose to compute expected benefit over a subset of all users
-		### when we do this, the key thing is to remember to turn off caching
-		subset_ugs = False
-		which_ugs = kwargs.get('ugs', None)
-		if which_ugs is not None:
-			subset_ugs = True
-
-		if not verb and not subset_ugs:
-			## don't rely on caching if we want to log / print statistics
-			try:
-				cache_rep = get_a_cache_rep(a_effective)
-				benefit, (xsumx_cache_rep, psumx_cache_rep) = self.calc_cache.all_caches['lb'][cache_rep]
-				xsumx = np.linspace(xsumx_cache_rep[0], xsumx_cache_rep[1], num=LBX_DENSITY)
-				psumx = np.zeros(LBX_DENSITY)
-				for i,d in psumx_cache_rep.items():
-					psumx[i] = d
-				ret = (benefit, (xsumx,psumx))
-
-				return ret
-			except KeyError:
-				pass
-		# else:
-		# 	pickle.dump(self.calc_cache.all_caches['lb'], open("worker_{}_cache.pkl".format(self.worker_i), 'wb'))
-
-		super_verbose=False
-
-		USER_OF_INTEREST = None #### UI is respect to the whole deployment
-		WORKER_OF_INTEREST = None
-
-
-		timers = {
-			'cache_lookup': 0,
-			'capacity_1': 0,
-			'capacity_2': 0,
-			'capacity_3': 0,
-			'capacity_4': 0,
-			'probs': 0,
-			'benefit': 0,
-			'convolution': 0,
-			'start': time.time()
-		}
-
-		## Dims are path, prefix, user
-		self.get_ingress_probabilities_by_dict(a_effective, **kwargs)
-		p_mat = self.ingress_probabilities
-		benefits = self.measured_latency_benefits
-
-		if super_verbose:
-			print("Entering super verbose")
-			print(p_mat.get(USER_OF_INTEREST))
-
-		timers['probs'] = time.time()
-
-
-		if subset_ugs:
-			which_ugs_this_worker = get_intersection(which_ugs, self.ugs)
-			if len(which_ugs_this_worker) == 0:
-				pdf = np.zeros(self.lbx.shape)
-				pdf[-1] = 1
-				return 0, (self.lbx.flatten(),pdf.flatten())
-			which_ugs_i = np.array([self.ug_to_ind[ug] for ug in which_ugs_this_worker])
-
-		#### SETUP CACHE
-		# caching px by ingress probabilities matrix
-		# loop over users for which something is different
-		ug_inds_to_loop = {}
-		if self.user_ip_cache['init_ip'] is not None:
-			for ui in range(self.n_ug):
-				refa = self.user_ip_cache['init_ip'][ui]
-				refb = p_mat[ui]
-				
-				for k in set(refa).union(set(refb)):
-					if np.abs(refa.get(k,0) - refb.get(k,0)) > PROB_TOLERANCE:
-						# print(ui)
-						# print(get_difference(refa,refb))
-						# print(get_difference(refb,refa))
-						# print(k)
-						# print(refa.get(k,0))
-						# print(refb.get(k,0))
-						# if np.random.random() > .99:exit(0)
-
-						ug_inds_to_loop[ui] = None
-						break
-			ug_inds_to_loop = np.array(sorted(list(ug_inds_to_loop)))
-			self.user_px = copy.copy(self.user_ip_cache['default_px'])
-			self.big_lbx = copy.copy(self.user_ip_cache['big_lbx'])
-			if self.with_capacity:
-				self.ingress_px = copy.copy(self.user_ip_cache['default_ingress_px'])
-				self.p_link_fails = copy.copy(self.user_ip_cache['p_link_fails'])
-				self.link_failure_severities = copy.copy(self.user_ip_cache['link_failure_severities'])
-		else:
-			ug_inds_to_loop = np.arange(self.n_ug)
-		changed_popps = {} # notes popps for which I need to recompute p link fails
-		if len(ug_inds_to_loop) > 0:
-			if self.with_capacity:
-				tmp = copy.copy(self.ingress_px)
-				self.ingress_px[:,ug_inds_to_loop] = 0
-				for poppi,_ in zip(*np.where(tmp != self.ingress_px)):
-					changed_popps[poppi] = None
-
-		timers['cache_lookup'] = time.time()
-
-		if super_verbose:
-			print("Computing for user super verbose: {}".format(USER_OF_INTEREST in ug_inds_to_loop))
-
-
-		if self.with_capacity:
-			## holds P(ingress) for each user
-			vol_x = self.vol_x
-
-			all_pref_inds = np.arange(self.n_prefixes)
-			recalc_popps = {} # tracks popps with new p link failure probability
-			for ui in ug_inds_to_loop:
-				all_pv_i = p_mat[ui]
-				# Holds prefix j, ingress poppi, benefit and probability
-				all_pv = [(prefj,benefits[poppi,ui],all_pv_i[poppi,prefj],poppi) for poppi,prefj in all_pv_i]
-				if len(all_pv) == 0:
-					# this user has no paths
-					continue
-				if len(all_pv) == 1:
-					_, _, p, poppi = all_pv[0]
-					self.ingress_px[poppi, ui] += p
-					changed_popps[poppi] = None 
-				else:
-					all_pv = sorted(all_pv,key=lambda el : el[1])
-					running_probs = np.zeros((self.n_prefixes))
-					running_probs[all_pv[0][0]] = all_pv[0][2]
-					
-					prefs_exist = list(set([el[0] for el in all_pv]))
-					for pref_j in get_difference(all_pref_inds, prefs_exist):
-						running_probs[pref_j] = 1 
-
-					for i in range(1,len(all_pv)):
-						pref_j, _, p, poppi = all_pv[i]
-
-						# calculate prob(max latency benefit)
-						# we calculate this iteratively, from the smallest to the largest value
-						# probability calc is basically probability of this value (p) times probability 
-						# other prefixes are one of the smaller values (running prob)
-						max_prob = p * np.prod(running_probs[all_pref_inds!=pref_j])
-						running_probs[pref_j] += p
-						if max_prob == 0 : continue
-
-						self.ingress_px[poppi, ui] += max_prob
-						changed_popps[poppi] = None 
-			timers['capacity_1'] = time.time()
-
-			## prob that user j contributes volx i
-			for ingress_i in changed_popps:
-				ug_prob_vols_this_ingress_i = np.where(self.ingress_px[ingress_i,:] > 0)[0]
-				
-				include_in_px = []
-				definitely_here = 0
-				for ui in ug_prob_vols_this_ingress_i:
-					# Model user as bernoulli on this ingress
-					if self.ingress_px[ingress_i, ui] >= .99:
-						definitely_here += self.ug_vols[ui]
-						continue
-					include_in_px.append(ui)
-				n_nontrivial_ugs = len(include_in_px)
-				severity = 0
-				if n_nontrivial_ugs > 0:
-					ug_prob_vols_this_ingress = np.zeros((len(self.vol_x), n_nontrivial_ugs))
-					tmpind = 0
-
-					for ui in include_in_px:
-						ug_prob_vols_this_ingress[self.ui_to_vol_i[ui], tmpind] = self.ingress_px[ingress_i, ui]
-						ug_prob_vols_this_ingress[0, tmpind] = 1 - self.ingress_px[ingress_i, ui]
-						tmpind += 1
-					x_vol_this_ingress, p_vol_this_ingress = self.pdf_sum_function(self.big_vol_x[:,0:n_nontrivial_ugs],
-						ug_prob_vols_this_ingress)
-					x_vol_this_ingress = x_vol_this_ingress.flatten()
-					p_vol_this_ingress = p_vol_this_ingress.flatten()
-					x_vol_this_ingress += definitely_here
-					new_p = np.sum(p_vol_this_ingress[x_vol_this_ingress > self.link_capacities[ingress_i]])
-					if new_p > 0:
-						severity = np.sum(p_vol_this_ingress * x_vol_this_ingress)
-				else:
-					x_vol_this_ingress = definitely_here
-					p_vol_this_ingress = 1
-					new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
-					if new_p > 0:
-						severity = x_vol_this_ingress
-				## Doesn't this negate my ability to split across UGs???? ughghghghghg
-				# will probably have to do main -> compute prob -> return -> combine prob -> compress -> send to workers
-				# ~or~ pretend every link is 1/n_workers capacity and shuffle users
-				# ~or~ group all users with similar reachabilities in the same worker
-				old_p = self.p_link_fails[ingress_i]
-				if np.abs(old_p - new_p) > PROB_TOLERANCE:
-					recalc_popps[ingress_i] = None
-				self.p_link_fails[ingress_i] = new_p
-				self.link_failure_severities[ingress_i] = severity / self.link_capacities[ingress_i]
-
-			if verb:
-				for ingress_i in np.where(self.p_link_fails)[0]:
-					# self.print("{} Ingress {} ({}) fails with probability {}, users {}".format(self.worker_i,ingress_i, self.popps[ingress_i],
-					#  	self.p_link_fails[ingress_i], np.where(self.ingress_px[ingress_i,:] > .1)[0]))
-					whole_deployment_uis = [self.whole_deployment_ug_to_ind[self.ugs[ui]] for ui in np.where(self.ingress_px[ingress_i,:])[0]]
-					severity = self.link_failure_severities[ingress_i]
-					# self.print(np.where(self.ingress_px[ingress_i,:]))
-					# self.print("whole deployment uis {} ".format(whole_deployment_uis))
-					# self.print("severity is {}".format(severity))
-
-
-					# ui_global = self.whole_deployment_ug_to_ind[ug]
-					uis = np.where(self.ingress_px[ingress_i,:] > .001)[0]
-					uis_global = [self.whole_deployment_ug_to_ind[self.ugs[ui]] for ui in uis]
-					users_str = "-".join([str(el) for el in uis_global])
-					failing_popp = kwargs.get('failing_popp','none')
-					if failing_popp != 'none':
-						failing_popp = self.popp_to_ind[failing_popp]
-					self.log("link_fail_report,{},{},{},{},{},{},{}\n".format(
-						self.iter,ingress_i,failing_popp,self.link_capacities[ingress_i],
-						severity,users_str,self.p_link_fails[ingress_i]))
-
-
-					
-					ug_prob_vols_this_ingress_i = np.where(self.ingress_px[ingress_i,:] > .1)[0]
-					include_in_px = []
-					definitely_here = 0
-					for ui in ug_prob_vols_this_ingress_i:
-						# Model user as bernoulli on this ingress
-						if self.ingress_px[ingress_i, ui] >= .99:
-							definitely_here += self.ug_vols[ui]
-							continue
-						include_in_px.append(ui)
-					n_nontrivial_ugs = len(include_in_px)
-					if n_nontrivial_ugs > 0:
-						ug_prob_vols_this_ingress = np.zeros((len(self.vol_x), n_nontrivial_ugs))
-						tmpind = 0
-
-						for ui in include_in_px:
-							ug_prob_vols_this_ingress[self.ui_to_vol_i[ui], tmpind] = self.ingress_px[ingress_i, ui]
-							ug_prob_vols_this_ingress[0, tmpind] = 1 - self.ingress_px[ingress_i, ui]
-							tmpind += 1
-						x_vol_this_ingress, p_vol_this_ingress = self.pdf_sum_function(self.big_vol_x[:,0:n_nontrivial_ugs],
-							ug_prob_vols_this_ingress)
-						x_vol_this_ingress = x_vol_this_ingress.flatten()
-						p_vol_this_ingress = p_vol_this_ingress.flatten()
-						x_vol_this_ingress += definitely_here
-					else:
-						x_vol_this_ingress = definitely_here
-						p_vol_this_ingress = 1
-						new_p = x_vol_this_ingress > self.link_capacities[ingress_i]
-
-
-					# self.print("Ingress capacity is {} while users contribute {}, prob {}".format(self.link_capacities[ingress_i],
-					# 	x_vol_this_ingress,p_vol_this_ingress))
-
-			timers['capacity_2'] = time.time()
-			timers['capacity_3'] = time.time()
-			ug_inds_to_loop = list(ug_inds_to_loop)
-			for ingress_i in recalc_popps:
-				for ui in self.poppi_to_ui[ingress_i]:
-					ug_inds_to_loop.append(ui)
-			ug_inds_to_loop = np.array(sorted(list(set(ug_inds_to_loop))))
-		
-
-		if len(ug_inds_to_loop) > 0:
-			self.user_px[:,ug_inds_to_loop] = 0
-
-		
-
-		timers['capacity_4'] = time.time()
-
-		lb_multiplier_link_failure = self.get_limited_cap_latency_multiplier()
-
-		all_pref_inds = np.arange(self.n_prefixes)
-
-
-		ug_benefit_updates = []
-		for ui in ug_inds_to_loop:
-
-			min_experienced_benefit, max_experienced_benefit = np.inf, -1 * np.inf
-			all_pv_i = p_mat[ui]
-			## combine benefit with bernoulli link failure
-			all_pv = [(prefj, benefits[poppi,ui], all_pv_i[poppi,prefj], self.p_link_fails[poppi], 
-				self.link_failure_severities[poppi]) \
-				for poppi,prefj in all_pv_i]
-			# if verb and self.worker_i == WORKER_OF_INTEREST and self.whole_deployment_ug_to_ind[self.ugs[ui]] == USER_OF_INTEREST:
-			# 	self.print("PV : {}".format(all_pv))
-
-			if len(all_pv) == 0:
-				# this user has no paths
-				continue
-			elif len(all_pv) == 1:
-				_, lb, p, plf, lfs = all_pv[0]
-
-				if lb > max_experienced_benefit:
-					max_experienced_benefit = lb
-				if lb < min_experienced_benefit:
-					min_experienced_benefit = lb
-
-				if lb <= self.big_lbx[0,ui]:
-					## reformat now, this is a big deal
-					self.big_lbx[:,ui] = np.linspace(lb*1.5, self.big_lbx[-1,ui])
-					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-				elif lb >= self.big_lbx[-1,ui]:
-					lbx_i = self.big_lbx.shape[0] - 1 
-				else:
-					lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-				if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
-					self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
-						self.big_lbx[-1,ui]))
-
-				self.user_px[lbx_i, ui] += p * (1 -  plf)
-				if plf > 0:
-					lb_failure = lb * self.lfs_to_penalty(lfs) * lb_multiplier_link_failure
-					# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
-					# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
-
-					if lb_failure > max_experienced_benefit:
-						max_experienced_benefit = lb
-					if lb_failure < min_experienced_benefit:
-						min_experienced_benefit = lb
-
-					if lb_failure <= self.big_lbx[0,ui]:
-						## reformat now, this is a big deal
-						self.big_lbx[:,ui] = np.linspace(lb_failure*1.5, self.big_lbx[-1,ui])
-						limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
-					elif lb_failure >= self.big_lbx[-1,ui]:
-						limited_cap_lbxi = self.big_lbx.shape[0] - 1 
-					else:
-						limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
-
-					self.user_px[limited_cap_lbxi, ui] += p * plf
-			else:
-				all_pv = sorted(all_pv,key=lambda el : el[1])
-				
-				running_probs = np.zeros((self.n_prefixes))
-				running_probs[all_pv[0][0]] = all_pv[0][2]
-
-				prefs_exist = list(set([el[0] for el in all_pv]))
-				for pref_j in get_difference(all_pref_inds, prefs_exist):
-					running_probs[pref_j] = 1 
-
-				for i in range(1,len(all_pv)):
-					pref_j, lb, p, plf, lfs = all_pv[i]
-
-					# calculate prob(max latency benefit)
-					# we calculate this iteratively, from the smallest to the largest value
-					# probability calc is basically probability of this value (p) times probability 
-					# other prefixes are one of the smaller values (running prob)
-					max_prob = p * np.prod(running_probs[all_pref_inds!=pref_j])
-					running_probs[pref_j] += p
-
-					if max_prob == 0 : continue
-
-					if lb > max_experienced_benefit:
-						max_experienced_benefit = lb
-					if lb < min_experienced_benefit:
-						min_experienced_benefit = lb
-
-					if lb <= self.big_lbx[0,ui]:
-						## reformat now, this is a big deal
-						self.big_lbx[:,ui] = np.linspace(lb*1.5, self.big_lbx[-1,ui])
-						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-					elif lb >= self.big_lbx[-1,ui]:
-						lbx_i = self.big_lbx.shape[0] - 1 
-					else:
-						lbx_i = np.where(lb - self.big_lbx[:,ui] <= 0)[0][0]
-					if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST:
-						self.print("multi LB {} LBXI {}, low : {} up : {}".format(lb,lbx_i,self.big_lbx[0,ui],
-							self.big_lbx[-1,ui]))
-					# print("{} {}".format(lb,self.big_lbx[lbx_i,ui]))
-					# if np.random.random() > .999:
-					# 	exit(0)
-
-					self.user_px[lbx_i, ui] += max_prob * (1 - plf)
-					if plf > 0:
-						lb_failure = lb * self.lfs_to_penalty(lfs)
-						# print("{},{},{},{}".format(round(lb,3),round(lfs,3),
-						# 	round(lb_multiplier_link_failure,3),round(lb_failure,3)))
-						if lb_failure > max_experienced_benefit:
-							max_experienced_benefit = lb
-						if lb_failure < min_experienced_benefit:
-							min_experienced_benefit = lb
-						
-						if lb_failure <= self.big_lbx[0,ui]:
-							## reformat now, this is a big deal
-							self.big_lbx[:,ui] = np.linspace(lb_failure*1.5, self.big_lbx[-1,ui])
-							limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
-						elif lb_failure >= self.big_lbx[-1,ui]:
-							limited_cap_lbxi = self.big_lbx.shape[0] - 1 
-						else:
-							limited_cap_lbxi = np.where(lb_failure - self.big_lbx[:,ui] <= 0)[0][0]
-						
-						self.user_px[limited_cap_lbxi, ui] += max_prob * plf
-
-			# static assignment to best possible
-			max_experienced_benefit = self.best_latency_benefits[ui] 	
-			# lower bound it a little more
-			min_experienced_benefit = min_experienced_benefit * 1.5
-			if min_experienced_benefit == max_experienced_benefit:
-				min_experienced_benefit -= .1
-			self.lb_range_trackers[ui][0] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][0] + \
-				self.lb_range_alpha * min_experienced_benefit
-			self.lb_range_trackers[ui][1] = (1-self.lb_range_alpha) * self.lb_range_trackers[ui][1] + \
-				self.lb_range_alpha * max_experienced_benefit
-
-			if np.abs(self.lb_range_trackers[ui][0] - self.big_lbx[0,ui]) > .01 or \
-				np.abs(self.lb_range_trackers[ui][1] - self.big_lbx[-1,ui]) > .01:
-				ug_benefit_updates.append(ui)
-
-			if self.worker_i == WORKER_OF_INTEREST and ui == USER_OF_INTEREST and (super_verbose or verb):
-				print(self.lb_range_trackers[ui])
-				print(all_pv)
-				print("{} {}".format(min_experienced_benefit/1.5, max_experienced_benefit))
-
-		
-		for ui in ug_inds_to_loop:
-			if np.sum(self.user_px[:,ui]) == 0:
-				# This user experiences no benefit with probability 1
-				# no benefit means no path, so it's actually just the most 
-				# negative benefit we can give
-				self.user_px[0,ui] = 1
-				if verb or super_verbose:
-					log_str = "no_path_warning,{}\n".format(ui)
-					self.log(log_str)
-		self.user_px = self.user_px / (np.sum(self.user_px,axis=0) + 1e-8) # renorm
-
-		if verb or super_verbose:
-			total_b = 0
-			prnts = []
-			for bi,ui in zip(*np.where(self.user_px)):
-				p = self.user_px[bi,ui]
-				if p > .001:
-					prnts.append((ui,bi,self.big_lbx[bi,ui],p))
-					total_b += p*self.big_lbx[bi,ui]
-			if kwargs.get('failing_popp') is None or super_verbose:
-				for ui,bi,lb,p in sorted(prnts, key = lambda el : el[0]):
-					# get likely popps
-					likely_popps = np.where(self.ingress_px[:,ui]>.01)[0]
-					likely_popps_str = ""
-					likely_popps_str = "-".join(["{} ({} ms)".format(poppi,round(self.ug_perfs[self.ugs[ui]][self.popps[poppi]],2)) for poppi in likely_popps])
-					ug = self.ugs[ui]
-					ui_global = self.whole_deployment_ug_to_ind[ug]
-					log_str = "benefit_estimate,{},{},{},{},{},{},{}\n".format(
-						self.iter,ui_global,bi,lb,round(p,2),likely_popps_str,self.logging_iter)
-					if (verb or super_verbose) and self.worker_i == WORKER_OF_INTEREST and ui_global == USER_OF_INTEREST:
-						self.print("PV : {}".format(p_mat[ui]))
-						self.print(log_str)
-					self.log(log_str)
-				self.logging_iter += 1
-			# print("Total : {}".format(total_b))
-
-		## save calc cache for later if its not set
-		if self.user_ip_cache['init_ip'] is None:
-			self.user_ip_cache['init_ip'] = p_mat
-			self.user_ip_cache['default_px'] = copy.copy(self.user_px)
-			self.user_ip_cache['big_lbx'] = copy.copy(self.big_lbx)
-			if self.with_capacity:
-				self.user_ip_cache['default_ingress_px'] = copy.copy(self.ingress_px)
-				self.user_ip_cache['p_link_fails'] = copy.copy(self.p_link_fails)
-				self.user_ip_cache['link_failure_severities'] = copy.copy(self.link_failure_severities)
-
-		timers['benefit'] = time.time()
-		## Calculate p(sum(benefits)) which is a convolution of the p(benefits)
-		if subset_ugs:
-			px = self.user_px[:,which_ugs_i]
-			lbx = self.big_lbx[:,which_ugs_i]
-		else:
-			px = self.user_px
-			lbx = self.big_lbx
-		xsumx, psumx = self.pdf_sum_function(lbx, px)
-		xsumx = xsumx.flatten(); psumx = psumx.flatten()
-		benefit = np.sum(xsumx * psumx)
-
-		## Update the big LBX object
-		for ui in ug_benefit_updates:
-			self.big_lbx[:,ui] = np.linspace(self.lb_range_trackers[ui][0], self.lb_range_trackers[ui][1], 
-				num=LBX_DENSITY)
-
-		if np.sum(psumx) < .5:
-			print("ERRRRRR : {}".format(np.sum(psumx)))
-			exit(0)
-
-		timers['convolution'] = time.time()
-		# if np.random.random() > 0:
-		# 	t_order = ['start','probs','cache_lookup','capacity_1','capacity_2',
-		# 		'capacity_3','capacity_4','benefit','convolution']
-		# 	t_deltas = [timers[t_order[i+1]] - timers[t_order[i]] for i in range(len(t_order)-1)]
-		# 	time_str = "  --  ".join("{}--{}ms".format(t_order[i+1],
-		# 		int(t_deltas[i]*1000)) for i in range(len(t_order)-1))
-		# 	print("Worker {} looping over {} pct of UGs".format(self.worker_i, 
-		# 		round(len(ug_inds_to_loop)*100.0/self.n_ug),3))
-		# 	print(time_str)
-		# 	print("{} seconds total".format(round(time.time() - timers['start'], 3)))
-		# 	print('\n')
-
-
-		if not subset_ugs:
-			### Store compressed versions of these variables
-			cache_rep = get_a_cache_rep(a_effective)
-			xsumx_cache_rep = (xsumx[0], xsumx[-1])
-			psumx_cache_rep = {}
-			for i in np.where(psumx)[0]:
-				psumx_cache_rep[i] = psumx[i]
-
-			self.calc_cache.all_caches['lb'][cache_rep] = (benefit, (xsumx_cache_rep, psumx_cache_rep))
-
-		return benefit, (xsumx, psumx)
+		return self.generic_benefit(a, kwargs.get('generic_obj'))
 
 	def log(self,s):
 		self.log_ptr = open(os.path.join(LOG_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, self.dpsize)),'a')
@@ -997,7 +684,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if len(cache_to_clear) > MAX_CACHE_SIZE:
 			# order of lbx_density + n_popps*n_prefixes per entry
 			# self.print("Clearing calc cache, currently size {}".format(
-			# 	len(pickle.dumps(self.calc_cache))/1e6))
+			#   len(pickle.dumps(self.calc_cache))/1e6))
 			# self.print("Clearing calc cache, current len {}".format(len(cache_to_clear)))
 			self.this_time_ip_cache = {}
 			self.calc_cache.all_caches['lb'] = {}
@@ -1011,7 +698,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def clear_new_meas_caches(self):
 		# print("Clearing caches in worker {}".format(self.worker_i))
 		self.this_time_ip_cache = {}
-		self.init_user_px_cache()
 		self.calc_cache.clear_new_measurement_caches()
 
 	def check_for_commands(self):
@@ -1037,73 +723,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			for (args,kwargs) in data:
 				ret.append(self.latency_benefit(*args, **kwargs))
 			del self.this_time_ip_cache
-		elif cmd == 'calc_compressed_lb':
-			# if len(data) > 1:
-			# 	if self.worker_i == 0:
-			# 		pickle.dump([data,self.output_deployment()], open('cache/tmp.pkl','wb'))
-			# 	exit(0)
-			ts = time.time()
-			tlp = time.time()
-			ret = []
-			base_args,base_kwa = data[0]
-			base_adv, = base_args
-			base_adv = base_adv.astype(bool)
-
-			if len(data[1:]) > 1:
-				### Prepopulate the cache with the "average" advertisement
-				self.init_user_px_cache()
-				avg_adv = np.zeros(base_adv.shape)
-				for diff, kwa in data[1:]:
-					for ind in zip(*diff):
-						base_adv[ind] = not base_adv[ind]
-					avg_adv += base_adv.astype(np.int32)
-					for ind in zip(*diff):
-						base_adv[ind] = not base_adv[ind]
-				avg_adv = avg_adv / len(data[1:])
-				avg_adv = avg_adv > .5
-				self.latency_benefit(avg_adv, **base_kwa)
-			ret.append({'ans': self.latency_benefit(base_adv, **base_kwa), 'job_id': base_kwa.get('job_id', -1)})
-			i=0
-			for diff, kwa in data[1:]:
-				kwa['verbose_workers'] = base_kwa.get('verbose_workers',False) or kwa.get('verbose_workers',False)
-				for ind in zip(*diff):
-					base_adv[ind] = not base_adv[ind]
-				ret.append({'ans': self.latency_benefit(base_adv, **kwa), 'job_id': kwa.get('job_id',-1)})
-				for ind in zip(*diff):
-					base_adv[ind] = not base_adv[ind]
-				i += 1
-				# kwa['verb'] = True
-				if time.time() - tlp > 100:
-					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
-						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
-					tlp = time.time()
-				self.check_clear_cache()
-			# if len(data)>10:
-			# 	print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
-
-		elif cmd == "solve_lp_lagrange":
-			ret = []
-			ts = time.time()
-			n_iters,t_per_iter = 0,0
-			self.check_load_rw_measure_wrapper()
-			for fields in sorted(data, key = lambda el : el[0]):
-				if len(fields) == 4:
-					adv_i, adv, deployment, update_dep = fields
-				else:
-					adv_i, adv, opt_adv, deployment, update_dep = fields
-				if update_dep:
-					deployment_save = self.output_deployment()
-					self.clear_caches()
-					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
-				self.check_load_rw_measure_wrapper()
-				this_ret = self.solve_lp_lagrange(adv)
-				if update_dep:
-					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
-					self.check_load_rw_measure_wrapper()
-				ret.append((adv_i, this_ret))
-				n_iters += 1
-
-				t_per_iter = round((time.time() - ts)/n_iters,2)
 
 		elif cmd == "solve_lp":
 			ret = []
@@ -1121,14 +740,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
 				self.check_load_rw_measure_wrapper()
 
-				if deployment.get('generic_objective') is not None:
-					rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
-					this_ret = solve_generic_lp_with_failure_catch(self, rti, deployment.get('generic_objective'))
-				else:
-					if len(fields) == 4:
-						this_ret = self.solve_lp_with_failure_catch(adv)
-					else:
-						this_ret = self.solve_lp_with_failure_catch_weighted_penalty(adv, opt_adv)
+				rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
+				this_ret = solve_generic_lp_with_failure_catch(self, rti, deployment.get('generic_objective'))
 				if update_dep:
 					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
 					self.check_load_rw_measure_wrapper()
@@ -1136,11 +749,41 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				n_iters += 1
 
 				t_per_iter = round((time.time() - ts)/n_iters,2)
-
+		elif cmd == 'calc_compressed_lb':
+			ts = time.time()
+			tlp = time.time()
+			ret = []
+			base_args,base_kwa = data[0]
+			base_adv, = base_args
+			base_adv = base_adv.astype(bool)
+			ret.append({'ans': self.latency_benefit(base_adv, **base_kwa), 'job_id': base_kwa.get('job_id', -1)})
+			i=0
+			last_timing_summary = 0
+			for diff, kwa in data[1:]:
+				kwa['verbose_workers'] = base_kwa.get('verbose_workers',False) or kwa.get('verbose_workers',False)
+				for ind in zip(*diff):
+					base_adv[ind] = not base_adv[ind]
+				ret.append({'ans': self.latency_benefit(base_adv, **kwa), 'job_id': kwa.get('job_id',-1)})
+				for ind in zip(*diff):
+					base_adv[ind] = not base_adv[ind]
+				i += 1
+				# kwa['verb'] = True
+				if time.time() - tlp > 100:
+					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
+						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
+					tlp = time.time()
+				if i % 50 == 0 and i > 0 and time.time() - last_timing_summary > 20:
+					self.summarize_timing()
+					last_timing_summary = time.time()
+				self.check_clear_cache()
+			# if len(data)>10:
+			#   print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
+		
 		elif cmd == 'reset_new_meas_cache':
 			self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
+			self.updated_ingress_probabilities = True
 			parents_on = data
 			for ug in parents_on:
 				for beaten_ingress, routed_ingress in parents_on[ug]:

@@ -599,6 +599,7 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
+		"available_paths": available_paths,
 		"solved": model.status,
 		"vols_by_poppi": vols_by_poppi,
 		"fraction_congested_volume": fraction_congested_volume,
