@@ -12,9 +12,13 @@ for pyt in ['python','Python']:
 			("testing_priorities" in row and str(port) in row):
 			print(row)
 			try:
-				pnum = re.search("tom + (\d+) .+", row).group(1)
+				pnum = re.search(r"tom + (\d+) .+", row).group(1)
 			except:
-				pnum = re.search("ubuntu + (\d+) .+", row).group(1)
+				try:
+					pnum = re.search(r"ubuntu + (\d+) .+", row).group(1)
+				except:
+					pnum = re.search(r"tomkoch + (\d+) .+", row).group(1)
+
 
 			print("kill -9 {}".format(pnum))
 			call("kill -9 {}".format(pnum),shell=True)

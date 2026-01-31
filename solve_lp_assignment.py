@@ -2,6 +2,7 @@ import numpy as np,  scipy, time
 from helpers import *
 from scipy.sparse import csr_matrix
 import gurobipy as gp
+gp.setParam("OutputFlag", 0)
 
 def NO_PATH_INGRESS(sas):
 	return sas.n_popps

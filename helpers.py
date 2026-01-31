@@ -355,9 +355,9 @@ def get_fe_from_device(device_name):
 	# they should really get a system of global UIDs for all of this...
 	try:
 		if "ier" in device_name:
-			return re.search("ier\d+\.(\D+)\d?", device_name).group(1).replace("-","")
+			return re.search(r"ier\d+\.(\D+)\d?", device_name).group(1).replace("-","")
 		elif "ter" in device_name:
-			return re.search("ter\d+\.(\D+)\d?", device_name).group(1).replace("-","")
+			return re.search(r"ter\d+\.(\D+)\d?", device_name).group(1).replace("-","")
 		return re.search("^(\D{2,3}).?", device_name).group(1).replace("-","")
 	except AttributeError:
 		print(device_name); exit(0)

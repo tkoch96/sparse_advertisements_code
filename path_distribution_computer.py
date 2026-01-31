@@ -11,6 +11,8 @@ from solve_lp_assignment import solve_generic_lp_with_failure_catch, get_paths_b
 import gurobipy as gp
 from scipy.sparse import csr_matrix
 
+gp.setParam("OutputFlag", 0)
+
 
 remeasure_a = None
 try:
