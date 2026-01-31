@@ -404,6 +404,11 @@ def get_link_capacities(deployment, scale_factor=1.3, verb=True, **kwargs):
 	
 	return link_capacities
 
+def get_cp_str(**kwargs):
+	considering_pops = kwargs.get('considering_pops')
+	cpstr = pops_to_fn(considering_pops)
+	return cpstr
+
 def cluster_actual_users_actual_deployment(**kwargs):
 	from realworld_measure_wrapper import RIPE_Atlas_Utilities
 	rau = RIPE_Atlas_Utilities(kwargs.get('deployment_size'))
@@ -415,7 +420,7 @@ def cluster_actual_users_actual_deployment(**kwargs):
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 	pops = list(set([popp[0] for popp in popps]))
-	print("{} UGs, {} popps, {} pops".format(len(ugs), len(popps), len(pops)))
+	print("Performing clustering for {} UGs, {} popps, {} pops".format(len(ugs), len(popps), len(pops)))
 
 	ug_to_ind = {ug:i for i,ug in enumerate(ugs)}
 	popp_to_ind = {popp:i for i, popp in enumerate(popps)}
@@ -588,24 +593,31 @@ def cluster_actual_users_actual_deployment(**kwargs):
 
 	return clustered_ug_perfs, clustered_anycast_perfs, ug_to_ip
 
-def cluster_actual_users(**kwargs):
+def get_performance_data(**kwargs):
+	print("Loading performances in get_performance_data")
+	pruned_performance_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'pruned_performances_{}.pkl'.format(get_cp_str(**kwargs)))
 	considering_pops = kwargs.get('considering_pops')
-	cpstr = pops_to_fn(considering_pops)
-	cluster_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'clustered_perfs_{}.pkl'.format(cpstr))
-	if not os.path.exists(cluster_cache_fn):# or len(considering_pops) >= 30:
-		pruned_performance_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'pruned_performances_{}.pkl'.format(cpstr))
-		if not os.path.exists(pruned_performance_cache_fn) or len(considering_pops) >= 30:
-			anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
-			pickle.dump([anycast_latencies, ug_perfs], open(pruned_performance_cache_fn,'wb'))
-		else:
-			print("Loading filtered performances from cache")
-			anycast_latencies, ug_perfs = pickle.load(open(pruned_performance_cache_fn, 'rb'))
-		ug_to_ip = {}
+	if not os.path.exists(pruned_performance_cache_fn) or len(considering_pops) >= 30:
+		anycast_latencies, ug_perfs = load_actual_perfs(**kwargs)
+		pickle.dump([anycast_latencies, ug_perfs], open(pruned_performance_cache_fn,'wb'))
+	else:
+		print("Loading filtered performances from cache")
+		anycast_latencies, ug_perfs = pickle.load(open(pruned_performance_cache_fn, 'rb'))
+	ug_to_ip = {}
+	for ug in ug_perfs:
+		# ug is just (tmp, IP address)
+		ug_to_ip[ug] = ug[1]
 
+	return ug_perfs, anycast_latencies, ug_to_ip
+
+def cluster_actual_users(**kwargs):
+	cluster_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'clustered_perfs_{}.pkl'.format(get_cp_str(**kwargs)))
+	if not os.path.exists(cluster_cache_fn):# or len(considering_pops) >= 30:
+		ug_perfs, anycast_latencies, ug_to_ip = get_performance_data(**kwargs)
 		### Form a matrix of all latencies
 		ugs = sorted(list(ug_perfs))
 		popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
-		print("{} UGs, {} popps".format(len(ugs), len(popps)))
+		print("Performing clustering for {} UGs, {} popps".format(len(ugs), len(popps)))
 
 		ug_to_ind = {ug:i for i,ug in enumerate(ugs)}
 		popp_to_ind = {popp:i for i, popp in enumerate(popps)}
@@ -652,6 +664,7 @@ def cluster_actual_users(**kwargs):
 
 		examples_by_label = {}
 		for i in range(len((labels))):
+			print(ugs[i])
 			lab = labels[i]
 			try:
 				examples_by_label[lab].append(ugs[i])
@@ -711,17 +724,6 @@ def cluster_actual_users(**kwargs):
 		max_errors = [np.max(error) for error in errors]
 		min_errors = [np.min(error) for error in errors]
 		median_errors = [np.median(error) for error in errors]
-		# for arr,k in zip([mean_errors, max_errors,min_errors,median_errors], ['mean','max','min','median']):
-		# 	x,cdf_x = get_cdf_xy(arr)
-		# 	plt.plot(x,cdf_x,label=k)
-		# plt.xlabel("Error")
-		# plt.ylabel("CDF of {} Clusters".format(len(errors)))
-		# plt.grid(True)
-		# plt.yticks([0,.1,.2,.3,.4,.5,.6,.7,.8,.9,1.0])
-		# plt.xlim([0,200])
-		# plt.legend()
-		# plt.savefig('figures/clustering_reconstruction_error-{}.pdf'.format(cpstr))
-		# plt.clf(); plt.close()
 
 		pickle.dump([clustered_ug_perfs,clustered_anycast_perfs, ug_to_ip], open(cluster_cache_fn,'wb'))
 	else:
@@ -791,6 +793,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 			ug_perfs[ug][pop,peer].append(lat)
 		except KeyError:
 			ug_perfs[ug][pop,peer] = [lat]
+		# if np.random.random() > .9999999:break
 
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
@@ -800,12 +803,14 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 		if len(ug_perfs[ug]) == 1:
 			to_del.append(ug)
 			continue
+		mlat = 10000000000
 		for popp, lats in ug_perfs[ug].items():
 			ug_perfs[ug][popp] = np.min(lats)
-		if any([lat == 1 for lat in ug_perfs[ug].values()]):
-			# trivial
+			if ug_perfs[ug][popp] < mlat:
+				mlat = ug_perfs[ug][popp]
+		# remove 1ms UGs
+		if mlat <= 1:
 			to_del.append(ug)
-			continue
 	for ug in to_del: del ug_perfs[ug]
 	ugs = sorted(list(ug_perfs))
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
@@ -814,8 +819,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	anycast_latencies = {}
 	anycast_pop = {}
 	for row in tqdm.tqdm(open(os.path.join(CACHE_DIR, 'vultr_anycast_latency_smaller.csv')
-		,'r'),desc="Parsing VULTR anycast latencies"):
-		# if np.random.random() > .999999:break
+		,'r'), desc="Parsing VULTR anycast latencies"):
 		_,ip,lat,pop = row.strip().split(',')
 		if lat == '-1': continue
 		metro = 'tmp'
@@ -897,63 +901,70 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	popps = sorted(list(set(popp for ug in ugs for popp in ug_perfs[ug])))
 	print("{} UGs, {} popps after removing SOL and only considering anycast ones".format(len(ugs), len(popps)))
 
+	## Compute best popp per UG
+	ug_to_best_popp = {}
+	for _ug in ugs:
+		these_popps = list(ug_perfs[_ug])
+		perfs = np.array([ug_perfs[_ug][_popp] for _popp in these_popps])
+		best_popp = these_popps[np.argmin(perfs)]
+		ug_to_best_popp[_ug] = best_popp
+
 	if kwargs.get('do_filter', True):
 		### Randomly limit to max_n_ug per popp, unless the popp is a provider
-		max_n_ug = kwargs.get('n_users_per_peer', 200)
+		# max_n_ug = kwargs.get('n_users_per_peer', 200)
+		default_max_n_ug = 20
+		max_n_ug = kwargs.get('n_users_per_peer', default_max_n_ug)
 		provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
-		provider_popps = []
+		provider_popps, provider_popps_d = [], {}
 		for row in open(provider_fn, 'r'):
 			pop,peer = row.strip().split(',')
 			if pop not in considering_pops:
 				continue
 			provider_popps.append((pop,peer))
+			provider_popps_d[pop,peer] = None
 		popp_to_ug = {popp:[] for popp in popps}
 		for ug, perfs in ug_perfs.items():
 			for popp in perfs:
-				if kwargs.get('focus_on_peers',True):
+				# if kwargs.get('focus_on_peers',True):
+				if kwargs.get('focus_on_peers', False):
 					if popp in provider_popps: continue
 				popp_to_ug[popp].append(ug)
-			
-		if kwargs.get('do_plot', True):
-			import matplotlib.pyplot as plt
-			x,cdf_x = get_cdf_xy(list([len(popp_to_ug[popp]) for popp in popp_to_ug]))
-			plt.plot(x,cdf_x)
-			plt.xlabel("Number of UGs per Ingress")
-			plt.ylabel("CDF of Ingresses")
-			plt.grid(True)
-			plt.savefig('figures/n_ugs_per_ingress.pdf')
-			plt.clf()
-			plt.close()
 
 		n_total_users, n_peer_was_best, n_provider_was_best = 0,0,0
-		for popp,_ugs in tqdm.tqdm(popp_to_ug.items(),desc="Limiting peers to be a max number of measurements..."):
-			if kwargs.get('focus_on_peers',True):
-				if popp in provider_popps: continue
+		for popp,_ugs in tqdm.tqdm(popp_to_ug.items(), 
+			desc="Limiting peers to be a max number of measurements..."):
+			# if kwargs.get('focus_on_peers',True):
+			if kwargs.get('focus_on_peers', False):
+				try:
+					provider_popps_d[popp]
+					continue
+				except KeyError:
+					pass
 
 			### Favor users whose best popp is not a provider
 			peer_ugs, provider_ugs = [],[]
 			for _ug in _ugs:
-				these_popps = list(ug_perfs[_ug])
-				perfs = np.array([ug_perfs[_ug][_popp] for _popp in these_popps])
-				best_popp = these_popps[np.argmin(perfs)]
-				if best_popp in provider_popps:
+				best_popp = ug_to_best_popp[_ug]
+				try:
+					provider_popps_d[best_popp]
 					provider_ugs.append(_ug)
-				else:
+				except KeyError:
 					peer_ugs.append(_ug)
 			if len(peer_ugs) > 0:
 				np.random.shuffle(peer_ugs)
 			if len(provider_ugs) > 0:
 				np.random.shuffle(provider_ugs)
 
-			n_keeping_peer = np.minimum(len(peer_ugs), max_n_ug)
-			n_peer_was_best += n_keeping_peer
-			n_keeping_provider = np.minimum(max_n_ug - n_keeping_peer, len(provider_ugs))
-			n_provider_was_best += n_keeping_provider
+			
 			n_keep = np.minimum(len(_ugs), max_n_ug)
-			n_total_users += n_keep
-
 			_ugs = peer_ugs + provider_ugs
 			popp_to_ug[popp] = _ugs[0:n_keep]
+
+			n_total_users += n_keep
+			n_keeping_peer = np.minimum(len(peer_ugs), max_n_ug)
+			n_keeping_provider = np.minimum(max_n_ug - n_keeping_peer, len(provider_ugs))
+			n_provider_was_best += n_keeping_provider
+			n_peer_was_best += n_keeping_peer
 
 		print("Out of {} UGs, {} ({} pct) peer was best, {} ({} pct) provider was best.".format(
 			n_total_users, n_peer_was_best, round(n_peer_was_best*100/n_total_users,2),
@@ -977,16 +988,6 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		
-		if kwargs.get('do_plot', True):
-			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-			plt.plot(x,cdf_x,label="Frac UGs by Provider")
-			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-			plt.plot(x,cdf_x,label="Frac Providers by UG")
-			plt.legend()
-			plt.savefig('figures/provider_meas_description_preprune.pdf')
-			plt.clf()
-			plt.close()
 
 		to_del_popps = []
 		for popp, n in sorted(n_ugs_by_provider.items(), key = lambda el : el[1]):
@@ -1012,17 +1013,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		
-		if kwargs.get('do_plot', True):
-			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-			plt.plot(x,cdf_x,label="Frac UGs by Provider")
-			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-			plt.plot(x,cdf_x,label="Frac Providers by UG")
-			plt.legend()
-			plt.savefig('figures/provider_meas_description_postprune.pdf')
-			plt.clf()
-			plt.close()
-		
+	
 		## Remove users have measurements to too few providers
 		cutoff_frac = .35
 		to_del = list([ug for ug,n in n_providers_by_ug.items() if n/len(provider_popps) < cutoff_frac])
@@ -1041,16 +1032,6 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 					n_providers_by_ug[ug] += 1
 				except KeyError:
 					continue
-		
-		if kwargs.get('do_plot', True):
-			x,cdf_x = get_cdf_xy(list([n/len(ug_perfs) for n in n_ugs_by_provider.values()]))
-			plt.plot(x,cdf_x,label="Frac UGs by Provider")
-			x,cdf_x = get_cdf_xy(list([n/len(provider_popps) for n in n_providers_by_ug.values()]))
-			plt.plot(x,cdf_x,label="Frac Providers by UG")
-			plt.legend()
-			plt.savefig('figures/provider_meas_description_postprune2.pdf')
-			plt.clf()
-			plt.close()
 
 	anycast_latencies = {ug:anycast_latencies[ug] for ug in ug_perfs}
 
@@ -1063,6 +1044,60 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 def get_bulk_vol(deployment):
 	bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
 	return bulk_vol
+
+def remove_ug_from_deployment(deployment):
+	## TODO -- implement
+	return deployment
+
+def get_apnic_ug_to_vol(deployment):
+	ugs = deployment['ugs']
+	asn_to_vol = {}
+	pref_to_asn = {}
+	asn_to_ugs = {}
+	ugs_to_remove = []
+	## Lookup ASNs / APNIC volumes for each UG
+	for row in open(os.path.join(CACHE_DIR, 'vultr_all_dsts_asn_apnic_pop.csv'), 'r'):
+		if row[0] == "#": continue
+		ip,asn,vol = row.strip().split(',')
+		pref_to_asn[ip32_to_24(ip)] = asn
+		asn_to_vol[asn] = float(vol)
+	n_unknown_ugs = 0
+	covered_ases = {}
+	for ug in ugs:
+		_,ip = ug
+		try:
+			asn = pref_to_asn[ip32_to_24(ip)]
+			try:
+				asn_to_ugs[asn].append(ug)
+			except KeyError:
+				asn_to_ugs[asn] = [ug]
+		except KeyError:
+			n_unknown_ugs += 1
+			ugs_to_remove.append(ug)
+		covered_ases[asn] = None
+	print("{} unknown UGs when looking up APNIC data out of {}".format(n_unknown_ugs, len(ugs)))
+	covered_vol = sum(asn_to_vol[asn] for asn in covered_ases)
+	all_vol = sum(list(asn_to_vol.values()))
+	print("{} of potential volume covered (potential volume is a subset of the whole)".format(round(100*covered_vol/float(all_vol),2)))
+
+	## Assign each UG in each ASN a percentage of that UGs volume within the ASN
+	ug_to_vol = {}
+	for asn, ugs in asn_to_ugs.items():
+		random_vols = np.random.random(len(ugs))
+		random_vols /= np.sum(random_vols)
+		for i,ug in enumerate(ugs):
+			ug_to_vol[ug] = asn_to_vol[asn] * random_vols[i]
+	# if unknown, essentially remove this UG by making the volume very small
+	for ug in ugs_to_remove:
+		ug_to_vol[ug] = .0000001
+
+	# Normalize
+	max_vol = np.max(list(ug_to_vol.values()))
+	for ug in ug_to_vol:
+		ug_to_vol[ug] = ug_to_vol[ug] / max_vol
+
+
+	return ug_to_vol
 
 def get_random_ug_to_vol(deployment):
 	## Set UG vols to balance non-provider expected volume
@@ -1176,14 +1211,18 @@ def load_actual_deployment(deployment_size, **kwargs):
 		if deployment_size in ACTUAL_DEPLOYMENT_SIZES:
 			ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users_actual_deployment(considering_pops=considering_pops,deployment_size=deployment_size)	
 		else:
-			ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users(considering_pops=considering_pops, 
-				n_users_per_peer=10)
+			if DO_UG_CLUSTERING:
+				ug_perfs, anycast_latencies, ug_to_ip = cluster_actual_users(considering_pops=considering_pops, 
+					n_users_per_peer=10)
+			else:
+				ug_perfs, anycast_latencies, ug_to_ip = get_performance_data(considering_pops=considering_pops)
 
 		## add sub-ms latency noise to arbitrarily break ties
 		for ug in ug_perfs:
 			for popp,lat in ug_perfs[ug].items():
 				ug_perfs[ug][popp] = lat + .1 * np.random.uniform()
 
+		## Delete data from PoPs that we are not considering
 		for ug in list(ug_perfs):
 			to_del = [popp for popp in ug_perfs[ug] if popp[0] not in considering_pops]
 			for popp in to_del:
@@ -1237,8 +1276,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 			'n_providers': n_providers,
 			'provider_popps': provider_popps,
 		}
-
-		ug_to_vol = get_random_ug_to_vol(deployment)
+		if APNIC_VOLUME:
+			# we can only assign APNIC volume if we don't cluster UGs
+			assert not DO_UG_CLUSTERING
+			ug_to_vol = get_apnic_ug_to_vol(deployment)
+		else:
+			ug_to_vol = get_random_ug_to_vol(deployment)
 		deployment['ug_to_vol'] = ug_to_vol
 		deployment['whole_deployment_ug_to_vol'] = ug_to_vol
 
@@ -1258,7 +1301,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 	else:
 		deployment = pickle.load(open(deployment_cache_fn,'rb'))
 
-		ug_to_vol = get_random_ug_to_vol(deployment)
+		if APNIC_VOLUME:
+			# we can only assign APNIC volume if we don't cluster UGs
+			assert not DO_UG_CLUSTERING
+			ug_to_vol = get_apnic_ug_to_vol(deployment)
+		else:
+			ug_to_vol = get_random_ug_to_vol(deployment)
 		deployment['ug_to_vol'] = ug_to_vol
 		deployment['whole_deployment_ug_to_vol'] = ug_to_vol
 

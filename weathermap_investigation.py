@@ -767,9 +767,9 @@ def ilgar_flashcrowd_analysis():
 
 
 if __name__ == "__main__":
-	# fetch_files()
+	fetch_files()
 	# parse_and_plot()
-	paper_plots()
+	# paper_plots()
 	# ilgar_flashcrowd_analysis()
 
 

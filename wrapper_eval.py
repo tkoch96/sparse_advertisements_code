@@ -2,7 +2,7 @@ import tqdm, numpy as np, os, copy
 from constants import *
 gamma = 4
 capacity = True
-N_TO_SIM = 1 
+N_TO_SIM = 1
 #### NOTE -- need to make sure lambduh decreases with the problem size
 #### or else the latency gains won't be significant enough to get a signal through
 lambduh = .00001
@@ -14,6 +14,7 @@ global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_fail
 
 ### Default metrics for performance evaluations
 default_metrics = {
+	'save_run_dir': {i:None for i in range(N_TO_SIM)},
 	'compare_rets': {i:None for i in range(N_TO_SIM)},
 	'adv': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 	'adv_representation': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},

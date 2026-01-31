@@ -60,7 +60,6 @@ class Worker_Manager:
 				except:
 					time.sleep(.5)
 
-
 	def start_workers(self):
 		# self.worker_to_uis = {}
 		self.worker_to_deployments = {}

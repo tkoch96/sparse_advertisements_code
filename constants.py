@@ -9,6 +9,10 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 	'darkslategray','deeppink','crimson','mediumpurple','khaki','dodgerblue','lime','black','midnightblue',
 	'lightsteelblue']
 
+# whether to cluster UGs based on their latency to PoPPs
+DO_UG_CLUSTERING = False
+# whether or not to use APNIC volume (false means use simulated volume)
+APNIC_VOLUME = True
 
 LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
 GRAD_CLIP_VAL = 10
@@ -66,13 +70,13 @@ def PRINT_FREQUENCY(dpsize):
 		return 2
 	dpsize_pops = n_pops_from_dpsize(dpsize)
 	if dpsize == 'small':
-		return 3#10
+		return 3
 	elif dpsize_pops <= 5:
-		return 50
+		return 10
 	elif dpsize_pops <= 15:
-		return 30
+		return 10
 	else:
-		return 15
+		return 10
 
 
 def get_n_workers(deployment_size):
