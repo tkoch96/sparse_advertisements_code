@@ -58,6 +58,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
+		return
 		total_time = sum(list(self.timing.values()))
 		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
 		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
@@ -137,7 +138,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			return self.model
 		return None
 
-	def solve_generic_lp_persistent(self, routed_through_ingress, **kwargs):
+	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
 		"""The high-level wrapper that tries Standard first, then MLU."""
 		ts = time.time()
 		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
@@ -256,19 +257,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def increment_iter(self):
 		self.iter += 1
 
-	def get_limited_cap_latency_multiplier(self):
-		if self.simulated:
-			LIMITED_CAP_LATENCY_MULTIPLIER = 1.1
-			power = 1.02
-			return np.minimum(2.4, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
-		else:
-			LIMITED_CAP_LATENCY_MULTIPLIER = 1.3
-			power = 1.04
-			return np.minimum(10.0, np.power(power,((self.iter+1)/3)) * LIMITED_CAP_LATENCY_MULTIPLIER)
-		# LIMITED_CAP_LATENCY_MULTIPLIER = 5
-		# power = 1.05
-		# return np.minimum(20, np.power(power,self.iter+1) * LIMITED_CAP_LATENCY_MULTIPLIER)
-
 	def clear_caches(self):
 		self.this_time_ip_cache = {}
 		self.calc_cache.clear_all_caches()
@@ -349,11 +337,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					### Cache the entries that have non-zero probability
 					cacheref[poppi,ui] = npoppis
 			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
-
-		# if np.random.random() > 0 and self.worker_i == 0:
-		#   print('\n')
-		#   for k,v in timers.items():
-		#       print("{} -- {} s".format(k,round(v,5)))
 
 	def get_ingress_probabilities_by_dict(self, a, verb=False, **kwargs):
 		## Uses dictionaries to do the job
@@ -577,8 +560,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
-			total_obj = self.solve_generic_lp_persistent(routed_through_ingress)["objective"]
-			# total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
+			if obj == "avg_latency":
+				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
+			else:
+				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
 			objs[i] = total_obj
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1

@@ -7,9 +7,8 @@ from paper_plotting_functions import *
 from wrapper_eval import *
 
 
-def gen_paper_plots():
-	# metrics_fn = os.path.join(CACHE_DIR, 'joint_latency_bulk_download_metrics_small.pkl')
-	metrics_fn = os.path.join(CACHE_DIR, 'joint_latency_bulk_download_metrics_actual-32.pkl')
+def gen_paper_plots(dpsize):
+	metrics_fn = os.path.join(CACHE_DIR, 'joint_latency_bulk_download_metrics_{}.pkl'.format(dpsize))
 	metrics = pickle.load(open(metrics_fn, 'rb'))
 
 	f,ax = get_figure(l=3.5)
@@ -128,7 +127,7 @@ def assess_performance_over_bulk_volumes(sas, adv, solution, bulk_volumes):
 		'bulk_latencies_over_bulk_vals': bulk_latencies_over_bulk_vals,
 	}
 
-def testing_priorities_one_pass(**kwargs):
+def testing_priorities_one_pass(dpsize, **kwargs):
 	"""
 		Tests minimization of LL + alpha * Bulk download in a one-pass optimization
 	"""
@@ -138,7 +137,6 @@ def testing_priorities_one_pass(**kwargs):
 	gamma = 0#2.0
 
 	n_random_sim = 1
-	dpsize = sys.argv[1]
 	obj = 'joint_latency_bulk_download'
 	performance_metrics_fn = os.path.join(CACHE_DIR, "{}_metrics_{}.pkl".format(obj,dpsize))
 	if os.path.exists(performance_metrics_fn):
@@ -417,7 +415,8 @@ def testing_priorities_one_pass(**kwargs):
 
 
 if __name__ == "__main__":
-	testing_priorities_one_pass()
-	gen_paper_plots()
+	dpsize = sys.argv[1]
+	testing_priorities_one_pass(dpsize)
+	gen_paper_plots(dpsize)
 
 
