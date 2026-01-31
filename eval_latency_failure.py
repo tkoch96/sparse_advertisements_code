@@ -122,7 +122,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 				using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes,
-				save_run_dir=save_run_dirs[random_iter])
+				save_run_dir=save_run_dirs[random_iter], generic_objective='avg_latency')
 
 			metrics['settings'][random_iter] = sas.get_init_kwa()
 			if wm is None:
@@ -155,51 +155,51 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
-	RECALC_LATENCY_WITH_PENALTY = False
-	try:
-		changed=False
-		for random_iter in range(N_TO_SIM):
-			k_of_interest = 'latencies_penalty'
-			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-			if RECALC_LATENCY_WITH_PENALTY or havent_calced_everything:
-				print("-----Latency with penalty calc for deployment number = {} -------".format(random_iter))
-				if sas is None:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
+	# RECALC_LATENCY_WITH_PENALTY = False
+	# try:
+	# 	changed=False
+	# 	for random_iter in range(N_TO_SIM):
+	# 		k_of_interest = 'latencies_penalty'
+	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
+	# 		if RECALC_LATENCY_WITH_PENALTY or havent_calced_everything:
+	# 			print("-----Latency with penalty calc for deployment number = {} -------".format(random_iter))
+	# 			if sas is None:
+	# 				deployment = metrics['deployment'][random_iter]
+	# 				deployment['port'] = port
 
-					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
-					if wm is None:
-						wm = Worker_Manager(sas.get_init_kwa(), deployment)
-						wm.start_workers()
-					sas.set_worker_manager(wm)
-					sas.update_deployment(deployment)
-				else:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
-					sas.update_deployment(deployment)
-				ug_vols = sas.ug_to_vol
-				ret = metrics['compare_rets'][random_iter]
-				for solution in soln_types:
-					try:
-						adv = ret['adv_solns'][solution][0]
-					except:
-						print("No solution for {}".format(solution))
-						continue
+	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
+	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
+	# 					using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
+	# 				if wm is None:
+	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+	# 					wm.start_workers()
+	# 				sas.set_worker_manager(wm)
+	# 				sas.update_deployment(deployment)
+	# 			else:
+	# 				deployment = metrics['deployment'][random_iter]
+	# 				deployment['port'] = port
+	# 				sas.update_deployment(deployment)
+	# 			ug_vols = sas.ug_to_vol
+	# 			ret = metrics['compare_rets'][random_iter]
+	# 			for solution in soln_types:
+	# 				try:
+	# 					adv = ret['adv_solns'][solution][0]
+	# 				except:
+	# 					print("No solution for {}".format(solution))
+	# 					continue
 
-					print("Assessing latency with penalty for {}".format(solution))
-					one_per_peer_adv = np.eye(sas.n_popps)
-					penalty_lats_by_ug = sas.solve_lp_with_failure_catch_weighted_penalty(adv, one_per_peer_adv)['lats_by_ug']
-					metrics['latencies_penalty'][random_iter][solution] = penalty_lats_by_ug
-					changed=True
+	# 				print("Assessing latency with penalty for {}".format(solution))
+	# 				one_per_peer_adv = np.eye(sas.n_popps)
+	# 				penalty_lats_by_ug = sas.solve_lp_with_failure_catch_weighted_penalty(adv, one_per_peer_adv)['lats_by_ug']
+	# 				metrics['latencies_penalty'][random_iter][solution] = penalty_lats_by_ug
+	# 				changed=True
 
-		if changed:
-			pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-	except:
-		import traceback
-		traceback.print_exc()
+	# 	if changed:
+	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
+	# except:
+	# 	import traceback
+	# 	traceback.print_exc()
 
 	RECALC_PCT_VOL_IN_LAT_MULTIPLIERS = False
 	try:
@@ -227,6 +227,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					sas.update_deployment(deployment)
 				ug_vols = sas.ug_to_vol
 				ret = metrics['compare_rets'][random_iter]
+				print(ret)
 				for solution in soln_types:
 					try:
 						adv = ret['adv_solns'][solution][0]
@@ -316,131 +317,6 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	except:
 		import traceback
 		traceback.print_exc()
-
-	# RECALC_FAILURE_LATENCY_PENALTY_METRICS = False
-	# try:
-	# 	changed=False
-	# 	for random_iter in range(N_TO_SIM):
-	# 		k_of_interest = 'popp_failures_latency_penalty_optimal_specific'
-	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-
-	# 		if RECALC_FAILURE_LATENCY_PENALTY_METRICS or havent_calced_everything:
-	# 			print("-----Failure calc with latency penalty for deployment number = {} -------".format(random_iter))
-	# 			if sas is None:
-	# 				deployment = metrics['deployment'][random_iter]
-	# 				deployment['port'] = port
-
-	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-	# 					using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
-	# 				if wm is None:
-	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
-	# 					wm.start_workers()
-	# 				sas.set_worker_manager(wm)
-	# 				sas.update_deployment(deployment)
-	# 			else:
-	# 				deployment = metrics['deployment'][random_iter]
-	# 				deployment['port'] = port
-	# 				sas.update_deployment(deployment)
-	# 			changed=True
-
-	# 			for solution in soln_types:
-	# 				if not RECALC_FAILURE_LATENCY_PENALTY_METRICS:
-	# 					if metrics[k_of_interest][random_iter][solution]  != \
-	# 						default_metrics[k_of_interest][0][solution]:
-	# 						print("Already calced {}".format(solution))
-	# 						continue
-	# 				print(solution)
-	# 				adv = metrics['adv'][random_iter][solution]
-	# 				if len(adv) == 0:
-	# 					print("No solution for {}".format(solution))
-	# 					continue
-	# 				try:
-	# 					ret = assess_failure_resilience(sas, adv, which='popps', penalty=True)
-	# 					metrics['popp_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
-	# 					metrics['popp_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-					
-	# 					ret = assess_failure_resilience(sas, adv, which='pops', penalty=True)
-	# 					metrics['pop_failures_congestion_penalty'][random_iter][solution] = ret['mutable']['congestion_delta']
-	# 					metrics['pop_failures_latency_penalty_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-	# 				except:
-	# 					import traceback
-	# 					traceback.print_exc()
-	# 					continue
-
-
-	# 	if changed:
-	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-
-	# except:
-	# 	import traceback
-	# 	traceback.print_exc()
-
-	# RECALC_FAILURE_LATENCY_LAGRANGE_METRICS = False
-	# try:
-	# 	changed=False
-	# 	for random_iter in range(N_TO_SIM):
-	# 		break
-	# 		k_of_interest = 'popp_failures_latency_lagrange_optimal_specific'
-	# 		havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-
-	# 		if RECALC_FAILURE_LATENCY_LAGRANGE_METRICS or havent_calced_everything:
-	# 			print("-----Failure calc with latency w/ Lagrange for deployment number = {} -------".format(random_iter))
-	# 			if sas is None:
-	# 				deployment = metrics['deployment'][random_iter]
-	# 				deployment['port'] = port
-
-	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-	# 					using_resilience_benefit=True, gamma=gamma, n_prefixes=n_prefixes)
-	# 				if wm is None:
-	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
-	# 					wm.start_workers()
-	# 				sas.set_worker_manager(wm)
-	# 				sas.update_deployment(deployment)
-	# 			else:
-	# 				deployment = metrics['deployment'][random_iter]
-	# 				deployment['port'] = port
-	# 				sas.update_deployment(deployment)
-	# 			changed=True
-
-	# 			for solution in soln_types:
-	# 				if not RECALC_FAILURE_LATENCY_LAGRANGE_METRICS:
-	# 					if metrics[k_of_interest][random_iter][solution]  != \
-	# 						default_metrics[k_of_interest][0][solution]:
-	# 						print("Already calced {}".format(solution))
-	# 						continue
-	# 				print(solution)
-	# 				adv = metrics['adv'][random_iter][solution]
-	# 				if len(adv) == 0:
-	# 					print("No solution for {}".format(solution))
-	# 					continue
-	# 				try:
-	# 					ret = assess_failure_resilience(sas, adv, which='popps', lagrange=True)
-	# 					metrics['popp_failures_congestion_lagrange'][random_iter][solution] = ret['mutable']['congestion_delta']
-	# 					metrics['popp_failures_latency_lagrange_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-					
-	# 					ret = assess_failure_resilience(sas, adv, which='pops', lagrange=True)
-	# 					metrics['pop_failures_congestion_lagrange'][random_iter][solution] = ret['mutable']['congestion_delta']
-	# 					metrics['pop_failures_latency_lagrange_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
-
-	# 				except:
-	# 					import traceback
-	# 					traceback.print_exc()
-	# 					continue
-
-
-	# 	if changed:
-	# 		pickle.dump(metrics, open(performance_metrics_fn,'wb'))
-
-	# except:
-	# 	import traceback
-	# 	traceback.print_exc()
 
 	RECALC_VOL_MULTIPLIERS = False
 	volume_multiply_values = np.linspace(0,29,num=20)
@@ -792,31 +668,31 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 
 
-			#### Changes in latency (with weighted penalty)
-			diffs = []
-			wts = []
-			for random_iter in SIM_INDS_TO_PLOT:
-				this_diffs = []
-				this_wts = []
-				for i in range(len(metrics['best_latencies'][random_iter])):
-					diffs.append(metrics['best_latencies'][random_iter][i] - metrics['latencies_penalty'][random_iter][solution][i])
-					this_diffs.append(metrics['best_latencies'][random_iter][i] - metrics['latencies_penalty'][random_iter][solution][i])
-					wts.append(metrics['ug_to_vol'][random_iter][i])
-					this_wts.append(metrics['ug_to_vol'][random_iter][i])
+			# #### Changes in latency (with weighted penalty)
+			# diffs = []
+			# wts = []
+			# for random_iter in SIM_INDS_TO_PLOT:
+			# 	this_diffs = []
+			# 	this_wts = []
+			# 	for i in range(len(metrics['best_latencies'][random_iter])):
+			# 		diffs.append(metrics['best_latencies'][random_iter][i] - metrics['latencies_penalty'][random_iter][solution][i])
+			# 		this_diffs.append(metrics['best_latencies'][random_iter][i] - metrics['latencies_penalty'][random_iter][solution][i])
+			# 		wts.append(metrics['ug_to_vol'][random_iter][i])
+			# 		this_wts.append(metrics['ug_to_vol'][random_iter][i])
 
-				this_x,this_cdf_x = get_cdf_xy(list(zip(this_diffs,this_wts)), weighted=True)
-				for lat_threshold in interesting_latency_suboptimalities:
-					xi = np.argmin(np.abs(this_x-lat_threshold))
-					metrics['stats_latency_penalty_thresholds_normal'][solution][random_iter][lat_threshold] = this_cdf_x[xi]
-			for lat_threshold in interesting_latency_suboptimalities:
-				avg_suboptimality = np.mean(list([metrics['stats_latency_penalty_thresholds_normal'][solution][random_iter][lat_threshold] for random_iter in SIM_INDS_TO_PLOT]))
-				print("({}) {} pct of traffic within {} ms of optimal for latency penalty LP".format(solution, 100*round(1-avg_suboptimality,4), lat_threshold))
+			# 	this_x,this_cdf_x = get_cdf_xy(list(zip(this_diffs,this_wts)), weighted=True)
+			# 	for lat_threshold in interesting_latency_suboptimalities:
+			# 		xi = np.argmin(np.abs(this_x-lat_threshold))
+			# 		metrics['stats_latency_penalty_thresholds_normal'][solution][random_iter][lat_threshold] = this_cdf_x[xi]
+			# for lat_threshold in interesting_latency_suboptimalities:
+			# 	avg_suboptimality = np.mean(list([metrics['stats_latency_penalty_thresholds_normal'][solution][random_iter][lat_threshold] for random_iter in SIM_INDS_TO_PLOT]))
+			# 	print("({}) {} pct of traffic within {} ms of optimal for latency penalty LP".format(solution, 100*round(1-avg_suboptimality,4), lat_threshold))
 			
-			x,cdf_x = get_cdf_xy(list(zip(diffs,wts)), weighted=True)
-			ax[LATENCY_PENALTY_I].plot(x,cdf_x,label=solution)
-			avg_latency_diff = np.average(diffs, weights=wts)
-			print("Average latency compared to optimal with penalty : {}".format(avg_latency_diff))
-			metrics['stats_latencies_penalty'][solution] = avg_latency_diff			
+			# x,cdf_x = get_cdf_xy(list(zip(diffs,wts)), weighted=True)
+			# ax[LATENCY_PENALTY_I].plot(x,cdf_x,label=solution)
+			# avg_latency_diff = np.average(diffs, weights=wts)
+			# print("Average latency compared to optimal with penalty : {}".format(avg_latency_diff))
+			# metrics['stats_latencies_penalty'][solution] = avg_latency_diff			
 
 
 			#### PCT of Volume within a Certainty Latency Threshold
@@ -832,17 +708,17 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
 			ax[POPP_FAILURE_LATENCY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
-			all_differences, x, stats, threshold_stats = get_failure_metric_arr('popp_failures_latency_penalty_optimal_specific', solution)
-			metrics['stats_' + 'popp_failures_latency_penalty_optimal_specific'][solution] = stats
-			metrics['stats_latency_penalty_thresholds_fail_popp'][solution] = threshold_stats
-			x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
-			ax[POPP_FAILURE_LATENCY_PENALTY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
+			# all_differences, x, stats, threshold_stats = get_failure_metric_arr('popp_failures_latency_penalty_optimal_specific', solution)
+			# metrics['stats_' + 'popp_failures_latency_penalty_optimal_specific'][solution] = stats
+			# metrics['stats_latency_penalty_thresholds_fail_popp'][solution] = threshold_stats
+			# x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
+			# ax[POPP_FAILURE_LATENCY_PENALTY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
-			all_differences, x, stats, threshold_stats = get_failure_metric_arr('popp_failures_latency_lagrange_optimal_specific', solution)
-			metrics['stats_' + 'popp_failures_latency_lagrange_optimal_specific'][solution] = stats
-			metrics['stats_latency_lagrange_thresholds_fail_popp'][solution] = threshold_stats
-			x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
-			ax[POPP_FAILURE_LATENCY_LAGRANGE_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
+			# all_differences, x, stats, threshold_stats = get_failure_metric_arr('popp_failures_latency_lagrange_optimal_specific', solution)
+			# metrics['stats_' + 'popp_failures_latency_lagrange_optimal_specific'][solution] = stats
+			# metrics['stats_latency_lagrange_thresholds_fail_popp'][solution] = threshold_stats
+			# x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
+			# ax[POPP_FAILURE_LATENCY_LAGRANGE_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
 			all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_optimal_specific', solution)
 			metrics['stats_' + 'pop_failures_latency_optimal_specific'][solution] = stats
@@ -850,17 +726,17 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			x,cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
 			ax[POP_FAILURE_LATENCY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
-			all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_penalty_optimal_specific', solution)
-			metrics['stats_' + 'pop_failures_latency_penalty_optimal_specific'][solution] = stats
-			metrics['stats_latency_penalty_thresholds_fail_pop'][solution] = threshold_stats
-			x,cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
-			ax[POP_FAILURE_LATENCY_PENALTY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
+			# all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_penalty_optimal_specific', solution)
+			# metrics['stats_' + 'pop_failures_latency_penalty_optimal_specific'][solution] = stats
+			# metrics['stats_latency_penalty_thresholds_fail_pop'][solution] = threshold_stats
+			# x,cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
+			# ax[POP_FAILURE_LATENCY_PENALTY_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
-			all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_lagrange_optimal_specific', solution)
-			metrics['stats_' + 'pop_failures_latency_lagrange_optimal_specific'][solution] = stats
-			metrics['stats_latency_lagrange_thresholds_fail_pop'][solution] = threshold_stats
-			x,cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
-			ax[POP_FAILURE_LATENCY_LAGRANGE_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
+			# all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_lagrange_optimal_specific', solution)
+			# metrics['stats_' + 'pop_failures_latency_lagrange_optimal_specific'][solution] = stats
+			# metrics['stats_latency_lagrange_thresholds_fail_pop'][solution] = threshold_stats
+			# x,cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
+			# ax[POP_FAILURE_LATENCY_LAGRANGE_OPTIMAL_SPECIFIC_I].plot(x,cdf_x,label=solution)
 
 
 
@@ -1224,3 +1100,7 @@ if __name__ == "__main__":
 		evaluate_all_metrics(args.dpsize, int(port), prefix_deployment=deployment)
 	else:
 		evaluate_all_metrics(args.dpsize, int(port))
+
+
+
+		

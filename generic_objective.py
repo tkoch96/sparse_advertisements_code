@@ -5,8 +5,8 @@ import numpy as np
 
 class Generic_Objective:
 	def __init__(self, sas, obj, **kwargs):
-		self.sas = sas
-		self.obj = obj
+		self.sas = sas # SAS object
+		self.obj = obj # string identifying the objective. e.g., avg_latency
 
 	def get_latency_benefit_adv(self, a):
 		routed_through_ingress, _ = self.sas.calculate_ground_truth_ingress(a)
