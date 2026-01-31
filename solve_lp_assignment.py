@@ -137,19 +137,13 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	### Solve for volume on each popp,user
 	ts = time.time()
 
-	## TOO COMPLEX -- - CHANGE TO FIRST LL THEN BULK
-
 	### Gurobi solve
 	model = gp.Model()
 	model.Params.LogToConsole = 0
 	model.Params.TimeLimit = 15.0 # seconds, should be approx. double what it takes for a LP
 	model.Params.Threads = N_WORKERS_GENERIC
 		
-	# #### Low latency 
-	# x = model.addMVar(n_paths, name='low_latency_volume_each_path', lb=0)
-	# obj_norm = np.sum(sas.whole_deployment_ug_vols)
-	# model.addConstr(cap_constraint_A @ x <= caps)
-	# model.addConstr(volume_conservation_A @ x == conservation_b)
+	#### Low latency 
 	x = avg_latency_ret['raw_solution']
 	if len(x) > n_paths: ## cut off the MLU index
 		x = x[1:]
@@ -164,7 +158,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	bulk_conservation_b = sas.whole_deployment_ug_bulk_vols
 	model.addConstr(volume_conservation_A @ b == bulk_conservation_b)
 	## another constraint could be like bulk oversubscription is at most N X normal capacity, where N can be 10 or something
-	BULK_CAP_LIMIT = 3.0
+	BULK_CAP_LIMIT = 100.0
 	model.addConstr(cap_constraint_A @ (b + x) <= BULK_CAP_LIMIT * caps)
 
 	obj_fn = oversubscribe @ significances #+ 100 * oversubscribe @ np.ones(n_popps)

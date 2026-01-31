@@ -1042,7 +1042,10 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	return anycast_latencies, ug_perfs
 
 def get_bulk_vol(deployment):
-	bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
+	if 'actual' not in deployment['dpsize']:
+		bulk_vol = {ug:v*BULK_MULTIPLIER * .1 for ug,v in deployment['ug_to_vol'].items()}
+	else:
+		bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
 	return bulk_vol
 
 def remove_ug_from_deployment(deployment):

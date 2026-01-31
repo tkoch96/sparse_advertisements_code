@@ -197,11 +197,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 		## Queue up calls to individual workers
 		self.lb_args_queue = []
-		## How many monte-carlo simulations we conduct on the advertisement when computing objectives
-		## setting this to 1 turns it off and resorts to simple rounding
-		## NOTE -- even on a small topology, 100 MC sims is not enough to get a reasonable estimate of the gradient
-		## so this idea isn't really tractable unless we come up with a much more intelligent sampling mechanism
-		self.mc_adv_sims = 1
 
 	def get_init_kwa(self):
 		kwa =  {
@@ -263,92 +258,12 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			kwa['generic_obj'] = self.generic_objective.obj
 			self.compressed_lb_args_queue.append((np.where(base_adv!=other_adv), kwa))
 
-	def flush_latency_benefit_queue_generic_mc_advs(self, **kwargs):
-		"""
-			For the generic objective, it makes more sense to split jobs among workers rather than
-			create smaller jobs for each worker. So, easier splitting process here.
-			But we need to do a slightly custom args creation process.
-		"""
-
-		### Idea: first adv is the base, rest are deltas from the base
-		### transmit the base and the deltas.
-		n_workers = min(self.get_n_workers(), len(self.lb_args_queue) * self.mc_adv_sims)
-
-		for i,(a,kwa) in enumerate(self.lb_args_queue):
-			kwa['job_id'] = i
-
-		ugs = kwargs.get('ugs', None)
-		is_verb = kwargs.get('verbose_workers', False)
-		base_args, base_kwa = self.lb_args_queue[0]
-		if ugs is not None:
-			base_kwa['ugs'] = ugs
-		base_kwa['verbose_workers'] = is_verb or base_kwa.get('verbose_workers',False)
-		base_kwa['generic_obj'] = self.generic_objective.obj
-		base_adv, = base_args
-
-		base_adv = threshold_a(base_adv)
-		base_args = (base_adv,)
-
-		all_worker_jobs_seq = split_seq(self.lb_args_queue[1:], n_workers)
-		
-		all_workers_jobs = [[(base_args, base_kwa)] for _ in range(n_workers)]
-
-		## for each worker, and for each advertisement job. compute a bunch of random realizations of that
-		## advertisement and assign those jobs to workers
-		for i,job_set in enumerate(all_worker_jobs_seq):
-			for other_args, kwa in job_set:
-				other_adv, = other_args
-				for mc_adv_i in range(self.mc_adv_sims):
-					## todo -- check that this is correct
-					other_adv_realization = (other_adv > np.random.uniform(size=other_adv.shape)).astype(np.int32)
-					if ugs is not None:
-						kwa['ugs'] = ugs
-					kwa['verbose_workers'] = is_verb or kwa.get('verbose_workers',False)
-					kwa['generic_obj'] = self.generic_objective.obj
-					all_workers_jobs[i].append((np.where(base_adv!=other_adv_realization), kwa))
-
-		msgs = list([pickle.dumps(['calc_compressed_lb', subset]) for subset in all_workers_jobs])
-		rets = self.worker_manager.send_receive_messages_workers(msgs, n_workers=n_workers)
-		
-		### just append all the jobs, in order. it's important that these things happen in order
-		### since that's how we ID the job
-		ret_to_call = {}
-
-		all_rets = []
-		for worker_i in range(n_workers):
-			if worker_i > 0:
-				all_rets = all_rets + rets[worker_i][1:]
-			else: ## get the base answer from worker 0
-				all_rets = all_rets + rets[worker_i]
-		means_by_j_id = {}
-		for adv_ret_i,ret in enumerate(all_rets):
-			mean,(x,px) = ret['ans']
-			try:
-				means_by_j_id[ret['job_id']].append(mean)
-			except KeyError:
-				means_by_j_id[ret['job_id']] = [mean]
-			try:
-				ret_to_call[ret['job_id']]
-				ret_to_call[ret['job_id']][0] += mean/self.mc_adv_sims ## monte-carlo average
-			except KeyError: ## todo -- maybe do the x,px part differently
-				ret_to_call[ret['job_id']] = [mean, (x.flatten(), px.flatten())] ## use array so mutable
-		n_to_flush = len(self.lb_args_queue)
-		arr_ret_to_call = [None for _ in range(n_to_flush)]
-		for adv_ret_i, v in ret_to_call.items(): ## convert to tuple
-			arr_ret_to_call[adv_ret_i] = (v[0], v[1])
-		self.lb_args_queue = []
-		self.get_cache()
-		return arr_ret_to_call
-
 	def flush_latency_benefit_queue_generic(self, **kwargs):
 		"""
 			For the generic objective, it makes more sense to split jobs among workers rather than
 			create smaller jobs for each worker. So, easier splitting process here.
 			But we need to do a slightly custom args creation process.
 		"""
-
-		if self.mc_adv_sims > 1:
-			return self.flush_latency_benefit_queue_generic_mc_advs(**kwargs)
 
 		### Idea: first adv is the base, rest are deltas from the base
 		### transmit the base and the deltas
