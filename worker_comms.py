@@ -7,7 +7,7 @@ from constants import *
 SLEEP_PERIOD = .02
 
 paths = ["/home/tom/venv/bin/python", "/Users/tom/Documents/phd/research/ingress_opt/venv/bin/python",
-	'/home/ubuntu/venv/bin/python']
+	'/home/ubuntu/venv/bin/python', '/Users/tomkoch/Documents/venv/bin/python']
 PYTHON = None
 for path in paths:
 	if os.path.exists(path):
@@ -27,11 +27,9 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		return 20
-		if self.kwa_settings.get('generic_objective') is not None:
-			return multiprocessing.cpu_count()
-		else:
-			return get_n_workers(self.dpsize)
+		cpu_count = multiprocessing.cpu_count()
+		suggested_num_workers = get_n_workers(self.dpsize)
+		return min(cpu_count, suggested_num_workers)
 
 	def update_worker_deployments(self, new_deployment):
 		self.deployment = new_deployment

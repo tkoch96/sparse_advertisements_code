@@ -1419,7 +1419,5 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	return deployment
 
 if __name__ == "__main__":
-	# export_interesting_measurements()
-	characterize_measurements_from_deployment(n_users_per_peer = 25)
-	# cluster_actual_users()
+	get_random_deployment("small")
 

@@ -1,4 +1,4 @@
-import numpy as np, numba as nb, pickle, copy, zmq, time
+import numpy as np as nb, pickle, copy, zmq, time
 np.setbufsize(262144*8)
 np.random.seed(31414)
 import random
@@ -32,7 +32,6 @@ def get_a_cache_rep(a):
 		tups.append((x,y))
 	return tuple(sorted(tups))
 
-#### When these matrices are really big, helps to use numba, but can't work in multiprocessing scenarios
 @nb.njit(fastmath=True,parallel=True)
 def large_logical_and(arr1,arr2):
 	return np.logical_and(arr1,arr2)

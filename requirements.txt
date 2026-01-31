@@ -3,4 +3,7 @@ matplotlib
 scipy
 gurobipy
 tqdm
-geopy.distance
+geopy
+zmq
+cymruwhois
+sklearn
