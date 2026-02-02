@@ -309,7 +309,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		"fraction_congested_volume_with_bulk": fraction_congested_volume_with_bulk,
 	}
 
-def solve_joint_latency_bulk_download_new(sas, routed_through_ingress, obj, **kwargs):
+def solve_latency_plus_site_cost_with_capacity(sas, routed_through_ingress, obj, **kwargs):
 
     import numpy as np
     from scipy.sparse import csr_matrix
@@ -404,7 +404,7 @@ def solve_joint_latency_bulk_download_new(sas, routed_through_ingress, obj, **kw
         return {"solved": False, "status": int(m.status)}
 
     sol = x.X  
-    print('sol', sol)
+    # print('sol', sol)
 
 	# Copied from other LP
     distribution = x.X
@@ -459,8 +459,10 @@ def solve_joint_latency_bulk_download_new(sas, routed_through_ingress, obj, **kw
     for ug,lat in lats_by_ug.items():
         lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
 
-
-    fraction_congested_volume = congested_volume / all_volume
+    if all_volume > 0:
+        fraction_congested_volume = congested_volume / all_volume
+    else:
+        fraction_congested_volume = 0
 
 
 
@@ -478,7 +480,7 @@ def solve_joint_latency_bulk_download_new(sas, routed_through_ingress, obj, **kw
 
 
 generic_lp_functions = {
-	'joint_latency_bulk_download': solve_joint_latency_bulk_download_new,
+	'joint_latency_bulk_download': solve_latency_plus_site_cost_with_capacity,
 	# 'cost': solve_latency_plus_site_cost_with_capacity
 }
 
