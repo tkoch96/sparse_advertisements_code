@@ -4,7 +4,6 @@ np.set_printoptions(precision=5)
 from constants import *
 from helpers import *
 from subprocess import call, check_output
-from test_polyphase import *
 from generic_objective import Generic_Objective
 from worker_comms import Worker_Manager
 from solve_lp_assignment import *
@@ -24,7 +23,6 @@ class Optimal_Adv_Wrapper:
 		self.with_capacity = kwargs.get('with_capacity', False)
 		self.n_prefixes = kwargs.get('n_prefixes')
 
-		self.pdf_sum_function = sum_pdf_fixed_point
 		self.generic_objective = Generic_Objective(self, kwargs.get('generic_objective', 'avg_latency'), **kwargs)
 
 		self.calc_cache = Calc_Cache()
@@ -634,6 +632,7 @@ class Optimal_Adv_Wrapper:
 			'whole_deployment_ug_to_vol': self.whole_deployment_ug_to_vol,
 			'whole_deployment_ug_to_bulk_vol': self.whole_deployment_ug_to_bulk_vol,
 			'popps': self.popps,
+			'site_costs': self.site_costs,
 			'metro_loc': self.metro_loc,
 			'pop_to_loc': self.pop_to_loc,
 			'n_providers': self.n_providers,
@@ -724,6 +723,7 @@ class Optimal_Adv_Wrapper:
 		self.popps = sorted(list(set(deployment['popps'])))
 		self.n_popps = len(self.popps)
 		self.pops = sorted(list(set([u[0] for u in self.popps])))
+		self.site_costs = deployment['site_costs']
 		self.n_pops = len(self.pops)
 		self.popp_to_ind = {k:i for i,k in enumerate(self.popps)}
 		self.pop_to_ind = {k:i for i,k in enumerate(self.pops)}

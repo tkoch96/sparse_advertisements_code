@@ -111,6 +111,8 @@ RESILIENCE_DIFFICULTY = 'hard'
 #### SOLVER SETTINGS
 ## number of threads to allocate to one Gurobi solver
 N_WORKERS_GENERIC = 1 
+## minimize MLU + ALPHA * LATENCY + DEFAULT_SITE_COST * site cost
+DEFAULT_SITE_COST = 100.0
 ## minimuze MLU + ALPHA * LATENCY ;; so alpha is a tradeoff between congestion and latency (roughly)
 ALPHA = .1
 ## minimize average latency + ALPHA_BULK * bulk_traffic_overuse

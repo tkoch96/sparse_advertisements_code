@@ -1048,6 +1048,11 @@ def get_bulk_vol(deployment):
 		bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
 	return bulk_vol
 
+def get_random_site_costs(deployment):
+	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
+
+	return {s: np.random.random() for s in all_sites}
+
 def remove_ug_from_deployment(deployment):
 	## TODO -- implement
 	return deployment
@@ -1299,6 +1304,9 @@ def load_actual_deployment(deployment_size, **kwargs):
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
 
+		site_costs = get_random_site_costs(deployment, **kwargs)
+		deployment['site_costs'] = site_costs
+
 		pickle.dump(deployment, open(deployment_cache_fn,'wb'))
 
 	else:
@@ -1323,6 +1331,9 @@ def load_actual_deployment(deployment_size, **kwargs):
 
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
+
+		site_costs = get_random_site_costs(deployment, **kwargs)
+		deployment['site_costs'] = site_costs
 
 	return deployment
 
@@ -1462,6 +1473,9 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	bulk_vol = get_bulk_vol(deployment)
 	deployment['ug_to_bulk_vol'] = bulk_vol
 	deployment['whole_deployment_ug_to_bulk_vol'] = bulk_vol
+
+	site_costs = get_random_site_costs(deployment, **kwargs)
+	deployment['site_costs'] = site_costs
 
 	print("----Done Creating Random Deployment-----")
 	print("Deployment has {} users, {} popps, {} pops".format(
