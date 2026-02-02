@@ -84,15 +84,24 @@ def get_obj_fn(model, minimizer_weight, opt_var, obj, n_paths, sas, using_mlu=Fa
 		raise ValueError("Objective {} not implemented in solve_lp_assignment".format(obj))
 	return model, opt_var, obj_fn, obj_norm
 
+
+# The site cost for small deployment
+SITE_COST = {
+	'0': 1,
+	'1': 1,
+	'2': 2
+}
+
 def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs):
 	## minimizes average latency for low latency traffic and (sorta) amount of congested low latency traffic
 
+	sites = sorted({site for (site, _peer) in sas.popps})
+	# print(sites, SITE_COST[sites[0]])
 
 	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency')
 	if not avg_latency_ret['solved']:
 		print("Didn't even solve low latency allocation ... ")
 		exit(0)
-
 
 	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
 	n_paths = len(available_paths)
@@ -300,8 +309,177 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		"fraction_congested_volume_with_bulk": fraction_congested_volume_with_bulk,
 	}
 
+def solve_joint_latency_bulk_download_new(sas, routed_through_ingress, obj, **kwargs):
+
+    import numpy as np
+    from scipy.sparse import csr_matrix
+    import gurobipy as gp
+
+    alpha = float(kwargs.get("alpha", 0.02))
+    time_limit = float(kwargs.get("time_limit", 3.0))
+    n_threads = int(kwargs.get("threads", N_WORKERS_GENERIC))
+
+    # sites = sorted({site for (site, _peer) in sas.popps})
+    # print('sites', sites)
+
+    # Build candidate (ug, poppi) paths
+    available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
+    n_paths = len(available_paths)
+
+    # +1 for the NO_PATH ingress index (sas.n_popps)
+    n_popps = sas.n_popps + 1
+
+    # per-path latency and per-path site-cost weight
+    available_latencies = np.ones(n_paths, dtype=float)
+    available_site_cost = np.zeros(n_paths, dtype=float)
+
+    for i, (ug, poppi) in enumerate(available_paths):
+        if poppi == NO_PATH_INGRESS(sas):
+            # Treat "no route" as extremely bad latency; site cost 0 by default
+            available_latencies[i] = NO_ROUTE_LATENCY
+            available_site_cost[i] = 0.0
+        else:
+            popp = sas.popps[poppi]  # (site, peer)
+            site = popp[0]
+            available_latencies[i] = sas.whole_deployment_ug_perfs[ug][popp]
+            available_site_cost[i] = float(SITE_COST.get(site, 0.0))
+
+    # build  matrices for constraints
+    # A_cap: (n_popps x n_paths): sums volume to each ingress poppi
+    # A_vol: (n_ug x n_paths): sums volume per UG
+    cap_row = np.zeros(n_paths, dtype=int)
+    cap_col = np.zeros(n_paths, dtype=int)
+    vol_row = np.zeros(n_paths, dtype=int)
+    vol_col = np.zeros(n_paths, dtype=int)
+
+    for pli in range(n_paths):
+        ug, poppi = available_paths[pli]
+        ugi = sas.whole_deployment_ug_to_ind[ug]
+
+        cap_row[pli] = int(poppi)
+        cap_col[pli] = int(pli)
+
+        vol_row[pli] = int(ugi)
+        vol_col[pli] = int(pli)
+
+    cap_constraint_A = csr_matrix(
+        (np.ones(n_paths), (cap_row, cap_col)),
+        shape=(n_popps, n_paths),
+    )
+    volume_conservation_A = csr_matrix(
+        (np.ones(n_paths), (vol_row, vol_col)),
+        shape=(sas.whole_deployment_n_ug, n_paths),
+    )
+
+    # Capacities: per ingress + huge cap for NO_PATH to avoid binding
+    caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000.0])]).flatten()
+
+    # Per-UG volumes
+    ug_vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float).flatten()
+
+    # - Solve LP 
+    m = gp.Model()
+    m.Params.LogToConsole = 0
+    m.Params.Threads = n_threads
+    m.Params.TimeLimit = time_limit
+
+    # Decision variables: x >= 0
+    x = m.addMVar(shape=n_paths, lb=0.0, name="vol_each_path")
+
+    # Constraints
+	# UG volumes are allocated
+    m.addConstr(volume_conservation_A @ x == ug_vols, name="ug_conservation")
+	# Capacity per ingress
+    m.addConstr(cap_constraint_A @ x <= caps, name="ingress_capacity")
+
+    # Objective: latency + alpha * site_cost
+    # 
+    obj_expr = (available_latencies @ x) + alpha * (available_site_cost @ x)
+    m.setObjective(obj_expr, gp.GRB.MINIMIZE)
+
+    m.optimize()
+
+    if m.status != gp.GRB.OPTIMAL:
+        print('not solved')
+        return {"solved": False, "status": int(m.status)}
+
+    sol = x.X  
+    print('sol', sol)
+
+	# Copied from other LP
+    distribution = x.X
+    path_distribution = distribution[1:]
+
+	## Compute paths by ug
+    lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
+    paths_by_ug = {}
+    vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
+    for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
+        if poppi == NO_PATH_INGRESS(sas): 
+            lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
+            continue # no path
+        if vol_amt > 0:
+            ugi = sas.whole_deployment_ug_to_ind[ug]
+            vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
+            vols_by_poppi[poppi] += vol_amt
+            try:
+                paths_by_ug[ugi].append((poppi, vol_pct))
+            except KeyError:
+                paths_by_ug[ugi] = [(poppi, vol_pct)]
+
+    vols_by_poppi = {poppi:v/float(caps[poppi]) for poppi,v in vols_by_poppi.items()}
+    inundated_popps = {poppi:None for poppi,v in vols_by_poppi.items() if v > 1}
+	# print("Inundated popps {} ({}), \n vols by poppi: {}".format(inundated_popps, list([sas.popps[poppi] for poppi in inundated_popps]), vols_by_poppi))
+
+    lats_by_ug = {}
+    all_volume, congested_volume = 0, 0
+    for ugi, pathvols in paths_by_ug.items():
+        ug = sas.whole_deployment_ugs[ugi]
+		# if kwargs.get('verb'):
+		# 	print("{} ({}) -- {}".format(ugi,ug,pathvols))
+        these_lats = []
+        cum_vol = 0
+        for poppi,vol in pathvols:
+            try:
+                inundated_popps[poppi]
+                if kwargs.get('really_bad_fail',False):
+                    these_lats.append((NO_ROUTE_LATENCY*100, vol))
+                else:
+                    these_lats.append((NO_ROUTE_LATENCY, vol))
+				# if not sas.simulated:
+				# 	print("In min MLU, UG {} experiencing congestion".format(sas.whole_deployment_ugs[ugi]))
+                congested_volume += sas.whole_deployment_ug_vols[ugi] * vol
+            except KeyError:
+                popp = sas.popps[poppi]
+                these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
+            cum_vol += vol
+            all_volume += sas.whole_deployment_ug_vols[ugi]
+        avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
+        lats_by_ug[ug] = avg_lat
+    for ug,lat in lats_by_ug.items():
+        lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
+
+
+    fraction_congested_volume = congested_volume / all_volume
+
+
+
+
+    return {
+        "solved": True,
+        "status": int(m.status),
+        "raw_solution": sol,
+        "paths_by_ug": paths_by_ug,
+		"lats_by_ug" : lats_by_ug_arr,
+		"vols_by_poppi": vols_by_poppi,
+		"fraction_congested_volume": fraction_congested_volume,
+        "objective": float(m.objVal),
+    }
+
+
 generic_lp_functions = {
-	'joint_latency_bulk_download': solve_joint_latency_bulk_download,
+	'joint_latency_bulk_download': solve_joint_latency_bulk_download_new,
+	# 'cost': solve_latency_plus_site_cost_with_capacity
 }
 
 def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwargs):

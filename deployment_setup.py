@@ -1455,6 +1455,10 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 		'n_providers': n_providers,
 		'provider_popps': provider_popps,
 	}
+	
+	# sites = sorted({site for (site, _peer) in deployment["popps"]})
+	# deployment["site_cost_by_site"] = {s: float(np.random.uniform(0.2, 2.0)) for s in sites}
+
 	deployment['ingress_priorities'] = get_random_ingress_priorities(deployment)
 	deployment['whole_deployment_ingress_priorities'] = copy.deepcopy(deployment['ingress_priorities'])
 	deployment['link_capacities'] = get_link_capacities(deployment, **kwargs)
