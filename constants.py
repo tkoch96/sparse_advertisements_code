@@ -12,7 +12,7 @@ cols = ['firebrick','salmon','orangered','lightsalmon','sienna','lawngreen','dar
 # whether to cluster UGs based on their latency to PoPPs
 DO_UG_CLUSTERING = False
 # whether or not to use APNIC volume (false means use simulated volume)
-APNIC_VOLUME = True
+APNIC_VOLUME = False
 
 LIMITED_CAP_LATENCY_MULTIPLIER = 1.5
 GRAD_CLIP_VAL = 10
@@ -95,13 +95,9 @@ def get_n_workers(deployment_size):
 	if n_workers is None:
 		n_pops = n_pops_from_dpsize(deployment_size)
 		if n_pops <= 5:
-			n_workers = 3
-		elif n_pops < 15:
-			n_workers = 8
-		elif n_pops < 20:
-			n_workers = 16
+			n_workers = 5
 		else:
-			n_workers = 24
+			n_workers = 1000 # cpu count
 
 	return n_workers
 
