@@ -6,9 +6,7 @@ N_TO_SIM = 1
 #### NOTE -- need to make sure lambduh decreases with the problem size
 #### or else the latency gains won't be significant enough to get a signal through
 lambduh = .00001
-# soln_types = ['sparse', 'anycast', 'one_per_pop', 'painter', 'anyopt', 'random', 'one_per_peering']
-global_soln_types = ['anyopt', 'painter', 'sparse', 'anycast', 'one_per_pop', 'one_per_peering']
-# soln_types = ['sparse', 'painter', 'anyopt', 'oracle']
+global_soln_types = ['sparse', 'anyopt', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
 
 global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(dps))
 
