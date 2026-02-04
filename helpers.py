@@ -59,6 +59,7 @@ def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
 
 	deployments = []
 	for ug_chunk in ug_chunks:
+		### TODO -- do I really need to copy these? seems unnecessary
 		try:
 			deployments.append({
 				# simulated

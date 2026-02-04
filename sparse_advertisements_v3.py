@@ -750,7 +750,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'current_pseudo_objective', 'iter', 'uncertainty_factor', 'stop', 'alpha', 'path_measures', 'current_effective_objective',
 			'current_objective', 'calc_times', 'current_latency_benefit', 'current_resilience_benefit']
 		if self.simulated:
-			self.save_state_every = 20 # how often to save our optimization state
+			self.save_state_every = 5 # how often to save our optimization state
 		else:
 			self.save_state_every = 1
 
@@ -1776,11 +1776,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'measured_prefs': self.measured_prefs,
 			'metrics': self.metrics,
 		}
-		try:
-			# may or may not have these variables
-			save_state['old_optimal_expensive_solution'] = self.old_optimal_expensive_solution
-		except AttributeError:
-			pass
 		pickle.dump(save_state, open(out_fn, 'wb'))
 		print("Done saving")
 
@@ -1809,7 +1804,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		new_deployment_with_pseudo_users = save_state['ug_modified_deployment']
 		self.og_deployment['port'] = save_port
 		new_deployment_with_pseudo_users['port'] = save_port
-		self.old_optimal_expensive_solution = save_state['old_optimal_expensive_solution']
 		self.update_deployment(new_deployment_with_pseudo_users)
 		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
@@ -2075,6 +2069,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			print("Updated numbers of popps on per prefix.")
 			print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
+
+		# After finishing, end the optimization
+		self.output_optimization_state()
 
 		self.reset_ugs()
 
