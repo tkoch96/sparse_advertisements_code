@@ -845,7 +845,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
 						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
 					tlp = time.time()
-				if i % 10 == 0 and i > 0 and time.time() - last_timing_summary > 20:
+				if i % 50 == 0 and i > 0 and time.time() - last_timing_summary > 20:
 					self.summarize_timing()
 					last_timing_summary = time.time()
 				self.check_clear_cache()

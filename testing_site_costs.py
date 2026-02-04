@@ -7,6 +7,21 @@ from paper_plotting_functions import *
 from wrapper_eval import *
 
 
+def weighted_cdf_xy(values, weights):
+	"""Return x,y for a weighted CDF where y is cumulative weight / total_weight."""
+	values = np.asarray(values, dtype=float)
+	weights = np.asarray(weights, dtype=float)
+	assert values.shape == weights.shape
+
+	order = np.argsort(values)
+	x = values[order]
+	w = weights[order]
+	cw = np.cumsum(w)
+	if cw[-1] <= 0:
+		return x, np.zeros_like(x)
+	y = cw / cw[-1]
+	return x, y
+
 def gen_paper_plots(dpsize):
 	metrics_fn = os.path.join(CACHE_DIR, 'per_site_cost_metrics_{}.pkl'.format(dpsize))
 	
@@ -38,6 +53,13 @@ def gen_paper_plots(dpsize):
 		print(f"{'Solution':<20} | {'Avg Latency (ms)':<20} | {'Total Site Cost':<20}")
 		print("-" * 70)
 
+		cdf_latency_data = {}
+		site_cost_totals_data = {}
+
+		avg_latency_data = {}
+		latency_parts = []
+		cost_parts = []
+
 		for solution in solutions:
 			if solution not in metrics[random_iter]:
 				continue
@@ -50,6 +72,10 @@ def gen_paper_plots(dpsize):
 			# lats_by_ug is the latency for each user group
 			lats = np.array(lp_solution['lats_by_ug'])
 			avg_latency = np.average(lats, weights=ug_vols)
+
+			# store CDF of latency across traffic
+			x, y = weighted_cdf_xy(lats, ug_vols)
+			cdf_latency_data[solution] = (x, y)
 
 			# --- 2. Calculate Total Site Cost using vols_by_poppi ---
 			# vols_by_poppi keys are likely sites or (site, peer) tuples
@@ -66,6 +92,11 @@ def gen_paper_plots(dpsize):
 					# Optional: Print warning if a site is receiving traffic but has no cost data
 					# print(f"Warning: Site {site} not in site_costs dict")
 					pass
+			
+			site_cost_totals_data[solution] = total_site_cost
+
+			latency_parts.append(avg_latency)
+			cost_parts.append((DEFAULT_SITE_COST * total_site_cost) / total_vol)
 
 			# --- 3. Get Congestion info (optional but helpful) ---
 			frac_congested = lp_solution.get('fraction_congested_volume', 0.0)
@@ -73,6 +104,62 @@ def gen_paper_plots(dpsize):
 			print(f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {(total_vol*avg_latency+DEFAULT_SITE_COST*total_site_cost)/total_vol:<20.4f} | {frac_congested:.4f}")
 			
 		print("-" * 95)
+
+		cdf_colors = {}  # solution -> color
+		plt.figure()
+		for solution, (x, y) in cdf_latency_data.items():
+			line, = plt.plot(x, y, label=solution)
+			cdf_colors[solution] = line.get_color() 
+		plt.xlabel("Latency (ms)")
+		plt.ylabel("CDF (fraction of traffic)")
+		plt.title(f"Traffic-weighted latency CDF (iter={random_iter})")
+		plt.grid(True, alpha=0.3)
+		plt.legend()
+		plt.tight_layout()
+		plt.savefig('site_cost_latency_{}.png'.format(dpsize))
+		
+		plt.figure()
+		sols = list(site_cost_totals_data.keys())
+		costs = [site_cost_totals_data[s] for s in sols]
+		colors = [cdf_colors.get(s, None) for s in sols]
+		plt.bar(sols, costs, color=colors)
+		plt.ylabel("Total site cost")
+		plt.title(f"Total site cost by solution (iter={random_iter})")
+		plt.xticks(rotation=30, ha="right")
+		plt.grid(True, axis="y", alpha=0.3)
+		plt.tight_layout()
+		plt.savefig('site_cost_totals_{}.png'.format(dpsize))
+
+		lat_colors = [cdf_colors[s] for s in sols]
+
+		# Make cost colors slightly lighter (same hue)
+		def lighten(color, factor=0.5):
+			import matplotlib.colors as mc
+
+			c = np.array(mc.to_rgb(color))
+			return tuple(1 - factor * (1 - c))
+
+		cost_colors = [lighten(cdf_colors[s], 0.6) for s in sols]
+
+		# Plot
+		plt.figure()
+		plt.bar(sols, latency_parts, color=lat_colors, label="Latency")
+		plt.bar(
+			sols,
+			cost_parts,
+			bottom=latency_parts,
+			color=cost_colors,
+			label="Site cost",
+		)
+
+		plt.ylabel("Objective value")
+		plt.title(f"Final objective breakdown (iter={random_iter})")
+		plt.xticks(rotation=30, ha="right")
+		plt.grid(True, axis="y", alpha=0.3)
+		plt.legend()
+		plt.tight_layout()
+		plt.savefig("site_cost_final_objective_breakdown_{}.png".format(dpsize))
+
 		# Break after printing the first valid iteration to avoid spamming 
 		# (remove break if you want to see all random seeds)
 		break
