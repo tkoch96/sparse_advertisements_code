@@ -239,6 +239,7 @@ def testing_site_cost(dpsize, **kwargs):
 				metrics[random_iter]['optimal_objective'] = sas.optimal_expensive_solution
 				metrics[random_iter]['compare_rets'] = ret
 				metrics[random_iter]['ug_to_vol'] = sas.ug_vols
+				metrics[random_iter]['deployment'] = sas.output_deployment()
 
 				metrics[random_iter]['save_run_dir'] = sas.sas.save_run_dir # sparse's save run dir
 				for solution in soln_types:
