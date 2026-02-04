@@ -892,8 +892,8 @@ def gen_plots_over_objs():
 if __name__ == "__main__":
 	# compare_speedup_heuristic()
 
-	# train_models_for_obj('avg_latency')
-	compare_from_trained_sparse('1726599827-actual-32-sparse')
+	train_models_for_obj('avg_latency')
+	# compare_from_trained_sparse('1726599827-actual-32-sparse')
 	# compare_from_trained_sparse('1726672233-small-sparse')
 
 
