@@ -116,7 +116,7 @@ def gen_paper_plots(dpsize):
 		plt.grid(True, alpha=0.3)
 		plt.legend()
 		plt.tight_layout()
-		plt.savefig('site_cost_latency_{}.png'.format(dpsize))
+		plt.savefig(os.path.join(FIG_DIR, 'site_cost_latency_{}.pdf'.format(dpsize)))
 		
 		plt.figure()
 		sols = list(site_cost_totals_data.keys())
@@ -128,7 +128,7 @@ def gen_paper_plots(dpsize):
 		plt.xticks(rotation=30, ha="right")
 		plt.grid(True, axis="y", alpha=0.3)
 		plt.tight_layout()
-		plt.savefig('site_cost_totals_{}.png'.format(dpsize))
+		plt.savefig(os.path.join(FIG_DIR, 'site_cost_totals_{}.pdf'.format(dpsize)))
 
 		lat_colors = [cdf_colors[s] for s in sols]
 
@@ -158,7 +158,7 @@ def gen_paper_plots(dpsize):
 		plt.grid(True, axis="y", alpha=0.3)
 		plt.legend()
 		plt.tight_layout()
-		plt.savefig("site_cost_final_objective_breakdown_{}.png".format(dpsize))
+		plt.savefig(os.path.join(FIG_DIR, "site_cost_final_objective_breakdown_{}.pdf".format(dpsize)))
 
 		# Break after printing the first valid iteration to avoid spamming 
 		# (remove break if you want to see all random seeds)
@@ -207,6 +207,7 @@ def testing_site_cost(dpsize, **kwargs):
 					if metrics[random_iter]['done']: continue
 				except KeyError:
 					metrics[random_iter] = {'done': False}
+				print("Not yet done with iteration {} so starting training".format(random_iter))
 
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
@@ -266,12 +267,9 @@ def testing_site_cost(dpsize, **kwargs):
 		if True:
 			port = int(sys.argv[2])
 			for random_iter in range(n_random_sim):
-				try:
-					this_iter_deployment = metrics[random_iter]['deployment']
-				except KeyError:
-					this_iter_deployment = get_random_deployment(dpsize)
+				this_iter_deployment = metrics[random_iter]['deployment']
+				print("Recomputing solutions for random iter {}".format(random_iter))
 				this_iter_deployment['port'] = port
-				print("Random deployment for joint latency site cost, number {}/{}".format(random_iter+1,n_random_sim))
 				
 				deployment = copy.deepcopy(this_iter_deployment)
 				metrics[random_iter] = {'deployment': deployment}
