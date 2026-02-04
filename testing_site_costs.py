@@ -132,7 +132,7 @@ def testing_site_cost(dpsize, **kwargs):
 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 					using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes,
-					generic_objective=obj)
+					generic_objective=obj,save_run_dir="1770119815-actual-20-sparse")
 
 				metrics[random_iter]['settings'] = sas.get_init_kwa()
 				if wm is None:

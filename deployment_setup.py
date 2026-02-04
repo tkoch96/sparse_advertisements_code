@@ -912,7 +912,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	if kwargs.get('do_filter', True):
 		### Randomly limit to max_n_ug per popp, unless the popp is a provider
 		# max_n_ug = kwargs.get('n_users_per_peer', 200)
-		default_max_n_ug = 20
+		default_max_n_ug = 15
 		max_n_ug = kwargs.get('n_users_per_peer', default_max_n_ug)
 		provider_fn = os.path.join(CACHE_DIR, 'vultr_provider_popps.csv')
 		provider_popps, provider_popps_d = [], {}
