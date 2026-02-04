@@ -207,7 +207,7 @@ def testing_site_cost(dpsize, **kwargs):
 					if metrics[random_iter]['done']: continue
 				except KeyError:
 					metrics[random_iter] = {'done': False}
-				print("Not yet done with iteration {} so starting training".format(random_iter))
+				print("\n=========\nNot yet done with iteration {} so starting training\n=========\n".format(random_iter))
 
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
@@ -268,11 +268,10 @@ def testing_site_cost(dpsize, **kwargs):
 			port = int(sys.argv[2])
 			for random_iter in range(n_random_sim):
 				this_iter_deployment = metrics[random_iter]['deployment']
-				print("Recomputing solutions for random iter {}".format(random_iter))
+				print("\n=========\nRecomputing solutions for random iter {}\n=========\n".format(random_iter))
 				this_iter_deployment['port'] = port
 				
 				deployment = copy.deepcopy(this_iter_deployment)
-				metrics[random_iter] = {'deployment': deployment}
 
 				n_prefixes = deployment_to_prefixes(deployment)
 
@@ -292,19 +291,17 @@ def testing_site_cost(dpsize, **kwargs):
 				metrics[random_iter]['optimal_objective'] = sas.optimal_expensive_solution
 				metrics[random_iter]['ug_to_vol'] = sas.ug_vols
 				for solution in soln_types:
-					metrics[random_iter][solution] = {}
 					try:
-						adv = ret['adv_solns'][solution][0]
+						adv = metrics[random_iter][solution]['adv']
 					except:
 						print("No solution for {}".format(solution))
 						continue
 					### compute the allocation with the generic objective, even with non-sparse solutions
-					lp_solution = sas.sas.generic_objective.get_latency_benefit_adv(adv) 
+					lp_solution = sas.generic_objective.get_latency_benefit_adv(adv) 
 
 					metrics[random_iter][solution]['adv'] = adv
 					metrics[random_iter][solution]['lp_solution'] = lp_solution
 
-				metrics[random_iter]['done'] = True
 				pickle.dump(metrics, open(performance_metrics_fn, 'wb'))
 
 	except:

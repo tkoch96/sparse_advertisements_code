@@ -27,6 +27,7 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
+		return 5
 		cpu_count = multiprocessing.cpu_count()
 		suggested_num_workers = get_n_workers(self.dpsize)
 		return min(cpu_count, suggested_num_workers)
@@ -35,9 +36,9 @@ class Worker_Manager:
 		self.deployment = new_deployment
 		self.worker_to_deployments = {}
 		n_workers = self.get_n_workers()
-		# print("Splitting deployment into subdeployments.")
+		print("Splitting deployment into subdeployments...")
 		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
-		# print("Done splitting deployment into subdeployments.")
+		print("Done splitting deployment into subdeployments.")
 		
 		context = zmq.Context()
 		for worker in range(n_workers):

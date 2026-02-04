@@ -750,7 +750,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'current_pseudo_objective', 'iter', 'uncertainty_factor', 'stop', 'alpha', 'path_measures', 'current_effective_objective',
 			'current_objective', 'calc_times', 'current_latency_benefit', 'current_resilience_benefit']
 		if self.simulated:
-			self.save_state_every = 20 # how often to save our optimization state
+			self.save_state_every = 5 # how often to save our optimization state
 		else:
 			self.save_state_every = 1
 
