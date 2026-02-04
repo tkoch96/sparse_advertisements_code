@@ -7,7 +7,7 @@ from constants import *
 SLEEP_PERIOD = .02
 
 paths = ["/home/tom/venv/bin/python", "/Users/tom/Documents/phd/research/ingress_opt/venv/bin/python",
-	'/home/ubuntu/venv/bin/python', '/Users/tomkoch/Documents/venv/bin/python']
+	'/home/ubuntu/venv/bin/python', '/Users/tomkoch/Documents/venv/bin/python', '/home/ubuntu/env/bin/python']
 PYTHON = None
 for path in paths:
 	if os.path.exists(path):

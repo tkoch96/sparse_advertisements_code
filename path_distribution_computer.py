@@ -58,7 +58,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
-		return
+		# return
 		total_time = sum(list(self.timing.values()))
 		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
 		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
@@ -150,7 +150,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if poppi == NO_PATH_INGRESS(self):
 				obj_coeffs.append(NO_ROUTE_LATENCY)
 			else:
-				obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
+				obj_coeffs.append(
+					self.whole_deployment_ug_perfs[ug][self.popps[poppi]] 
+				)
 
 		# 1. Try Standard Solve
 		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
@@ -209,6 +211,84 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			"vols_by_poppi": vols_by_poppi,
 			"fraction_congested_volume": congested_vol / (total_vol + 1e-9)
 		}
+
+	def solve_generic_lp_persistent_with_site_cost(self, routed_through_ingress, obj, **kwargs):
+		"""The high-level wrapper that tries Standard first, then MLU."""
+		ts = time.time()
+		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
+		self.timing['get_paths_by_ug'] = time.time() - ts
+		# print('enter solve_generic_lp_persistent_with_site_cost')
+
+		# Pre-calculate objective (latencies)
+		obj_coeffs = []
+		for ug, poppi in available_paths:
+			if poppi == NO_PATH_INGRESS(self):
+				obj_coeffs.append(NO_ROUTE_LATENCY)
+			else:
+				obj_coeffs.append(
+					self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + 
+					DEFAULT_SITE_COST*self.site_costs[self.popps[poppi][0]]
+				)
+
+		# 1. Try Standard Solve
+		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+
+		# 2. Fallback to MLU if Standard is Infeasible
+		if model_res is None:
+			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
+
+		if model_res is None:
+			print("Infeasible problem, exiting")
+			exit(0)
+			return {'solved': False}
+
+		## Distribution is the amount of volume (not percent) placed on each path
+		## a path is specified by a <user, popp>
+		raw_x = {key: var.X for key, var in self.var_pool.items() if var.X > 1e-7}
+	
+		# Initialize result containers
+		lats_by_ug_arr = np.zeros(self.whole_deployment_n_ug)
+		vols_by_poppi = {pi: 0.0 for pi in range(len(self.static_caps))}
+		paths_by_ug_res = {}
+		congested_vol, total_vol = 0.0, 0.0
+
+		ts = time.time()
+		for (ug, poppi), vol_amt in raw_x.items():
+			ugi = self.whole_deployment_ug_to_ind[ug]
+			vols_by_poppi[poppi] += vol_amt
+			total_vol += vol_amt
+			
+			# Check congestion against STATIC caps
+			if vol_amt > self.static_caps[poppi] + 1e-6 and poppi != len(self.static_caps)-1:
+				congested_vol += vol_amt
+			
+			if ugi not in paths_by_ug_res:
+				paths_by_ug_res[ugi] = []
+			paths_by_ug_res[ugi].append((poppi, vol_amt / self.whole_deployment_ug_to_vol[ug]))
+
+			# Calculate latency for this specific <user, path> allocation
+			if poppi == NO_PATH_INGRESS(self):
+				path_lat = NO_ROUTE_LATENCY
+			else:
+				path_lat = self.whole_deployment_ug_perfs[ug][self.popps[poppi]]
+			
+			# Weighted average latency contribution
+			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
+
+		obj_norm = np.sum(self.whole_deployment_ug_vols)
+		self.timing['organizing_results'] = time.time()-ts
+		return {
+			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
+			"raw_solution": raw_x,
+			"paths_by_ug": paths_by_ug_res,
+			"lats_by_ug": lats_by_ug_arr,
+			"available_paths": available_paths,
+			"solved": True,
+			"vols_by_poppi": vols_by_poppi,
+			"fraction_congested_volume": congested_vol / (total_vol + 1e-9)
+		}
+
+
 
 	def init_all_vars(self):
 		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
@@ -562,8 +642,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			routed_through_ingress = all_routed_through_ingress[i]
 			if obj == "avg_latency":
 				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
+			elif obj == 'per_site_cost':
+				total_obj = self.solve_generic_lp_persistent_with_site_cost(routed_through_ingress, obj)["objective"]
 			else:
+				ts = time.time()
 				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
+				self.timing['optimize'] = time.time() - ts
 			objs[i] = total_obj
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
@@ -755,7 +839,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
 						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
 					tlp = time.time()
-				if i % 50 == 0 and i > 0 and time.time() - last_timing_summary > 20:
+				if i % 10 == 0 and i > 0 and time.time() - last_timing_summary > 20:
 					self.summarize_timing()
 					last_timing_summary = time.time()
 				self.check_clear_cache()
