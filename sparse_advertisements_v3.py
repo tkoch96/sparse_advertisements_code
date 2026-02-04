@@ -2070,6 +2070,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print("Updated numbers of popps on per prefix.")
 			print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
 
+		# After finishing, end the optimization
+		self.output_optimization_state()
+
 		self.reset_ugs()
 
 		if self.verbose:
