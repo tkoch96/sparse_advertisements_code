@@ -242,7 +242,7 @@ def testing_site_cost(dpsize, **kwargs):
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
 				except KeyError:
-					this_iter_deployment = get_random_deployment(dpsize)
+					this_iter_deployment = get_random_deployment(dpsize, cost_type='carbon')
 				this_iter_deployment['port'] = port
 				print("Random deployment for joint latency site cost, number {}/{}".format(random_iter+1,n_random_sim))
 				

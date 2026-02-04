@@ -1359,7 +1359,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
 
-		site_costs = get_carbon_site_costs(deployment, **kwargs)
+		cost_type = kwargs.get('cost_type', 'random')
+		if cost_type == 'carbon':
+			print(cost_type)
+			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		else:
+			site_costs = get_random_site_costs(deployment, **kwargs)
 		
 		deployment['site_costs'] = site_costs
 
@@ -1388,7 +1393,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
 
-		site_costs = get_carbon_site_costs(deployment, **kwargs)
+		cost_type = kwargs.get('cost_type', 'random')
+		if cost_type == 'carbon':
+			print(cost_type)
+			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		else:
+			site_costs = get_random_site_costs(deployment, **kwargs)
 		deployment['site_costs'] = site_costs
 
 	return deployment
