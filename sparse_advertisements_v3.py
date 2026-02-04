@@ -649,7 +649,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		if kwargs.get('soln_types') is not None:
 			solution_types = kwargs.get('soln_types')
 		else:
-			solution_types = ['anyopt', 'painter', 'sparse', 'one_per_pop', 'anycast', 'random', 'one_per_peering']
+			solution_types = ['sparse', 'anyopt', 'painter', 'one_per_pop', 'anycast', 'random', 'one_per_peering']
 		metrics = {
 			'sparse_objective_vals': {k:[] for k in solution_types},
 			'painter_objective_vals': {k:[] for k in solution_types},
