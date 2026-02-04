@@ -1048,8 +1048,15 @@ def get_bulk_vol(deployment):
 		bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
 	return bulk_vol
 
-def get_random_site_costs(deployment):
+def get_carbon_site_costs(deployment, **kwargs):
 	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
+	
+
+	return {s: np.random.random() for s in all_sites}
+
+def get_random_site_costs(deployment, **kwargs):
+	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
+	print('all_sites', all_sites)
 
 	return {s: np.random.random() for s in all_sites}
 
