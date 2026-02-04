@@ -5,6 +5,7 @@ from helpers import *
 from constants import *
 from paper_plotting_functions import *
 from wrapper_eval import *
+import json
 
 
 def weighted_cdf_xy(values, weights):
@@ -104,6 +105,35 @@ def gen_paper_plots(dpsize):
 			print(f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {(total_vol*avg_latency+DEFAULT_SITE_COST*total_site_cost)/total_vol:<20.4f} | {frac_congested:.4f}")
 			
 		print("-" * 95)
+
+		def _to_jsonable(x):
+			if isinstance(x, (np.integer, np.int64, np.int32)):
+				return int(x)
+			if isinstance(x, (np.floating, np.float64, np.float32)):
+				return float(x)
+			if isinstance(x, np.ndarray):
+				return x.tolist()
+			return x
+
+		payload = {
+			"dpsize": dpsize,
+			"random_iter": random_iter,
+			"solutions": solutions,  # the solutions actually present in this iter (same order used in plots)
+			"cdf_latency_data": {
+				sol: {
+					"x": _to_jsonable(x),
+					"y": _to_jsonable(y),
+				}
+				for sol, (x, y) in cdf_latency_data.items()
+			},
+			"site_cost_totals_data": {sol: _to_jsonable(val) for sol, val in site_cost_totals_data.items()},
+			"latency_parts": {sol: _to_jsonable(v) for sol, v in zip(sols, latency_parts)},
+			"cost_parts": {sol: _to_jsonable(v) for sol, v in zip(sols, cost_parts)},
+		}
+
+		out_fn = f"site_cost_plot_data_{dpsize}_iter{random_iter}.json"
+		with open(out_fn, "w") as f:
+			json.dump(payload, f, indent=2, sort_keys=True)
 
 		cdf_colors = {}  # solution -> color
 		plt.figure()
