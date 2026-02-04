@@ -203,10 +203,10 @@ def testing_site_cost(dpsize, **kwargs):
 		if True:
 			port = int(sys.argv[2])
 			for random_iter in range(n_random_sim):
-				try:
-					if metrics[random_iter]['done']: continue
-				except KeyError:
-					metrics[random_iter] = {'done': False}
+				# try:
+				# 	if metrics[random_iter]['done']: continue
+				# except KeyError:
+				# 	metrics[random_iter] = {'done': False}
 				print("\n=========\nNot yet done with iteration {} so starting training\n=========\n".format(random_iter))
 
 				try:

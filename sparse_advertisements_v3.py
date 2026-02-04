@@ -1917,6 +1917,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.reset_ugs() 
 				return
 		except ValueError:
+			print("\n=====NOT HOT STARTING======\n")
 			self.modify_ugs()
 			self.optimization_advertisement = self.init_advertisement()
 			self.last_advertisement = copy.copy(self.optimization_advertisement)

@@ -27,7 +27,6 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		return 5
 		cpu_count = multiprocessing.cpu_count()
 		suggested_num_workers = get_n_workers(self.dpsize)
 		return min(cpu_count, suggested_num_workers)
