@@ -301,290 +301,290 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	}
 
 def solve_lp_assignment_with_site_cost_with_failure_catch(sas, routed_through_ingress, obj, site_cost_alpha=DEFAULT_SITE_COST, **kwargs):
-    ### Minimizes f(w) subject to capacity and volume constraints
-    ### w is the amount of volume to place on each path where a path is a <user, routed ingress>
-    ### Incorporates Site Cost into the minimization objective.
+	### Minimizes f(w) subject to capacity and volume constraints
+	### w is the amount of volume to place on each path where a path is a <user, routed ingress>
+	### Incorporates Site Cost into the minimization objective.
 
-    verb = False
-    # Try solving strictly first
-    ret = solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_cost_alpha=site_cost_alpha, **kwargs)
-    if ret['solved']:
-        if kwargs.get('smallverb') or verb:
-            print("Solved Generic LP without MLU")
-        return ret
-    elif kwargs.get('smallverb') or verb:
-        print("Failed to solve non-MLU problem")
+	verb = False
+	# Try solving strictly first
+	ret = solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_cost_alpha=site_cost_alpha, **kwargs)
+	if ret['solved']:
+		if kwargs.get('smallverb') or verb:
+			print("Solved Generic LP without MLU")
+		return ret
+	elif kwargs.get('smallverb') or verb:
+		print("Failed to solve non-MLU problem")
 
-    # --- Fallback: MLU Minimization ---
-    
-    ugs = sas.whole_deployment_ugs
-    available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
+	# --- Fallback: MLU Minimization ---
+	
+	ugs = sas.whole_deployment_ugs
+	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
 
-    n_paths = len(available_paths)
-    n_popps = sas.n_popps + 1 
+	n_paths = len(available_paths)
+	n_popps = sas.n_popps + 1 
 
-    ## caps is usually link capacities, but then very "large" for users with no route
-    caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])]).flatten()
+	## caps is usually link capacities, but then very "large" for users with no route
+	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])]).flatten()
 
-    ### upper bound A for enforcing utilization
-    n_entries_util = n_popps + n_paths
-    util_data = np.zeros((n_entries_util))
-    util_row = np.zeros((n_entries_util))
-    util_col = np.zeros((n_entries_util))
+	### upper bound A for enforcing utilization
+	n_entries_util = n_popps + n_paths
+	util_data = np.zeros((n_entries_util))
+	util_row = np.zeros((n_entries_util))
+	util_col = np.zeros((n_entries_util))
 
-    for i in range(n_popps): ## set the entire first column to -1 (Variable Y)
-        util_data[i] = -1 
-        util_row[i] = i
-        util_col[i] = 0
+	for i in range(n_popps): ## set the entire first column to -1 (Variable Y)
+		util_data[i] = -1 
+		util_row[i] = i
+		util_col[i] = 0
 
-    for i,(ug,poppi) in enumerate(available_paths):
-        if poppi == NO_PATH_INGRESS(sas):
-            util_data[n_popps+i] = 1 / 1000000.0 ## very high "capacity" for no path
-        else:
-            util_data[n_popps+i] = 1 / caps[poppi]
-        util_row[n_popps+i] = poppi
-        util_col[n_popps+i] = 1 + i
+	for i,(ug,poppi) in enumerate(available_paths):
+		if poppi == NO_PATH_INGRESS(sas):
+			util_data[n_popps+i] = 1 / 1000000.0 ## very high "capacity" for no path
+		else:
+			util_data[n_popps+i] = 1 / caps[poppi]
+		util_row[n_popps+i] = poppi
+		util_col[n_popps+i] = 1 + i
 
-    A_util = csr_matrix((util_data, (util_row, util_col)), shape=(n_popps, 1+n_paths))
-    b_ub = np.zeros((n_popps)).flatten()    
+	A_util = csr_matrix((util_data, (util_row, util_col)), shape=(n_popps, 1+n_paths))
+	b_ub = np.zeros((n_popps)).flatten()    
 
-    ### Set up volume conservation matrix
-    n_entries_vol_conservation = 1+n_paths
-    vol_conservation_data = np.zeros((n_entries_vol_conservation))
-    vol_conservation_row = np.zeros((n_entries_vol_conservation))
-    vol_conservation_col = np.zeros((n_entries_vol_conservation))
+	### Set up volume conservation matrix
+	n_entries_vol_conservation = 1+n_paths
+	vol_conservation_data = np.zeros((n_entries_vol_conservation))
+	vol_conservation_row = np.zeros((n_entries_vol_conservation))
+	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
-    for pli in range(n_paths):
-        ugi = sas.whole_deployment_ug_to_ind[available_paths[pli][0]]
-        vol_conservation_row[1+pli] = ugi
-        vol_conservation_col[1+pli] = 1 + pli
-        vol_conservation_data[1+pli] = 1
+	for pli in range(n_paths):
+		ugi = sas.whole_deployment_ug_to_ind[available_paths[pli][0]]
+		vol_conservation_row[1+pli] = ugi
+		vol_conservation_col[1+pli] = 1 + pli
+		vol_conservation_data[1+pli] = 1
 
-    volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_entries_vol_conservation))
-    conservation_b = sas.whole_deployment_ug_vols.flatten()
+	volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_entries_vol_conservation))
+	conservation_b = sas.whole_deployment_ug_vols.flatten()
 
-    ## optimization variable is [Y,v]
-    ## Y is dummy upper bound variable, v is percent of volume UG places on path
-    
-    # --- COMBINED OBJECTIVE CALCULATION ---
-    # Weight = Latency + (site_cost_alpha * Site_Cost)
-    weighted_available_metrics = np.ones(n_paths)
-    for i,(ug,poppi) in enumerate(available_paths):
-        if poppi == NO_PATH_INGRESS(sas):
-            # No route: penalty latency, 0 site cost
-            weighted_available_metrics[i] = NO_ROUTE_LATENCY
-        else:
-            lat = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
-            pop, _ = sas.popps[poppi]
-            site_cost = sas.site_costs[pop]
-            weighted_available_metrics[i] = lat + (site_cost_alpha * site_cost)
-            
-    ## ALPHA defined in constants ;; tradeoff between minimizing MLU and minimizing (latency + cost)
-    dummy_minimizer = np.concatenate([np.array([1.0 / ALPHA]), weighted_available_metrics]).flatten()
+	## optimization variable is [Y,v]
+	## Y is dummy upper bound variable, v is percent of volume UG places on path
+	
+	# --- COMBINED OBJECTIVE CALCULATION ---
+	# Weight = Latency + (site_cost_alpha * Site_Cost)
+	weighted_available_metrics = np.ones(n_paths)
+	for i,(ug,poppi) in enumerate(available_paths):
+		if poppi == NO_PATH_INGRESS(sas):
+			# No route: penalty latency, 0 site cost
+			weighted_available_metrics[i] = NO_ROUTE_LATENCY
+		else:
+			lat = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
+			pop, _ = sas.popps[poppi]
+			site_cost = sas.site_costs[pop]
+			weighted_available_metrics[i] = lat + (site_cost_alpha * site_cost)
+			
+	## ALPHA defined in constants ;; tradeoff between minimizing MLU and minimizing (latency + cost)
+	dummy_minimizer = np.concatenate([np.array([1.0 / ALPHA]), weighted_available_metrics]).flatten()
 
-    ### Gurobi solve
-    model = gp.Model()
-    model.Params.LogToConsole = 0
-    model.Params.Threads = N_WORKERS_GENERIC
-    model.Params.TimeLimit = 3.0 
-    x = model.addMVar(1 + n_paths, name='volume_each_path', lb=0)
+	### Gurobi solve
+	model = gp.Model()
+	model.Params.LogToConsole = 0
+	model.Params.Threads = N_WORKERS_GENERIC
+	model.Params.TimeLimit = 3.0 
+	x = model.addMVar(1 + n_paths, name='volume_each_path', lb=0)
 
-    # Pass using_mlu=True so get_obj_fn handles the Y variable correctly
-    model, x, obj_fn, obj_norm = get_obj_fn(model, dummy_minimizer, x, obj, n_paths, sas, using_mlu=True)
+	# Pass using_mlu=True so get_obj_fn handles the Y variable correctly
+	model, x, obj_fn, obj_norm = get_obj_fn(model, dummy_minimizer, x, obj, n_paths, sas, using_mlu=True)
 
-    model.setObjective(obj_fn)
-    model.addConstr(A_util @ x <= b_ub)
-    model.addConstr(volume_conservation_A @ x == conservation_b)
-    model.optimize()
+	model.setObjective(obj_fn)
+	model.addConstr(A_util @ x <= b_ub)
+	model.addConstr(volume_conservation_A @ x == conservation_b)
+	model.optimize()
 
-    if model.status != 2:
-        print("Infeasible problem, exiting")
-        exit(0)
-        return {'solved': False}
+	if model.status != 2:
+		print("Infeasible problem, exiting")
+		exit(0)
+		return {'solved': False}
 
-    ## Distribution is the amount of volume (not percent) placed on each path
-    distribution = x.X
-    path_distribution = distribution[1:]
+	## Distribution is the amount of volume (not percent) placed on each path
+	distribution = x.X
+	path_distribution = distribution[1:]
 
-    ## Compute paths by ug
-    lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
-    paths_by_ug = {}
-    vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
-    
-    for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
-        if poppi == NO_PATH_INGRESS(sas): 
-            lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
-            continue 
-        if vol_amt > 0:
-            ugi = sas.whole_deployment_ug_to_ind[ug]
-            vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
-            vols_by_poppi[poppi] += vol_amt
-            try:
-                paths_by_ug[ugi].append((poppi, vol_pct))
-            except KeyError:
-                paths_by_ug[ugi] = [(poppi, vol_pct)]
+	## Compute paths by ug
+	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
+	paths_by_ug = {}
+	vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
+	
+	for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
+		if poppi == NO_PATH_INGRESS(sas): 
+			lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
+			continue 
+		if vol_amt > 0:
+			ugi = sas.whole_deployment_ug_to_ind[ug]
+			vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
+			vols_by_poppi[poppi] += vol_amt
+			try:
+				paths_by_ug[ugi].append((poppi, vol_pct))
+			except KeyError:
+				paths_by_ug[ugi] = [(poppi, vol_pct)]
 
-    vols_by_poppi = {poppi:v/float(caps[poppi]) for poppi,v in vols_by_poppi.items()}
-    inundated_popps = {poppi:None for poppi,v in vols_by_poppi.items() if v > 1}
+	vols_by_poppi = {poppi:v/float(caps[poppi]) for poppi,v in vols_by_poppi.items()}
+	inundated_popps = {poppi:None for poppi,v in vols_by_poppi.items() if v > 1}
 
-    lats_by_ug = {}
-    all_volume, congested_volume = 0, 0
-    for ugi, pathvols in paths_by_ug.items():
-        ug = sas.whole_deployment_ugs[ugi]
-        these_lats = []
-        cum_vol = 0
-        for poppi,vol in pathvols:
-            try:
-                inundated_popps[poppi]
-                if kwargs.get('really_bad_fail',False):
-                    these_lats.append((NO_ROUTE_LATENCY*100, vol))
-                else:
-                    these_lats.append((NO_ROUTE_LATENCY, vol))
-                congested_volume += sas.whole_deployment_ug_vols[ugi] * vol
-            except KeyError:
-                popp = sas.popps[poppi]
-                these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
-            cum_vol += vol
-            all_volume += sas.whole_deployment_ug_vols[ugi]
-        avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
-        lats_by_ug[ug] = avg_lat
-    for ug,lat in lats_by_ug.items():
-        lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
+	lats_by_ug = {}
+	all_volume, congested_volume = 0, 0
+	for ugi, pathvols in paths_by_ug.items():
+		ug = sas.whole_deployment_ugs[ugi]
+		these_lats = []
+		cum_vol = 0
+		for poppi,vol in pathvols:
+			try:
+				inundated_popps[poppi]
+				if kwargs.get('really_bad_fail',False):
+					these_lats.append((NO_ROUTE_LATENCY*100, vol))
+				else:
+					these_lats.append((NO_ROUTE_LATENCY, vol))
+				congested_volume += sas.whole_deployment_ug_vols[ugi] * vol
+			except KeyError:
+				popp = sas.popps[poppi]
+				these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
+			cum_vol += vol
+			all_volume += sas.whole_deployment_ug_vols[ugi]
+		avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
+		lats_by_ug[ug] = avg_lat
+	for ug,lat in lats_by_ug.items():
+		lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
 
 
-    fraction_congested_volume = congested_volume / all_volume
+	fraction_congested_volume = congested_volume / all_volume
 
-    return {
-        "objective": -1 * model.objVal / obj_norm,
-        "raw_solution": x.X,
-        "paths_by_ug": paths_by_ug,
-        "lats_by_ug" : lats_by_ug_arr,
-        "solved": model.status,
-        "vols_by_poppi": vols_by_poppi,
-        "fraction_congested_volume": fraction_congested_volume,
-    }
+	return {
+		"objective": -1 * model.objVal / obj_norm,
+		"raw_solution": x.X,
+		"paths_by_ug": paths_by_ug,
+		"lats_by_ug" : lats_by_ug_arr,
+		"solved": model.status,
+		"vols_by_poppi": vols_by_poppi,
+		"fraction_congested_volume": fraction_congested_volume,
+	}
 
 def solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_cost_alpha=DEFAULT_SITE_COST, **kwargs):
-    ### Minimizes (alpha * site_cost + average latency) subject to not inundating a link,
-    ### but could fail if there's not enough aggregate capacity
-    available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
-    n_paths = len(available_paths)
-    n_popps = sas.n_popps + 1 
+	### Minimizes (alpha * site_cost + average latency) subject to not inundating a link,
+	### but could fail if there's not enough aggregate capacity
+	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
+	n_paths = len(available_paths)
+	n_popps = sas.n_popps + 1 
 
-    # --- COMBINED OBJECTIVE CALCULATION ---
-    # We construct 'available_metrics' to include both latency and site cost
-    available_metrics = np.ones(n_paths)
-    for i,(ug,poppi) in enumerate(available_paths):
-        if poppi == NO_PATH_INGRESS(sas):
-            # NO_ROUTE_LATENCY + 0 cost
-            available_metrics[i] = NO_ROUTE_LATENCY
-        else:
-            lat = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
-            pop, _ = sas.popps[poppi]
-            site_cost = sas.site_costs[pop]
-            available_metrics[i] = lat + (site_cost_alpha * site_cost)
-    
-    ### Set up capacity constraint matrix
-    n_entries_cap_constraint = n_paths
-    cap_constraint_data = np.ones((n_entries_cap_constraint))
-    cap_constraint_row = np.zeros((n_entries_cap_constraint))
-    cap_constraint_col = np.zeros((n_entries_cap_constraint))
+	# --- COMBINED OBJECTIVE CALCULATION ---
+	# We construct 'available_metrics' to include both latency and site cost
+	available_metrics = np.ones(n_paths)
+	for i,(ug,poppi) in enumerate(available_paths):
+		if poppi == NO_PATH_INGRESS(sas):
+			# NO_ROUTE_LATENCY + 0 cost
+			available_metrics[i] = NO_ROUTE_LATENCY
+		else:
+			lat = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
+			pop, _ = sas.popps[poppi]
+			site_cost = sas.site_costs[pop]
+			available_metrics[i] = lat + (site_cost_alpha * site_cost)
+	
+	### Set up capacity constraint matrix
+	n_entries_cap_constraint = n_paths
+	cap_constraint_data = np.ones((n_entries_cap_constraint))
+	cap_constraint_row = np.zeros((n_entries_cap_constraint))
+	cap_constraint_col = np.zeros((n_entries_cap_constraint))
 
-    ### Set up volume conservation matrix
-    n_entries_vol_conservation = n_paths
-    vol_conservation_data = np.ones((n_entries_vol_conservation))
-    vol_conservation_row = np.zeros((n_entries_vol_conservation))
-    vol_conservation_col = np.zeros((n_entries_vol_conservation))
+	### Set up volume conservation matrix
+	n_entries_vol_conservation = n_paths
+	vol_conservation_data = np.ones((n_entries_vol_conservation))
+	vol_conservation_row = np.zeros((n_entries_vol_conservation))
+	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
-    ## caps is usually link capacities, but then very "large" for users with no route
-    caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+	## caps is usually link capacities, but then very "large" for users with no route
+	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
 
-    conservation_b = sas.whole_deployment_ug_vols
+	conservation_b = sas.whole_deployment_ug_vols
 
-    for pli in range(n_paths):
-        poppi = available_paths[pli][1]
-        ugi = sas.whole_deployment_ug_to_ind[available_paths[pli][0]]
-        
-        cap_constraint_row[pli] = poppi
-        cap_constraint_col[pli] = pli
+	for pli in range(n_paths):
+		poppi = available_paths[pli][1]
+		ugi = sas.whole_deployment_ug_to_ind[available_paths[pli][0]]
+		
+		cap_constraint_row[pli] = poppi
+		cap_constraint_col[pli] = pli
 
-        vol_conservation_row[pli] = ugi
-        vol_conservation_col[pli] = pli
+		vol_conservation_row[pli] = ugi
+		vol_conservation_col[pli] = pli
 
-    cap_constraint_A = csr_matrix((cap_constraint_data, (cap_constraint_row, cap_constraint_col)), shape=(n_popps, n_paths))
-    volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_paths))
+	cap_constraint_A = csr_matrix((cap_constraint_data, (cap_constraint_row, cap_constraint_col)), shape=(n_popps, n_paths))
+	volume_conservation_A = csr_matrix((vol_conservation_data, (vol_conservation_row, vol_conservation_col)), shape=(sas.whole_deployment_n_ug, n_paths))
 
-    ### Solve for volume on each popp,user
-    ts = time.time()
+	### Solve for volume on each popp,user
+	ts = time.time()
 
-    ### Gurobi solve
-    model = gp.Model()
-    model.Params.LogToConsole = 0
-    model.Params.TimeLimit = 15.0 
-    model.Params.Threads = N_WORKERS_GENERIC
-    
-    x = model.addMVar(n_paths, name='volume_each_path', lb=0)
-    
-    # We pass the combined metrics (Latency + Cost) to get_obj_fn
-    model, x, obj_fn, obj_norm = get_obj_fn(model, available_metrics, x, obj, n_paths, sas, using_mlu=False)
+	### Gurobi solve
+	model = gp.Model()
+	model.Params.LogToConsole = 0
+	model.Params.TimeLimit = 15.0 
+	model.Params.Threads = N_WORKERS_GENERIC
+	
+	x = model.addMVar(n_paths, name='volume_each_path', lb=0)
+	
+	# We pass the combined metrics (Latency + Cost) to get_obj_fn
+	model, x, obj_fn, obj_norm = get_obj_fn(model, available_metrics, x, obj, n_paths, sas, using_mlu=False)
 
-    model.addConstr(cap_constraint_A @ x <= caps)
-    model.addConstr(volume_conservation_A @ x == conservation_b)
-    model.setObjective(obj_fn)
-    model.optimize()
+	model.addConstr(cap_constraint_A @ x <= caps)
+	model.addConstr(volume_conservation_A @ x == conservation_b)
+	model.setObjective(obj_fn)
+	model.optimize()
 
-    if model.status != 2: ## 2 is optimal
-        return {'solved': False}
-    path_distribution = x.X
+	if model.status != 2: ## 2 is optimal
+		return {'solved': False}
+	path_distribution = x.X
 
-    lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
-    paths_by_ug = {}
-    vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
-    
-    for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
-        if poppi == NO_PATH_INGRESS(sas): 
-            lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
-            continue 
-        if vol_amt > 0:
-            ugi = sas.whole_deployment_ug_to_ind[ug]
-            vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
-            vols_by_poppi[poppi] += vol_amt
-            try:
-                paths_by_ug[ugi].append((poppi, vol_pct))
-            except KeyError:
-                paths_by_ug[ugi] = [(poppi, vol_pct)]
+	lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug))
+	paths_by_ug = {}
+	vols_by_poppi = {poppi:0 for poppi in range(sas.n_popps)}
+	
+	for (ug,poppi),vol_amt in zip(available_paths, path_distribution):
+		if poppi == NO_PATH_INGRESS(sas): 
+			lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = NO_ROUTE_LATENCY
+			continue 
+		if vol_amt > 0:
+			ugi = sas.whole_deployment_ug_to_ind[ug]
+			vol_pct = vol_amt / sas.whole_deployment_ug_to_vol[ug]
+			vols_by_poppi[poppi] += vol_amt
+			try:
+				paths_by_ug[ugi].append((poppi, vol_pct))
+			except KeyError:
+				paths_by_ug[ugi] = [(poppi, vol_pct)]
 
-    # Convert to poppi utilizations
-    vols_by_poppi = {poppi:round(v/float(caps[poppi]),2) for poppi,v in vols_by_poppi.items()}
+	# Convert to poppi utilizations
+	vols_by_poppi = {poppi:round(v/float(caps[poppi]),2) for poppi,v in vols_by_poppi.items()}
 
-    lats_by_ug = {}
-    all_volume, congested_volume = 0, 0
-    for ugi, pathvols in paths_by_ug.items():
-        ug = sas.whole_deployment_ugs[ugi]
-        these_lats = []
-        cum_vol = 0
-        for poppi,vol in pathvols:
-            popp = sas.popps[poppi]
-            these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
-            cum_vol += vol
-            all_volume += sas.whole_deployment_ug_vols[ugi]
-        avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
-        lats_by_ug[ug] = avg_lat
-    for ug,lat in lats_by_ug.items():
-        lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
+	lats_by_ug = {}
+	all_volume, congested_volume = 0, 0
+	for ugi, pathvols in paths_by_ug.items():
+		ug = sas.whole_deployment_ugs[ugi]
+		these_lats = []
+		cum_vol = 0
+		for poppi,vol in pathvols:
+			popp = sas.popps[poppi]
+			these_lats.append((sas.whole_deployment_ug_perfs[ug][popp], vol))
+			cum_vol += vol
+			all_volume += sas.whole_deployment_ug_vols[ugi]
+		avg_lat = np.sum([el[0] * el[1] for el in these_lats]) / cum_vol
+		lats_by_ug[ug] = avg_lat
+	for ug,lat in lats_by_ug.items():
+		lats_by_ug_arr[sas.whole_deployment_ug_to_ind[ug]] = lat
 
-    fraction_congested_volume = congested_volume / all_volume
+	fraction_congested_volume = congested_volume / all_volume
 
-    return {
-        "objective": -1 * model.objVal / obj_norm,
-        "raw_solution": x.X,
-        "paths_by_ug": paths_by_ug,
-        "lats_by_ug" : lats_by_ug_arr,
-        "available_paths": available_paths,
-        "solved": model.status,
-        "vols_by_poppi": vols_by_poppi,
-        "fraction_congested_volume": fraction_congested_volume,
-    }
+	return {
+		"objective": -1 * model.objVal / obj_norm,
+		"raw_solution": x.X,
+		"paths_by_ug": paths_by_ug,
+		"lats_by_ug" : lats_by_ug_arr,
+		"available_paths": available_paths,
+		"solved": model.status,
+		"vols_by_poppi": vols_by_poppi,
+		"fraction_congested_volume": fraction_congested_volume,
+	}
 
 
 generic_lp_functions = {

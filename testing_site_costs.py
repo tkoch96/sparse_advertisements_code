@@ -168,6 +168,62 @@ def testing_site_cost(dpsize, **kwargs):
 	except:
 		import traceback
 		traceback.print_exc()
+
+	try:
+		if True:
+			port = int(sys.argv[2])
+			for random_iter in range(n_random_sim):
+				try:
+					this_iter_deployment = metrics[random_iter]['deployment']
+				except KeyError:
+					this_iter_deployment = get_random_deployment(dpsize)
+				this_iter_deployment['port'] = port
+				print("Random deployment for joint latency site cost, number {}/{}".format(random_iter+1,n_random_sim))
+				
+				deployment = copy.deepcopy(this_iter_deployment)
+				metrics[random_iter] = {'deployment': deployment}
+
+				n_prefixes = deployment_to_prefixes(deployment)
+
+				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
+					using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes,
+					generic_objective=obj)
+
+				metrics[random_iter]['settings'] = sas.get_init_kwa()
+				if wm is None:
+					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+					wm.start_workers()
+				sas.set_worker_manager(wm)
+				sas.update_deployment(deployment)
+				### Solve the problem for each type of solution (sparse, painter, etc...)
+				ret = sas.compare_different_solutions(n_run=1, verbose=True,
+					dont_update_deployment=True, soln_types=soln_types)
+				metrics[random_iter]['settings'] = sas.get_init_kwa()
+				metrics[random_iter]['optimal_objective'] = sas.optimal_expensive_solution
+				metrics[random_iter]['compare_rets'] = ret
+				metrics[random_iter]['ug_to_vol'] = sas.ug_vols
+
+				metrics[random_iter]['save_run_dir'] = sas.sas.save_run_dir # sparse's save run dir
+				for solution in soln_types:
+					metrics[random_iter][solution] = {}
+					try:
+						adv = ret['adv_solns'][solution][0]
+					except:
+						print("No solution for {}".format(solution))
+						continue
+					### compute the allocation with the generic objective, even with non-sparse solutions
+					lp_solution = sas.sas.generic_objective.get_latency_benefit_adv(adv) 
+
+					metrics[random_iter][solution]['adv'] = adv
+					metrics[random_iter][solution]['lp_solution'] = lp_solution
+
+				metrics[random_iter]['done'] = True
+				pickle.dump(metrics, open(performance_metrics_fn, 'wb'))
+
+	except:
+		import traceback
+		traceback.print_exc()
 	finally:
 		try:
 			wm.stop_workers()

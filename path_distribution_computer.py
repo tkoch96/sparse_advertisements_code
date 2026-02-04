@@ -40,7 +40,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.worker_i = worker_i
 		self.port = base_port
 		self.logging_iter = 0
-		self.timing = { k:0 for k in ['solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug','organizing_results','get_ingress_probabilities_by_dict_generic', 'sim_rti']}
+		self.timing = { k:0 for k in ['solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug','organizing_results',
+		'get_ingress_probabilities_by_dict_generic', 'sim_rti', 
+		'solve_generic_lp_persistent', 'solve_generic_lp_not_persistent']}
 		self.updated_ingress_probabilities = True
 
 		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
@@ -58,12 +60,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
-		# return
 		total_time = sum(list(self.timing.values()))
 		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
 		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
 			pct = round(self.timing[k] * 100.0 / total_time, 2)
-			print("{} - {} pct".format(k, pct))
+			print("{} - {} pct ({} ms)".format(k, pct, round(self.timing[k]*1000,2)))
 		print("==================\n\n")
 
 	def init_persistent_lp(self):
@@ -150,9 +151,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if poppi == NO_PATH_INGRESS(self):
 				obj_coeffs.append(NO_ROUTE_LATENCY)
 			else:
-				obj_coeffs.append(
-					self.whole_deployment_ug_perfs[ug][self.popps[poppi]] 
-				)
+				if obj == "avg_latency":
+					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
+				elif obj == "per_site_cost":
+					pop, _ = self.popps[poppi]
+					site_cost = self.site_costs[pop]
+					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + DEFAULT_SITE_COST * site_cost)
+				else:
+					raise ValueError("obj {} not supported in solve_generic_lp_persistent".format(obj))
 
 		# 1. Try Standard Solve
 		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
@@ -640,14 +646,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
-			if obj == "avg_latency":
+			if obj == "avg_latency" or obj == "per_site_cost":
+				ts = time.time()
 				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
-			elif obj == 'per_site_cost':
-				total_obj = self.solve_generic_lp_persistent_with_site_cost(routed_through_ingress, obj)["objective"]
+				self.timing['solve_generic_lp_persistent'] = time.time() - ts
 			else:
 				ts = time.time()
 				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
-				self.timing['optimize'] = time.time() - ts
+				self.timing['solve_generic_lp_not_persistent'] = time.time() - ts
 			objs[i] = total_obj
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
