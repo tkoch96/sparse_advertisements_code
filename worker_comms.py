@@ -81,7 +81,7 @@ class Worker_Manager:
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			kwargs = self.get_init_kwa()
 			self.worker_sockets[worker] = context.socket(zmq.REQ)
-			self.worker_sockets[worker].setsockopt(zmq.RCVTIMEO, 1000)
+			self.worker_sockets[worker].setsockopt(zmq.RCVTIMEO, 100000)
 			self.worker_sockets[worker].connect('tcp://localhost:{}'.format(base_port+worker))
 			msg = pickle.dumps(('init',(args,kwargs)))
 			self.worker_sockets[worker].send(msg)
@@ -194,6 +194,7 @@ class Worker_Manager:
 		for worker, worker_socket in self.worker_sockets.items():
 			msg = msgs[worker]
 			worker_socket.send(msg)
+			## this will fail if it hits a timeout
 			worker_socket.recv()
 
 

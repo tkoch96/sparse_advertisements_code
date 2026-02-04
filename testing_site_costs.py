@@ -105,6 +105,11 @@ def testing_site_cost(dpsize, **kwargs):
 	soln_types = global_soln_types
 
 	try:
+		save_run_dir = sys.argv[3]
+	except:
+		save_run_dir = None
+
+	try:
 		wm = None
 		sas = None
 
@@ -132,7 +137,7 @@ def testing_site_cost(dpsize, **kwargs):
 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 					using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes,
-					generic_objective=obj)
+					generic_objective=obj, save_run_dir=save_run_dir)
 
 				metrics[random_iter]['settings'] = sas.get_init_kwa()
 				if wm is None:
@@ -188,7 +193,7 @@ def testing_site_cost(dpsize, **kwargs):
 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
 					using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes,
-					generic_objective=obj)
+					generic_objective=obj, save_run_dir=save_run_dir)
 
 				metrics[random_iter]['settings'] = sas.get_init_kwa()
 				if wm is None:
@@ -197,8 +202,6 @@ def testing_site_cost(dpsize, **kwargs):
 				sas.set_worker_manager(wm)
 				sas.update_deployment(deployment)
 				### Solve the problem for each type of solution (sparse, painter, etc...)
-				ret = sas.compare_different_solutions(n_run=1, verbose=True,
-					dont_update_deployment=True, soln_types=soln_types)
 				metrics[random_iter]['settings'] = sas.get_init_kwa()
 				metrics[random_iter]['optimal_objective'] = sas.optimal_expensive_solution
 				metrics[random_iter]['compare_rets'] = ret
