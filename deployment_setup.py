@@ -1050,9 +1050,57 @@ def get_bulk_vol(deployment):
 
 def get_carbon_site_costs(deployment, **kwargs):
 	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
-	
+	print('all_sites', all_sites)
 
-	return {s: np.random.random() for s in all_sites}
+	site_gco2_kwh = {
+	"vtramsterdam": 264,
+	"vtratlanta": 575,
+	"vtrbangalore": 718,
+	"vtrchicago": 546,
+	"vtrdallas": 198,
+	"vtrdelhi": 654,
+	"vtrfrankfurt": 336,
+	"vtrhonolulu": 726,
+	"vtrjohannesburg": 683,
+	"vtrlondon": 137,
+	"vtrlosangelas": 82,
+	"vtrmadrid": 64,
+	"vtrmanchester": 137,
+	"vtrmelbourne": 417,
+	"vtrmexico": 364,
+	"vtrmiami": 419,
+	"vtrmumbai": 565,
+	"vtrnewjersey": 487,
+	"vtrnewyork": 487, # duplicate since code is using vtrnewyork
+	"vtrosaka": 598,
+	"vtrparis": 33,
+	"vtrsantiago": 246,
+	"vtrsaopaulo": 73,
+	"vtrseattle": 59,
+	"vtrseoul": 477,
+	"vtrsilicon": 82,
+	"vtrsingapore": 667,
+	"vtrstockholm": 29,
+	"vtrsydney": 417,
+	"vtrtelaviv": 531,
+	"vtrtokyo": 598,
+	"vtrtoronto": 172,
+	"vtrwarsaw": 624,
+	}
+
+	# Normalize the site cost so that every cost is between 0 and 1
+	# like np.random.random() in get_random_site_costs()
+	max_val = max(site_gco2_kwh.values())
+	site_gco2_kwh_norm = {
+		site: val / max_val
+		for site, val in site_gco2_kwh.items()
+	}
+	site_cost = {
+		s: site_gco2_kwh_norm[s] 
+		for s in all_sites
+	}
+	print('site_cost', site_cost)
+	return site_cost
 
 def get_random_site_costs(deployment, **kwargs):
 	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
@@ -1311,7 +1359,13 @@ def load_actual_deployment(deployment_size, **kwargs):
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
 
-		site_costs = get_random_site_costs(deployment, **kwargs)
+		cost_type = kwargs.get('cost_type', 'random')
+		if cost_type == 'carbon':
+			print(cost_type)
+			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		else:
+			site_costs = get_random_site_costs(deployment, **kwargs)
+		
 		deployment['site_costs'] = site_costs
 
 		pickle.dump(deployment, open(deployment_cache_fn,'wb'))
@@ -1339,7 +1393,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 		link_capacities = get_link_capacities(deployment, **kwargs)
 		deployment['link_capacities'] = link_capacities
 
-		site_costs = get_random_site_costs(deployment, **kwargs)
+		cost_type = kwargs.get('cost_type', 'random')
+		if cost_type == 'carbon':
+			print(cost_type)
+			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		else:
+			site_costs = get_random_site_costs(deployment, **kwargs)
 		deployment['site_costs'] = site_costs
 
 	return deployment
