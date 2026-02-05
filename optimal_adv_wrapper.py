@@ -1406,6 +1406,7 @@ class Optimal_Adv_Wrapper:
 	def enforce_measured_prefs(self, routed_through_ingress, actives):
 		### Saves information about which ingresses beat other ingresses for each user
 		### Sends this information to worker bees
+		ts = time.time()
 		for ui, ug in enumerate(self.ugs):
 			for prefix_i in routed_through_ingress:
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
@@ -1437,29 +1438,34 @@ class Optimal_Adv_Wrapper:
 							self.calc_cache.all_caches['parents_on'][ug][beaten_ingress,routed_ingress] = None
 						except KeyError:
 							self.calc_cache.all_caches['parents_on'][ug] = {(beaten_ingress,routed_ingress): None}
+		print("enforcement logic took {}s".format(time.time() - ts))
+		ts = time.time()
 		self.update_parent_tracker_workers()
+		print("updating parent tracker took {}s".format(time.time() - ts))
 	
 	def update_parent_tracker_workers(self):	
 		## Update workers about new parent tracker information
+		ts = time.time()
 		try:
 			self.worker_manager
 		except AttributeError:
 			return # no workers to update
+
+		## TODO -- could just send deltas
 		msgs = {}
+		msg = pickle.dumps(('update_parent_tracker', self.calc_cache.all_caches['parents_on']))
 		for worker in self.worker_manager.worker_sockets:
-			this_deployment_ugs = self.ugs
-			sub_cache = {}
-			for this_deployment_ug in this_deployment_ugs:
-				try:
-					sub_cache[this_deployment_ug] = self.calc_cache.all_caches['parents_on'][this_deployment_ug] 
-				except KeyError:
-					pass
-			msgs[worker] = pickle.dumps(('update_parent_tracker', sub_cache))
+			msgs[worker] = msg
+		print("pickling messages took {}s".format(time.time()-ts))
+		ts = time.time()
 		self.worker_manager.send_messages_workers(msgs)
+		print("sending messages took {}s".format(time.time() - ts))
 
 	def measure_ingresses(self, a, **kwargs):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
 		### i.e., this is an actual advertisement measurement, we should aim to limit these :)
+		print("Entering measure ingresses")
+		ts = time.time()
 		self.enforce_loaded_rwmw()
 
 		try:
@@ -1476,13 +1482,19 @@ class Optimal_Adv_Wrapper:
 		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
+		cnucts = time.time()
 		self.calculate_user_choice(a, get_ug_catchments=True, **kwargs)
-
+		print("cnuc took {}s".format(time.time()-cnucts))
 		a = threshold_a(a)
+		rtits = time.time()
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a, verb=True, **kwargs)
+		print("rti took {}s".format(time.time() - rtits))
 
+		empts = time.time()
 		self.enforce_measured_prefs(routed_through_ingress, actives)
+		print("empts took {}s".format(time.time() - empts))
 		self.measured[tuple(a.flatten())] = None
+		print("Leaving measure ingresses : {}s".format(time.time() - ts))
 			
 	def actual_nonconvex_objective(self, a, **kwargs):
 		# Don't approximate the L0 norm with anything

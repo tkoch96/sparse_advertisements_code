@@ -40,6 +40,7 @@ class Worker_Manager:
 		print("Done splitting deployment into subdeployments.")
 		
 		context = zmq.Context()
+		print("Sending deployment update messages...")
 		for worker in range(n_workers):
 			if len(subdeployments[worker]['ugs']) == 0: continue
 			## It would be annoying to make the code work for cases in which a processor focuses on one user
@@ -52,6 +53,8 @@ class Worker_Manager:
 			# msg = pickle.dumps(('init',(args,kwargs)))
 			msg = pickle.dumps(('update_deployment', subdeployments[worker]))
 			self.worker_sockets[worker].send(msg)
+		print("Waiting for deployment ACK messages...")
+		for worker in range(n_workers):
 			while True:
 				try:
 					msg = pickle.loads(self.worker_sockets[worker].recv())
@@ -77,7 +80,7 @@ class Worker_Manager:
 			base_port = int(self.deployment.get('port', 31415))
 			call("{} path_distribution_computer.py {} {} &".format(PYTHON, worker, base_port), shell=True) # VMs
 			# send worker startup information
-			args = [copy.deepcopy(subdeployments[worker])]
+			args = [subdeployments[worker]]
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			kwargs = self.get_init_kwa()
 			self.worker_sockets[worker] = context.socket(zmq.REQ)
@@ -191,11 +194,20 @@ class Worker_Manager:
 		return ret
 
 	def send_messages_workers(self, msgs):
+		# Phase 1: Fire all messages immediately
+		# ZMQ handles the buffering, so this loop completes almost instantly.
 		for worker, worker_socket in self.worker_sockets.items():
 			msg = msgs[worker]
 			worker_socket.send(msg)
-			## this will fail if it hits a timeout
-			worker_socket.recv()
+
+		# Phase 2: Collect acknowledgments
+		# By the time we get here, all workers are processing in parallel.
+		for worker, worker_socket in self.worker_sockets.items():
+			try:
+				# We assume your sockets have RCVTIMEO set as in start_workers
+				worker_socket.recv()
+			except zmq.error.Again:
+				print(f"Worker {worker} timed out receiving ACK.")
 
 
 

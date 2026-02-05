@@ -149,10 +149,9 @@ def gen_paper_plots(dpsize):
 		plt.savefig(os.path.join(FIG_DIR, 'site_cost_latency_{}.pdf'.format(dpsize)))
 		
 		plt.figure()
-		sols = list(site_cost_totals_data.keys())
-		costs = [site_cost_totals_data[s] for s in sols]
-		colors = [cdf_colors.get(s, None) for s in sols]
-		plt.bar(sols, costs, color=colors)
+		costs = [site_cost_totals_data[s] for s in solutions]
+		colors = [cdf_colors.get(s, None) for s in solutions]
+		plt.bar(solutions, costs, color=colors)
 		plt.ylabel("Total site cost")
 		plt.title(f"Total site cost by solution (iter={random_iter})")
 		plt.xticks(rotation=30, ha="right")
@@ -160,7 +159,7 @@ def gen_paper_plots(dpsize):
 		plt.tight_layout()
 		plt.savefig(os.path.join(FIG_DIR, 'site_cost_totals_{}.pdf'.format(dpsize)))
 
-		lat_colors = [cdf_colors[s] for s in sols]
+		lat_colors = [cdf_colors[s] for s in solutions]
 
 		# Make cost colors slightly lighter (same hue)
 		def lighten(color, factor=0.5):
@@ -169,13 +168,13 @@ def gen_paper_plots(dpsize):
 			c = np.array(mc.to_rgb(color))
 			return tuple(1 - factor * (1 - c))
 
-		cost_colors = [lighten(cdf_colors[s], 0.6) for s in sols]
+		cost_colors = [lighten(cdf_colors[s], 0.6) for s in solutions]
 
 		# Plot
 		plt.figure()
-		plt.bar(sols, latency_parts, color=lat_colors, label="Latency")
+		plt.bar(solutions, latency_parts, color=lat_colors, label="Latency")
 		plt.bar(
-			sols,
+			solutions,
 			cost_parts,
 			bottom=latency_parts,
 			color=cost_colors,
@@ -236,9 +235,11 @@ def testing_site_cost(dpsize, **kwargs):
 				try:
 					if metrics[random_iter]['done']: continue
 				except KeyError:
-					metrics[random_iter] = {'done': False}
+					try:
+						metrics[random_iter]
+					except KeyError:
+						metrics[random_iter] = {'done': False}
 				print("\n=========\nNot yet done with iteration {} so starting training\n=========\n".format(random_iter))
-
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
 				except KeyError:
@@ -434,6 +435,7 @@ def testing_site_cost(dpsize, **kwargs):
 
 
 if __name__ == "__main__":
+	np.random.seed(31415)
 	dpsize = sys.argv[1]
 	testing_site_cost(dpsize)
 	gen_paper_plots(dpsize)

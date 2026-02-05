@@ -31,24 +31,6 @@ from sklearn.exceptions import ConvergenceWarning
 from deployment_setup import *
 
 
-def violates(ordering, bigger, smallers):
-	# ordering - list of ingresses
-	# bigger - ingress that won
-	# smallers - ingresses that lost
-
-	# returns True if bigger comes after any of the smallers in the ordering
-
-	if bigger not in ordering: return False
-
-	ordering = np.array(ordering)
-	smallers = np.array(smallers)
-	wb = np.where(bigger == ordering)[0]
-	for s in get_intersection(smallers, ordering):
-		if wb > np.where(ordering == s)[0]:
-			return True
-	return False
-
-
 def compare_estimated_actual_per_user(dpsize):
 	modeled_user_lats = {}
 	for worker_log in glob.glob(os.path.join(LOG_DIR, 'worker*log-{}.txt'.format(dpsize))):
@@ -336,7 +318,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		""" sum over peers of E(delta benefit when that peer is knocked out)."""
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
-		if not self.simulated:
+		if not self.simulated or self.generic_objective.obj not in ["avg_latency"] or self.gamma == 0:
 			return 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
@@ -1584,7 +1566,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				perms = perms + not_in[0:n_left]
 				perm_labs += ["random" for _ in range(n_left)]
 
-
+			ts = time.time()
+			print("Starting to measure {} perms".format(len(perms)))
 			for flips in perms:
 				for flip in flips:
 					a[flip] = 1 - a[flip]
@@ -1592,6 +1575,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				for flip in flips:
 					a[flip] = 1 - a[flip]
 			all_lb_rets = self.flush_latency_benefit_queue()
+			print("Measured perms {}s elapsed".format(time.time() - ts))
 
 			for flipi, flips in enumerate(perms):
 				_,u = all_lb_rets[flipi]
@@ -1666,44 +1650,83 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return None		
 		# plt.close()
 
+
+
 	def stop_tracker(self, advertisement, skip_measuring=False):
+		# --- Timing Setup ---
+		print(f"\n--- TIMING START Iteration {self.iter} ---")
+		perf_t = time.time()
+		
 		# Stop when the objective doesn't change, 
 		# but use an EWMA to track the change so that we don't spuriously exit
 		delta_alpha = .2
 		delta_eff_alpha = .2
 
-
+		ts = time.time()
 
 		if not self.simulated:
 			if self.iter == 0:
 				### Save optimization state, just in case 
 				self.output_optimization_state()
+				print(f"[Timing] output_optimization_state (init): {time.time() - perf_t:.5f}s")
+				perf_t = time.time()
 
 		# re-calculate objective
 		self.last_objective = self.current_pseudo_objective
 		self.last_effective_objective = self.current_effective_objective
+		
 		self.metrics['effective_gammas'].append(self.get_gamma())
+		print(f"[Timing] get_gamma: {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
+
 		if not skip_measuring or len(self.metrics['gt_latency_benefit']) == 0:
 			#### This takes the most time, probably because we always step to a new advertisement and so reset our caches
+			
 			self.metrics['actual_nonconvex_objective'].append(self.measured_objective(advertisement, verb=True, save_metrics=True))
+			print(f"[Timing] measured_objective (1st): {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
 			self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement, verb=True, save_ug_ingress_decisions=True))
-			self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement,
-				store_metrics=True))
+			print(f"[Timing] get_ground_truth_latency_benefit: {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
+			self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement, store_metrics=True))
+			print(f"[Timing] get_ground_truth_resilience_benefit: {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
 			self.metrics['effective_objectives'].append(self.measured_objective(copy.copy(threshold_a(advertisement))))
+			print(f"[Timing] measured_objective (2nd - effective): {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
 		else:
 			for k in ['actual_nonconvex_objective', 'gt_latency_benefit', 'gt_resilience_benefit', 'effective_objectives']:
 				self.metrics[k].append(self.metrics[k][-1])
+			print(f"[Timing] Skipping measurement (appending last metrics): {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
 		self.current_objective = self.metrics['actual_nonconvex_objective'][-1]
 		self.current_latency_benefit = self.metrics['gt_latency_benefit'][-1]
 		self.current_resilience_benefit = self.metrics['gt_resilience_benefit'][-1]
 
 		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True,verbose=True) 
+		print(f"[Timing] modeled_objective (pseudo): {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
+
 		self.current_effective_objective = self.modeled_objective(threshold_a(advertisement))
+		print(f"[Timing] modeled_objective (effective): {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
+
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
+		
 		rb = self.resilience_benefit(advertisement)
 		self.metrics['resilience_benefit'].append(rb)
+		print(f"[Timing] resilience_benefit: {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
+
 		lb_model = self.latency_benefit_fn(advertisement,retnow=True)
 		self.metrics['latency_benefit'].append(lb_model[0])
+		print(f"[Timing] latency_benefit_fn: {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
 
 		## Add to metrics
 		self.metrics['frac_latency_benefit_calls'].append(len(self.n_latency_benefit_calls) / (self.n_popps * self.n_prefixes))
@@ -1714,19 +1737,30 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			msg = pickle.dumps(('increment_iter', "meep"))
 			worker_socket.send(msg)
 			worker_socket.recv()
+		print(f"[Timing] Worker notification loop: {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
 
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.current_pseudo_objective - self.last_objective)
 		self.rolling_delta_eff = (1 - delta_eff_alpha) * self.rolling_delta_eff + \
 			delta_eff_alpha * np.abs(self.current_effective_objective - self.last_effective_objective)
 		adv_delta = np.max(np.abs((advertisement - self.last_advertisement).flatten()))
 		self.rolling_adv_delta = (1 - delta_alpha) * self.rolling_adv_delta + delta_alpha * adv_delta
-		print("RAD: {}".format(self.rolling_adv_delta))
+		
+		# Original print logic kept intact
+		print("RAD: {} {}s".format(self.rolling_adv_delta, time.time() - ts))
+		
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
+		print(f"[Timing] stopping_condition: {time.time() - perf_t:.5f}s")
+		perf_t = time.time()
 
 		if self.iter % self.save_state_every == 0:
 			### Save optimization state 
 			self.output_optimization_state()
+			print(f"[Timing] output_optimization_state (save): {time.time() - perf_t:.5f}s")
+			perf_t = time.time()
+
 		self.output_small_stats()
+		print(f"[Timing] output_small_stats: {time.time() - perf_t:.5f}s")
 
 	def get_init_kwa(self):
 		kwa = {
@@ -1917,6 +1951,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.reset_ugs() 
 				return
 		except ValueError:
+			print("\n=====NOT HOT STARTING======\n")
 			self.modify_ugs()
 			self.optimization_advertisement = self.init_advertisement()
 			self.last_advertisement = copy.copy(self.optimization_advertisement)
