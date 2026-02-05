@@ -127,8 +127,8 @@ def gen_paper_plots(dpsize):
 				for sol, (x, y) in cdf_latency_data.items()
 			},
 			"site_cost_totals_data": {sol: _to_jsonable(val) for sol, val in site_cost_totals_data.items()},
-			"latency_parts": {sol: _to_jsonable(v) for sol, v in zip(sols, latency_parts)},
-			"cost_parts": {sol: _to_jsonable(v) for sol, v in zip(sols, cost_parts)},
+			"latency_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, latency_parts)},
+			"cost_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, cost_parts)},
 		}
 
 		out_fn = f"site_cost_plot_data_{dpsize}_iter{random_iter}.json"
