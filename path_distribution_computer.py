@@ -43,7 +43,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.timing = { k:0 for k in ['solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug','organizing_results',
 		'get_ingress_probabilities_by_dict_generic', 'sim_rti', 
 		'solve_generic_lp_persistent', 'solve_generic_lp_not_persistent']}
-		self.updated_ingress_probabilities = True
+		self.rti_data = {}
 
 		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
 
@@ -218,84 +218,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			"vols_by_poppi": vols_by_poppi,
 			"fraction_congested_volume": congested_vol / (total_vol + 1e-9)
 		}
-
-	def solve_generic_lp_persistent_with_site_cost(self, routed_through_ingress, obj, **kwargs):
-		"""The high-level wrapper that tries Standard first, then MLU."""
-		ts = time.time()
-		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
-		self.timing['get_paths_by_ug'] = time.time() - ts
-		# print('enter solve_generic_lp_persistent_with_site_cost')
-
-		# Pre-calculate objective (latencies)
-		obj_coeffs = []
-		for ug, poppi in available_paths:
-			if poppi == NO_PATH_INGRESS(self):
-				obj_coeffs.append(NO_ROUTE_LATENCY)
-			else:
-				obj_coeffs.append(
-					self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + 
-					DEFAULT_SITE_COST*self.site_costs[self.popps[poppi][0]]
-				)
-
-		# 1. Try Standard Solve
-		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
-
-		# 2. Fallback to MLU if Standard is Infeasible
-		if model_res is None:
-			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
-
-		if model_res is None:
-			print("Infeasible problem, exiting")
-			exit(0)
-			return {'solved': False}
-
-		## Distribution is the amount of volume (not percent) placed on each path
-		## a path is specified by a <user, popp>
-		raw_x = {key: var.X for key, var in self.var_pool.items() if var.X > 1e-7}
-	
-		# Initialize result containers
-		lats_by_ug_arr = np.zeros(self.whole_deployment_n_ug)
-		vols_by_poppi = {pi: 0.0 for pi in range(len(self.static_caps))}
-		paths_by_ug_res = {}
-		congested_vol, total_vol = 0.0, 0.0
-
-		ts = time.time()
-		for (ug, poppi), vol_amt in raw_x.items():
-			ugi = self.whole_deployment_ug_to_ind[ug]
-			vols_by_poppi[poppi] += vol_amt
-			total_vol += vol_amt
-			
-			# Check congestion against STATIC caps
-			if vol_amt > self.static_caps[poppi] + 1e-6 and poppi != len(self.static_caps)-1:
-				congested_vol += vol_amt
-			
-			if ugi not in paths_by_ug_res:
-				paths_by_ug_res[ugi] = []
-			paths_by_ug_res[ugi].append((poppi, vol_amt / self.whole_deployment_ug_to_vol[ug]))
-
-			# Calculate latency for this specific <user, path> allocation
-			if poppi == NO_PATH_INGRESS(self):
-				path_lat = NO_ROUTE_LATENCY
-			else:
-				path_lat = self.whole_deployment_ug_perfs[ug][self.popps[poppi]]
-			
-			# Weighted average latency contribution
-			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
-
-		obj_norm = np.sum(self.whole_deployment_ug_vols)
-		self.timing['organizing_results'] = time.time()-ts
-		return {
-			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
-			"raw_solution": raw_x,
-			"paths_by_ug": paths_by_ug_res,
-			"lats_by_ug": lats_by_ug_arr,
-			"available_paths": available_paths,
-			"solved": True,
-			"vols_by_poppi": vols_by_poppi,
-			"fraction_congested_volume": congested_vol / (total_vol + 1e-9)
-		}
-
-
 
 	def init_all_vars(self):
 		## Latency benefit for each user is -1 * MAX_LATENCY -> -1 MIN_LATENCY
@@ -519,82 +441,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			But can't be too rough so that it's unstable."""
 		return np.power(lfs, .1)
 
-	def sim_rti_better(self):
-		if self.updated_ingress_probabilities:
-			# 1. Map (ui, pref_i) pairs to flat indices and build distributions
-			# This prepares the data for a single vectorized operation
-			self.all_uis_prefixes_poppis = [] # Stores (ui, pref_i, list_of_poppis)
-			all_probs = []
-			
-			# We group by (ui, pref_i) to form the distribution for each user-prefix pair
-			# If your input structure is ui -> {(poppi, pref_i): prob}
-			for ui, data in self.ingress_probabilities.items():
-				# Temporary group by prefix for this specific user
-				prefs_for_ui = defaultdict(list)
-				for (poppi, pref_i), p in data.items():
-					prefs_for_ui[pref_i].append((poppi, p))
-					
-				for pref_i, distributions in prefs_for_ui.items():
-					poppis = [d[0] for d in distributions]
-					probs = [d[1] for d in distributions]
-					self.all_uis_prefixes_poppis.append((ui, pref_i, poppis))
-					all_probs.append(probs)
-
-			num_dists = len(all_probs)
-			if num_dists == 0:
-				return {}
-
-			# 2. Create a Padded CDF Matrix
-			# Vectorization requires a rectangular matrix, but PoP counts may vary.
-			# We pad the rows with 1.0.
-			max_pops = max(len(p) for p in all_probs)
-			self.routing_cdf_matrix = np.zeros((num_dists, max_pops))
-			
-			for i, p in enumerate(all_probs):
-				row_cdf = np.cumsum(p)
-				row_cdf[-1] = 1.0  # Force exact 1.0 to prevent floating point drift
-				self.routing_cdf_matrix[i, :len(row_cdf)] = row_cdf
-				if len(row_cdf) < max_pops:
-					self.routing_cdf_matrix[i, len(row_cdf):] = 1.0
-
-			# 3. Generate ALL Randomness Apriori
-			# One single call to the random engine
-			# Shape: (number of distributions, number of simulations)
-			self.random_mc_routing_samples = np.random.random((num_dists, self.MC_NUM))
-			self.updated_ingress_probabilities = False
-		else:
-			self.random_mc_routing_samples = np.random.random(self.random_mc_routing_samples.shape)
-
-		# 4. Vectorized Sampling
-		# np.searchsorted finds which "bucket" the random number falls into.
-		sampled_indices = np.empty(self.random_mc_routing_samples.shape, dtype=int)
-		for i in range(self.random_mc_routing_samples.shape[0]):
-			sampled_indices[i] = np.searchsorted(self.routing_cdf_matrix[i], self.random_mc_routing_samples[i])
-
-		# 5. Reconstruct the Results
-		routed_through_ingress = {mci: defaultdict(dict) for mci in range(self.MC_NUM)}
-
-
-		for row_idx, (ui, pref_i, poppis) in enumerate(self.all_uis_prefixes_poppis):
-			ug = self.whole_deployment_ugs[ui]
-			# Get the poppi for every simulation for this (ui, pref_i)
-			chosen_poppi_indices = sampled_indices[row_idx]
-			
-			for mci in range(self.MC_NUM):
-				poppi = poppis[chosen_poppi_indices[mci]]
-				routed_through_ingress[mci][pref_i][ug] = self.popps[poppi]
-				try:
-					if not (self.ingress_probabilities[ui][poppi,pref_i] > 0):
-						print("{},{},{} has route but {} probability".format(ui,poppi,pref_i,self.ingress_probabilities[ui][poppi,pref_i]))
-				except KeyError:
-					if ui not in self.ingress_probabilities:
-						print("UI in not ingress probs")
-					elif (poppi,pref_i) not in self.ingress_probabilities[ui]:
-						print("{},{} not in inress probs for {}".format(poppi,pref_i,ui))
-					exit(0)
-
-		return routed_through_ingress	
-
 	def sim_rti(self):
 		### Randomly simulates routes and returns them according to our model of ingress probabilities
 		## routed_through_ingress: prefix -> ug -> popp
@@ -633,6 +479,126 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		return routed_through_ingress
 
+	def sim_rti_better(self):
+		ts = time.time()
+		
+		# --- Step 1: Flatten Data & Prepare Matrices ---
+		# We need to map the nested dict structure into linear arrays for vectorization.
+		# We will track metadata to reconstruct the dictionary later.
+		self.rti_data["meta_data"] = [] # List of tuples: (user_index, prefix_index, user_group_name)
+		self.rti_data["all_probs"] = [] # List of probability arrays
+		self.rti_data["all_poppis"] = [] # List of ingress index arrays
+		
+		# Iterate through your existing structure to flatten it
+		for ui, entries in self.ingress_probabilities.items():
+			# Temporary storage to group by prefix for this user
+			# (Your original code grouped by prefix, so we must too)
+			temp_group = {} 
+			
+			for (poppi, pref_i), p in entries.items():
+				if pref_i not in temp_group:
+					temp_group[pref_i] = {'pops': [], 'probs': []}
+				temp_group[pref_i]['pops'].append(poppi)
+				temp_group[pref_i]['probs'].append(p)
+				
+			# Add these grouped entries to our master lists
+			ug_name = self.whole_deployment_ugs[ui]
+			for pref_i, data in temp_group.items():
+				self.rti_data["meta_data"].append((ui, pref_i, ug_name))
+				self.rti_data["all_probs"].append(data['probs'])
+				self.rti_data["all_poppis"].append(data['pops'])
+
+		self.timing['pmat_organize'] = time.time() - ts
+
+		# --- Step 2: Memory-Efficient Vectorized Selection ---
+		
+		self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
+		self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
+		
+		# Create Padded Matrix and CDF as before
+		# Memory: O(N_scenarios * Max_Choices) - Very small
+		P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
+		self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
+		
+		for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
+			n = len(probs)
+			P_matrix[i, :n] = probs
+			self.rti_data["choices_matrix"][i, :n] = pops
+
+		cdf = np.cumsum(P_matrix, axis=1)
+		cdf[:, -1] = 1.0
+		# 1. Create offsets. shape: (N_scenarios,)
+		# Each row 'i' is shifted by i. 
+		# This ensures values in row 0 are in range [0, 1], row 1 in [1, 2], etc.
+		self.rti_data["offsets"] = np.arange(self.rti_data["num_scenarios"])
+		
+		# 2. Add offsets to the CDF
+		# shape: (N_scenarios, Max_Choices)
+		self.rti_data["cdf_offset"] = cdf + self.rti_data["offsets"][:, None]
+		# Generate Random numbers
+		# Memory: O(N_scenarios * MC_NUM)
+		rand_vals = np.random.rand(self.rti_data["num_scenarios"], self.MC_NUM)
+		
+		# 3. Add offsets to the random values
+		# shape: (N_scenarios, MC_NUM)
+		rand_offset = rand_vals + self.rti_data["offsets"][:, None]
+
+		# 4. Flatten both
+		# cdf_flat size: N_scenarios * Max_Choices
+		# rand_flat size: N_scenarios * MC_NUM
+		cdf_flat = self.rti_data["cdf_offset"].ravel()
+		rand_flat = rand_offset.ravel()
+
+		# 5. Perform one giant binary search
+		# This returns the insertion index in the flattened array
+		insert_indices = np.searchsorted(cdf_flat, rand_flat)
+
+		# 6. Map back to 2D indices
+		# The 'insert_indices' are indices into the FLATTENED cdf.
+		# We need to know which column (which choice) that corresponds to.
+		# Since cdf_flat is row-major, modulo Max_Choices gives us the column index.
+		# However, because we offset the VALUES, not the indices, simply taking modulo
+		# of the result index works because 'cdf_flat' is effectively sorted globally.
+		idx_selections_flat = insert_indices % self.rti_data["max_choices"]
+		# Reshape back to (N_scenarios, MC_NUM)
+		idx_selections = idx_selections_flat.reshape(self.rti_data["num_scenarios"], self.MC_NUM)
+		# Map indices back to actual POPPIs
+		row_indices = np.arange(self.rti_data["num_scenarios"])[:, None]
+		selected_poppis = self.rti_data["choices_matrix"][row_indices, idx_selections]
+
+		# --- Construct Output Dictionary ---
+		routed_through_ingress = {}
+		# We iterate over the scenarios (rows) and their generated results
+		for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
+			simulated_routes = selected_poppis[i] # Array of size MC_NUM
+			
+			for mci, poppi in enumerate(simulated_routes):
+				# Access dictionary structure only once per MC index if possible
+				if mci not in routed_through_ingress:
+					routed_through_ingress[mci] = {}
+				
+				mc_dict = routed_through_ingress[mci]
+				
+				# Map the integer index back to the real object (self.popps)
+				real_pop_obj = self.popps[poppi]
+				
+				# Assign deep in the structure
+				if pref_i not in mc_dict:
+					mc_dict[pref_i] = {}
+				
+				mc_dict[pref_i][ug_name] = real_pop_obj
+				try:
+					if not (self.ingress_probabilities[ui][poppi,pref_i] > 0):
+						print("{},{},{} has route but {} probability".format(ui,poppi,pref_i,self.ingress_probabilities[ui][poppi,pref_i]))
+				except KeyError:
+					if ui not in self.ingress_probabilities:
+						print("UI in not ingress probs")
+					elif (poppi,pref_i) not in self.ingress_probabilities[ui]:
+						print("{},{} not in inress probs for {}".format(poppi,pref_i,ui))
+					exit(0)
+
+		return routed_through_ingress	
+
 	def generic_objective_pdf(self, obj, **kwargs):
 		"""
 			Solves self.MC_NUM traffic assignment problems, assuming that user routes are distributed
@@ -641,8 +607,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		### TODO -- maybe implement subset of users, but not really essential
 		ts = time.time()
-		# all_routed_through_ingress = self.sim_rti_better()
-		all_routed_through_ingress = self.sim_rti()
+		all_routed_through_ingress = self.sim_rti_better()
 		self.timing['sim_rti'] = time.time() - ts
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
@@ -857,7 +822,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.clear_new_meas_caches()
 			ret = "ACK"
 		elif cmd == 'update_parent_tracker':
-			self.updated_ingress_probabilities = True
 			parents_on = data
 			for ug in parents_on:
 				for beaten_ingress, routed_ingress in parents_on[ug]:
