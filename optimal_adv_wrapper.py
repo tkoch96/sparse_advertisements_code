@@ -1406,6 +1406,7 @@ class Optimal_Adv_Wrapper:
 	def enforce_measured_prefs(self, routed_through_ingress, actives):
 		### Saves information about which ingresses beat other ingresses for each user
 		### Sends this information to worker bees
+		ts = time.time()
 		for ui, ug in enumerate(self.ugs):
 			for prefix_i in routed_through_ingress:
 				routed_ingress = routed_through_ingress[prefix_i].get(ug)
@@ -1437,10 +1438,14 @@ class Optimal_Adv_Wrapper:
 							self.calc_cache.all_caches['parents_on'][ug][beaten_ingress,routed_ingress] = None
 						except KeyError:
 							self.calc_cache.all_caches['parents_on'][ug] = {(beaten_ingress,routed_ingress): None}
+		print("enforcement logic took {}s".format(time.time() - ts))
+		ts = time.time()
 		self.update_parent_tracker_workers()
+		print("updating parent tracker took {}s".format(time.time() - ts))
 	
 	def update_parent_tracker_workers(self):	
 		## Update workers about new parent tracker information
+		ts = time.time()
 		try:
 			self.worker_manager
 		except AttributeError:
@@ -1455,7 +1460,10 @@ class Optimal_Adv_Wrapper:
 				except KeyError:
 					pass
 			msgs[worker] = pickle.dumps(('update_parent_tracker', sub_cache))
+		print("pickling messages took {}s".format(time.time()-ts))
+		ts = time.time()
 		self.worker_manager.send_messages_workers(msgs)
+		print("sending messages took {}s".format(time.time() - ts))
 
 	def measure_ingresses(self, a, **kwargs):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
