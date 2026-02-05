@@ -22,6 +22,9 @@ except:
 
 USER_OF_INTEREST = None
 
+## TODO -- just remove the old version once we're more confident it works well
+TEST_BETTER_VERSION = True
+
 # dont make this too big or you'll break the VM
 # 2000 for lots of workers / smaller VMs. 15000 for fewer workers / large VMs
 MAX_CACHE_SIZE = 8000
@@ -60,7 +63,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
-		return
 		total_time = sum(list(self.timing.values()))
 		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
 		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
@@ -270,165 +272,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.this_time_ip_cache = {}
 		self.calc_cache.clear_all_caches()
 
-	def get_ingress_probabilities_by_dict_generic(self, a, verb=False, **kwargs):
-		## Uses dictionaries to do the job
-		a_log = threshold_a(a).astype(bool)
-
-		sum_a = np.sum(a,axis=0)
-
-		timers = {
-			'cache_hits': 0,
-			'cache_lookups': 0,
-			'api': 0,
-			'dpi': 0,
-			'apugi': 0,
-			'vpugi': 0,
-			'sort_calc': 0,
-			'final_calc': 0,
-			'total': 0,
-		}
-
-		self.ingress_probabilities = {ui:{} for ui in range(self.whole_deployment_n_ug)}
-		for pref_i in np.where(sum_a)[0]:
-			ts_loop = time.time()
-			tloga = tuple(a_log[:,pref_i].flatten())
-			if np.sum(a[:,pref_i]) == 0:
-				continue
-			try:
-				for (poppi,ui), prob in self.this_time_ip_cache[tloga].items():
-					# will need a more complicated caching mechanism if ever non-uniform
-					self.ingress_probabilities[ui][poppi,pref_i] = 1.0/prob 
-				timers['cache_hits'] += 1
-				timers['cache_lookups'] += time.time() - ts_loop
-				continue
-			except KeyError:
-				pass
-
-			## i.e, for each user and for each popp. compute whether a parent of that popp is currently active
-			active_parent_indicator = {}
-			poppis_active = {poppi:None for poppi in np.where(a_log[:,pref_i])[0]}
-			for ug,child,parent in self.parent_tracker: ### we should modify parent tracker to map parent to children
-				ui = self.whole_deployment_ug_to_ind[ug]
-				parenti = self.popp_to_ind[parent]
-				childi = self.popp_to_ind[child]
-				try:
-					poppis_active[parenti]
-					active_parent_indicator[ui,childi] = 1
-				except KeyError:
-					continue
-			timers['api'] += time.time() - ts_loop; ts_loop=time.time()
-
-			## For active poppi in active_poppis, for user in poppi to users, if not parent active for poppi -> tabulate
-
-			## Group by user
-			self.this_time_ip_cache[tloga] = {}
-			cacheref = self.this_time_ip_cache[tloga]
-			for ui in range(self.whole_deployment_n_ug):
-				these_poppis = []
-				ref = self.whole_deployment_ui_to_poppi[ui]
-				for poppi in poppis_active:
-					try:
-						ref[poppi]
-					except KeyError:
-						continue ### user doesn't have this popp
-					try:
-						active_parent_indicator[ui,poppi] ### We have an active parent, ignore
-						continue
-					except KeyError:
-						these_poppis.append(poppi)
-
-				if len(these_poppis) == 0:
-					continue
-				npoppis = len(these_poppis)
-				likelihood = 1.0 / npoppis
-				for poppi in these_poppis:
-					self.ingress_probabilities[ui][poppi,pref_i] = likelihood
-					### Cache the entries that have non-zero probability
-					cacheref[poppi,ui] = npoppis
-			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
-
-	def get_ingress_probabilities_by_dict(self, a, verb=False, **kwargs):
-		## Uses dictionaries to do the job
-		a_log = threshold_a(a).astype(bool)
-
-		sum_a = np.sum(a,axis=0)
-
-		timers = {
-			'cache_hits': 0,
-			'cache_lookups': 0,
-			'api': 0,
-			'dpi': 0,
-			'apugi': 0,
-			'vpugi': 0,
-			'sort_calc': 0,
-			'final_calc': 0,
-			'total': 0,
-		}
-
-		self.ingress_probabilities = {ui:{} for ui in range(self.n_ug)}
-		for pref_i in np.where(sum_a)[0]:
-			ts_loop = time.time()
-			tloga = tuple(a_log[:,pref_i].flatten())
-			if np.sum(a[:,pref_i]) == 0:
-				continue
-			try:
-				for (poppi,ui), prob in self.this_time_ip_cache[tloga].items():
-					# will need a more complicated caching mechanism if ever non-uniform
-					self.ingress_probabilities[ui][poppi,pref_i] = 1.0/prob 
-				timers['cache_hits'] += 1
-				timers['cache_lookups'] += time.time() - ts_loop
-				continue
-			except KeyError:
-				pass
-
-			## i.e, for each user and for each popp. compute whether a parent of that popp is currently active
-			active_parent_indicator = {}
-			poppis_active = {poppi:None for poppi in np.where(a_log[:,pref_i])[0]}
-			for ug,child,parent in self.parent_tracker: ### we should modify parent tracker to map parent to children
-				ui = self.ug_to_ind[ug]
-				parenti = self.popp_to_ind[parent]
-				childi = self.popp_to_ind[child]
-				try:
-					poppis_active[parenti]
-					active_parent_indicator[ui,childi] = 1
-				except KeyError:
-					continue
-			timers['api'] += time.time() - ts_loop; ts_loop=time.time()
-
-			## For active poppi in active_poppis, for user in poppi to users, if not parent active for poppi -> tabulate
-
-			## Group by user
-			self.this_time_ip_cache[tloga] = {}
-			cacheref = self.this_time_ip_cache[tloga]
-			for ui in range(self.n_ug):
-				these_poppis = []
-				ref = self.ui_to_poppi[ui]
-				for poppi in poppis_active:
-					try:
-						ref[poppi]
-					except KeyError:
-						continue ### user doesn't have this popp
-					try:
-						active_parent_indicator[ui,poppi] ### We have an active parent, ignore
-						continue
-					except KeyError:
-						these_poppis.append(poppi)
-
-				if len(these_poppis) == 0:
-					continue
-				npoppis = len(these_poppis)
-				likelihood = 1.0 / npoppis
-				for poppi in these_poppis:
-					self.ingress_probabilities[ui][poppi,pref_i] = likelihood
-					### Cache the entries that have non-zero probability
-					cacheref[poppi,ui] = npoppis
-			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
-
-		# if np.random.random() > 0 and self.worker_i == 0:
-		#   print('\n')
-		#   for k,v in timers.items():
-		#       print("{} -- {} s".format(k,round(v,5)))
-
 	def summarize_cache_size(self):
 		## 
 		for obj,nm in zip([self.user_ip_cache, self.calc_cache, self.this_time_ip_cache], 
@@ -599,7 +442,262 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		return routed_through_ingress	
 
-	def generic_objective_pdf(self, obj, **kwargs):
+	def get_ingress_probabilities_by_dict_generic(self, a, verb=False, **kwargs):
+		## Uses dictionaries to do the job
+		a_log = threshold_a(a).astype(bool)
+
+		sum_a = np.sum(a,axis=0)
+
+		timers = {
+			'cache_hits': 0,
+			'cache_lookups': 0,
+			'api': 0,
+			'dpi': 0,
+			'apugi': 0,
+			'vpugi': 0,
+			'sort_calc': 0,
+			'final_calc': 0,
+			'total': 0,
+		}
+
+		self.ingress_probabilities = {ui:{} for ui in range(self.whole_deployment_n_ug)}
+		for pref_i in np.where(sum_a)[0]:
+			ts_loop = time.time()
+			tloga = tuple(a_log[:,pref_i].flatten())
+			if np.sum(a[:,pref_i]) == 0:
+				continue
+			try:
+				for (poppi,ui), prob in self.this_time_ip_cache[tloga].items():
+					# will need a more complicated caching mechanism if ever non-uniform
+					self.ingress_probabilities[ui][poppi,pref_i] = 1.0/prob 
+				timers['cache_hits'] += 1
+				timers['cache_lookups'] += time.time() - ts_loop
+				continue
+			except KeyError:
+				pass
+
+			## i.e, for each user and for each popp. compute whether a parent of that popp is currently active
+			active_parent_indicator = {}
+			poppis_active = {poppi:None for poppi in np.where(a_log[:,pref_i])[0]}
+			for ug,child,parent in self.parent_tracker: ### we should modify parent tracker to map parent to children
+				ui = self.whole_deployment_ug_to_ind[ug]
+				parenti = self.popp_to_ind[parent]
+				childi = self.popp_to_ind[child]
+				try:
+					poppis_active[parenti]
+					active_parent_indicator[ui,childi] = 1
+				except KeyError:
+					continue
+			timers['api'] += time.time() - ts_loop; ts_loop=time.time()
+
+			## For active poppi in active_poppis, for user in poppi to users, if not parent active for poppi -> tabulate
+
+			## Group by user
+			self.this_time_ip_cache[tloga] = {}
+			cacheref = self.this_time_ip_cache[tloga]
+			for ui in range(self.whole_deployment_n_ug):
+				these_poppis = []
+				ref = self.whole_deployment_ui_to_poppi[ui]
+				for poppi in poppis_active:
+					try:
+						ref[poppi]
+					except KeyError:
+						continue ### user doesn't have this popp
+					try:
+						active_parent_indicator[ui,poppi] ### We have an active parent, ignore
+						continue
+					except KeyError:
+						these_poppis.append(poppi)
+
+				if len(these_poppis) == 0:
+					continue
+				npoppis = len(these_poppis)
+				likelihood = 1.0 / npoppis
+				for poppi in these_poppis:
+					self.ingress_probabilities[ui][poppi,pref_i] = likelihood
+					### Cache the entries that have non-zero probability
+					cacheref[poppi,ui] = npoppis
+			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
+	
+	def get_ingress_probabilities_and_sim(self, a, verb=False, **kwargs):
+	    """
+	    Combined and optimized version of get_ingress_probabilities + sim_rti_better.
+	    Directly produces the routed_through_ingress dictionary using pattern caching.
+	    """
+	    ts_total = time.time()
+	    
+	    # --- 1. Initialize Containers ---
+	    # Instead of nested dicts, we build the flat lists required for vectorization directly.
+	    self.rti_data = {
+	        "meta_data": [],  # List of tuples: (ui, pref_i, ug_name)
+	        "all_probs": [],  # List of probability lists: [0.5, 0.5]
+	        "all_poppis": []  # List of choice lists: [pop_A, pop_B]
+	    }
+
+	    # Ensure persistent cache exists (persist this across function calls)
+	    if not hasattr(self, 'pattern_cache'):
+	        self.pattern_cache = {}
+
+	    # Local variable speedups to avoid self lookups in loop
+	    ugs = self.whole_deployment_ugs
+	    # Assumed to be {ui: [poppi, poppi...]} or {ui: {poppi: data}}
+	    ui_to_poppi = self.whole_deployment_ui_to_poppi 
+	    
+	    # --- 2. Process Availability Matrix (a) ---
+	    # Assuming threshold_a logic is effectively: > 1e-6 means active
+	    a_log = (a > 1e-6) 
+	    
+	    # Iterate over prefixes (columns of a)
+	    for pref_i in range(a.shape[1]):
+	        col = a_log[:, pref_i]
+	        
+	        # Optimization: If no POPs are active for this prefix, skip entirely
+	        if not np.any(col):
+	            continue
+
+	        # Create a hashable signature for this availability state
+	        tloga = tuple(col)
+
+	        # --- CACHE CHECK ---
+	        if tloga in self.pattern_cache:
+	            # HIT: We have seen this network state before.
+	            # cached_entries is a list of: (ui, valid_pops_list, probs_list)
+	            cached_entries = self.pattern_cache[tloga]
+	            
+	            # Fast append to master lists
+	            # We reuse the logic (pops/probs), but update the prefix index (pref_i)
+	            for ui, pops, probs in cached_entries:
+	                self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
+	                self.rti_data["all_probs"].append(probs)
+	                self.rti_data["all_poppis"].append(pops)
+	            continue
+
+	        # --- CACHE MISS: Calculate Logic ---
+	        # This block only runs when we encounter a UNIQUE network failure state
+	        
+	        # 1. Identify active POPs indices
+	        active_poppis = np.where(col)[0]
+	        active_poppis_set = set(active_poppis)
+
+	        # 2. Identify Blocked (User, Child) pairs due to Active Parents
+	        # blocked_user_child stores (ui, child_poppi) that are FORBIDDEN
+	        blocked_user_child = set()
+	        for ug, child, parent in self.parent_tracker:
+	            parenti = self.popp_to_ind[parent]
+	            # If the parent is active in this specific state 'tloga', the child is blocked
+	            if parenti in active_poppis_set:
+	                ui = self.whole_deployment_ug_to_ind[ug]
+	                childi = self.popp_to_ind[child]
+	                blocked_user_child.add((ui, childi))
+
+	        # 3. Build Routing for this State
+	        entries_for_cache = [] # To store (ui, pops, probs) for future reuse
+
+	        for ui in range(self.whole_deployment_n_ug):
+	            valid_pops = []
+	            
+	            # Get potentially available POPs for this user (static config)
+	            potential_pops = ui_to_poppi[ui]
+	            
+	            for poppi in potential_pops:
+	                # Condition 1: POP must be physically UP
+	                if poppi not in active_poppis_set:
+	                    continue
+	                
+	                # Condition 2: POP must not be blocked by an active parent
+	                if (ui, poppi) in blocked_user_child:
+	                    continue
+	                
+	                valid_pops.append(poppi)
+
+	            if not valid_pops:
+	                continue
+
+	            # Compute Uniform Probability
+	            n = len(valid_pops)
+	            probs = [1.0 / n] * n
+	            
+	            # Append to current run
+	            self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
+	            self.rti_data["all_probs"].append(probs)
+	            self.rti_data["all_poppis"].append(valid_pops)
+
+	            # Append to Cache
+	            entries_for_cache.append((ui, valid_pops, probs))
+
+	        # Save this state's logic to cache so we never calculate it again for this pattern
+	        self.pattern_cache[tloga] = entries_for_cache
+
+	    self.timing['pmat_organize'] = time.time() - ts_total
+
+	    # --- 3. Vectorized Simulation (Previously sim_rti_better) ---
+	    # Now self.rti_data is fully populated. We proceed with the vectorized selection.
+	    
+	    self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
+	    if self.rti_data["num_scenarios"] == 0:
+	        return {}
+
+	    self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
+
+	    # Create Padded Matrix
+	    P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
+	    self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
+
+	    for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
+	        n = len(probs)
+	        P_matrix[i, :n] = probs
+	        self.rti_data["choices_matrix"][i, :n] = pops
+
+	    # CDF Construction
+	    cdf = np.cumsum(P_matrix, axis=1)
+	    cdf[:, -1] = 1.0 # Force sum to 1.0 to avoid float precision issues
+
+	    # Offset Trick for Vectorized Search
+	    # Shifts the values of every row so we can search a single flattened array
+	    offsets = np.arange(self.rti_data["num_scenarios"])
+	    cdf_offset = cdf + offsets[:, None]
+	    
+	    # Generate Random Numbers
+	    rand_vals = np.random.rand(self.rti_data["num_scenarios"], self.MC_NUM)
+	    rand_offset = rand_vals + offsets[:, None]
+
+	    # Flatten for searchsorted
+	    cdf_flat = cdf_offset.ravel()
+	    rand_flat = rand_offset.ravel()
+
+	    # Binary Search (Finds insertion point in flattened CDF)
+	    insert_indices = np.searchsorted(cdf_flat, rand_flat)
+
+	    # Map back to 2D indices
+	    idx_selections_flat = insert_indices % self.rti_data["max_choices"]
+	    idx_selections = idx_selections_flat.reshape(self.rti_data["num_scenarios"], self.MC_NUM)
+	    
+	    # Retrieve selected POP indices
+	    row_indices = np.arange(self.rti_data["num_scenarios"])[:, None]
+	    selected_poppis = self.rti_data["choices_matrix"][row_indices, idx_selections]
+
+	    # --- 4. Construct Final Output Dictionary ---
+	    routed_through_ingress = {}
+
+	    for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
+	        simulated_routes = selected_poppis[i] # Array of size MC_NUM
+	        
+	        for mci, poppi in enumerate(simulated_routes):
+	            if mci not in routed_through_ingress:
+	                routed_through_ingress[mci] = {}
+	            
+	            # Ensure structure exists
+	            if pref_i not in routed_through_ingress[mci]:
+	                routed_through_ingress[mci][pref_i] = {}
+	            
+	            # Assuming self.popps is a list/dict of actual POP objects
+	            routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
+
+	    self.timing['total_rti_calc'] = time.time() - ts_total
+	    
+	    return routed_through_ingress
+
+	def generic_objective_pdf(self, obj, a, **kwargs):
 		"""
 			Solves self.MC_NUM traffic assignment problems, assuming that user routes are distributed
 			according to distribution self.ingress_probabilities.
@@ -607,7 +705,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		### TODO -- maybe implement subset of users, but not really essential
 		ts = time.time()
-		all_routed_through_ingress = self.sim_rti_better()
+		if not TEST_BETTER_VERSION:
+			all_routed_through_ingress = self.sim_rti_better()
+		else:
+			all_routed_through_ingress = self.get_ingress_probabilities_and_sim(a)
 		self.timing['sim_rti'] = time.time() - ts
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
@@ -670,9 +771,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				pass
 
 		## Dims are path, prefix, user
-		ts = time.time()
-		self.get_ingress_probabilities_by_dict_generic(a_effective, **kwargs) ## populates self.ingress_probabilities
-		self.timing['get_ingress_probabilities_by_dict_generic'] = time.time() - ts
+		if not TEST_BETTER_VERSION:
+			ts = time.time()
+			self.get_ingress_probabilities_by_dict_generic(a_effective, **kwargs) ## populates self.ingress_probabilities
+			self.timing['get_ingress_probabilities_by_dict_generic'] = time.time() - ts
 
 		if subset_ugs: ##### REVISIT
 			which_ugs_this_worker = get_intersection(which_ugs, self.whole_deployment_ugs)
@@ -685,9 +787,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Calculate pdf of the generic objective
 		if subset_ugs:
-			xsumx, psumx = self.generic_objective_pdf(f_w, which_ugs_i=which_ugs_i)
+			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective, which_ugs_i=which_ugs_i)
 		else:
-			xsumx, psumx = self.generic_objective_pdf(f_w)
+			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective)
 
 		xsumx = xsumx.flatten(); psumx = psumx.flatten()
 		benefit = np.sum(xsumx * psumx)
@@ -737,6 +839,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def clear_new_meas_caches(self):
 		# print("Clearing caches in worker {}".format(self.worker_i))
 		self.this_time_ip_cache = {}
+		self.pattern_cache = {}
 		self.calc_cache.clear_new_measurement_caches()
 
 	def check_for_commands(self):
