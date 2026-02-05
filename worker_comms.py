@@ -80,7 +80,7 @@ class Worker_Manager:
 			base_port = int(self.deployment.get('port', 31415))
 			call("{} path_distribution_computer.py {} {} &".format(PYTHON, worker, base_port), shell=True) # VMs
 			# send worker startup information
-			args = [copy.deepcopy(subdeployments[worker])]
+			args = [subdeployments[worker]]
 			self.worker_to_deployments[worker] = subdeployments[worker]
 			kwargs = self.get_init_kwa()
 			self.worker_sockets[worker] = context.socket(zmq.REQ)
