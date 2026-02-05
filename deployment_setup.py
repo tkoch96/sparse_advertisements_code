@@ -1,6 +1,9 @@
 import tqdm, numpy as np
 from constants import *
 from helpers import *
+import math
+from random import sample
+
 
 def pops_to_fn(considering_pops):
 	considering_pops = [el.replace('vtr','') for el in considering_pops]
@@ -1048,6 +1051,32 @@ def get_bulk_vol(deployment):
 		bulk_vol = {ug:v*BULK_MULTIPLIER for ug,v in deployment['ug_to_vol'].items()}
 	return bulk_vol
 
+def get_site_costs_base_factor(deployment, frac=0.5, factor=1.2, base_cost=0.5, seed=None, **kwargs):
+	"""
+	Assign site costs:
+		- frac of sites are expensive (base_cost * factor)
+		- rest are cheap (base_cost)
+	"""
+	if seed is not None:
+		np.random.seed(seed)
+
+	all_sites = sorted({pop for pop, peer in deployment['popps']})
+	n_sites = len(all_sites)
+
+	n_exp = max(1, math.floor(frac * n_sites))
+
+	# sameple sites to be more expensive
+	exp_sites = set(sample(all_sites, n_exp))
+
+	site_costs = {}
+	for s in all_sites:
+		if s in exp_sites:
+			site_costs[s] = base_cost * factor
+		else:
+			site_costs[s] = base_cost
+
+	return site_costs
+
 def get_carbon_site_costs(deployment, **kwargs):
 	all_sites = sorted(list(set(pop for pop,peer in deployment['popps'])))
 	print('all_sites', all_sites)
@@ -1363,6 +1392,9 @@ def load_actual_deployment(deployment_size, **kwargs):
 		if cost_type == 'carbon':
 			print(cost_type)
 			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		elif cost_type == 'factor':
+			print(cost_type)
+			site_costs = get_site_costs_base_factor(deployment, **kwargs)
 		else:
 			site_costs = get_random_site_costs(deployment, **kwargs)
 		
@@ -1397,8 +1429,12 @@ def load_actual_deployment(deployment_size, **kwargs):
 		if cost_type == 'carbon':
 			print(cost_type)
 			site_costs = get_carbon_site_costs(deployment, **kwargs)
+		elif cost_type == 'factor':
+			print(cost_type)
+			site_costs = get_site_costs_base_factor(deployment, **kwargs)
 		else:
 			site_costs = get_random_site_costs(deployment, **kwargs)
+		
 		deployment['site_costs'] = site_costs
 
 	return deployment
