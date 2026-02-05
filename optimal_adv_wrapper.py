@@ -1460,6 +1460,8 @@ class Optimal_Adv_Wrapper:
 	def measure_ingresses(self, a, **kwargs):
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
 		### i.e., this is an actual advertisement measurement, we should aim to limit these :)
+		print("Entering measure ingresses")
+		ts = time.time()
 		self.enforce_loaded_rwmw()
 
 		try:
@@ -1476,13 +1478,19 @@ class Optimal_Adv_Wrapper:
 		self.clear_new_measurement_caches()
 
 		self.path_measures += 1
+		cnucts = time.time()
 		self.calculate_user_choice(a, get_ug_catchments=True, **kwargs)
-
+		print("cnuc took {}s".format(time.time()-cnucts))
 		a = threshold_a(a)
+		rtits = time.time()
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a, verb=True, **kwargs)
+		print("rti took {}s".format(time.time() - rtits))
 
+		empts = time.time()
 		self.enforce_measured_prefs(routed_through_ingress, actives)
+		print("empts took {}s".format(time.time() - empts))
 		self.measured[tuple(a.flatten())] = None
+		print("Leaving measure ingresses : {}s".format(time.time() - ts))
 			
 	def actual_nonconvex_objective(self, a, **kwargs):
 		# Don't approximate the L0 norm with anything
