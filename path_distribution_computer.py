@@ -63,6 +63,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
+		return
 		total_time = sum(list(self.timing.values()))
 		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
 		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
