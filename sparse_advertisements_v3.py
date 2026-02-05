@@ -318,7 +318,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		""" sum over peers of E(delta benefit when that peer is knocked out)."""
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
-		if not self.simulated:
+		if not self.simulated or self.generic_objective.obj not in ["avg_latency"] or self.gamma == 0:
 			return 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)

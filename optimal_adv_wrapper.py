@@ -1450,16 +1450,12 @@ class Optimal_Adv_Wrapper:
 			self.worker_manager
 		except AttributeError:
 			return # no workers to update
+
+		## TODO -- could just send deltas
 		msgs = {}
+		msg = pickle.dumps(('update_parent_tracker', self.calc_cache.all_caches['parents_on']))
 		for worker in self.worker_manager.worker_sockets:
-			this_deployment_ugs = self.ugs
-			sub_cache = {}
-			for this_deployment_ug in this_deployment_ugs:
-				try:
-					sub_cache[this_deployment_ug] = self.calc_cache.all_caches['parents_on'][this_deployment_ug] 
-				except KeyError:
-					pass
-			msgs[worker] = pickle.dumps(('update_parent_tracker', sub_cache))
+			msgs[worker] = msg
 		print("pickling messages took {}s".format(time.time()-ts))
 		ts = time.time()
 		self.worker_manager.send_messages_workers(msgs)
