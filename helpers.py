@@ -50,35 +50,55 @@ def parse_lat(lat_str):
 def ip32_to_24(ip):
 	return ".".join(ip.split(".")[0:3]) + ".0"
 
-def split_deployment_by_ug(deployment, limit = None, n_chunks = None):
-	### Create a bunch of sub-deployment objects, each with a subset of UGs
+def split_deployment_by_ug(deployment, limit=None, n_chunks=None):
 	ugs = deployment['ugs']
 	if limit is not None:
 		n_chunks = int(np.ceil(len(ugs) / limit))
 	ug_chunks = split_seq(ugs, n_chunks)
 
+	# 1. Keys that MUST be sliced per worker (Data relevant only to assigned UGs)
+	# These are dictionaries where the Key is the UG.
+	keys_to_slice = {
+		'ug_perfs', 
+		'ug_to_vol', 
+		'ug_to_bulk_vol', 
+		'ug_to_ip', 
+		'ug_anycast_perfs', 
+		'ingress_priorities'
+	}
+
+	# 2. Keys that are STATIC (Every worker needs the full version)
+	# Note: 'whole_deployment_*' keys are treated as static context here.
+	# If workers don't actually need the "whole" context, you could save 
+	# massive RAM by excluding them, but assuming your logic needs them:
+	static_keys = [
+		k for k in deployment.keys() 
+		if k not in keys_to_slice and k != 'ugs'
+	]
+	# Examples of static_keys based on your list:
+	# 'dpsize', 'simulated', 'port', 'popps', 'metro_loc', 'pop_to_loc',
+	# 'n_providers', 'provider_popps', 'link_capacities', 'site_costs',
+	# 'whole_deployment_ugs', 'whole_deployment_ug_perfs', etc.
+
 	deployments = []
 	for ug_chunk in ug_chunks:
-		### TODO -- do I really need to copy these? seems unnecessary
-		try:
-			deployments.append({
-				# simulated
-				'ugs': ug_chunk,
-				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
-				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
-				'ug_to_bulk_vol': copy.copy({ug:deployment['ug_to_bulk_vol'][ug] for ug in ug_chunk}),
-				'ingress_priorities': copy.copy({ug:deployment['ingress_priorities'][ug] for ug in ug_chunk}),
-			})
-		except KeyError:
-			# not simulated
-			deployments.append({
-				'ugs': ug_chunk,
-				'ug_perfs': copy.copy({ug:deployment['ug_perfs'][ug] for ug in ug_chunk}),
-				'ug_to_vol': copy.copy({ug:deployment['ug_to_vol'][ug] for ug in ug_chunk}),
-				'ug_to_bulk_vol': copy.copy({ug:deployment['ug_to_bulk_vol'][ug] for ug in ug_chunk}),
-			})
-		for k in get_difference(deployment, deployments[-1]):
-			deployments[-1][k] = copy.deepcopy(deployment[k])
+		# Create the sub-deployment dict
+		sub_dep = {'ugs': ug_chunk}
+
+		# A. Handle Sliced Keys
+		# We perform a dictionary comprehension to grab only the relevant UGs.
+		# We access values by REFERENCE (fast).
+		for k in keys_to_slice:
+			if k in deployment:
+				sub_dep[k] = {ug: deployment[k][ug] for ug in ug_chunk}
+
+		# B. Handle Static Keys
+		# We pass the entire object by REFERENCE (fast).
+		# Pickle will handle the copying when sending to the worker.
+		for k in static_keys:
+			sub_dep[k] = deployment[k]
+
+		deployments.append(sub_dep)
 
 	return deployments
 
