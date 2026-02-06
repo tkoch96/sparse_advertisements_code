@@ -888,6 +888,18 @@ class Optimal_Adv_Wrapper:
 				self.compute_one_per_peering_solution()
 			n_workers = self.get_n_workers()
 			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
+			msgs = []
+			for worker in range(n_workers):
+				if len(subdeployments[worker]['ugs']) == 0: continue
+				## It would be annoying to make the code work for cases in which a processor focuses on one user
+				assert len(subdeployments[worker]['ugs']) >= 1
+				# send worker startup information
+				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
+			
+				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
+				msgs.append(msg)
+			self.send_receive_messages_workers(msgs)
+			msgs = []
 			for worker in range(n_workers):
 				if len(subdeployments[worker]['ugs']) == 0: continue
 				## It would be annoying to make the code work for cases in which a processor focuses on one user
@@ -895,11 +907,9 @@ class Optimal_Adv_Wrapper:
 				# send worker startup information
 				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
 				
-				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
-				self.send_receive_worker(worker, msg)
-
 				msg = pickle.dumps(('update_deployment', (subdeployments[worker], kwargs)))
-				self.send_receive_worker(worker, msg)
+				msgs.append(msg)
+			self.send_receive_messages_workers(msg)
 			
 		except AttributeError:
 			pass
