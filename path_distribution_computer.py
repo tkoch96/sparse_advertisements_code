@@ -521,182 +521,182 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			timers['final_calc'] += time.time() - ts_loop; ts_loop=time.time()
 	
 	def get_ingress_probabilities_and_sim(self, a, verb=False, **kwargs):
-	    """
+		"""
 	    Combined and optimized version of get_ingress_probabilities + sim_rti_better.
 	    Directly produces the routed_through_ingress dictionary using pattern caching.
 	    """
-	    ts_total = time.time()
-	    
-	    # --- 1. Initialize Containers ---
-	    # Instead of nested dicts, we build the flat lists required for vectorization directly.
-	    self.rti_data = {
-	        "meta_data": [],  # List of tuples: (ui, pref_i, ug_name)
-	        "all_probs": [],  # List of probability lists: [0.5, 0.5]
-	        "all_poppis": []  # List of choice lists: [pop_A, pop_B]
-	    }
+		ts_total = time.time()
 
-	    # Ensure persistent cache exists (persist this across function calls)
-	    if not hasattr(self, 'pattern_cache'):
-	        self.pattern_cache = {}
+		# --- 1. Initialize Containers ---
+		# Instead of nested dicts, we build the flat lists required for vectorization directly.
+		self.rti_data = {
+			"meta_data": [],  # List of tuples: (ui, pref_i, ug_name)
+			"all_probs": [],  # List of probability lists: [0.5, 0.5]
+			"all_poppis": []  # List of choice lists: [pop_A, pop_B]
+		}
 
-	    # Local variable speedups to avoid self lookups in loop
-	    ugs = self.whole_deployment_ugs
-	    # Assumed to be {ui: [poppi, poppi...]} or {ui: {poppi: data}}
-	    ui_to_poppi = self.whole_deployment_ui_to_poppi 
-	    
-	    # --- 2. Process Availability Matrix (a) ---
-	    # Assuming threshold_a logic is effectively: > 1e-6 means active
-	    a_log = (a > 1e-6) 
-	    
-	    # Iterate over prefixes (columns of a)
-	    for pref_i in range(a.shape[1]):
-	        col = a_log[:, pref_i]
-	        
-	        # Optimization: If no POPs are active for this prefix, skip entirely
-	        if not np.any(col):
-	            continue
+		# Ensure persistent cache exists (persist this across function calls)
+		if not hasattr(self, 'pattern_cache'):
+			self.pattern_cache = {}
 
-	        # Create a hashable signature for this availability state
-	        tloga = tuple(col)
+		# Local variable speedups to avoid self lookups in loop
+		ugs = self.whole_deployment_ugs
+		# Assumed to be {ui: [poppi, poppi...]} or {ui: {poppi: data}}
+		ui_to_poppi = self.whole_deployment_ui_to_poppi 
 
-	        # --- CACHE CHECK ---
-	        if tloga in self.pattern_cache:
-	            # HIT: We have seen this network state before.
-	            # cached_entries is a list of: (ui, valid_pops_list, probs_list)
-	            cached_entries = self.pattern_cache[tloga]
-	            
-	            # Fast append to master lists
-	            # We reuse the logic (pops/probs), but update the prefix index (pref_i)
-	            for ui, pops, probs in cached_entries:
-	                self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
-	                self.rti_data["all_probs"].append(probs)
-	                self.rti_data["all_poppis"].append(pops)
-	            continue
+		# --- 2. Process Availability Matrix (a) ---
+		# Assuming threshold_a logic is effectively: > 1e-6 means active
+		a_log = (a > 1e-6) 
 
-	        # --- CACHE MISS: Calculate Logic ---
-	        # This block only runs when we encounter a UNIQUE network failure state
-	        
-	        # 1. Identify active POPs indices
-	        active_poppis = np.where(col)[0]
-	        active_poppis_set = set(active_poppis)
+		# Iterate over prefixes (columns of a)
+		for pref_i in range(a.shape[1]):
+			col = a_log[:, pref_i]
+			
+			# Optimization: If no POPs are active for this prefix, skip entirely
+			if not np.any(col):
+				continue
 
-	        # 2. Identify Blocked (User, Child) pairs due to Active Parents
-	        # blocked_user_child stores (ui, child_poppi) that are FORBIDDEN
-	        blocked_user_child = set()
-	        for ug, child, parent in self.parent_tracker:
-	            parenti = self.popp_to_ind[parent]
-	            # If the parent is active in this specific state 'tloga', the child is blocked
-	            if parenti in active_poppis_set:
-	                ui = self.whole_deployment_ug_to_ind[ug]
-	                childi = self.popp_to_ind[child]
-	                blocked_user_child.add((ui, childi))
+			# Create a hashable signature for this availability state
+			tloga = tuple(col)
 
-	        # 3. Build Routing for this State
-	        entries_for_cache = [] # To store (ui, pops, probs) for future reuse
+			# --- CACHE CHECK ---
+			if tloga in self.pattern_cache:
+				# HIT: We have seen this network state before.
+				# cached_entries is a list of: (ui, valid_pops_list, probs_list)
+				cached_entries = self.pattern_cache[tloga]
+				
+				# Fast append to master lists
+				# We reuse the logic (pops/probs), but update the prefix index (pref_i)
+				for ui, pops, probs in cached_entries:
+					self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
+					self.rti_data["all_probs"].append(probs)
+					self.rti_data["all_poppis"].append(pops)
+				continue
 
-	        for ui in range(self.whole_deployment_n_ug):
-	            valid_pops = []
-	            
-	            # Get potentially available POPs for this user (static config)
-	            potential_pops = ui_to_poppi[ui]
-	            
-	            for poppi in potential_pops:
-	                # Condition 1: POP must be physically UP
-	                if poppi not in active_poppis_set:
-	                    continue
-	                
-	                # Condition 2: POP must not be blocked by an active parent
-	                if (ui, poppi) in blocked_user_child:
-	                    continue
-	                
-	                valid_pops.append(poppi)
+			# --- CACHE MISS: Calculate Logic ---
+			# This block only runs when we encounter a UNIQUE network failure state
+			
+			# 1. Identify active POPs indices
+			active_poppis = np.where(col)[0]
+			active_poppis_set = set(active_poppis)
 
-	            if not valid_pops:
-	                continue
+			# 2. Identify Blocked (User, Child) pairs due to Active Parents
+			# blocked_user_child stores (ui, child_poppi) that are FORBIDDEN
+			blocked_user_child = set()
+			for ug, child, parent in self.parent_tracker:
+				parenti = self.popp_to_ind[parent]
+				# If the parent is active in this specific state 'tloga', the child is blocked
+				if parenti in active_poppis_set:
+					ui = self.whole_deployment_ug_to_ind[ug]
+					childi = self.popp_to_ind[child]
+					blocked_user_child.add((ui, childi))
 
-	            # Compute Uniform Probability
-	            n = len(valid_pops)
-	            probs = [1.0 / n] * n
-	            
-	            # Append to current run
-	            self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
-	            self.rti_data["all_probs"].append(probs)
-	            self.rti_data["all_poppis"].append(valid_pops)
+			# 3. Build Routing for this State
+			entries_for_cache = [] # To store (ui, pops, probs) for future reuse
 
-	            # Append to Cache
-	            entries_for_cache.append((ui, valid_pops, probs))
+			for ui in range(self.whole_deployment_n_ug):
+				valid_pops = []
+				
+				# Get potentially available POPs for this user (static config)
+				potential_pops = ui_to_poppi[ui]
+				
+				for poppi in potential_pops:
+					# Condition 1: POP must be physically UP
+					if poppi not in active_poppis_set:
+						continue
+					
+					# Condition 2: POP must not be blocked by an active parent
+					if (ui, poppi) in blocked_user_child:
+						continue
+					
+					valid_pops.append(poppi)
 
-	        # Save this state's logic to cache so we never calculate it again for this pattern
-	        self.pattern_cache[tloga] = entries_for_cache
+				if not valid_pops:
+					continue
 
-	    self.timing['pmat_organize'] = time.time() - ts_total
+				# Compute Uniform Probability
+				n = len(valid_pops)
+				probs = [1.0 / n] * n
+				
+				# Append to current run
+				self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
+				self.rti_data["all_probs"].append(probs)
+				self.rti_data["all_poppis"].append(valid_pops)
 
-	    # --- 3. Vectorized Simulation (Previously sim_rti_better) ---
-	    # Now self.rti_data is fully populated. We proceed with the vectorized selection.
-	    
-	    self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
-	    if self.rti_data["num_scenarios"] == 0:
-	        return {}
+				# Append to Cache
+				entries_for_cache.append((ui, valid_pops, probs))
 
-	    self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
+			# Save this state's logic to cache so we never calculate it again for this pattern
+			self.pattern_cache[tloga] = entries_for_cache
 
-	    # Create Padded Matrix
-	    P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
-	    self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
+		self.timing['pmat_organize'] = time.time() - ts_total
 
-	    for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
-	        n = len(probs)
-	        P_matrix[i, :n] = probs
-	        self.rti_data["choices_matrix"][i, :n] = pops
+		# --- 3. Vectorized Simulation (Previously sim_rti_better) ---
+		# Now self.rti_data is fully populated. We proceed with the vectorized selection.
 
-	    # CDF Construction
-	    cdf = np.cumsum(P_matrix, axis=1)
-	    cdf[:, -1] = 1.0 # Force sum to 1.0 to avoid float precision issues
+		self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
+		if self.rti_data["num_scenarios"] == 0:
+			return {}
 
-	    # Offset Trick for Vectorized Search
-	    # Shifts the values of every row so we can search a single flattened array
-	    offsets = np.arange(self.rti_data["num_scenarios"])
-	    cdf_offset = cdf + offsets[:, None]
-	    
-	    # Generate Random Numbers
-	    rand_vals = np.random.rand(self.rti_data["num_scenarios"], self.MC_NUM)
-	    rand_offset = rand_vals + offsets[:, None]
+		self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
 
-	    # Flatten for searchsorted
-	    cdf_flat = cdf_offset.ravel()
-	    rand_flat = rand_offset.ravel()
+		# Create Padded Matrix
+		P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
+		self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
 
-	    # Binary Search (Finds insertion point in flattened CDF)
-	    insert_indices = np.searchsorted(cdf_flat, rand_flat)
+		for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
+			n = len(probs)
+			P_matrix[i, :n] = probs
+			self.rti_data["choices_matrix"][i, :n] = pops
 
-	    # Map back to 2D indices
-	    idx_selections_flat = insert_indices % self.rti_data["max_choices"]
-	    idx_selections = idx_selections_flat.reshape(self.rti_data["num_scenarios"], self.MC_NUM)
-	    
-	    # Retrieve selected POP indices
-	    row_indices = np.arange(self.rti_data["num_scenarios"])[:, None]
-	    selected_poppis = self.rti_data["choices_matrix"][row_indices, idx_selections]
+		# CDF Construction
+		cdf = np.cumsum(P_matrix, axis=1)
+		cdf[:, -1] = 1.0 # Force sum to 1.0 to avoid float precision issues
 
-	    # --- 4. Construct Final Output Dictionary ---
-	    routed_through_ingress = {}
+		# Offset Trick for Vectorized Search
+		# Shifts the values of every row so we can search a single flattened array
+		offsets = np.arange(self.rti_data["num_scenarios"])
+		cdf_offset = cdf + offsets[:, None]
 
-	    for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
-	        simulated_routes = selected_poppis[i] # Array of size MC_NUM
-	        
-	        for mci, poppi in enumerate(simulated_routes):
-	            if mci not in routed_through_ingress:
-	                routed_through_ingress[mci] = {}
-	            
-	            # Ensure structure exists
-	            if pref_i not in routed_through_ingress[mci]:
-	                routed_through_ingress[mci][pref_i] = {}
-	            
-	            # Assuming self.popps is a list/dict of actual POP objects
-	            routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
+		# Generate Random Numbers
+		rand_vals = np.random.rand(self.rti_data["num_scenarios"], self.MC_NUM)
+		rand_offset = rand_vals + offsets[:, None]
 
-	    self.timing['total_rti_calc'] = time.time() - ts_total
-	    
-	    return routed_through_ingress
+		# Flatten for searchsorted
+		cdf_flat = cdf_offset.ravel()
+		rand_flat = rand_offset.ravel()
+
+		# Binary Search (Finds insertion point in flattened CDF)
+		insert_indices = np.searchsorted(cdf_flat, rand_flat)
+
+		# Map back to 2D indices
+		idx_selections_flat = insert_indices % self.rti_data["max_choices"]
+		idx_selections = idx_selections_flat.reshape(self.rti_data["num_scenarios"], self.MC_NUM)
+
+		# Retrieve selected POP indices
+		row_indices = np.arange(self.rti_data["num_scenarios"])[:, None]
+		selected_poppis = self.rti_data["choices_matrix"][row_indices, idx_selections]
+
+		# --- 4. Construct Final Output Dictionary ---
+		routed_through_ingress = {}
+
+		for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
+			simulated_routes = selected_poppis[i] # Array of size MC_NUM
+			
+			for mci, poppi in enumerate(simulated_routes):
+				if mci not in routed_through_ingress:
+					routed_through_ingress[mci] = {}
+				
+				# Ensure structure exists
+				if pref_i not in routed_through_ingress[mci]:
+					routed_through_ingress[mci][pref_i] = {}
+				
+				# Assuming self.popps is a list/dict of actual POP objects
+				routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
+
+		self.timing['total_rti_calc'] = time.time() - ts_total
+
+		return routed_through_ingress
 
 	def generic_objective_pdf(self, obj, a, **kwargs):
 		"""

@@ -49,7 +49,7 @@ def gen_paper_plots(dpsize):
 		site_costs = deployment['site_costs'] # Dictionary mapping site -> cost
 		ug_vols = np.array(metrics[random_iter]['ug_to_vol'])
 		total_vol = sum(ug_vols)
-		
+				
 		# Header for the table
 		print(f"{'Solution':<20} | {'Avg Latency (ms)':<20} | {'Total Site Cost':<20}")
 		print("-" * 70)
@@ -83,6 +83,10 @@ def gen_paper_plots(dpsize):
 			vols_by_poppi = lp_solution.get('vols_by_poppi', {})
 			total_site_cost = 0.0
 
+			# # sanity check on vols_by_poppi
+			# sum_poppi = sum(vols_by_poppi.values()) if vols_by_poppi else 0.0
+			# print("total_vol:", total_vol, "sum_poppi:", sum_poppi)
+
 			for poppi, vol in vols_by_poppi.items():
 				site, peer = deployment['popps'][poppi]
 				# Check if this site exists in our cost map
@@ -102,7 +106,7 @@ def gen_paper_plots(dpsize):
 			# --- 3. Get Congestion info (optional but helpful) ---
 			frac_congested = lp_solution.get('fraction_congested_volume', 0.0)
 
-			print(f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {(total_vol*avg_latency+DEFAULT_SITE_COST*total_site_cost)/total_vol:<20.4f} | {frac_congested:.4f}")
+			print(f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {(total_vol*avg_latency+DEFAULT_SITE_COST*total_site_cost)/total_vol:<20.4f} | {frac_congested:.4f} |{lp_solution['objective']}")
 			
 		print("-" * 95)
 
@@ -243,7 +247,7 @@ def testing_site_cost(dpsize, **kwargs):
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
 				except KeyError:
-					this_iter_deployment = get_random_deployment(dpsize, cost_type='carbon')
+					this_iter_deployment = get_random_deployment(dpsize, cost_type='factor')
 				this_iter_deployment['port'] = port
 				print("Random deployment for joint latency site cost, number {}/{}".format(random_iter+1,n_random_sim))
 				
