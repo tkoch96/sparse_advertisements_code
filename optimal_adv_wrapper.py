@@ -887,8 +887,12 @@ class Optimal_Adv_Wrapper:
 			if kwargs.get('compute_best_lats', True):
 				self.compute_one_per_peering_solution()
 			n_workers = self.get_n_workers()
+			ts=time.time()
+			print("In main function computing sub-deployments...")
 			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 			msgs = []
+			print("Done, took {}s".format(time.time()-ts))
+			ts=time.time()
 			for worker in range(n_workers):
 				if len(subdeployments[worker]['ugs']) == 0: continue
 				## It would be annoying to make the code work for cases in which a processor focuses on one user
@@ -898,7 +902,11 @@ class Optimal_Adv_Wrapper:
 			
 				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
 				msgs.append(msg)
-			self.send_receive_messages_workers(msgs)
+			print("Pickling kwa took {}s".format(time.time()-ts))
+			ts=time.time()
+			self.worker_manager.send_receive_messages_workers(msgs)
+			print("Sending/receiving kwa took {}s".format(time.time()-ts))
+			ts=time.time()
 			msgs = []
 			for worker in range(n_workers):
 				if len(subdeployments[worker]['ugs']) == 0: continue
@@ -909,7 +917,10 @@ class Optimal_Adv_Wrapper:
 				
 				msg = pickle.dumps(('update_deployment', (subdeployments[worker], kwargs)))
 				msgs.append(msg)
-			self.send_receive_messages_workers(msg)
+			print("Pickling subdeployments took {}s".format(time.time()-ts))
+			ts=time.time()
+			self.worker_manager.send_receive_messages_workers(msgs)
+			print("Send/rcv subdeployments took {}s".format(time.time()-ts))
 			
 		except AttributeError:
 			pass
