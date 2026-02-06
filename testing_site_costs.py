@@ -23,9 +23,14 @@ def weighted_cdf_xy(values, weights):
 	y = cw / cw[-1]
 	return x, y
 
-def gen_paper_plots(dpsize):
-	metrics_fn = os.path.join(CACHE_DIR, 'per_site_cost_metrics_{}.pkl'.format(dpsize))
+def gen_paper_plots(dpsize, cost_setting):
+	metrics_fn = os.path.join(CACHE_DIR, 'per_site_cost_metrics_{}_{}.pkl'.format(dpsize, cost_setting))
 	
+	result_out_dir = os.path.join(FIG_DIR, 'testing_site_costs')
+	if not os.path.exists(result_out_dir):
+		from subprocess import call
+		call("mkdir {}".format(result_out_dir), shell=True)
+
 	if not os.path.exists(metrics_fn):
 		print("Metrics file not found: {}".format(metrics_fn))
 		return
@@ -35,7 +40,7 @@ def gen_paper_plots(dpsize):
 	# Filter for standard solutions
 	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
 
-	print(f"\nEvaluation Results for Deployment Size: {dpsize}")
+	print(f"\nEvaluation Results for Deployment Size: {dpsize} Cost setting {cost_setting}")
 	print("="*80)
 
 	# Iterate over each random simulation stored in the metrics
@@ -49,153 +54,155 @@ def gen_paper_plots(dpsize):
 		site_costs = deployment['site_costs'] # Dictionary mapping site -> cost
 		ug_vols = np.array(metrics[random_iter]['ug_to_vol'])
 		total_vol = sum(ug_vols)
-				
-		# Header for the table
-		print(f"{'Solution':<20} | {'Avg Latency (ms)':<20} | {'Total Site Cost':<20}")
-		print("-" * 70)
-
-		cdf_latency_data = {}
-		site_cost_totals_data = {}
-
-		avg_latency_data = {}
-		latency_parts = []
-		cost_parts = []
-
-		for solution in solutions:
-			if solution not in metrics[random_iter]:
-				continue
-			
-			# Retrieve the solution data
-			sol_data = metrics[random_iter][solution]
-			lp_solution = sol_data['lp_solution']
-
-			# 1. Calculate Average Latency (Weighted by User Group Volume)
-			# lats_by_ug is the latency for each user group
-			lats = np.array(lp_solution['lats_by_ug'])
-			avg_latency = np.average(lats, weights=ug_vols)
-
-			# store CDF of latency across traffic
-			x, y = weighted_cdf_xy(lats, ug_vols)
-			cdf_latency_data[solution] = (x, y)
-
-			# --- 2. Calculate Total Site Cost using vols_by_poppi ---
-			# vols_by_poppi keys are likely sites or (site, peer) tuples
-			vols_by_poppi = lp_solution.get('vols_by_poppi', {})
-			total_site_cost = 0.0
-
-			# # sanity check on vols_by_poppi
-			# sum_poppi = sum(vols_by_poppi.values()) if vols_by_poppi else 0.0
-			# print("total_vol:", total_vol, "sum_poppi:", sum_poppi)
-
-			for poppi, vol in vols_by_poppi.items():
-				site, peer = deployment['popps'][poppi]
-				# Check if this site exists in our cost map
-				if site in site_costs:
-					cost_per_unit = site_costs[site]
-					total_site_cost += vol * cost_per_unit
-				else:
-					# Optional: Print warning if a site is receiving traffic but has no cost data
-					# print(f"Warning: Site {site} not in site_costs dict")
-					pass
-			
-			site_cost_totals_data[solution] = total_site_cost
-
-			latency_parts.append(avg_latency)
-			cost_parts.append((DEFAULT_SITE_COST * total_site_cost) / total_vol)
-
-			# --- 3. Get Congestion info (optional but helpful) ---
-			frac_congested = lp_solution.get('fraction_congested_volume', 0.0)
-
-			print(f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {(total_vol*avg_latency+DEFAULT_SITE_COST*total_site_cost)/total_vol:<20.4f} | {frac_congested:.4f} |{lp_solution['objective']}")
-			
-		print("-" * 95)
-
-		def _to_jsonable(x):
-			if isinstance(x, (np.integer, np.int64, np.int32)):
-				return int(x)
-			if isinstance(x, (np.floating, np.float64, np.float32)):
-				return float(x)
-			if isinstance(x, np.ndarray):
-				return x.tolist()
-			return x
-
-		payload = {
-			"dpsize": dpsize,
-			"random_iter": random_iter,
-			"solutions": solutions,  # the solutions actually present in this iter (same order used in plots)
-			"cdf_latency_data": {
-				sol: {
-					"x": _to_jsonable(x),
-					"y": _to_jsonable(y),
-				}
-				for sol, (x, y) in cdf_latency_data.items()
-			},
-			"site_cost_totals_data": {sol: _to_jsonable(val) for sol, val in site_cost_totals_data.items()},
-			"latency_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, latency_parts)},
-			"cost_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, cost_parts)},
-		}
-
-		out_fn = f"site_cost_plot_data_{dpsize}_iter{random_iter}.json"
-		with open(out_fn, "w") as f:
-			json.dump(payload, f, indent=2, sort_keys=True)
-
-		cdf_colors = {}  # solution -> color
-		plt.figure()
-		for solution, (x, y) in cdf_latency_data.items():
-			line, = plt.plot(x, y, label=solution)
-			cdf_colors[solution] = line.get_color() 
-		plt.xlabel("Latency (ms)")
-		plt.ylabel("CDF (fraction of traffic)")
-		plt.title(f"Traffic-weighted latency CDF (iter={random_iter})")
-		plt.grid(True, alpha=0.3)
-		plt.legend()
-		plt.tight_layout()
-		plt.savefig(os.path.join(FIG_DIR, 'site_cost_latency_{}.pdf'.format(dpsize)))
 		
-		plt.figure()
-		costs = [site_cost_totals_data[s] for s in solutions]
-		colors = [cdf_colors.get(s, None) for s in solutions]
-		plt.bar(solutions, costs, color=colors)
-		plt.ylabel("Total site cost")
-		plt.title(f"Total site cost by solution (iter={random_iter})")
-		plt.xticks(rotation=30, ha="right")
-		plt.grid(True, axis="y", alpha=0.3)
-		plt.tight_layout()
-		plt.savefig(os.path.join(FIG_DIR, 'site_cost_totals_{}.pdf'.format(dpsize)))
+		# --- MODIFICATION START: Open file for writing ---
+		results_fn = os.path.join(result_out_dir, f"results_site_cost_{dpsize}_{cost_setting}.txt")
+		with open(results_fn, "w") as f_out:
+			
+			# Header for the table (Updated to include the columns actually being printed)
+			header = f"{'Solution':<20} | {'Avg Latency (ms)':<20} | {'Total Site Cost':<20} | {'Combined Obj':<20} | {'Congested':<10} | {'Raw LP Obj'}"
+			print(header)
+			print("-" * 110)
+			
+			f_out.write(f"Iteration: {random_iter}\n")
+			f_out.write(header + "\n")
+			f_out.write("-" * 110 + "\n")
 
-		lat_colors = [cdf_colors[s] for s in solutions]
+			cdf_latency_data = {}
+			site_cost_totals_data = {}
 
-		# Make cost colors slightly lighter (same hue)
-		def lighten(color, factor=0.5):
-			import matplotlib.colors as mc
+			avg_latency_data = {}
+			latency_parts = []
+			cost_parts = []
 
-			c = np.array(mc.to_rgb(color))
-			return tuple(1 - factor * (1 - c))
+			for solution in solutions:
+				if solution not in metrics[random_iter]:
+					continue
+				
+				# Retrieve the solution data
+				sol_data = metrics[random_iter][solution]
+				lp_solution = sol_data['lp_solution']
 
-		cost_colors = [lighten(cdf_colors[s], 0.6) for s in solutions]
+				# 1. Calculate Average Latency
+				lats = np.array(lp_solution['lats_by_ug'])
+				avg_latency = np.average(lats, weights=ug_vols)
 
-		# Plot
-		plt.figure()
-		plt.bar(solutions, latency_parts, color=lat_colors, label="Latency")
-		plt.bar(
-			solutions,
-			cost_parts,
-			bottom=latency_parts,
-			color=cost_colors,
-			label="Site cost",
-		)
+				x, y = weighted_cdf_xy(lats, ug_vols)
+				cdf_latency_data[solution] = (x, y)
 
-		plt.ylabel("Objective value")
-		plt.title(f"Final objective breakdown (iter={random_iter})")
-		plt.xticks(rotation=30, ha="right")
-		plt.grid(True, axis="y", alpha=0.3)
-		plt.legend()
-		plt.tight_layout()
-		plt.savefig(os.path.join(FIG_DIR, "site_cost_final_objective_breakdown_{}.pdf".format(dpsize)))
+				# 2. Calculate Total Site Cost
+				vols_by_poppi = lp_solution.get('vols_by_poppi', {})
+				total_site_cost = 0.0
 
-		# Break after printing the first valid iteration to avoid spamming 
-		# (remove break if you want to see all random seeds)
-		break
+				for poppi, vol in vols_by_poppi.items():
+					site, peer = deployment['popps'][poppi]
+					if site in site_costs:
+						cost_per_unit = site_costs[site]
+						total_site_cost += vol * cost_per_unit
+					else:
+						pass
+				
+				site_cost_totals_data[solution] = total_site_cost
+
+				latency_parts.append(avg_latency)
+				cost_parts.append((DEFAULT_SITE_COST * total_site_cost) / total_vol)
+
+				# 3. Get Congestion info
+				frac_congested = lp_solution.get('fraction_congested_volume', 0.0)
+
+				# --- MODIFICATION: Calc objective var, Print, and Write to file ---
+				obj_val = (total_vol * avg_latency + DEFAULT_SITE_COST * total_site_cost) / total_vol
+				
+				row_str = f"{solution:<20} | {avg_latency:<20.4f} | {total_site_cost:<20.4f} | {obj_val:<20.4f} | {frac_congested:.4f}     | {lp_solution['objective']}"
+				
+				print(row_str)
+				f_out.write(row_str + "\n")
+				# ------------------------------------------------------------------
+
+			print("-" * 95)
+			# (Rest of JSON dumping and plotting code remains unchanged)
+			
+			def _to_jsonable(x):
+				if isinstance(x, (np.integer, np.int64, np.int32)):
+					return int(x)
+				if isinstance(x, (np.floating, np.float64, np.float32)):
+					return float(x)
+				if isinstance(x, np.ndarray):
+					return x.tolist()
+				return x
+
+			payload = {
+				"dpsize": dpsize,
+				"random_iter": random_iter,
+				"solutions": solutions,
+				"cdf_latency_data": {
+					sol: {
+						"x": _to_jsonable(x),
+						"y": _to_jsonable(y),
+					}
+					for sol, (x, y) in cdf_latency_data.items()
+				},
+				"site_cost_totals_data": {sol: _to_jsonable(val) for sol, val in site_cost_totals_data.items()},
+				"latency_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, latency_parts)},
+				"cost_parts": {sol: _to_jsonable(v) for sol, v in zip(solutions, cost_parts)},
+			}
+
+			out_fn = os.path.join(result_out_dir, f"site_cost_plot_data_{dpsize}_cost_setting{cost_setting}.json")
+			with open(out_fn, "w") as f:
+				json.dump(payload, f, indent=2, sort_keys=True)
+
+			cdf_colors = {}
+			plt.figure()
+			for solution, (x, y) in cdf_latency_data.items():
+				line, = plt.plot(x, y, label=solution)
+				cdf_colors[solution] = line.get_color()
+			plt.xlabel("Latency (ms)")
+			plt.ylabel("CDF (fraction of traffic)")
+			plt.title(f"Traffic-weighted latency CDF (iter={random_iter})")
+			plt.grid(True, alpha=0.3)
+			plt.legend()
+			plt.tight_layout()
+			plt.savefig(os.path.join(result_out_dir, 'site_cost_latency_{}.pdf'.format(dpsize)))
+			
+			plt.figure()
+			costs = [site_cost_totals_data[s] for s in solutions]
+			colors = [cdf_colors.get(s, None) for s in solutions]
+			plt.bar(solutions, costs, color=colors)
+			plt.ylabel("Total site cost")
+			plt.title(f"Total site cost by solution (iter={random_iter})")
+			plt.xticks(rotation=30, ha="right")
+			plt.grid(True, axis="y", alpha=0.3)
+			plt.tight_layout()
+			plt.savefig(os.path.join(result_out_dir, 'site_cost_totals_{}.pdf'.format(dpsize)))
+
+			lat_colors = [cdf_colors[s] for s in solutions]
+
+			def lighten(color, factor=0.5):
+				import matplotlib.colors as mc
+				c = np.array(mc.to_rgb(color))
+				return tuple(1 - factor * (1 - c))
+
+			cost_colors = [lighten(cdf_colors[s], 0.6) for s in solutions]
+
+			plt.figure()
+			plt.bar(solutions, latency_parts, color=lat_colors, label="Latency")
+			plt.bar(
+				solutions,
+				cost_parts,
+				bottom=latency_parts,
+				color=cost_colors,
+				label="Site cost",
+			)
+
+			plt.ylabel("Objective value")
+			plt.title(f"Final objective breakdown (iter={random_iter})")
+			plt.xticks(rotation=30, ha="right")
+			plt.grid(True, axis="y", alpha=0.3)
+			plt.legend()
+			plt.tight_layout()
+			plt.savefig(os.path.join(result_out_dir, "site_cost_final_objective_breakdown_{}.pdf".format(dpsize)))
+
+			break
 
 def check_calced_everything(metrics, random_iter, k_of_interest):
 	soln_types = global_soln_types
@@ -206,7 +213,7 @@ def check_calced_everything(metrics, random_iter, k_of_interest):
 			return False
 	return True
 
-def testing_site_cost(dpsize, **kwargs):
+def testing_site_cost(dpsize, port, cost_setting, **kwargs):
 	"""
 		Tests minimization of LL + alpha * site_cost of traffic
 	"""
@@ -217,24 +224,20 @@ def testing_site_cost(dpsize, **kwargs):
 
 	n_random_sim = 1
 	obj = 'per_site_cost'
-	performance_metrics_fn = os.path.join(CACHE_DIR, "{}_metrics_{}.pkl".format(obj, dpsize))
+	performance_metrics_fn = os.path.join(CACHE_DIR, "{}_metrics_{}_{}.pkl".format(obj, dpsize, cost_setting))
 	if os.path.exists(performance_metrics_fn):
 		metrics = pickle.load(open(performance_metrics_fn, 'rb'))
 	else:
 		metrics = {i:{'done':False} for i in range(n_random_sim)}
 	soln_types = global_soln_types
 
-	try:
-		save_run_dir = sys.argv[3]
-	except:
-		save_run_dir = None
+	save_run_dir = kwargs.get('save_run_dir', None)
 
 	try:
 		wm = None
 		sas = None
 
 		if True:
-			port = int(sys.argv[2])
 			for random_iter in range(n_random_sim):
 				try:
 					if metrics[random_iter]['done']: continue
@@ -247,7 +250,7 @@ def testing_site_cost(dpsize, **kwargs):
 				try:
 					this_iter_deployment = metrics[random_iter]['deployment']
 				except KeyError:
-					this_iter_deployment = get_random_deployment(dpsize, cost_type='factor')
+					this_iter_deployment = get_random_deployment(dpsize, cost_type=cost_setting)
 				this_iter_deployment['port'] = port
 				print("Random deployment for joint latency site cost, number {}/{}".format(random_iter+1,n_random_sim))
 				
@@ -300,7 +303,6 @@ def testing_site_cost(dpsize, **kwargs):
 
 	try:
 		if True:
-			port = int(sys.argv[2])
 			for random_iter in range(n_random_sim):
 				this_iter_deployment = metrics[random_iter]['deployment']
 				print("\n=========\nRecomputing solutions for random iter {}\n=========\n".format(random_iter))
@@ -439,9 +441,18 @@ def testing_site_cost(dpsize, **kwargs):
 
 
 if __name__ == "__main__":
+	import argparse
+	parser = argparse.ArgumentParser()
+	parser.add_argument("--save_run_dir", default=None, required=False)
+	parser.add_argument("--dpsize", default=None, required=True)
+	parser.add_argument("--port", required=True)
+	args = parser.parse_args()
 	np.random.seed(31415)
-	dpsize = sys.argv[1]
-	testing_site_cost(dpsize)
-	gen_paper_plots(dpsize)
+	dpsize = args.dpsize
+	port = args.port
+	save_run_dir = args.save_run_dir
+	for cost_setting in ['carbon', 'factor', 'random']:
+		testing_site_cost(dpsize, port, cost_setting, save_run_dir=save_run_dir)
+		gen_paper_plots(dpsize, cost_setting)
 
 
