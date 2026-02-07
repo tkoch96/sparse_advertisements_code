@@ -1074,7 +1074,7 @@ def get_site_costs_base_factor(deployment, frac=0.5, factor=1.2, base_cost=0.5, 
 			site_costs[s] = base_cost * factor
 		else:
 			site_costs[s] = base_cost
-
+	print(site_costs)
 	return site_costs
 
 def get_carbon_site_costs(deployment, **kwargs):

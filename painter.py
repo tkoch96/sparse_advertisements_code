@@ -196,7 +196,6 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 				(time.time() - ts) / (self.iter+1)))
 
 			self.advs = advs
-			if self.iter >= 10:break
 		if not self.simulated:
 			self.calculate_ground_truth_ingress(self.optimization_advertisement, measurement_file_prefix='painter_{}'.format(self.iter))
 
