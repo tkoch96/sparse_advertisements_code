@@ -15,13 +15,27 @@ for path in paths:
 		break
 assert PYTHON is not None
 
+import ray
+# Initialize ray cluster (or local)
+ray.init(address='auto')
+
+from path_distribution_computer_ray import Path_Distribution_Computer
+
 class Worker_Manager:
 	def __init__(self, kwa_settings, deployment):
 
 		self.kwa_settings = kwa_settings
 		self.deployment = deployment
 		self.dpsize = self.deployment['dpsize']
-		self.worker_sockets = {}
+
+		workers = []
+		for i in range(100):
+		    w = Path_Distribution_Computer.remote(
+		        worker_i=i, 
+		        init_args=(args_from_optimal_adv_wrapper,), 
+		        init_kwargs={...}
+		    )
+		    workers.append(w)
 
 	def get_init_kwa(self):
 		return self.kwa_settings

@@ -1395,8 +1395,10 @@ def load_actual_deployment(deployment_size, **kwargs):
 		elif cost_type == 'factor':
 			print(cost_type)
 			site_costs = get_site_costs_base_factor(deployment, **kwargs)
-		else:
+		elif cost_type == 'random':
 			site_costs = get_random_site_costs(deployment, **kwargs)
+		else:
+			raise ValueError("Cost type {} not recognized.".foramt(cost_type))
 		
 		deployment['site_costs'] = site_costs
 
