@@ -56,6 +56,10 @@ def _setup(size='small'):
 
 # ----- Test 1: Degenerate to nominal LP ------------------------------------ #
 
+# Realistic-scale (deployment-like dynamics): 'decent' is 10 pops, ~270 popps,
+# ~4000 UGs -- structurally similar to actual-10 without the 4.5GB data parse.
+# We always test 'really_friggin_small' for fast iteration, AND 'decent' so the
+# tests exercise deployment-scale LP dynamics. 'small' is a useful midpoint.
 @pytest.mark.unit
 @pytest.mark.gurobi
 @pytest.mark.parametrize('size,method', [
@@ -63,6 +67,8 @@ def _setup(size='small'):
 	('really_friggin_small', 'cold'),
 	('small', 'warm'),
 	('small', 'cold'),
+	('decent', 'warm'),
+	('decent', 'cold'),
 ])
 def test_stochastic_degenerates_to_nominal(size, method):
 	"""S = {(empty, 1.0)} must produce the same answer as the plain LP."""
@@ -86,7 +92,7 @@ def test_stochastic_degenerates_to_nominal(size, method):
 
 @pytest.mark.unit
 @pytest.mark.gurobi
-@pytest.mark.parametrize('size', ['really_friggin_small', 'small'])
+@pytest.mark.parametrize('size', ['really_friggin_small', 'small', 'decent'])
 def test_per_scenario_matches_standalone(size):
 	"""For each scenario in S, the stochastic LP's per-scenario latency must
 	match what we'd get solving that single scenario alone (recourse formulation)."""
@@ -94,7 +100,7 @@ def test_per_scenario_matches_standalone(size):
 
 	worker, dep, adv = _setup(size)
 	scenarios = single_popp_scenarios(dep, p_any_fail=0.5)
-	# limit to first 4 scenarios so the test is fast
+	# limit to first 4 scenarios so the test is fast even at 'decent' scale
 	scenarios = scenarios[:4]
 
 	stoch = solve_stochastic_lp(worker, adv, scenarios, method='warm')
@@ -121,12 +127,13 @@ def test_per_scenario_matches_standalone(size):
 
 @pytest.mark.unit
 @pytest.mark.gurobi
-def test_per_scenario_feasibility():
+@pytest.mark.parametrize('size', ['really_friggin_small', 'decent'])
+def test_per_scenario_feasibility(size):
 	"""For each scenario, the produced routing must have zero flow on failed
 	popps and respect remaining capacity."""
 	from stochastic_lp import solve_stochastic_lp, single_popp_scenarios
 
-	worker, dep, adv = _setup('really_friggin_small')
+	worker, dep, adv = _setup(size)
 	scenarios = single_popp_scenarios(dep, p_any_fail=0.5)[:4]
 
 	stoch = solve_stochastic_lp(worker, adv, scenarios, method='warm', keep_paths=True)
@@ -231,18 +238,20 @@ def test_warm_and_cold_agree():
 
 @pytest.mark.unit
 @pytest.mark.gurobi
-def test_pop_failure_objective_responds_to_scenario_set():
+@pytest.mark.parametrize('size', ['small', 'decent'])
+def test_pop_failure_objective_responds_to_scenario_set(size):
 	"""When we include pop-failure scenarios with non-trivial weight, the
 	expected latency under those scenarios should be the objective; the LP's
 	objective should respond accordingly. We don't have a separate 'advertisement
 	optimiser' in the unit test scope, so we just sanity-check that pop-failure
 	scenarios produce HIGHER expected latency than nominal-only (since failures
-	can only hurt or be neutral for a fixed advertisement)."""
+	can only hurt or be neutral for a fixed advertisement). 'decent' has 10
+	pops so pop-failures are non-trivial; 'small' has 3 (still meaningful)."""
 	from stochastic_lp import (
 		solve_stochastic_lp, nominal_only_scenario, single_pop_scenarios,
 	)
 
-	worker, dep, adv = _setup('small')
+	worker, dep, adv = _setup(size)
 	nominal = solve_stochastic_lp(worker, adv, nominal_only_scenario(), method='warm')
 	with_pop_failures = solve_stochastic_lp(
 		worker, adv, single_pop_scenarios(dep, p_any_fail=0.5), method='warm')
