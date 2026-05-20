@@ -296,8 +296,10 @@ def test_multi_scenario_agrees_with_warm(size):
 @pytest.mark.unit
 @pytest.mark.gurobi
 @pytest.mark.parametrize('size,K,scale_factor', [
-	('small', 16, 1.3),    # deployment_setup default: 30% headroom on link capacities
-	('small', 16, 1.05),   # tight: only 5% capacity headroom → failures actually bite
+	('small', 16, 1.3),     # deployment_setup default: 30% headroom on link capacities
+	('small', 16, 1.05),    # tight: only 5% capacity headroom → failures actually bite
+	('decent', 16, 1.3),    # 10 pops, 270 popps, 4000 UGs — deployment-scale dynamics
+	('decent', 16, 1.05),   # tight at deployment scale
 ])
 def test_three_approaches_comparison(size, K, scale_factor):
 	"""Apples-to-apples comparison for a FIXED advertisement:
