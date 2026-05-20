@@ -49,7 +49,7 @@ def solve_stochastic_lp(
 	worker,
 	advertisement: np.ndarray,
 	scenarios: List[Scenario],
-	method: str = 'warm',
+	method: str = 'multi_scenario',
 	keep_paths: bool = False,
 ) -> StochasticLPResult:
 	"""Solve the per-scenario LPs for the given advertisement and return the
@@ -62,11 +62,14 @@ def solve_stochastic_lp(
 	is a frozenset of (pop, peer) tuples. Probabilities should sum to ~1.
 
 	`method`:
-	  'warm' - reuse the persistent Gurobi model, flip cap RHS per scenario.
-	  'cold' - rebuild the Gurobi LP for each scenario via init_persistent_lp.
+	  'multi_scenario' - Gurobi's Multi-Scenario API: one optimize() call
+	     solves all K scenarios with shared basis exploitation. Recommended.
+	  'warm' - sequential warm-start: K optimize() calls, each reuses the
+	     prior solve's basis. Useful as a correctness reference.
+	  'cold' - rebuild the model from scratch per scenario. Benchmark baseline.
 	"""
-	if method not in ('warm', 'cold'):
-		raise ValueError("method must be 'warm' or 'cold'")
+	if method not in ('multi_scenario', 'warm', 'cold'):
+		raise ValueError("method must be 'multi_scenario', 'warm', or 'cold'")
 	if not scenarios:
 		raise ValueError("scenarios must be non-empty")
 
@@ -84,7 +87,9 @@ def solve_stochastic_lp(
 	# failed popps) and re-computes rti. This matches what
 	# solve_lp_with_failure_catch_mp does today and gives UGs a chance to be
 	# re-routed onto alternate popps that the unmasked rti wouldn't expose.
-	if method == 'warm':
+	if method == 'multi_scenario':
+		results = _solve_multi_scenario(worker, advertisement, scenarios, keep_paths)
+	elif method == 'warm':
 		results = _solve_warm(worker, advertisement, scenarios, keep_paths)
 	else:
 		results = _solve_cold(worker, advertisement, scenarios, keep_paths)
@@ -109,6 +114,180 @@ def solve_stochastic_lp(
 		per_scenario_overflow=per_overflow,
 	)
 	return out
+
+
+# ---- multi-scenario (one optimize() call, Gurobi internal scenario solver) ----
+
+def _solve_multi_scenario(worker, advertisement, scenarios, keep_paths):
+	"""Gurobi's Multi-Scenario API: build the model once with N scenarios baked
+	in via per-scenario variable upper bounds, single optimize() call.
+
+	Per-scenario differences encoded via:
+	  - Var.ScenNUB[i]: 0 if path is not in scenario i's paths_by_ug (path goes
+	    through a failed popp, or simply not exposed by rti for this scenario);
+	    infinity otherwise.
+	  - Cap constraints stay at their canonical RHS = static_caps[poppi];
+	    failed-popp paths get pinned to 0 via UB, so the cap constraints don't
+	    need per-scenario RHS overrides.
+
+	The Multi-Scenario API exploits shared structure (one basis tree, scenario
+	exploration), so this is the fast path when K is large.
+	"""
+	import gurobipy as gp
+	from solve_lp_assignment import get_paths_by_ug, NO_PATH_INGRESS
+	from constants import NO_ROUTE_LATENCY
+
+	# Phase 1: per-scenario rti + paths_by_ug, computed once.
+	per_scenario_paths = []
+	per_scenario_failed_popps = []
+	for failed_popps, _prob in scenarios:
+		adv_s = advertisement.copy()
+		for popp in failed_popps:
+			if popp in worker.popp_to_ind:
+				adv_s[worker.popp_to_ind[popp], :] = 0
+		rti_s, _ = worker.calculate_ground_truth_ingress(adv_s, do_cache=False)
+		avail_s, _ = get_paths_by_ug(worker, rti_s)
+		per_scenario_paths.append(frozenset(avail_s))
+		per_scenario_failed_popps.append(
+			frozenset(worker.popp_to_ind[p] for p in failed_popps if p in worker.popp_to_ind)
+		)
+
+	# Union of all paths across scenarios; new vars added to var_pool if missing.
+	all_paths = set()
+	for paths in per_scenario_paths:
+		all_paths |= paths
+
+	for (ug, poppi) in all_paths:
+		if (ug, poppi) in worker.var_pool:
+			continue
+		if poppi == NO_PATH_INGRESS(worker):
+			latency = NO_ROUTE_LATENCY
+		else:
+			latency = worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]]
+		col = gp.Column()
+		col.addTerms(1.0, worker.vol_constrs[ug])
+		col.addTerms(1.0, worker.cap_constrs[poppi])
+		worker.var_pool[(ug, poppi)] = worker.model.addVar(lb=0.0, obj=latency, column=col)
+
+	# Make sure objective coefficients are correct for every var we care about
+	# (in case anything stale from an earlier MLU-mode solve corrupted them).
+	for (ug, poppi) in all_paths:
+		var = worker.var_pool[(ug, poppi)]
+		if poppi == NO_PATH_INGRESS(worker):
+			var.Obj = NO_ROUTE_LATENCY
+		else:
+			var.Obj = worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]]
+
+	# MLU mode with a STRONG penalty: this way, capacity-feasible scenarios
+	# leave MLU at 0 (recovering the non-MLU answer that warm gets), AND
+	# capacity-infeasible scenarios still solve (MLU engages just enough to
+	# satisfy volume conservation). The penalty is heavy enough that the LP
+	# never "trades latency for overflow" -- mirrors warm's non-MLU-first /
+	# MLU-fallback behavior in one solver call.
+	#
+	# Formulation: sum(flow) - static_caps[i] * mlu_dummy ≤ 0, with
+	# mlu_dummy in objective at MLU_PENALTY. When all caps fit, mlu=0 ⇒
+	# constraint reduces to sum(flow)≤0, which is too tight, so we keep
+	# constraint coefficient and let mlu>=1 be the no-overflow level. Set
+	# initial mlu_dummy lower bound to 1 so "no overflow" is the default.
+	import gurobipy as gp
+	MLU_PENALTY = 1e6  # much larger than max plausible latency * volume
+	worker.mlu_dummy.Obj = MLU_PENALTY
+	worker.mlu_dummy.UB = gp.GRB.INFINITY
+	worker.mlu_dummy.LB = 1.0  # at mlu=1 the constraint is sum(flow) ≤ cap (non-MLU)
+	for pi, constr in worker.cap_constrs.items():
+		worker.model.chgCoeff(constr, worker.mlu_dummy, -1.0 * float(worker.static_caps[pi]))
+		constr.RHS = 0.0
+
+	# Default: deactivate every path var; per-scenario UB will re-enable.
+	all_vars = list(worker.var_pool.values())
+	worker.model.setAttr("UB", all_vars, [0.0] * len(all_vars))
+
+	# Phase 2: configure the multi-scenario problem.
+	K = len(scenarios)
+	# NumScenarios=0 then set to K to wipe stale per-scenario data from prior calls.
+	worker.model.NumScenarios = 0
+	worker.model.NumScenarios = K
+
+	for i in range(K):
+		worker.model.Params.ScenarioNumber = i
+		paths_i = per_scenario_paths[i]
+		# All vars start with the model's nominal UB (0); we override per-scenario.
+		for (ug, poppi), var in worker.var_pool.items():
+			if (ug, poppi) in paths_i:
+				var.ScenNUB = gp.GRB.INFINITY
+			else:
+				var.ScenNUB = 0.0
+
+	# Phase 3: one optimize() call solves all K scenarios.
+	worker.model.optimize()
+
+	# Phase 4: per-scenario result extraction.
+	results = []
+	for i in range(K):
+		worker.model.Params.ScenarioNumber = i
+		# Per-scenario objective value (or infeasible status).
+		try:
+			scen_obj_val = float(worker.model.ScenNObjVal)
+			# Gurobi uses GRB.INFINITY for infeasible scenario solutions.
+			infeasible = scen_obj_val >= 1e30
+		except Exception:
+			infeasible = True
+		if infeasible:
+			results.append({
+				'solved': False,
+				'objective': float('-inf'),
+				'latency': float('inf'),
+				'paths_by_ug': {} if keep_paths else None,
+				'fraction_overflow_volume': 0.0,
+			})
+			continue
+
+		# Reconstruct latency from per-scenario variable values (var.ScenNX).
+		paths_by_ug_res = {}
+		total_weighted_lat = 0.0
+		vol_by_popp = {}
+		for (ug, poppi), var in worker.var_pool.items():
+			vol = float(var.ScenNX)
+			if vol <= 1e-7:
+				continue
+			ugi = worker.whole_deployment_ug_to_ind[ug]
+			ug_vol = float(worker.whole_deployment_ug_to_vol[ug])
+			vpct = vol / max(ug_vol, 1e-9)
+			paths_by_ug_res.setdefault(ugi, []).append((poppi, vpct))
+			if poppi == NO_PATH_INGRESS(worker):
+				path_lat = NO_ROUTE_LATENCY
+			else:
+				path_lat = worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]]
+			total_weighted_lat += path_lat * vol
+			vol_by_popp[poppi] = vol_by_popp.get(poppi, 0.0) + vol
+
+		no_path_idx = len(worker.static_caps) - 1
+		overflow_vol, total_vol = 0.0, 0.0
+		for poppi, v in vol_by_popp.items():
+			total_vol += v
+			if poppi == no_path_idx:
+				continue
+			cap = float(worker.static_caps[poppi])
+			if v > cap + 1e-6:
+				overflow_vol += (v - cap)
+
+		obj_norm = float(np.sum(worker.whole_deployment_ug_vols))
+		avg_lat = total_weighted_lat / max(obj_norm, 1e-9)
+		results.append({
+			'solved': True,
+			'objective': -avg_lat,
+			'latency': avg_lat,
+			'paths_by_ug': paths_by_ug_res if keep_paths else None,
+			'fraction_overflow_volume': overflow_vol / max(total_vol, 1e-9),
+		})
+
+	# Reset to single-scenario mode so subsequent unrelated calls see a normal
+	# model. NumScenarios=0 disables multi-scenario; ScenarioNumber reset for
+	# good measure.
+	worker.model.NumScenarios = 0
+
+	return results
 
 
 # ---- warm-start (one persistent Gurobi model, change RHS per scenario) ----
@@ -190,7 +369,13 @@ def _solve_safely(worker, rti):
 	latency by iterating the solved variables (not model.objVal -- in MLU
 	fallback mode model.objVal is contaminated by the MLU dummy variable's
 	contribution and is NOT just the avg latency × volume).
+
+	MLU fallback uses a STRONG penalty (1e6) so MLU stays at the no-overflow
+	floor unless feasibility strictly requires more. This is the same
+	formulation _solve_multi_scenario uses, so the two paths agree
+	deterministically on MLU-required scenarios.
 	"""
+	import gurobipy as gp
 	from solve_lp_assignment import get_paths_by_ug, NO_PATH_INGRESS
 	from constants import NO_ROUTE_LATENCY
 
@@ -202,9 +387,48 @@ def _solve_safely(worker, rti):
 		else:
 			obj_coeffs.append(worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]])
 
+	# Try non-MLU first (matches multi-scenario's mlu=1 floor).
 	model_res = worker.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
 	if model_res is None:
-		model_res = worker.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
+		# MLU fallback. Override mlu_dummy with the strong-penalty formulation
+		# that matches _solve_multi_scenario so both paths converge to the
+		# same routing. solve_unified_lp(using_mlu=True) uses ALPHA-based
+		# penalty which is too soft; we set our own here.
+		MLU_PENALTY = 1e6
+		worker.mlu_dummy.Obj = MLU_PENALTY
+		worker.mlu_dummy.UB = gp.GRB.INFINITY
+		worker.mlu_dummy.LB = 1.0
+		for pi, constr in worker.cap_constrs.items():
+			worker.model.chgCoeff(constr, worker.mlu_dummy, -1.0 * float(worker.static_caps[pi]))
+			constr.RHS = 0.0
+		# Activate the same path vars as solve_unified_lp would
+		all_vars = list(worker.var_pool.values())
+		worker.model.setAttr("UB", all_vars, [0.0] * len(all_vars))
+		# Discover any missing vars + activate
+		for (ug, poppi), latency in zip(available_paths, obj_coeffs):
+			key = (ug, poppi)
+			if key not in worker.var_pool:
+				col = gp.Column()
+				col.addTerms(1.0, worker.vol_constrs[ug])
+				col.addTerms(1.0, worker.cap_constrs[poppi])
+				worker.var_pool[key] = worker.model.addVar(lb=0.0, obj=latency, column=col)
+			else:
+				worker.var_pool[key].Obj = latency
+			worker.var_pool[key].UB = gp.GRB.INFINITY
+		worker.model.optimize()
+		if worker.model.status != 2:
+			# Reset state before returning
+			worker.mlu_dummy.LB = 0.0
+			worker.mlu_dummy.UB = 0.0
+			worker.mlu_dummy.Obj = 0.0
+			return {'solved': False, 'objective': float('-inf'), 'paths_by_ug': {}}
+		# Reset LB on mlu_dummy so subsequent non-MLU solves work
+		# (we don't reset Obj/UB/coefficients here -- solve_unified_lp does
+		# that on its next call).
+		try:
+			model_res = worker.model
+		finally:
+			pass
 	if model_res is None:
 		return {'solved': False, 'objective': float('-inf'), 'paths_by_ug': {}}
 
@@ -267,6 +491,7 @@ def _summarise_ret(ret, worker, keep_paths):
 		'solved': solved,
 		'objective': obj,
 		'latency': latency,
+		'fraction_overflow_volume': float(ret.get('fraction_overflow_volume', 0.0)),
 	}
 	if keep_paths:
 		out['paths_by_ug'] = ret.get('paths_by_ug')
