@@ -8,7 +8,15 @@ N_TO_SIM = 1
 lambduh = .00001
 global_soln_types = ['sparse', 'anyopt', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
 
-global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}.pkl'.format(dps))
+def _run_tag_suffix():
+	# SCULPTOR_RUN_TAG namespaces the metrics pickle so parallel A/B runs at
+	# the same dpsize don't cross-contaminate (e.g. one run loading another
+	# run's compare_rets and skipping its own training loop). Empty by default
+	# so existing single-run workflows are unchanged.
+	tag = os.environ.get('SCULPTOR_RUN_TAG', '')
+	return '_' + tag if tag else ''
+
+global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_failure_latency_comparison_{}{}.pkl'.format(dps, _run_tag_suffix()))
 
 ### Default metrics for performance evaluations
 default_metrics = {

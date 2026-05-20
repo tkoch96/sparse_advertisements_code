@@ -73,6 +73,7 @@ launch_one() {
 
     cd "${REPO}"
     eval "SCULPTOR_DEPLOYMENT_SEED=${seed} \
+        SCULPTOR_RUN_TAG=seed${seed}_${cond} \
         SCULPTOR_MAX_ITER=${MAX_ITER} \
         SCULPTOR_N_WORKERS=${N_WORKERS} \
         ${extra_env} \
