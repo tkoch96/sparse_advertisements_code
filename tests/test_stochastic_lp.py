@@ -300,6 +300,8 @@ def test_multi_scenario_agrees_with_warm(size):
 	('small', 16, 1.05),    # tight: only 5% capacity headroom → failures actually bite
 	('decent', 16, 1.3),    # 10 pops, 270 popps, 4000 UGs — deployment-scale dynamics
 	('decent', 16, 1.05),   # tight at deployment scale
+	('med', 16, 1.3),       # 30 pops, ~1500+ popps — closer to actual-32
+	('med', 16, 1.05),
 ])
 def test_three_approaches_comparison(size, K, scale_factor):
 	"""Apples-to-apples comparison for a FIXED advertisement:
