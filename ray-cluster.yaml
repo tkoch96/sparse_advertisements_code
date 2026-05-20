@@ -28,8 +28,9 @@
 
 cluster_name: sculptor
 
-# Cap on total worker count. Start with 1 for the baseline run, bump later.
-max_workers: 1
+# Cap on total worker count. Bumped to 5 for the Session-3 A/B
+# (5 trial pairs in parallel; RESEARCH_ROADMAP Tier 1 #1).
+max_workers: 5
 
 # How fast the autoscaler spins up new workers (1.0 = conservative).
 upscaling_speed: 1.0
@@ -110,7 +111,7 @@ available_node_types:
                         Value: worker
         resources: {}
         min_workers: 0
-        max_workers: 1
+        max_workers: 5
 
 head_node_type: ray.head.default
 
