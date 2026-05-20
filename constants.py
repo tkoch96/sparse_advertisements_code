@@ -56,13 +56,29 @@ NO_ROUTE_LATENCY = 100*MAX_LATENCY
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 import re
+
+# Maps synthetic (non-actual) deployment-size names to their n_pop counts.
+# Kept in sync with deployment_setup.problem_params. ACTUAL_DEPLOYMENT_SIZES
+# and `actual-N` forms are still handled separately in n_pops_from_dpsize.
+_SYNTHETIC_DPSIZE_N_POPS = {
+	'really_friggin_small': 2,
+	'small': 3,
+	'decent': 10,
+	'med': 30,
+	'large': 100,
+}
+
 def n_pops_from_dpsize(deployment_size):
 	if deployment_size in ACTUAL_DEPLOYMENT_SIZES:
 		return len(CONSIDERING_POPS_ACTUAL_DEPLOYMENT[deployment_size])
 	elif 'actual' in deployment_size:
 		return int(re.search('actual\-(.+)',deployment_size).group(1))
 	elif deployment_size == 'small':
+		# Preserve original return value (2) even though small actually has
+		# 3 pops; downstream callers depend on this.
 		return 2
+	# Fall-through covers really_friggin_small / decent / med / large.
+	return _SYNTHETIC_DPSIZE_N_POPS.get(deployment_size)
 
 def PRINT_FREQUENCY(dpsize):
 	### How often we make plots, often slow to create
@@ -71,6 +87,10 @@ def PRINT_FREQUENCY(dpsize):
 	dpsize_pops = n_pops_from_dpsize(dpsize)
 	if dpsize == 'small':
 		return 3
+	# Defensive: an unknown size returns None from n_pops_from_dpsize. Fall
+	# through to the common case (10) instead of crashing on None <= 5.
+	if dpsize_pops is None:
+		return 10
 	elif dpsize_pops <= 5:
 		return 10
 	elif dpsize_pops <= 15:

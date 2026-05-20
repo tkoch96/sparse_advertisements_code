@@ -986,9 +986,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				poppi = self.popp_to_ind[popp]
 				tmp_a[poppi,rand_outer_prefix] = 1.0 # Turn this popp on
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+				# A/B knob: SCULPTOR_RB_NO_UGS_SUBSET=1 drops the per-call user
+				# subset. Bigger LP per call but enables cache hits on
+				# a_effective AND lets persistent Gurobi warm-start across
+				# consecutive calls (since LP variable set is constant).
+				if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
+					self.latency_benefit(tmp_a)
+				else:
+					self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 				tmp_a[poppi,rand_outer_prefix] = 0.0 # turn this popp off
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+				if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
+					self.latency_benefit(tmp_a)
+				else:
+					self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 
 				calls.append((popp, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
@@ -1038,9 +1048,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				continue
 
 			tmp_a[poppi_helper,rand_outer_prefix] = 1.0 # Turn this popp on
-			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+			if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
+				self.latency_benefit(tmp_a)
+			else:
+				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 			tmp_a[poppi_helper,rand_outer_prefix] = 0.0 # turn this popp off
-			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+			if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
+				self.latency_benefit(tmp_a)
+			else:
+				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 			calls.append((popp_helper, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
@@ -1205,6 +1221,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return grad_rb
 
 	def gradients_resilience_benefit(self, advertisement):
+		# SCULPTOR_SKIP_RB_GRAD short-circuits this entire phase to test the
+		# "resilience-via-LP-headroom" formulation. With SCULPTOR_CAPACITY_HEADROOM
+		# set in solve_lp_assignment.py, the inner LP already reserves capacity
+		# for failures, making the SGD-RB gradient unnecessary.
+		if os.environ.get('SCULPTOR_SKIP_RB_GRAD'):
+			return np.zeros(advertisement.shape)
 
 		grad_link_failure = self.gradients_resilience_benefit_popp(advertisement)
 		grad_pop_failure = 0#self.gradients_resilience_benefit_pop(advertisement) ### This hurts convergence

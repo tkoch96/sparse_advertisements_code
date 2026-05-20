@@ -4,6 +4,15 @@ from scipy.sparse import csr_matrix
 import gurobipy as gp
 gp.setParam("OutputFlag", 0)
 
+def _apply_capacity_headroom(arr):
+	"""Multiply capacities by (1 - SCULPTOR_CAPACITY_HEADROOM env var, default 0).
+	Used to leave headroom in LP capacity constraints so that a single popp
+	failure can be absorbed without re-running the LP. When SCULPTOR_SKIP_RB_GRAD
+	is also set, this fully replaces the SGD-based resilience benefit gradient.
+	"""
+	h = float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0'))
+	return arr * (1.0 - h)
+
 def NO_PATH_INGRESS(sas):
 	return sas.n_popps
 
@@ -118,7 +127,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
 
 
 	for pli in range(n_paths):
@@ -324,7 +333,7 @@ def solve_lp_assignment_with_site_cost_with_failure_catch(sas, routed_through_in
 	n_popps = sas.n_popps + 1 
 
 	## caps is usually link capacities, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
 
 	### upper bound A for enforcing utilization
 	n_entries_util = n_popps + n_paths
@@ -497,7 +506,7 @@ def solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_co
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usually link capacities, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 
@@ -592,9 +601,45 @@ generic_lp_functions = {
 	'per_site_cost': solve_lp_assignment_with_site_cost_with_failure_catch,
 }
 
+## Objectives that solve_generic_lp_persistent (in path_distribution_computer.py)
+## knows how to handle. Routing these through the persistent Gurobi model warm-
+## starts the simplex basis across consecutive calls; this is the main reason
+## the persistent model exists, so we should actually use it.
+_PERSISTENT_GUROBI_OBJECTIVES = ('avg_latency', 'per_site_cost')
+
+
+def _can_use_persistent_gurobi(sas):
+	"""True iff `sas` is a worker with an initialized persistent Gurobi model.
+
+	When sas is the main-thread Optimal_Adv_Wrapper, it has neither the method
+	nor `self.model` / `self.var_pool` -- so we have to fall back to scipy.
+	"""
+	return (hasattr(sas, 'solve_generic_lp_persistent')
+			and hasattr(sas, 'model')
+			and hasattr(sas, 'var_pool'))
+
+
 def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwargs):
 	### Minmizes f(w) subject to capacity and volume constraints
 	### w is the amount of volume to place on each path where a path is a <user, routed ingress>
+
+	## Prefer the worker's persistent Gurobi model for objectives it supports.
+	## This is the path that warm-starts across calls and is dramatically
+	## faster on the MC inner loop (same adv, varying routing realization).
+	## Falls through to scipy if (a) sas isn't a worker, (b) the persistent
+	## solve returns unsolved, or (c) it raises.
+	if obj in _PERSISTENT_GUROBI_OBJECTIVES and _can_use_persistent_gurobi(sas):
+		try:
+			ret = sas.solve_generic_lp_persistent(
+				routed_through_ingress, obj, **kwargs)
+			if ret.get('solved'):
+				if kwargs.get('smallverb'):
+					print("Solved {} via persistent Gurobi".format(obj))
+				return ret
+			# Unsolved -> fall through to the scipy MLU path below.
+		except Exception as e:
+			print("Persistent Gurobi solve raised ({}); "
+				  "falling back to scipy".format(e))
 
 	try:
 		return generic_lp_functions[obj](sas, routed_through_ingress, obj, **kwargs)
@@ -617,7 +662,7 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
 
 	### upper bound A for enforcing utilization
 	n_entries_util = n_popps + n_paths
@@ -799,7 +844,7 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 
@@ -921,7 +966,7 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
 
 	## optimization variable is [Y,v]
 	## Y is dummy upper bound variable, v is percent of volume UG places on path
@@ -1098,7 +1143,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([sas.link_capacities_arr.flatten(), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 

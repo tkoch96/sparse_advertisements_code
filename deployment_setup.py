@@ -189,9 +189,9 @@ def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_
 		total_v = ug_to_vol[ug]
 		total_available_v = sum([link_capacities[popp] for popp in ug_perfs[ug]])
 		oversubscriptions[ug] = total_available_v / total_v
-	if verb:
-		print("Vol by metro: ")
-		print(vol_by_metro)
+	# if verb:
+	# 	print("Vol by metro: ")
+	# 	print(vol_by_metro)
 
 
 	if verb:
@@ -357,9 +357,9 @@ def get_link_capacities(deployment, scale_factor=1.3, verb=True, **kwargs):
 		total_v = ug_to_vol[ug]
 		total_available_v = sum([link_capacities[popp] for popp in ug_perfs[ug]])
 		oversubscriptions[ug] = total_available_v / total_v
-	if verb:
-		print("Vol by metro: ")
-		print(vol_by_metro)
+	# if verb:
+	# 	print("Vol by metro: ")
+	# 	print(vol_by_metro)
 
 
 		### For each pop, what is the distribution of load along its pops assuming 1pp scheme?

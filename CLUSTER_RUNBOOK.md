@@ -1,0 +1,412 @@
+# Cluster runbook: SCULPTOR on AWS Ray
+
+Operational reference for getting SCULPTOR running on AWS via Ray, end-to-end.
+Written 2026-05-19 after the overnight session that stood up the first
+working setup. Every step below is what we actually did and verified —
+nothing aspirational.
+
+If you're a new Claude agent picking this up: read this file, then
+`OVERNIGHT_SUMMARY.md`, then `RESEARCH_ROADMAP.md`. The cluster yaml and
+teardown script are ready to use — `ray up ray-cluster.yaml -y` works
+unmodified.
+
+---
+
+## TL;DR — happy path from zero
+
+```
+# 0. Prereqs (one-time, do once per AWS account):
+#    - Create IAM user with AmazonEC2FullAccess + IAMFullAccess
+#    - aws configure on local Mac with that user's keys
+#    - Have ~/gurobi.lic (WLS, not node-locked)
+#    - Have Drive data files in:
+#       data/vultr_peers_inferred.csv
+#       cache/vultr_ingress_latencies_by_dst.csv  (~4.5GB)
+#       cache/vultr_anycast_latency_smaller.csv   (~52MB)
+#       cache/vultr_provider_popps.csv            (~2KB)
+#    - pip install "ray[default]" boto3 in your local venv
+
+# 1. Spin cluster (5-30 min depending on whether 4.5GB rsync is fresh)
+~/Documents/venv312/bin/ray up ray-cluster.yaml -y
+
+# 2. Run something
+~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+  ts=$(date +%Y%m%d_%H%M%S)
+  cd ~/sparse_advertisements_code
+  SCULPTOR_MAX_ITER=10 SCULPTOR_N_WORKERS=32 nohup /home/ubuntu/venv312/bin/python \
+    run_ray.py eval_latency_failure --port 31415 --dpsize actual-32 \
+    > /tmp/cluster_runs/${ts}.log 2>&1 < /dev/null &
+  echo $! > /tmp/cluster_runs/${ts}.pid
+  ln -sfn ${ts}.log /tmp/cluster_runs/latest.log
+  ln -sfn ${ts}.pid /tmp/cluster_runs/latest.pid
+'
+
+# 3. Watch progress (any of):
+~/Documents/venv312/bin/ray exec ray-cluster.yaml 'tail -30 /tmp/cluster_runs/latest.log'
+~/Documents/venv312/bin/ray exec ray-cluster.yaml 'ray status'
+
+# 4. Tear down (UNCONDITIONAL AT END OF EACH SESSION)
+./teardown.sh
+```
+
+---
+
+## AWS account prereqs (one-time per account)
+
+### 1. IAM user with right perms
+
+In AWS console → IAM → Users → Create user `ray-cluster`. Attach BOTH:
+
+- `AmazonEC2FullAccess` (provision EC2)
+- `IAMFullAccess` (Ray creates an instance profile for cluster nodes; without
+  this `ray up` errors with `AccessDenied iam:GetInstanceProfile`)
+
+Yes, `IAMFullAccess` is broad. For a single-user research account it's the
+operational simplicity tradeoff. To scope down, the specific perms Ray uses
+are: `iam:GetInstanceProfile`, `iam:CreateInstanceProfile`,
+`iam:AddRoleToInstanceProfile`, `iam:RemoveRoleFromInstanceProfile`,
+`iam:DeleteInstanceProfile`, `iam:CreateRole`, `iam:GetRole`,
+`iam:DeleteRole`, `iam:AttachRolePolicy`, `iam:DetachRolePolicy`,
+`iam:PassRole`.
+
+Create access keys for the user, save the CSV. The secret is only shown
+once.
+
+### 2. Configure aws CLI locally
+
+```
+pip install awscli   # if not already
+aws configure        # paste access key ID, secret, region us-east-1
+aws sts get-caller-identity   # must return your user's ARN
+```
+
+**Don't paste real AWS credentials into chat with Claude.** Anthropic logs
+the conversation. If you ever leak one, rotate immediately.
+
+### 3. Check (and possibly request) spot quota
+
+AWS console → Service Quotas → EC2 → "All Standard (A, C, D, H, I, M, R,
+T, Z) Spot Instance Requests". Default is often 5-64 vCPU which doesn't fit
+even one c7g.16xlarge (64 vCPU). Request increase to **256 or 512 vCPU**
+(supports 4-8 spot workers). Takes hours to ~1 day.
+
+Tom's account: already at **640 vCPU** as of 2026-05-18 → 10× c7g.16xlarge.
+
+### 4. Gurobi WLS license
+
+Must be a WLS (Web License Service) file, not node-locked. Lives at
+`~/gurobi.lic` on the local Mac. Ray syncs it to `/home/ubuntu/gurobi.lic`
+on each cluster node via `file_mounts`. License is account-bound, not
+machine-bound, so the same file works on N cluster nodes.
+
+If you have an older node-locked Gurobi license, get a WLS one from
+gurobi.com/academia.
+
+---
+
+## Repo layout
+
+```
+sparse_advertisements_code/
+├── HANDOFF.md                         ← original handoff (pre-AWS work)
+├── OVERNIGHT_SUMMARY.md               ← what session-2 (this one) did
+├── CLUSTER_RUNBOOK.md                 ← this file
+├── RESEARCH_ROADMAP.md                ← next-steps + experiment plans
+├── ray-cluster.yaml                   ← Ray cluster config (use as-is)
+├── teardown.sh                        ← end-of-session script (use as-is)
+├── run_ray.py                         ← Ray-backend launcher
+├── sparse_advertisements_v3.py        ← SCULPTOR algorithm
+├── eval_latency_failure.py            ← primary driver
+├── worker_comms_ray.py                ← Ray Worker_Manager
+├── path_distribution_computer_ray.py  ← Ray actor wrapper
+├── solve_lp_assignment.py             ← LP dispatch (with headroom helper)
+├── deployment_setup.py                ← deployment builder
+├── constants.py                       ← APNIC_VOLUME=False, etc.
+└── tests/                             ← pytest suite
+```
+
+Data files (you provide):
+```
+data/vultr_peers_inferred.csv           (~500KB from Drive)
+cache/vultr_ingress_latencies_by_dst.csv (~4.5GB from Drive)
+cache/vultr_anycast_latency_smaller.csv  (~52MB from Drive)
+cache/vultr_provider_popps.csv           (~2KB from Drive)
+# cache/addresses_violating_sol.csv      auto-touched by setup_commands
+```
+
+Source: shared Google Drive folder. README.md mentions the link.
+
+---
+
+## ray-cluster.yaml: what's in it and why
+
+The yaml in the repo is already validated. **Don't rewrite it from scratch
+without reading this section** — there are 8 distinct gotchas baked in that
+we discovered the hard way.
+
+### Cluster shape
+
+- Head: `m7g.4xlarge` on-demand. 16 vCPU, 64 GB RAM. **Don't downsize to
+  m7g.large** — the actual-32 driver loads the 4.5GB CSV into Python dicts
+  and peaks at ~30 GB RAM. m7g.large (8 GB) OOMs.
+- Worker: `c7g.16xlarge` spot. 64 vCPU, 128 GB RAM. ARM64 (matches AMI).
+  Cheap on spot (~$0.55-0.85/hr).
+- `min_workers: 0`, `idle_timeout_minutes: 10`. Workers auto-terminate
+  when idle. Idle-only worker for cost: head $0.16/hr (~$4/day).
+- All instances tagged `project=sculptor` for cost allocation and
+  teardown verification.
+
+### file_mounts (~/Documents/sparse_advertisements_code → cluster)
+
+Mirror the whole repo to `/home/ubuntu/sparse_advertisements_code`. Plus
+the Gurobi license to `/home/ubuntu/gurobi.lic`.
+
+**`rsync_filter` is intentionally NOT set.** The default would respect
+.gitignore which excludes `cache/`. But cache/ contains the 4.5GB latency
+file we MUST ship. Use explicit `rsync_exclude` instead (the yaml does).
+
+### setup_commands
+
+Six categories of mandatory items. **All present and tested** in the yaml.
+For reference if rebuilding from scratch:
+
+1. **Ubuntu 22.04 ARM64 + Python 3.12** via deadsnakes PPA.
+2. **Venv at `/home/ubuntu/venv312`** to mirror local Mac path layout.
+3. **Pip install**: ray[default], numpy, matplotlib, scipy, gurobipy,
+   tqdm, geopy, pyzmq, cymruwhois, scikit-learn, pytest, **boto3**.
+   - `boto3` is mandatory on the head node. Ray autoscaler runs there and
+     uses boto3 to call EC2 RunInstances. Without it autoscaler crashes
+     silently — visible only in `/tmp/ray/session_latest/logs/monitor.err`.
+4. **`sudo ln -sf /home/ubuntu/venv312/bin/ray /usr/local/bin/ray`**.
+   Ray autoscaler internally invokes a bare `ray stop` from non-interactive
+   SSH. Doesn't see venv bin even with --login. Symlink fixes it.
+5. **`ln -sfn /home/ubuntu/venv312 /home/ubuntu/venv`** and same for
+   `cache`, `data`, `figures`, `logs`, `runs`. The codebase has
+   hardcoded paths (`worker_comms.py:11-16` checks specific venv paths;
+   `path_distribution_computer_ray.py:66` opens relative `logs/...`).
+   Symlinks make these resolve regardless of CWD.
+6. **`mkdir -p` runtime directories** (figures, logs, runs, cache,
+   cache/deployments) and **`touch cache/addresses_violating_sol.csv`**.
+   Codebase auto-populates this file but raises FileNotFoundError if
+   missing entirely.
+7. **`export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic`** in .bashrc and
+   .profile.
+
+### head_start_ray_commands / worker_start_ray_commands
+
+Standard, with `ulimit -n 65536` bump required at scale.
+
+### AMI
+
+Currently pinned to `ami-06683ebc6ba468d04` (Ubuntu 22.04 ARM64 in
+us-east-1, dated 2026-05-03). Canonical publishes new images regularly.
+To refresh:
+
+```
+aws ec2 describe-images --owners 099720109477 \
+  --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*" \
+  --query 'sort_by(Images, &CreationDate)[-1].[ImageId,Name]' \
+  --output text
+```
+
+Paste new ImageId into yaml at TWO places (head + worker definitions).
+
+---
+
+## Running a SCULPTOR job — the detached pattern
+
+`ray up` and `ray attach` keep an SSH session open. Long SCULPTOR runs need
+to survive wifi flakes, laptop sleep, etc. The pattern we settled on:
+
+```bash
+~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+  mkdir -p /tmp/cluster_runs
+  ts=$(date +%Y%m%d_%H%M%S)
+  cd ~/sparse_advertisements_code
+  <ENV_VARS> nohup /home/ubuntu/venv312/bin/python \
+    run_ray.py eval_latency_failure --port 31415 --dpsize <dpsize> \
+    > /tmp/cluster_runs/${ts}_<name>.log 2>&1 < /dev/null &
+  pid=$!
+  echo $pid > /tmp/cluster_runs/${ts}_<name>.pid
+  ln -sfn ${ts}_<name>.log /tmp/cluster_runs/latest.log
+  ln -sfn ${ts}_<name>.pid /tmp/cluster_runs/latest.pid
+  echo "started <name> pid=$pid"
+'
+```
+
+Key elements:
+- `nohup ... &` detaches from the SSH session
+- `< /dev/null` to avoid hanging on input
+- `> file 2>&1` redirects both streams
+- pid file + latest symlinks so polling scripts can find it without
+  knowing the timestamp
+
+### Useful runtime env vars (all default-off; all gated behind env var checks)
+
+| Env var | Default | Effect |
+|---|---|---|
+| `SCULPTOR_MAX_ITER` | (uses dpsize-based default: 20 for small, 150 otherwise) | Override max SAS iterations |
+| `SCULPTOR_N_WORKERS` | min(multiprocessing.cpu_count(), get_n_workers(dpsize)) | Override actor count; needed because the default reads driver's cpu_count |
+| `SCULPTOR_RB_NO_UGS_SUBSET` | unset | Drop `ugs=` from RB-grad calls (cache + warm-start eligible). NEUTRAL at actual-10 scale; untested at actual-32 |
+| `SCULPTOR_CAPACITY_HEADROOM` | "0" | Multiply LP capacities by (1 - this). 0.2 = 20% headroom. Currently also affects eval LP (bug — see RESEARCH_ROADMAP) |
+| `SCULPTOR_SKIP_RB_GRAD` | unset | Returns zeros from gradients_resilience_benefit. Use WITH HEADROOM. |
+
+### Monitoring patterns
+
+**Quick status:**
+```bash
+~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+  pid=$(cat /tmp/cluster_runs/latest.pid)
+  if ps -p $pid > /dev/null; then echo RUNNING; else echo STOPPED; fi
+  ray status | head -20
+  tail -30 /tmp/cluster_runs/latest.log
+'
+```
+
+**Iter timing extraction:**
+```bash
+~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+  grep -E "Timer: grads|LEARNING ITERATION|Calcing.*grad took" /tmp/cluster_runs/latest.log
+'
+```
+
+**Heartbeat (every 5 min) for long-running jobs:**
+
+Use Claude's `Monitor` tool with a loop that ssh's once per tick to grab
+status and exits when the process dies. Pattern from session 2 saved at
+the bottom of OVERNIGHT_SUMMARY.md if useful, but it's a 20-line shell
+construct nothing fancy.
+
+### tqdm and \r progress bars
+
+Worker code uses `tqdm` heavily. Progress bars use `\r` to overwrite within
+a single log line. `tail -1` of the log gets the LATEST tqdm update only
+if you strip control chars with `tr '\r' '\n' | tail -1`. Otherwise you
+see the FIRST update (the "0%|..." part of the line) and think it's stuck.
+
+This burned us multiple times — heartbeats reported "0/5206" when actually
+it was 100% complete and the next phase had started.
+
+---
+
+## Teardown — the hard rule
+
+**Every session that brings up cluster MUST end with teardown.** Cost
+discipline. Do not trust yourself to remember.
+
+```
+./teardown.sh
+```
+
+What it does:
+1. `ray down -y ray-cluster.yaml` (terminates head; workers cascade)
+2. Verifies no project=sculptor EC2 instances are still running
+3. Checks for unattached EBS volumes
+4. Checks for orphan Elastic IPs
+
+Exits non-zero if any orphans found, with explicit terminate commands you
+can paste. If `ray down` fails for any reason, the verification step is
+your safety net.
+
+If for some reason `teardown.sh` itself fails:
+
+```bash
+# Manual nuclear option
+~/Documents/venv312/bin/aws ec2 describe-instances --region us-east-1 \
+  --filters "Name=tag:project,Values=sculptor" "Name=instance-state-name,Values=running,pending,stopping" \
+  --query 'Reservations[].Instances[].InstanceId' --output text \
+  | xargs -r ~/Documents/venv312/bin/aws ec2 terminate-instances --region us-east-1 --instance-ids
+```
+
+---
+
+## Cost reference
+
+Cluster running 1 head + 1 c7g.16xlarge worker:
+- Head: $0.16/hr (m7g.4xlarge on-demand)
+- Worker: ~$0.60-0.85/hr (c7g.16xlarge spot, varies by capacity)
+- Total: ~$0.80-1.00/hr active
+
+Cluster running 1 head + 0 workers (autoscaled down):
+- Just head: $0.16/hr (~$4/day if forgotten)
+
+Per-run cost estimate for actual-32 at MAX_ITER=200 (single c7g.16xlarge):
+- ~16 min/iter × 200 = ~55 hours wall, ~$50-60 spot
+
+After the headroom optimization (untested at scale but plausible 6×):
+- ~3 min/iter × 200 = ~10 hours wall, ~$10-15 spot
+
+**Cap your AWS Cost Explorer alert at $50/day** if you don't already.
+This is a research account on advisor's bill — better than discovering a
+surprise later.
+
+---
+
+## Known issues you'll hit eventually
+
+These are non-fatal but show up in logs and confuse new readers.
+
+### Tracebacks from SAS top-of-file diagnostic code
+
+`sparse_advertisements_v3.py:64` (`compare_estimated_actual_per_user`) and
+`:1224` (`make_plots`) raise IndexError on most runs. Old code, non-fatal,
+SCULPTOR continues. Just ignore.
+
+### Diurnal-eval np.int64 KeyError on synthetic deployments
+
+`wrapper_eval.py:741` `metro_to_diurnal_factor` tries to look up
+`POP2TIMEZONE[metro]` but for synthetic dpsizes (`decent`, `med`),
+metros are np.int64 not city strings. Doesn't fire for actual-N runs
+(real city names). Non-fatal — caught somewhere upstream.
+
+### `tuple - tuple` TypeError in flash-crowd eval
+
+`eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` raises
+`TypeError: unsupported operand type(s) for -: 'tuple' and 'tuple'`
+repeatedly. Eval results for flash-crowd are partially lost but other
+phases continue.
+
+### Ray log deduplication hides repeated worker prints
+
+By default Ray deduplicates identical log lines across actors. So if 32
+workers all print "Worker N -- X% done", you might see only one. Set
+`RAY_DEDUP_LOGS=0` env var if you need to see all of them (rarely needed).
+
+### SSH dropouts on long ad-hoc commands
+
+`ray exec` opens an SSH session for each command. If your local wifi drops
+for >15s, the session dies. Most of the time this is harmless because the
+detached process keeps running. But if you were running an inline
+`ray exec '... slow command ...'`, that command dies.
+
+Mitigation: keep ad-hoc commands short. Use the detached pattern for
+anything that needs to survive.
+
+### Worker takes 5-10 min to spawn first time
+
+When the autoscaler sees demand and provisions a new c7g.16xlarge spot:
+- ~30s for AWS to allocate spot
+- ~30s for cloud-init
+- ~5-8 min for `setup_commands` (apt + pip)
+- ~30s for Ray daemon start
+
+So a SCULPTOR call that needs a new worker waits ~7-10 min before its
+first actor task runs. Subsequent calls reuse the existing worker
+(no setup again) until idle timeout fires.
+
+If you'll be doing back-to-back runs, bump `idle_timeout_minutes` to 30 or
+keep at least one worker alive by setting `min_workers: 1` (costs
+$0.60-0.85/hr always-on).
+
+---
+
+## What's in `OVERNIGHT_SUMMARY.md` (don't duplicate, point to)
+
+Session-2's empirical results:
+- Per-iter timing measurements (actual-10, actual-32)
+- The 7 setup hurdles in chronological order with diagnostic detail
+- The headroom optimization A/B test results
+- Cost model for paper grid-runs
+
+If something in this runbook contradicts OVERNIGHT_SUMMARY.md, this
+runbook is wrong — update it.

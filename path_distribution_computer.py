@@ -92,7 +92,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# so Gurobi knows this is a constraint to be filled later.
 			self.vol_constrs[ug] = self.model.addLConstr(0.0, gp.GRB.EQUAL, target_vol, name=f"vol_{ug}")
 
-		self.static_caps = np.concatenate([self.link_capacities_arr.flatten(), [1000000.0]])
+		# Apply SCULPTOR_CAPACITY_HEADROOM if set (mirrors solve_lp_assignment).
+		_headroom = float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0'))
+		self.static_caps = np.concatenate([self.link_capacities_arr.flatten() * (1.0 - _headroom), [1000000.0]])
 		self.cap_constrs = {}
 		for pi in range(len(self.static_caps)):
 			target_cap = float(self.static_caps[pi])

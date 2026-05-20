@@ -1,0 +1,239 @@
+# ============================================================================
+# SCULPTOR Ray cluster on AWS
+# ============================================================================
+#
+# Prereqs (do once, see top of session for details):
+#   1. aws configure  (with an IAM user that has AmazonEC2FullAccess)
+#   2. aws sts get-caller-identity   # must succeed
+#   3. Fill in ImageId below (see "AMI lookup" comment near each occurrence)
+#
+# Usage:
+#   ray up    ray-cluster.yaml          # provision head + worker(s)
+#   ray attach ray-cluster.yaml         # SSH into head node
+#   ray submit ray-cluster.yaml <file>  # run a script on the cluster
+#   ./teardown.sh                       # tear down + verify nothing left
+#
+# Cost shape:
+#   - Head node (m7g.large on-demand): ~$0.07/hr, always-on while cluster is up
+#   - Worker (c7g.16xlarge spot): ~$0.50-1.00/hr per worker, auto-terminates
+#     when idle for >idle_timeout_minutes
+#   - With max_workers=1, worst-case running cost is ~$1.10/hr
+#   - Worst-case "forgot to teardown" cost (workers idled out, head still up):
+#     ~$1.70/day from the head node alone
+#
+# Resource tagging:
+#   All EC2 instances tagged project=sculptor for cost allocation and for the
+#   teardown script's orphan-detection query.
+# ============================================================================
+
+cluster_name: sculptor
+
+# Cap on total worker count. Start with 1 for the baseline run, bump later.
+max_workers: 1
+
+# How fast the autoscaler spins up new workers (1.0 = conservative).
+upscaling_speed: 1.0
+
+# Workers without active tasks self-terminate after this many minutes.
+# Aggressive (10) for cost control; bump if you see workers getting killed
+# mid-run because Ray didn't think they had work assigned.
+idle_timeout_minutes: 10
+
+# Don't preserve stopped nodes between sessions — truly terminate them.
+provider:
+    type: aws
+    region: us-east-1
+    cache_stopped_nodes: false
+    # No availability_zones specified — let AWS pick whichever AZ has spot capacity.
+
+auth:
+    ssh_user: ubuntu
+    # Ray auto-generates an SSH key on first `ray up`:
+    #   ~/.ssh/ray-autoscaler_us-east-1.pem
+
+available_node_types:
+
+    # ---- HEAD NODE ----
+    # Orchestration only: runs the Ray autoscaler + the SCULPTOR driver.
+    # Explicitly set CPU resource to 0 so Ray never schedules actor tasks here.
+    # NB: m7g.large (8GB RAM) OOMs when the driver loads the actual-32
+    # latency CSV (~4.5GB raw, expands ~3-4x in memory as Python dicts).
+    # Use m7g.4xlarge (64GB RAM, $0.16/hr) — RAM for the deployment build,
+    # CPU is overkill but the SKU mix is fine for the small premium.
+    ray.head.default:
+        node_config:
+            InstanceType: m7g.4xlarge
+            # AMI lookup (Ubuntu 22.04 ARM64 in us-east-1):
+            #   aws ec2 describe-images --owners 099720109477 \
+            #     --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*" \
+            #     --query 'sort_by(Images, &CreationDate)[-1].[ImageId,Name]' \
+            #     --output text
+            # Paste the ImageId here:
+            ImageId: ami-06683ebc6ba468d04
+            BlockDeviceMappings:
+                - DeviceName: /dev/sda1
+                  Ebs:
+                      VolumeSize: 50
+                      VolumeType: gp3
+            TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                      - Key: project
+                        Value: sculptor
+                      - Key: role
+                        Value: head
+        resources: {"CPU": 0}
+        min_workers: 0
+        max_workers: 0
+
+    # ---- WORKER NODE ----
+    # 64 vCPU per node, spot pricing, auto-terminates when idle.
+    ray.worker.default:
+        node_config:
+            InstanceType: c7g.16xlarge
+            ImageId: ami-06683ebc6ba468d04
+            InstanceMarketOptions:
+                MarketType: spot
+                # No max-price — defaults to on-demand price as cap, which is
+                # what you want (spot is usually 60-70% off on-demand).
+            BlockDeviceMappings:
+                - DeviceName: /dev/sda1
+                  Ebs:
+                      VolumeSize: 50
+                      VolumeType: gp3
+            TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                      - Key: project
+                        Value: sculptor
+                      - Key: role
+                        Value: worker
+        resources: {}
+        min_workers: 0
+        max_workers: 1
+
+head_node_type: ray.head.default
+
+# ============================================================================
+# File mounts: local path -> remote absolute path
+# Synced on every `ray up`. Workers receive these too (unless head-only).
+# ============================================================================
+file_mounts:
+    /home/ubuntu/gurobi.lic: ~/gurobi.lic
+    /home/ubuntu/sparse_advertisements_code: ~/Documents/sparse_advertisements_code
+
+# Don't sync these — huge, regenerable, or irrelevant on the cluster.
+rsync_exclude:
+    - "**/.git"
+    - "**/__pycache__"
+    - "**/.pytest_cache"
+    - "**/figures"
+    - "**/logs"
+    - "**/old_scripts"
+    - "**/graphs"
+    - "**/.claude"
+    # NB: data/ and cache/ are NOT excluded. actual-32 needs ~5GB of CSVs +
+    # the MaxMind .mmdb in those dirs; rsync uses incremental diff so re-syncs
+    # are fast once the initial transfer is done. If a teammate ever stages
+    # multi-GB files in those dirs that DON'T need to ship, add explicit
+    # excludes here.
+
+# NOTE: rsync_filter (.gitignore) is intentionally NOT used. The .gitignore
+# in this repo excludes `cache/`, which is correct for git but breaks data
+# shipment to the cluster — the multi-GB latency CSV lives in cache/ and we
+# DO need it on workers. Rely on rsync_exclude above for what to skip.
+
+# ============================================================================
+# Setup commands: run on EVERY node before Ray starts.
+# Keep idempotent — `ray up` re-runs these on existing nodes.
+# ============================================================================
+setup_commands:
+    # System packages + Python 3.12 from deadsnakes (Ubuntu 22.04 ships 3.10).
+    - sudo apt-get update -qq
+    - sudo apt-get install -y software-properties-common
+    - sudo add-apt-repository -y ppa:deadsnakes/ppa
+    - sudo apt-get update -qq
+    - sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essential
+    # Venv at /home/ubuntu/venv312 to mirror the user's Mac layout.
+    - test -d /home/ubuntu/venv312 || python3.12 -m venv /home/ubuntu/venv312
+    - /home/ubuntu/venv312/bin/pip install --upgrade pip wheel setuptools
+    # Python deps. Note: pyzmq (not zmq), scikit-learn (not sklearn — the
+    # pip name `sklearn` is now a deprecated stub that errors).
+    # pytest is here so the test suite can run on the cluster.
+    # boto3 is REQUIRED on the head node: Ray's autoscaler talks to EC2 via
+    # boto3 to provision workers. Without it, the autoscaler monitor crashes
+    # at startup, ray status keeps showing pending demand, no workers ever
+    # spawn, and Ray client calls hang waiting for actors.
+    - /home/ubuntu/venv312/bin/pip install
+        "ray[default]"
+        numpy
+        matplotlib
+        scipy
+        gurobipy
+        tqdm
+        geopy
+        pyzmq
+        cymruwhois
+        scikit-learn
+        pytest
+        boto3
+    # Symlink ray onto system PATH. Ray's autoscaler internally invokes a
+    # bare `ray stop` from a non-interactive SSH shell, which doesn't see the
+    # venv's bin dir even with --login. Symlink is the most reliable fix.
+    - sudo ln -sf /home/ubuntu/venv312/bin/ray /usr/local/bin/ray
+    # worker_comms.py hardcodes a list of venv python paths and asserts one
+    # exists at module-import time. The list includes /home/ubuntu/venv/...
+    # but not /home/ubuntu/venv312/... — symlink so the lookup succeeds.
+    - ln -sfn /home/ubuntu/venv312 /home/ubuntu/venv
+    # Runtime directories the SCULPTOR codebase expects but doesn't create:
+    # figures/ for matplotlib plots written as a side effect of deployment
+    # setup, logs/runs/cache for various per-iteration state.
+    - mkdir -p /home/ubuntu/sparse_advertisements_code/figures
+        /home/ubuntu/sparse_advertisements_code/logs
+        /home/ubuntu/sparse_advertisements_code/runs
+        /home/ubuntu/sparse_advertisements_code/cache
+        /home/ubuntu/sparse_advertisements_code/cache/deployments
+    # addresses_violating_sol.csv is read at deployment_setup.py:745 and
+    # auto-populated at line 893. Empty file is fine; missing file raises.
+    - touch /home/ubuntu/sparse_advertisements_code/cache/addresses_violating_sol.csv
+    # Worker actors' CWD on workers isn't ~/sparse_advertisements_code (it's
+    # typically /home/ubuntu or a Ray runtime_resources dir), so the relative
+    # path 'logs/worker_X_log-<dpsize>.txt' that path_distribution_computer_ray.py:66
+    # opens fails with FileNotFoundError. Symlinking /home/ubuntu/logs ->
+    # /home/ubuntu/sparse_advertisements_code/logs makes the relative path
+    # resolve from /home/ubuntu too.
+    - ln -sfn /home/ubuntu/sparse_advertisements_code/logs /home/ubuntu/logs
+    # Same defensive symlinks for cache/figures/runs/data in case other
+    # relative-path opens hit the same issue elsewhere in the codebase.
+    - ln -sfn /home/ubuntu/sparse_advertisements_code/cache /home/ubuntu/cache
+    - ln -sfn /home/ubuntu/sparse_advertisements_code/figures /home/ubuntu/figures
+    - ln -sfn /home/ubuntu/sparse_advertisements_code/runs /home/ubuntu/runs
+    - ln -sfn /home/ubuntu/sparse_advertisements_code/data /home/ubuntu/data
+    # Point Gurobi at the file_mounted WLS license.
+    - echo 'export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic' >> /home/ubuntu/.bashrc
+    - echo 'export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic' >> /home/ubuntu/.profile
+
+head_setup_commands: []
+worker_setup_commands: []
+
+# ============================================================================
+# Ray start commands. ulimit bump is required at scale.
+# ============================================================================
+head_start_ray_commands:
+    - ray stop
+    - >-
+      export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic;
+      ulimit -n 65536;
+      /home/ubuntu/venv312/bin/ray start --head
+      --port=6379
+      --object-manager-port=8076
+      --autoscaling-config=~/ray_bootstrap_config.yaml
+
+worker_start_ray_commands:
+    - ray stop
+    - >-
+      export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic;
+      ulimit -n 65536;
+      /home/ubuntu/venv312/bin/ray start
+      --address=$RAY_HEAD_IP:6379
+      --object-manager-port=8076

@@ -6,4 +6,5 @@ tqdm
 geopy
 zmq
 cymruwhois
-sklearn
+scikit-learn
+ray
