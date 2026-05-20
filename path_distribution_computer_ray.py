@@ -204,6 +204,13 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		self.iter = data
 		return "ACK"
 
+	def _cmd_set_training_mode(self, data):
+		# Inherited from Path_Distribution_Computer: toggles self._in_training
+		# and pushes new RHS into the persistent Gurobi cap constraints so
+		# SCULPTOR_CAPACITY_HEADROOM only applies during the gradient loop.
+		self.set_training_mode(data)
+		return "ACK"
+
 	def _cmd_reset_cache(self, _data=None):
 		self.clear_caches()
 		return "ACK"
