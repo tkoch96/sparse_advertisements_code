@@ -151,6 +151,11 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# (hyper-) parameters
 
 		self.iter = 0
+		# Whether we're inside the gradient / training loop. Gated by solve()
+		# below; downstream LPs (driver-side _apply_capacity_headroom and the
+		# worker-side persistent Gurobi) check this so SCULPTOR_CAPACITY_HEADROOM
+		# only affects training, not the eval phase.
+		self._in_training = False
 		self.initialization = init
 		self.explore = explore
 		self.stopping_condition = lambda el : el[0] > self.max_n_iter or (el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
@@ -341,6 +346,12 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def init_advertisement(self):
 		print("Initializing advertisement...")
+		# SCULPTOR_DEPLOYMENT_SEED also pins the initial advertisement so an A/B
+		# pair starts from the same point. Offset by 1 to decorrelate from the
+		# deployment-build RNG state without exposing a second env var.
+		_seed = os.environ.get('SCULPTOR_DEPLOYMENT_SEED')
+		if _seed is not None:
+			np.random.seed(int(_seed) + 1)
 		mode = self.initialization['type']
 		if mode == 'random_binary':
 			return np.random.randint(0,2,size=(self.n_popp, self.n_prefixes)) * 1.0
@@ -1965,6 +1976,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# if not self.simulated:
 		# 	self.get_realworld_measure_wrapper()
 
+	def _broadcast_training_mode(self, in_training):
+		# Set local flag (read by driver-side _apply_capacity_headroom) and
+		# fan out to workers (which rebuild their persistent Gurobi caps).
+		# Mirrors the existing set_iter / increment_iter broadcast pattern.
+		self._in_training = bool(in_training)
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
+			return
+		for worker, worker_socket in wm.worker_sockets.items():
+			msg = pickle.dumps(('set_training_mode', self._in_training))
+			worker_socket.send(msg)
+			worker_socket.recv()
+
 	def solve(self, **kwargs):
 		try:
 			## If we're hot-starting, load the optimization state. But this will throw an error if we're not
@@ -1992,6 +2016,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		if not self.simulated:
 			self.last_measured_advertisement = self.optimization_advertisement
+
+		# Enter training mode: gates SCULPTOR_CAPACITY_HEADROOM in
+		# solve_lp_assignment._apply_capacity_headroom (driver) and in the
+		# workers' persistent Gurobi (Path_Distribution_Computer.set_training_mode).
+		# Eval phase runs after solve() returns, with this flag cleared below.
+		self._broadcast_training_mode(True)
 
 		while not self.stop:
 
@@ -2126,6 +2156,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			print("Updated numbers of popps on per prefix.")
 			print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
+
+		# Exit training mode before the eval phase touches the same LPs.
+		self._broadcast_training_mode(False)
 
 		# After finishing, end the optimization
 		self.output_optimization_state()

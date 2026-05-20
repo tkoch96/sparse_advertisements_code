@@ -1495,6 +1495,16 @@ problem_params = {
 }
 
 def get_random_deployment(problem_size, **kwargs):
+	# SCULPTOR_DEPLOYMENT_SEED makes A/B trials share a problem instance.
+	# We seed both numpy and Python random; load_actual_deployment uses
+	# np.random.uniform for sub-ms tie-breaking noise (line ~1315), and
+	# get_random_deployment_by_size uses np.random extensively.
+	_seed = os.environ.get('SCULPTOR_DEPLOYMENT_SEED')
+	if _seed is not None:
+		_s = int(_seed)
+		np.random.seed(_s)
+		import random as _random
+		_random.seed(_s)
 	if 'actual' in problem_size:
 		return load_actual_deployment(problem_size, **kwargs)
 	else:

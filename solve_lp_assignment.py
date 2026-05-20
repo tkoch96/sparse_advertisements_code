@@ -4,12 +4,19 @@ from scipy.sparse import csr_matrix
 import gurobipy as gp
 gp.setParam("OutputFlag", 0)
 
-def _apply_capacity_headroom(arr):
+def _apply_capacity_headroom(arr, sas=None):
 	"""Multiply capacities by (1 - SCULPTOR_CAPACITY_HEADROOM env var, default 0).
 	Used to leave headroom in LP capacity constraints so that a single popp
 	failure can be absorbed without re-running the LP. When SCULPTOR_SKIP_RB_GRAD
 	is also set, this fully replaces the SGD-based resilience benefit gradient.
+
+	Only applies when sas._in_training is True (set/cleared in
+	Sparse_Advertisement_Solver.solve around the gradient loop) -- otherwise the
+	eval phase would solve every solution's LP under reduced caps, shifting the
+	"optimal" reference for ALL solutions (sparse, painter, anyopt, ...).
 	"""
+	if not getattr(sas, '_in_training', False):
+		return arr
 	h = float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0'))
 	return arr * (1.0 - h)
 
@@ -127,7 +134,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])])
 
 
 	for pli in range(n_paths):
@@ -333,7 +340,7 @@ def solve_lp_assignment_with_site_cost_with_failure_catch(sas, routed_through_in
 	n_popps = sas.n_popps + 1 
 
 	## caps is usually link capacities, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])]).flatten()
 
 	### upper bound A for enforcing utilization
 	n_entries_util = n_popps + n_paths
@@ -506,7 +513,7 @@ def solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_co
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usually link capacities, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 
@@ -662,7 +669,7 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])]).flatten()
 
 	### upper bound A for enforcing utilization
 	n_entries_util = n_popps + n_paths
@@ -844,7 +851,7 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 
@@ -966,7 +973,7 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	n_popps = sas.n_popps + 1 ### number of popps + 1 representing a "no route" ingress
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])]).flatten()
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])]).flatten()
 
 	## optimization variable is [Y,v]
 	## Y is dummy upper bound variable, v is percent of volume UG places on path
@@ -1143,7 +1150,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 	vol_conservation_col = np.zeros((n_entries_vol_conservation))
 
 	## caps is usualy link capaciites, but then very "large" for users with no route
-	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten()), np.array([100000])])
+	caps = np.concatenate([_apply_capacity_headroom(sas.link_capacities_arr.flatten(), sas), np.array([100000])])
 
 	conservation_b = sas.whole_deployment_ug_vols
 

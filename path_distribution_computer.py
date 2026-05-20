@@ -92,9 +92,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# so Gurobi knows this is a constraint to be filled later.
 			self.vol_constrs[ug] = self.model.addLConstr(0.0, gp.GRB.EQUAL, target_vol, name=f"vol_{ug}")
 
-		# Apply SCULPTOR_CAPACITY_HEADROOM if set (mirrors solve_lp_assignment).
-		_headroom = float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0'))
-		self.static_caps = np.concatenate([self.link_capacities_arr.flatten() * (1.0 - _headroom), [1000000.0]])
+		# SCULPTOR_CAPACITY_HEADROOM is gated on self._in_training (set via the
+		# 'set_training_mode' RPC from sas.solve()), so the eval phase sees full
+		# capacities. Cache the unscaled caps and start in eval mode (in_training
+		# = False); the driver flips us into training mode before its gradient
+		# loop.
+		self._in_training = False
+		self._link_capacities_full = np.concatenate([self.link_capacities_arr.flatten(), [1000000.0]])
+		self.static_caps = self._compute_static_caps()
 		self.cap_constrs = {}
 		for pi in range(len(self.static_caps)):
 			target_cap = float(self.static_caps[pi])
@@ -102,6 +107,31 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.cap_constrs[pi] = self.model.addLConstr(0.0, gp.GRB.LESS_EQUAL, target_cap, name=f"cap_{pi}")
 
 		self.var_pool = {} # Key: (ug, poppi) -> Gurobi Var Object
+
+	def _compute_static_caps(self):
+		# Headroom is gated on _in_training so the eval phase always sees full
+		# capacities. Pin the [..., 1000000.0] "no-route" sentinel; it's an
+		# overflow sink, not a real link.
+		if self._in_training:
+			h = float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0'))
+			scaled = self._link_capacities_full[:-1] * (1.0 - h)
+			return np.concatenate([scaled, self._link_capacities_full[-1:]])
+		return self._link_capacities_full.copy()
+
+	def set_training_mode(self, in_training):
+		# RPC entrypoint: driver flips this around the gradient loop. When mode
+		# changes we rebuild static_caps and push new RHS values into the
+		# persistent Gurobi cap constraints; subsequent solve_unified_lp calls
+		# read self.static_caps directly when restoring RHS, so this is the only
+		# place capacity values get refreshed.
+		if bool(in_training) == bool(self._in_training):
+			return
+		self._in_training = bool(in_training)
+		if not hasattr(self, 'model'):
+			return  # persistent LP not built yet; init_persistent_lp will pick up the flag
+		self.static_caps = self._compute_static_caps()
+		for pi, constr in self.cap_constrs.items():
+			constr.RHS = float(self.static_caps[pi])
 
 	def solve_unified_lp(self, available_paths, obj_coeffs, using_mlu=False):
 		"""Core solve logic. Toggles between Standard and MLU."""
@@ -953,6 +983,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = "ACK"
 		elif cmd == 'set_iter':
 			self.iter = data
+			ret = "ACK"
+		elif cmd == 'set_training_mode':
+			self.set_training_mode(data)
 			ret = "ACK"
 		elif cmd == 'reset_cache':
 			self.clear_caches()
