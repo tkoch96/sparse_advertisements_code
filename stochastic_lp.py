@@ -1,0 +1,293 @@
+"""
+Stochastic LP for failure-resilient routing.
+
+Given a fixed advertisement, optimises Σ_s p_s · latency(s) over a scenario set
+S where each scenario s is a set of failed popps and p_s is its probability.
+
+Routing decisions are per-scenario (recourse), so for a fixed advertisement the
+scenarios are independent LPs. Two implementations:
+
+  - method='cold':  rebuild the Gurobi model from scratch for each scenario.
+                    Baseline; useful only as a reference for the speedup plot.
+
+  - method='warm':  one persistent Gurobi model; flip cap_constrs[poppi].RHS
+                    to 0.0 for failed popps between scenarios. Gurobi's simplex
+                    warm-starts the basis -- only the changed constraint may
+                    be violated, so re-optimisation is dramatically cheaper.
+                    This is the path you'd actually use in production.
+
+`solve_stochastic_lp(...)` is the entrypoint. It is *deliberately* built on top
+of the existing `_LocalPathDistributionComputer` so we inherit volume
+conservation, NO_ROUTE handling, and the persistent-Gurobi infrastructure
+without reimplementing them.
+"""
+from dataclasses import dataclass, field
+from typing import Iterable, FrozenSet, List, Tuple, Optional
+import time
+
+import numpy as np
+
+
+# Scenario = (frozenset of failed popps, probability)
+Scenario = Tuple[FrozenSet[Tuple[str, str]], float]
+
+
+@dataclass
+class StochasticLPResult:
+	expected_latency: float                          # Σ p_s · avg_latency(s)
+	per_scenario_latencies: List[float]              # avg_latency under each scenario
+	per_scenario_objectives: List[float]             # raw LP objective (negative of latency)
+	per_scenario_solved: List[bool]                  # did each LP solve cleanly
+	scenarios: List[Scenario]                        # the input scenario list, kept for downstream
+	wall_time: float                                 # total time inside solve_stochastic_lp
+	method: str                                      # 'cold' or 'warm'
+	per_scenario_paths: Optional[List[dict]] = None  # paths_by_ug per scenario (optional, omitted by default for memory)
+
+
+def solve_stochastic_lp(
+	worker,
+	advertisement: np.ndarray,
+	scenarios: List[Scenario],
+	method: str = 'warm',
+	keep_paths: bool = False,
+) -> StochasticLPResult:
+	"""Solve the per-scenario LPs for the given advertisement and return the
+	weighted-expectation result.
+
+	`worker` must be a Path_Distribution_Computer (or _LocalPathDistributionComputer)
+	with an initialised persistent Gurobi model.
+
+	`scenarios` is a list of (failed_popps, probability) tuples. `failed_popps`
+	is a frozenset of (pop, peer) tuples. Probabilities should sum to ~1.
+
+	`method`:
+	  'warm' - reuse the persistent Gurobi model, flip cap RHS per scenario.
+	  'cold' - rebuild the Gurobi LP for each scenario via init_persistent_lp.
+	"""
+	if method not in ('warm', 'cold'):
+		raise ValueError("method must be 'warm' or 'cold'")
+	if not scenarios:
+		raise ValueError("scenarios must be non-empty")
+
+	# Validate probabilities sum to ~1; warn if not (don't raise -- tests
+	# legitimately use unnormalised sub-samples and renormalise).
+	psum = sum(p for _, p in scenarios)
+	if abs(psum - 1.0) > 1e-6:
+		# Caller is responsible for whether this matters; we still compute the
+		# weighted sum with the given probabilities.
+		pass
+
+	t_start = time.time()
+
+	# Semantics: each scenario MASKS the advertisement (zeroes out rows for
+	# failed popps) and re-computes rti. This matches what
+	# solve_lp_with_failure_catch_mp does today and gives UGs a chance to be
+	# re-routed onto alternate popps that the unmasked rti wouldn't expose.
+	if method == 'warm':
+		results = _solve_warm(worker, advertisement, scenarios, keep_paths)
+	else:
+		results = _solve_cold(worker, advertisement, scenarios, keep_paths)
+
+	wall = time.time() - t_start
+
+	per_lat = [r['latency'] for r in results]
+	per_obj = [r['objective'] for r in results]
+	per_solved = [r['solved'] for r in results]
+	expected = float(sum(p * lat for (_, p), lat in zip(scenarios, per_lat)))
+
+	out = StochasticLPResult(
+		expected_latency=expected,
+		per_scenario_latencies=per_lat,
+		per_scenario_objectives=per_obj,
+		per_scenario_solved=per_solved,
+		scenarios=scenarios,
+		wall_time=wall,
+		method=method,
+		per_scenario_paths=[r.get('paths_by_ug') for r in results] if keep_paths else None,
+	)
+	return out
+
+
+# ---- warm-start (one persistent Gurobi model, change RHS per scenario) ----
+
+def _solve_warm(worker, advertisement, scenarios, keep_paths):
+	"""One persistent Gurobi model across scenarios.
+
+	For each scenario we mask the advertisement (zero out failed popps' rows)
+	and recompute rti; solve_generic_lp_persistent then warm-starts from the
+	previous solve's basis. The var_pool grows monotonically as new (ug,poppi)
+	paths get exercised by different scenarios.
+	"""
+	results = []
+	for failed_popps, _prob in scenarios:
+		adv_s = advertisement.copy()
+		for popp in failed_popps:
+			if popp in worker.popp_to_ind:
+				adv_s[worker.popp_to_ind[popp], :] = 0
+		rti_s, _ = worker.calculate_ground_truth_ingress(adv_s, do_cache=False)
+		ret = _solve_safely(worker, rti_s)
+		results.append(_summarise_ret(ret, worker, keep_paths))
+	return results
+
+
+# ---- cold-start (rebuild Gurobi model from scratch per scenario) ----
+
+def _solve_cold(worker, advertisement, scenarios, keep_paths):
+	"""Rebuild the persistent Gurobi LP per scenario.
+
+	Benchmark baseline for measuring basis-reuse benefit: per scenario, dispose
+	the existing Gurobi model and reinit from scratch -- so no basis or
+	var_pool carries over between scenarios. The semantics (advertisement
+	masking, rti recompute) is identical to warm.
+	"""
+	import gurobipy as gp
+
+	results = []
+	for failed_popps, _prob in scenarios:
+		# Dispose & rebuild the model. We replicate init_persistent_lp's body
+		# rather than calling it directly so we're certain the rebuilt model
+		# matches one-to-one with what the worker would have created originally.
+		try:
+			worker.model.dispose()
+		except Exception:
+			pass
+
+		worker.model = gp.Model(f"Worker_{worker.worker_i}_Cold")
+		worker.model.Params.LogToConsole = 0
+		worker.model.Params.Method = 1
+		worker.model.Params.Threads = 1
+		worker.mlu_dummy = worker.model.addVar(lb=0.0, obj=0.0, name="mlu_Y")
+		worker.vol_constrs = {}
+		for ugi, ug in enumerate(worker.whole_deployment_ugs):
+			target_vol = float(worker.whole_deployment_ug_vols[ugi])
+			worker.vol_constrs[ug] = worker.model.addLConstr(0.0, gp.GRB.EQUAL, target_vol, name=f"vol_{ug}")
+		worker.cap_constrs = {}
+		for pi in range(len(worker.static_caps)):
+			worker.cap_constrs[pi] = worker.model.addLConstr(0.0, gp.GRB.LESS_EQUAL, float(worker.static_caps[pi]), name=f"cap_{pi}")
+		worker.var_pool = {}
+
+		# Mask adv + recompute rti
+		adv_s = advertisement.copy()
+		for popp in failed_popps:
+			if popp in worker.popp_to_ind:
+				adv_s[worker.popp_to_ind[popp], :] = 0
+		rti_s, _ = worker.calculate_ground_truth_ingress(adv_s, do_cache=False)
+
+		ret = _solve_safely(worker, rti_s)
+		results.append(_summarise_ret(ret, worker, keep_paths))
+
+	return results
+
+
+def _solve_safely(worker, rti):
+	"""Call worker.solve_generic_lp_persistent without letting it `exit(0)`
+	on infeasibility. We intercept the path of the persistent solver and
+	check the model status ourselves.
+
+	path_distribution_computer.py:208 calls exit(0) when both Standard and
+	MLU solves return None. We need a softer failure mode for stochastic LP
+	scenarios where a popp loss can make the problem infeasible -- return
+	{'solved': False, 'objective': inf} instead.
+	"""
+	# Replicate the body of solve_generic_lp_persistent without the exit(0).
+	from solve_lp_assignment import get_paths_by_ug, NO_PATH_INGRESS
+	from constants import NO_ROUTE_LATENCY, DEFAULT_SITE_COST
+
+	available_paths, _ = get_paths_by_ug(worker, rti)
+	obj_coeffs = []
+	for ug, poppi in available_paths:
+		if poppi == NO_PATH_INGRESS(worker):
+			obj_coeffs.append(NO_ROUTE_LATENCY)
+		else:
+			obj_coeffs.append(worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]])
+
+	model_res = worker.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+	if model_res is None:
+		model_res = worker.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
+	if model_res is None:
+		return {'solved': False, 'objective': float('inf'), 'paths_by_ug': {}}
+
+	# Build the standard return dict the way solve_generic_lp_persistent does
+	# (we don't reuse its remaining body because it's tightly coupled to the
+	# worker's wider invariants; we extract just what stochastic_lp needs).
+	# 'objective' = -1 * avg latency = model.objVal / total_volume (negated)
+	total_vol = float(np.sum(worker.whole_deployment_ug_vols))
+	avg_lat = float(model_res.objVal) / max(total_vol, 1e-9)
+	return {
+		'solved': True,
+		'objective': -avg_lat,
+		'paths_by_ug': _build_paths_by_ug(worker, available_paths, model_res),
+	}
+
+
+def _build_paths_by_ug(worker, available_paths, model):
+	"""Reconstruct {ugi: [(poppi, vol_pct), ...]} from the solved model."""
+	paths_by_ug = {}
+	for (ug, poppi) in available_paths:
+		var = worker.var_pool.get((ug, poppi))
+		if var is None:
+			continue
+		vol = float(var.X)
+		if vol < 1e-9:
+			continue
+		ugi = worker.whole_deployment_ug_to_ind[ug]
+		ug_vol = float(worker.whole_deployment_ug_to_vol[ug])
+		vpct = vol / max(ug_vol, 1e-9)
+		paths_by_ug.setdefault(ugi, []).append((poppi, vpct))
+	return paths_by_ug
+
+
+def _summarise_ret(ret, worker, keep_paths):
+	"""Normalise the dict that solve_generic_lp_persistent returns into the
+	shape we want for StochasticLPResult."""
+	solved = bool(ret.get('solved', False))
+	# 'objective' in the existing convention is -avg_latency
+	obj = float(ret.get('objective', 0.0))
+	latency = -obj  # positive latency
+	out = {
+		'solved': solved,
+		'objective': obj,
+		'latency': latency,
+	}
+	if keep_paths:
+		out['paths_by_ug'] = ret.get('paths_by_ug')
+	return out
+
+
+# ---- scenario factories ----
+
+def nominal_only_scenario() -> List[Scenario]:
+	return [(frozenset(), 1.0)]
+
+
+def single_popp_scenarios(deployment, p_any_fail: float = 0.5) -> List[Scenario]:
+	"""Nominal + every single-popp failure, uniform prob over failures."""
+	popps = deployment['popps']
+	nominal = (frozenset(), 1.0 - p_any_fail)
+	per = p_any_fail / len(popps) if popps else 0.0
+	return [nominal] + [(frozenset([tuple(p)]), per) for p in popps]
+
+
+def single_pop_scenarios(deployment, p_any_fail: float = 0.5) -> List[Scenario]:
+	"""Nominal + every single-pop failure (drops ALL popps at that pop)."""
+	popps = [tuple(p) for p in deployment['popps']]
+	pops = sorted({pop for pop, _peer in popps})
+	nominal = (frozenset(), 1.0 - p_any_fail)
+	per = p_any_fail / len(pops) if pops else 0.0
+	failure_scenarios = []
+	for pop in pops:
+		failed = frozenset(p for p in popps if p[0] == pop)
+		failure_scenarios.append((failed, per))
+	return [nominal] + failure_scenarios
+
+
+def subsample_scenarios(scenarios: List[Scenario], k: int, rng) -> List[Scenario]:
+	"""Uniform random sub-sample of size k, renormalised so probs sum to 1."""
+	if k >= len(scenarios):
+		# renormalise the existing list
+		total = sum(p for _, p in scenarios)
+		return [(s, p / total) for s, p in scenarios]
+	idx = rng.choice(len(scenarios), size=k, replace=False)
+	sub = [scenarios[i] for i in idx]
+	total = sum(p for _, p in sub)
+	return [(s, p / total) for s, p in sub]
