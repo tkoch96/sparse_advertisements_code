@@ -238,6 +238,91 @@ def test_warm_and_cold_agree():
 
 @pytest.mark.unit
 @pytest.mark.gurobi
+# ----- Test 8: Three-way comparison (headroom / stochastic / RB-grad approx) - #
+
+@pytest.mark.unit
+@pytest.mark.gurobi
+@pytest.mark.parametrize('size,K', [
+	('small', 16),
+])
+def test_three_approaches_comparison(size, K):
+	"""Apples-to-apples on the inner-LP cost SCULPTOR's gradient step pays:
+
+	  (a) headroom            : 1 LP solve with caps × (1 - h)
+	  (b) stochastic (warm)   : K LP solves with persistent-Gurobi basis reuse
+	  (c) RB-grad approx (cold): K LP solves rebuilding the model each time
+
+	(b) and (c) bracket the right answer for "how long does it take to compute
+	the resilience signal over K scenarios"; the existing RB-grad uses warm
+	persistent Gurobi in practice, so (c) is an upper bound on the SGD-RB cost.
+
+	Also reports the *failure-tolerance metric* for the fixed adv:
+	per-scenario fraction of UG volume that lands on NO_PATH_INGRESS = the
+	"users couldn't be routed" rate under failure.
+	"""
+	import time
+	from stochastic_lp import (
+		solve_stochastic_lp, solve_headroom_lp, single_popp_scenarios,
+		compute_unroutable_volume_fractions,
+	)
+
+	worker, dep, adv = _setup(size)
+	# Baseline single-LP-solve time for the same fixed adv (nominal scenario)
+	t0 = time.time()
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+	_ = worker.solve_generic_lp_persistent(rti, 'avg_latency')
+	single_lp_time = time.time() - t0
+
+	# Scenario set: K single-popp failures (warm runs them in order; cold rebuilds each)
+	scenarios = single_popp_scenarios(dep, p_any_fail=0.5)[:K]
+
+	# (a) headroom
+	headroom = solve_headroom_lp(worker, adv, headroom_factor=0.2)
+
+	# (b) stochastic LP, warm-start basis reuse
+	stoch = solve_stochastic_lp(worker, adv, scenarios, method='warm', keep_paths=True)
+
+	# (c) RB-grad approximation = K cold solves
+	rb_grad = solve_stochastic_lp(worker, adv, scenarios, method='cold')
+
+	# Failure-routing metric: how much UG volume couldn't be routed per scenario
+	unroutable = compute_unroutable_volume_fractions(stoch, worker)
+
+	# Single-LP × K is a back-of-envelope prediction for (c)
+	predicted_c = K * single_lp_time
+
+	print(f"\n  size={size}, K={K}, n_popps={len(dep['popps'])}, n_ugs={len(dep['ugs'])}")
+	print(f"  baseline single LP solve              : {single_lp_time*1000:>9.1f} ms")
+	print(f"  (a) headroom 0.2  (1 LP)              : {headroom['wall_time']*1000:>9.1f} ms")
+	print(f"  (b) stochastic   (K={K} warm LPs)      : {stoch.wall_time*1000:>9.1f} ms")
+	print(f"  (c) RB-grad ≈   (K={K} cold LPs)      : {rb_grad.wall_time*1000:>9.1f} ms")
+	print(f"      predicted K * single-LP            : {predicted_c*1000:>9.1f} ms")
+	print(f"")
+	print(f"  failure-routing metric (volume on NO_PATH_INGRESS):")
+	import numpy as _np
+	print(f"    nominal scenario                     : {unroutable[0]:.5f}")
+	print(f"    mean over failure scenarios          : {_np.mean(unroutable[1:]):.5f}")
+	print(f"    max over failure scenarios           : {_np.max(unroutable[1:]):.5f}")
+	print(f"    n_scenarios with >0.1% unroutable    : {sum(1 for u in unroutable[1:] if u > 0.001)}/{K-1}")
+	print(f"")
+	print(f"  expected latencies:")
+	print(f"    (a) headroom-LP latency              : {headroom['latency']:.4f}")
+	print(f"    (b)/(c) E[latency] over K scenarios  : {stoch.expected_latency:.4f}")
+
+	# Sanity checks
+	assert all([headroom['solved'], all(stoch.per_scenario_solved),
+				all(rb_grad.per_scenario_solved)])
+	assert all(0.0 <= u <= 1.0 + 1e-9 for u in unroutable), \
+		f"unroutable fractions out of range: {unroutable}"
+	# Headroom is ~1 LP; stochastic is ~K LPs. Stochastic should be at least
+	# K/3× slower than headroom (loose bound; allows for warm-start savings).
+	assert stoch.wall_time > headroom['wall_time'] * K / 3, \
+		f"stochastic wall ({stoch.wall_time}) suspiciously low vs headroom ({headroom['wall_time']}) for K={K}"
+	# Cold should be slower (or equal within noise) than warm.
+	assert rb_grad.wall_time >= stoch.wall_time * 0.9, \
+		f"cold ({rb_grad.wall_time}) faster than warm ({stoch.wall_time}) -- warm-start path broken?"
+
+
 @pytest.mark.parametrize('size', ['small', 'decent'])
 def test_pop_failure_scenarios_solve_cleanly(size):
 	"""Pop-failure scenarios should all solve and produce a finite expected

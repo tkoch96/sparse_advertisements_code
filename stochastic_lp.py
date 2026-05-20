@@ -281,6 +281,70 @@ def single_pop_scenarios(deployment, p_any_fail: float = 0.5) -> List[Scenario]:
 	return [nominal] + failure_scenarios
 
 
+def solve_headroom_lp(worker, advertisement: np.ndarray,
+					   headroom_factor: float = 0.2) -> dict:
+	"""Single LP solve where every real-popp capacity is multiplied by
+	(1 - headroom_factor). The NO_PATH sentinel cap (last entry) is left
+	alone. This is what SCULPTOR_CAPACITY_HEADROOM does during training in
+	condition C of the Session-3 experiment: ONE LP solve per gradient
+	step, with a heuristic capacity haircut as the failure-tolerance proxy.
+
+	Returns: { latency, objective, wall_time, method, headroom_factor }.
+	"""
+	saved = np.array(worker.static_caps).copy()
+	# Scale real popp caps, leave the NO_PATH sentinel at the tail untouched.
+	worker.static_caps = saved.copy()
+	worker.static_caps[:-1] = saved[:-1] * (1.0 - headroom_factor)
+	try:
+		t0 = time.time()
+		rti, _ = worker.calculate_ground_truth_ingress(advertisement, do_cache=False)
+		ret = _solve_safely(worker, rti)
+		wall = time.time() - t0
+	finally:
+		worker.static_caps = saved
+	return {
+		'latency': -float(ret['objective']),
+		'objective': float(ret['objective']),
+		'solved': bool(ret.get('solved', False)),
+		'wall_time': wall,
+		'method': 'headroom',
+		'headroom_factor': headroom_factor,
+	}
+
+
+def compute_unroutable_volume_fractions(
+		stoch_result, worker) -> List[float]:
+	"""For each scenario in a StochasticLPResult (must have keep_paths=True),
+	return the fraction of total UG volume that ended up on the NO_PATH_INGRESS
+	sentinel — i.e. could not be routed under that scenario's failure mask.
+
+	Higher = worse failure tolerance.
+	"""
+	if stoch_result.per_scenario_paths is None:
+		raise ValueError(
+			"stoch_result.per_scenario_paths is None; "
+			"call solve_stochastic_lp with keep_paths=True")
+	from solve_lp_assignment import NO_PATH_INGRESS
+	no_path_poppi = NO_PATH_INGRESS(worker)
+	fracs = []
+	for paths in stoch_result.per_scenario_paths:
+		no_path_vol = 0.0
+		total_vol = 0.0
+		if paths is None:
+			fracs.append(float('nan'))
+			continue
+		for ugi, allocs in paths.items():
+			ug = worker.whole_deployment_ugs[ugi]
+			ug_vol = float(worker.whole_deployment_ug_to_vol[ug])
+			for poppi, vpct in allocs:
+				v = vpct * ug_vol
+				total_vol += v
+				if poppi == no_path_poppi:
+					no_path_vol += v
+		fracs.append(no_path_vol / max(total_vol, 1e-9))
+	return fracs
+
+
 def subsample_scenarios(scenarios: List[Scenario], k: int, rng) -> List[Scenario]:
 	"""Uniform random sub-sample of size k, renormalised so probs sum to 1."""
 	if k >= len(scenarios):
