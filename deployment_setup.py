@@ -1291,10 +1291,20 @@ def load_actual_deployment(deployment_size, **kwargs):
 	print("Considering pops : {}, deployment size: {}".format(considering_pops, deployment_size))
 	cpstr = pops_to_fn(considering_pops)
 	
+	# For actual-N the considering_pops list is fixed, so without a seed
+	# suffix every SCULPTOR_DEPLOYMENT_SEED would hit the same cache entry
+	# (ug_to_vol, ingress_priorities, link_capacities, site_costs are all
+	# random but only built when the cache miss branch runs). The CSV parse
+	# and clustering layers above (pruned_performance_cache_fn,
+	# cluster_cache_fn) are seed-independent and continue to be shared.
+	_seed_suffix = ''
+	_seed_env = os.environ.get('SCULPTOR_DEPLOYMENT_SEED')
+	if _seed_env is not None:
+		_seed_suffix = '_seed{}'.format(_seed_env)
 	if deployment_size in ACTUAL_DEPLOYMENT_SIZES:
-		deployment_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'actual_deployment_cache_ripe_{}.pkl'.format(cpstr))
+		deployment_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'actual_deployment_cache_ripe_{}{}.pkl'.format(cpstr, _seed_suffix))
 	else:
-		deployment_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'actual_deployment_cache_{}.pkl'.format(cpstr))
+		deployment_cache_fn = os.path.join(CACHE_DIR, 'deployments', 'actual_deployment_cache_{}{}.pkl'.format(cpstr, _seed_suffix))
 
 	### completely re-randomly generate large deployments since the combination of possible pops is relatively small
 	if not os.path.exists(deployment_cache_fn) or len(considering_pops) >= 30:
