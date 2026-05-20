@@ -77,20 +77,38 @@ def run_speedup_study():
 	"""
 	from stochastic_lp import solve_stochastic_lp, single_popp_scenarios
 
-	# Skip 'decent' locally — it can trip a transient SSL cert error against
-	# Gurobi's WLS license server when the model rebuild forces a fresh token
-	# request. For cluster runs this is fine. Synthetic 'small' is enough to
-	# demonstrate the speedup direction; magnitudes scale with problem size.
-	sizes = ['really_friggin_small', 'small']
+	# Synthetic sizes that span deployment scales. 'decent' (10 pops, ~270
+	# popps) matches actual-10's structure; 'med' (30 pops, ~1500 popps) is
+	# closer to actual-32. On a laptop with flaky local Gurobi WLS, skip
+	# decent/med by setting STOCHASTIC_BENCH_QUICK=1.
+	if os.environ.get('STOCHASTIC_BENCH_QUICK'):
+		sizes = ['really_friggin_small', 'small']
+	else:
+		sizes = ['really_friggin_small', 'small', 'decent', 'med']
 	TRIALS = 3
+
+	# Cap |S| to keep total wall manageable on big synthetic sizes.
+	# For 'med' (~1500 popps), |S| = n_popps+1 → ~7500 LP solves with TRIALS=3
+	# × 2 methods. Cap |S| at 32 scenarios so wall stays under ~10 min.
+	S_CAP = 32
 
 	rows = []
 	print("\n=== SPEEDUP STUDY ===")
-	print(f"{'size':>22}  {'n_popps':>8}  {'|S|':>4}  {'warm (s)':>10}  {'cold (s)':>10}  {'speedup':>8}")
+	print(f"{'size':>22}  {'n_popps':>8}  {'|S|':>5}  {'warm (s)':>10}  {'cold (s)':>10}  {'speedup':>8}")
 	for size in sizes:
 		worker, dep, adv = _build_worker(size, seed=31415)
 		n_popps = len(dep['popps'])
-		scenarios = single_popp_scenarios(dep, p_any_fail=0.5)
+		all_scenarios = single_popp_scenarios(dep, p_any_fail=0.5)
+		if len(all_scenarios) > S_CAP:
+			# nominal + (S_CAP-1) sampled single-popp scenarios
+			rng = np.random.default_rng(31415)
+			idx = rng.choice(len(all_scenarios) - 1, size=S_CAP - 1, replace=False) + 1
+			scenarios = [all_scenarios[0]] + [all_scenarios[int(i)] for i in idx]
+			# renormalise
+			total = sum(p for _, p in scenarios)
+			scenarios = [(s, p / total) for s, p in scenarios]
+		else:
+			scenarios = all_scenarios
 
 		warm_times = []
 		cold_times = []
