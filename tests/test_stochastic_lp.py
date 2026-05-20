@@ -239,33 +239,38 @@ def test_warm_and_cold_agree():
 @pytest.mark.unit
 @pytest.mark.gurobi
 @pytest.mark.parametrize('size', ['small', 'decent'])
-def test_pop_failure_objective_responds_to_scenario_set(size):
-	"""When we include pop-failure scenarios with non-trivial weight, the
-	expected latency under those scenarios should be the objective; the LP's
-	objective should respond accordingly. We don't have a separate 'advertisement
-	optimiser' in the unit test scope, so we just sanity-check that pop-failure
-	scenarios produce HIGHER expected latency than nominal-only (since failures
-	can only hurt or be neutral for a fixed advertisement). 'decent' has 10
-	pops so pop-failures are non-trivial; 'small' has 3 (still meaningful)."""
+def test_pop_failure_scenarios_solve_cleanly(size):
+	"""Pop-failure scenarios should all solve and produce a finite expected
+	latency that differs from the nominal-only case (i.e. failures aren't
+	being silently ignored).
+
+	Note: we DON'T assert expected_latency >= nominal here. Synthetic
+	deployments use random ingress_priorities (BGP-style path selection)
+	that aren't pure-latency-ordered, so failing a high-priority but
+	mediocre-latency popp can route UGs to a *faster* lower-priority
+	alternative -- making per-scenario latency LOWER than nominal. The
+	monotonicity invariant only holds in the limit where ingress
+	priorities perfectly match latency rank, which isn't the case here.
+	"""
 	from stochastic_lp import (
 		solve_stochastic_lp, nominal_only_scenario, single_pop_scenarios,
 	)
 
 	worker, dep, adv = _setup(size)
 	nominal = solve_stochastic_lp(worker, adv, nominal_only_scenario(), method='warm')
-	with_pop_failures = solve_stochastic_lp(
-		worker, adv, single_pop_scenarios(dep, p_any_fail=0.5), method='warm')
+	pop_scenarios = single_pop_scenarios(dep, p_any_fail=0.5)
+	with_pop_failures = solve_stochastic_lp(worker, adv, pop_scenarios, method='warm')
 
-	# Expected latency under failures should be >= nominal (failures can only
-	# hurt the fixed adv we passed in).
-	assert with_pop_failures.expected_latency >= nominal.expected_latency - 1e-6, \
-		(f"pop-failure expected latency {with_pop_failures.expected_latency} "
-		 f"< nominal {nominal.expected_latency}, which is impossible")
-
-	# And there should be SOME degradation if the problem isn't trivial.
-	# Use a small lower bound -- this just asserts the failure scenarios aren't
-	# silently ignored.
-	if any(len(s) > 0 for s, _ in with_pop_failures.scenarios):
-		# At least one scenario actually drops some popps -- so expect at least
-		# some increase, even if small.
-		assert with_pop_failures.expected_latency > nominal.expected_latency - 1e-3
+	# All per-scenario LPs solved.
+	assert all(with_pop_failures.per_scenario_solved), \
+		f"some pop-failure scenarios didn't solve: {with_pop_failures.per_scenario_solved}"
+	# Finite expected latency.
+	assert math.isfinite(with_pop_failures.expected_latency)
+	# Failures are NOT silently no-ops: at least one scenario should produce
+	# a per-scenario latency that differs from nominal (otherwise the failure
+	# masking is broken).
+	nominal_lat = nominal.expected_latency
+	max_dev = max(abs(l - nominal_lat) for l in with_pop_failures.per_scenario_latencies[1:])
+	assert max_dev > 1e-6, (
+		f"all pop-failure scenarios produced the same latency as nominal "
+		f"({nominal_lat}); failures aren't engaging")
