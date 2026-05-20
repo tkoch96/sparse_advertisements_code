@@ -29,8 +29,14 @@ import pytest
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
 
 
-def _setup(size='small'):
-	"""Reusable worker + deployment fixture. Mirrors test_lp_correctness.py:_setup."""
+def _setup(size='small', scale_factor=None):
+	"""Reusable worker + deployment fixture.
+
+	scale_factor : passed through to get_link_capacities. Default in
+	deployment_setup.py is 1.3 (30% headroom over anycast load); pass 1.05
+	to make the problem capacity-tight and force failures to actually
+	matter. None means use the deployment_setup default.
+	"""
 	import random
 	random.seed(31415)
 	np.random.seed(31415)
@@ -38,7 +44,11 @@ def _setup(size='small'):
 	from helpers import split_deployment_by_ug
 	from path_distribution_computer_ray import _LocalPathDistributionComputer
 
-	dep = get_random_deployment(size, port=31700)
+	kw = {'port': 31700}
+	if scale_factor is not None:
+		kw['scale_factor'] = scale_factor
+
+	dep = get_random_deployment(size, **kw)
 	subdep = split_deployment_by_ug(dep, n_chunks=1)[0]
 	init_kwa = {
 		'lambduh': 1.0, 'gamma': 0, 'verbose': False,
@@ -48,9 +58,16 @@ def _setup(size='small'):
 	worker = _LocalPathDistributionComputer(
 		worker_i=0, subdeployment=subdep, init_kwargs=init_kwa)
 	n_popps = len(dep['popps'])
-	# every popp on, one prefix: most permissive starting point so failure
-	# scenarios actually have something to remove
-	adv = np.ones((n_popps, 1))
+	# Multi-prefix advertisement matters: with a single all-ones prefix, BGP
+	# pins each UG to one popp and the LP has no routing flexibility, so the
+	# capacity constraint can never bind. Use 3 prefixes: prefix 0 is anycast
+	# (safety net so every UG is reachable), prefixes 1-2 are sparse random
+	# subsets so the LP has genuine alternative routes per UG.
+	np.random.seed(31415)
+	n_prefixes = 3
+	adv = np.zeros((n_popps, n_prefixes))
+	adv[:, 0] = 1                                                        # anycast safety net
+	adv[:, 1:] = (np.random.uniform(size=(n_popps, n_prefixes - 1)) > 0.5).astype(float)
 	return worker, dep, adv
 
 
@@ -105,17 +122,20 @@ def test_per_scenario_matches_standalone(size):
 
 	stoch = solve_stochastic_lp(worker, adv, scenarios, method='warm')
 
+	from stochastic_lp import _solve_safely
 	for i, (failed, _p) in enumerate(scenarios):
-		# Standalone reference: mask the advertisement (zero rows for failed
-		# popps), recompute rti, solve once. This matches the semantics that
-		# solve_stochastic_lp uses internally.
+		# Standalone reference: same machinery (mask adv, recompute rti, solve)
+		# via _solve_safely so latency is computed the same way (variable
+		# iteration, MLU-safe). Using worker.solve_generic_lp_persistent's
+		# 'objective' field directly would disagree on capacity-tight problems
+		# because that field is model.objVal/total_vol which is contaminated
+		# when MLU fallback engages.
 		adv_s = adv.copy()
 		for popp in failed:
 			if popp in worker.popp_to_ind:
 				adv_s[worker.popp_to_ind[popp], :] = 0
 		rti_s, _ = worker.calculate_ground_truth_ingress(adv_s, do_cache=False)
-		single = worker.solve_generic_lp_persistent(rti_s, 'avg_latency')
-
+		single = _solve_safely(worker, rti_s)
 		single_latency = -float(single['objective'])
 		assert math.isclose(stoch.per_scenario_latencies[i], single_latency,
 							rel_tol=1e-3, abs_tol=1e-3), (
@@ -242,85 +262,132 @@ def test_warm_and_cold_agree():
 
 @pytest.mark.unit
 @pytest.mark.gurobi
-@pytest.mark.parametrize('size,K', [
-	('small', 16),
+@pytest.mark.parametrize('size,K,scale_factor', [
+	('small', 16, 1.3),    # deployment_setup default: 30% headroom on link capacities
+	('small', 16, 1.05),   # tight: only 5% capacity headroom → failures actually bite
 ])
-def test_three_approaches_comparison(size, K):
-	"""Apples-to-apples on the inner-LP cost SCULPTOR's gradient step pays:
+def test_three_approaches_comparison(size, K, scale_factor):
+	"""Apples-to-apples comparison for a FIXED advertisement:
 
 	  (a) headroom            : 1 LP solve with caps × (1 - h)
 	  (b) stochastic (warm)   : K LP solves with persistent-Gurobi basis reuse
 	  (c) RB-grad approx (cold): K LP solves rebuilding the model each time
 
-	(b) and (c) bracket the right answer for "how long does it take to compute
-	the resilience signal over K scenarios"; the existing RB-grad uses warm
-	persistent Gurobi in practice, so (c) is an upper bound on the SGD-RB cost.
+	Reports BOTH:
+	  - per-iter LP cost (what gradient-step time looks like for each)
+	  - failure-performance characterization (the actual thing we care about
+	    measuring: how does this advertisement behave under popp / pop failure)
 
-	Also reports the *failure-tolerance metric* for the fixed adv:
-	per-scenario fraction of UG volume that lands on NO_PATH_INGRESS = the
-	"users couldn't be routed" rate under failure.
+	`scale_factor` controls link capacity headroom IN THE DEPLOYMENT (passed
+	to get_link_capacities). 1.3 = default, loose; 1.05 = tight, failures
+	actually matter.
+
+	NB: results are for ONE FIXED ADVERTISEMENT (every popp on, 1 prefix).
+	The real research question is whether each *approach's gradient* steers
+	SCULPTOR toward better-performing advertisements over many iters; that
+	requires wiring into the outer loop. This test only quantifies per-iter
+	cost + per-iter information content.
 	"""
 	import time
+	import numpy as _np
 	from stochastic_lp import (
-		solve_stochastic_lp, solve_headroom_lp, single_popp_scenarios,
+		solve_stochastic_lp, solve_headroom_lp,
+		single_popp_scenarios, single_pop_scenarios,
 		compute_unroutable_volume_fractions,
 	)
 
-	worker, dep, adv = _setup(size)
-	# Baseline single-LP-solve time for the same fixed adv (nominal scenario)
+	worker, dep, adv = _setup(size, scale_factor=scale_factor)
+	n_popps = len(dep['popps'])
+	n_ugs = len(dep['ugs'])
+
+	# Plain nominal LP: the actual latency of the fixed adv under no-failure.
 	t0 = time.time()
 	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
-	_ = worker.solve_generic_lp_persistent(rti, 'avg_latency')
+	nominal_ret = worker.solve_generic_lp_persistent(rti, 'avg_latency')
 	single_lp_time = time.time() - t0
+	nominal_latency = -float(nominal_ret['objective'])
 
-	# Scenario set: K single-popp failures (warm runs them in order; cold rebuilds each)
-	scenarios = single_popp_scenarios(dep, p_any_fail=0.5)[:K]
+	# Failure scenario sets
+	popp_scenarios = single_popp_scenarios(dep, p_any_fail=0.5)
+	if len(popp_scenarios) > K + 1:
+		popp_scenarios = popp_scenarios[:K + 1]
+	pop_scenarios = single_pop_scenarios(dep, p_any_fail=0.5)
 
-	# (a) headroom
+	# ------- (a) HEADROOM (per-iter signal) ------- #
 	headroom = solve_headroom_lp(worker, adv, headroom_factor=0.2)
 
-	# (b) stochastic LP, warm-start basis reuse
-	stoch = solve_stochastic_lp(worker, adv, scenarios, method='warm', keep_paths=True)
+	# ------- (b) STOCHASTIC LP, warm ------- #
+	stoch_popp = solve_stochastic_lp(worker, adv, popp_scenarios, method='warm', keep_paths=True)
+	stoch_pop = solve_stochastic_lp(worker, adv, pop_scenarios, method='warm', keep_paths=True)
 
-	# (c) RB-grad approximation = K cold solves
-	rb_grad = solve_stochastic_lp(worker, adv, scenarios, method='cold')
+	# ------- (c) RB-GRAD APPROX (K cold LPs) ------- #
+	rb_grad_popp = solve_stochastic_lp(worker, adv, popp_scenarios, method='cold')
 
-	# Failure-routing metric: how much UG volume couldn't be routed per scenario
-	unroutable = compute_unroutable_volume_fractions(stoch, worker)
+	# Failure metrics
+	popp_unroutable = compute_unroutable_volume_fractions(stoch_popp, worker)
+	pop_unroutable = compute_unroutable_volume_fractions(stoch_pop, worker)
 
-	# Single-LP × K is a back-of-envelope prediction for (c)
-	predicted_c = K * single_lp_time
+	# Per-scenario failure latency vectors (excluding the nominal at index 0)
+	popp_failure_lats = stoch_popp.per_scenario_latencies[1:]
+	pop_failure_lats = stoch_pop.per_scenario_latencies[1:]
 
-	print(f"\n  size={size}, K={K}, n_popps={len(dep['popps'])}, n_ugs={len(dep['ugs'])}")
-	print(f"  baseline single LP solve              : {single_lp_time*1000:>9.1f} ms")
-	print(f"  (a) headroom 0.2  (1 LP)              : {headroom['wall_time']*1000:>9.1f} ms")
-	print(f"  (b) stochastic   (K={K} warm LPs)      : {stoch.wall_time*1000:>9.1f} ms")
-	print(f"  (c) RB-grad ≈   (K={K} cold LPs)      : {rb_grad.wall_time*1000:>9.1f} ms")
-	print(f"      predicted K * single-LP            : {predicted_c*1000:>9.1f} ms")
-	print(f"")
-	print(f"  failure-routing metric (volume on NO_PATH_INGRESS):")
-	import numpy as _np
-	print(f"    nominal scenario                     : {unroutable[0]:.5f}")
-	print(f"    mean over failure scenarios          : {_np.mean(unroutable[1:]):.5f}")
-	print(f"    max over failure scenarios           : {_np.max(unroutable[1:]):.5f}")
-	print(f"    n_scenarios with >0.1% unroutable    : {sum(1 for u in unroutable[1:] if u > 0.001)}/{K-1}")
-	print(f"")
-	print(f"  expected latencies:")
-	print(f"    (a) headroom-LP latency              : {headroom['latency']:.4f}")
-	print(f"    (b)/(c) E[latency] over K scenarios  : {stoch.expected_latency:.4f}")
+	predicted_c = (len(popp_scenarios)) * single_lp_time
 
-	# Sanity checks
-	assert all([headroom['solved'], all(stoch.per_scenario_solved),
-				all(rb_grad.per_scenario_solved)])
-	assert all(0.0 <= u <= 1.0 + 1e-9 for u in unroutable), \
-		f"unroutable fractions out of range: {unroutable}"
-	# Headroom is ~1 LP; stochastic is ~K LPs. Stochastic should be at least
-	# K/3× slower than headroom (loose bound; allows for warm-start savings).
-	assert stoch.wall_time > headroom['wall_time'] * K / 3, \
-		f"stochastic wall ({stoch.wall_time}) suspiciously low vs headroom ({headroom['wall_time']}) for K={K}"
-	# Cold should be slower (or equal within noise) than warm.
-	assert rb_grad.wall_time >= stoch.wall_time * 0.9, \
-		f"cold ({rb_grad.wall_time}) faster than warm ({stoch.wall_time}) -- warm-start path broken?"
+	# ------- REPORT ------- #
+	print(f"\n  {'=' * 70}")
+	print(f"  PROBLEM: size={size}, n_popps={n_popps}, n_ugs={n_ugs}, "
+		  f"link-cap scale_factor={scale_factor}")
+	print(f"  {'=' * 70}")
+
+	print(f"\n  SOLVE TIME (per-iter LP cost):")
+	print(f"    baseline single LP solve         : {single_lp_time*1000:>9.1f} ms")
+	print(f"    (a) headroom (1 LP)              : {headroom['wall_time']*1000:>9.1f} ms")
+	print(f"    (b) stochastic ({len(popp_scenarios)} warm LPs)        : {stoch_popp.wall_time*1000:>9.1f} ms")
+	print(f"    (c) RB-grad   ({len(popp_scenarios)} cold LPs)        : {rb_grad_popp.wall_time*1000:>9.1f} ms")
+	print(f"    pred (c) = K × single-LP         : {predicted_c*1000:>9.1f} ms")
+	print(f"    (b)/(a) per-iter overhead        : {stoch_popp.wall_time/headroom['wall_time']:>8.1f}×")
+	print(f"    (c)/(b) cold-vs-warm overhead    : {rb_grad_popp.wall_time/stoch_popp.wall_time:>8.2f}×")
+
+	popp_overflow = stoch_popp.per_scenario_overflow or [0.0] * len(popp_scenarios)
+	pop_overflow = stoch_pop.per_scenario_overflow or [0.0] * len(pop_scenarios)
+
+	print(f"\n  PERFORMANCE under NOMINAL (no failure):")
+	print(f"    plain LP latency                 : {nominal_latency:>9.4f}")
+	print(f"    (a) headroom-LP latency          : {headroom['latency']:>9.4f}  (Δ vs nominal: {headroom['latency']-nominal_latency:+.4f})")
+	print(f"    (a) headroom-LP overflow %       : {headroom['fraction_overflow_volume']*100:>9.4f}%   ← if >0, MLU mode engaged: latency is from over-capacity routing, not real")
+	print(f"    (b) stochastic nominal-bucket    : {stoch_popp.per_scenario_latencies[0]:>9.4f}")
+	print(f"    (b) stochastic nominal overflow %: {popp_overflow[0]*100:>9.4f}%")
+
+	print(f"\n  PERFORMANCE under POPP failure (single popp drops):")
+	print(f"    E[latency] over popp-failures    : {_np.mean(popp_failure_lats):>9.4f}  (Δ vs nominal: {_np.mean(popp_failure_lats)-nominal_latency:+.4f})")
+	print(f"    max latency over popp-failures   : {_np.max(popp_failure_lats):>9.4f}  (Δ vs nominal: {_np.max(popp_failure_lats)-nominal_latency:+.4f})")
+	print(f"    mean unroutable %                : {_np.mean(popp_unroutable[1:])*100:>9.4f}%")
+	print(f"    max unroutable %                 : {_np.max(popp_unroutable[1:])*100:>9.4f}%")
+	print(f"    # scenarios w/ ≥0.1% unroutable  : {sum(1 for u in popp_unroutable[1:] if u > 0.001)}/{len(popp_unroutable)-1}")
+	print(f"    mean cap overflow %              : {_np.mean(popp_overflow[1:])*100:>9.4f}%")
+	print(f"    max cap overflow %               : {_np.max(popp_overflow[1:])*100:>9.4f}%")
+
+	print(f"\n  PERFORMANCE under POP failure (whole pop drops):")
+	print(f"    E[latency] over pop-failures     : {_np.mean(pop_failure_lats):>9.4f}  (Δ vs nominal: {_np.mean(pop_failure_lats)-nominal_latency:+.4f})")
+	print(f"    max latency over pop-failures    : {_np.max(pop_failure_lats):>9.4f}  (Δ vs nominal: {_np.max(pop_failure_lats)-nominal_latency:+.4f})")
+	print(f"    mean unroutable %                : {_np.mean(pop_unroutable[1:])*100:>9.4f}%")
+	print(f"    max unroutable %                 : {_np.max(pop_unroutable[1:])*100:>9.4f}%")
+	print(f"    # scenarios w/ ≥0.1% unroutable  : {sum(1 for u in pop_unroutable[1:] if u > 0.001)}/{len(pop_unroutable)-1}")
+	print(f"    mean cap overflow %              : {_np.mean(pop_overflow[1:])*100:>9.4f}%")
+	print(f"    max cap overflow %               : {_np.max(pop_overflow[1:])*100:>9.4f}%")
+
+	# Sanity assertions (loose)
+	assert nominal_ret.get('solved')
+	assert headroom['solved']
+	assert all(stoch_popp.per_scenario_solved)
+	assert all(stoch_pop.per_scenario_solved)
+	assert all(rb_grad_popp.per_scenario_solved)
+	for u in (popp_unroutable + pop_unroutable):
+		assert 0.0 <= u <= 1.0 + 1e-9
+	# (b) should be at least K/3× slower than (a) — loose floor allowing warm-start savings
+	assert stoch_popp.wall_time > headroom['wall_time'] * len(popp_scenarios) / 3
+	# (c) should not be faster than (b) (warm-start should not lose to cold)
+	assert rb_grad_popp.wall_time >= stoch_popp.wall_time * 0.9
 
 
 @pytest.mark.parametrize('size', ['small', 'decent'])

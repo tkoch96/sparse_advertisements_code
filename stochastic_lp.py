@@ -42,6 +42,7 @@ class StochasticLPResult:
 	wall_time: float                                 # total time inside solve_stochastic_lp
 	method: str                                      # 'cold' or 'warm'
 	per_scenario_paths: Optional[List[dict]] = None  # paths_by_ug per scenario (optional, omitted by default for memory)
+	per_scenario_overflow: Optional[List[float]] = None  # fraction of volume routed in excess of static_caps (MLU mode signal)
 
 
 def solve_stochastic_lp(
@@ -93,6 +94,7 @@ def solve_stochastic_lp(
 	per_lat = [r['latency'] for r in results]
 	per_obj = [r['objective'] for r in results]
 	per_solved = [r['solved'] for r in results]
+	per_overflow = [r.get('fraction_overflow_volume', 0.0) for r in results]
 	expected = float(sum(p * lat for (_, p), lat in zip(scenarios, per_lat)))
 
 	out = StochasticLPResult(
@@ -104,6 +106,7 @@ def solve_stochastic_lp(
 		wall_time=wall,
 		method=method,
 		per_scenario_paths=[r.get('paths_by_ug') for r in results] if keep_paths else None,
+		per_scenario_overflow=per_overflow,
 	)
 	return out
 
@@ -181,17 +184,15 @@ def _solve_cold(worker, advertisement, scenarios, keep_paths):
 
 def _solve_safely(worker, rti):
 	"""Call worker.solve_generic_lp_persistent without letting it `exit(0)`
-	on infeasibility. We intercept the path of the persistent solver and
-	check the model status ourselves.
-
-	path_distribution_computer.py:208 calls exit(0) when both Standard and
-	MLU solves return None. We need a softer failure mode for stochastic LP
-	scenarios where a popp loss can make the problem infeasible -- return
-	{'solved': False, 'objective': inf} instead.
+	on infeasibility. Mirror the body of solve_generic_lp_persistent at
+	path_distribution_computer.py:178+ but: (a) return {'solved': False}
+	instead of exiting on dual infeasibility, and (b) compute average
+	latency by iterating the solved variables (not model.objVal -- in MLU
+	fallback mode model.objVal is contaminated by the MLU dummy variable's
+	contribution and is NOT just the avg latency × volume).
 	"""
-	# Replicate the body of solve_generic_lp_persistent without the exit(0).
 	from solve_lp_assignment import get_paths_by_ug, NO_PATH_INGRESS
-	from constants import NO_ROUTE_LATENCY, DEFAULT_SITE_COST
+	from constants import NO_ROUTE_LATENCY
 
 	available_paths, _ = get_paths_by_ug(worker, rti)
 	obj_coeffs = []
@@ -205,36 +206,54 @@ def _solve_safely(worker, rti):
 	if model_res is None:
 		model_res = worker.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
 	if model_res is None:
-		return {'solved': False, 'objective': float('inf'), 'paths_by_ug': {}}
+		return {'solved': False, 'objective': float('-inf'), 'paths_by_ug': {}}
 
-	# Build the standard return dict the way solve_generic_lp_persistent does
-	# (we don't reuse its remaining body because it's tightly coupled to the
-	# worker's wider invariants; we extract just what stochastic_lp needs).
-	# 'objective' = -1 * avg latency = model.objVal / total_volume (negated)
-	total_vol = float(np.sum(worker.whole_deployment_ug_vols))
-	avg_lat = float(model_res.objVal) / max(total_vol, 1e-9)
-	return {
-		'solved': True,
-		'objective': -avg_lat,
-		'paths_by_ug': _build_paths_by_ug(worker, available_paths, model_res),
-	}
-
-
-def _build_paths_by_ug(worker, available_paths, model):
-	"""Reconstruct {ugi: [(poppi, vol_pct), ...]} from the solved model."""
-	paths_by_ug = {}
+	# Reconstruct latency from variable values (not model.objVal -- MLU-safe).
+	# Also compute per-popp total volume so we can detect MLU-overflow (any
+	# popp whose total flow exceeded static_caps means MLU mode kicked in and
+	# the routing is using more capacity than the link nominally has).
+	paths_by_ug_res = {}
+	total_weighted_lat = 0.0
+	vol_by_popp = {}
 	for (ug, poppi) in available_paths:
 		var = worker.var_pool.get((ug, poppi))
 		if var is None:
 			continue
 		vol = float(var.X)
-		if vol < 1e-9:
+		if vol <= 1e-7:
 			continue
 		ugi = worker.whole_deployment_ug_to_ind[ug]
 		ug_vol = float(worker.whole_deployment_ug_to_vol[ug])
 		vpct = vol / max(ug_vol, 1e-9)
-		paths_by_ug.setdefault(ugi, []).append((poppi, vpct))
-	return paths_by_ug
+		paths_by_ug_res.setdefault(ugi, []).append((poppi, vpct))
+		if poppi == NO_PATH_INGRESS(worker):
+			path_lat = NO_ROUTE_LATENCY
+		else:
+			path_lat = worker.whole_deployment_ug_perfs[ug][worker.popps[poppi]]
+		total_weighted_lat += path_lat * vol
+		vol_by_popp[poppi] = vol_by_popp.get(poppi, 0.0) + vol
+
+	# Congestion: any real popp where total routed volume exceeds its capacity.
+	# (Skip the NO_PATH_INGRESS sentinel index = last.)
+	no_path_idx = len(worker.static_caps) - 1
+	overflow_vol = 0.0
+	total_vol = 0.0
+	for poppi, v in vol_by_popp.items():
+		total_vol += v
+		if poppi == no_path_idx:
+			continue
+		cap = float(worker.static_caps[poppi])
+		if v > cap + 1e-6:
+			overflow_vol += (v - cap)
+
+	obj_norm = float(np.sum(worker.whole_deployment_ug_vols))
+	avg_lat = total_weighted_lat / max(obj_norm, 1e-9)
+	return {
+		'solved': True,
+		'objective': -avg_lat,  # objective convention: -latency (more positive = better)
+		'paths_by_ug': paths_by_ug_res,
+		'fraction_overflow_volume': overflow_vol / max(total_vol, 1e-9),
+	}
 
 
 def _summarise_ret(ret, worker, keep_paths):
@@ -309,6 +328,7 @@ def solve_headroom_lp(worker, advertisement: np.ndarray,
 		'wall_time': wall,
 		'method': 'headroom',
 		'headroom_factor': headroom_factor,
+		'fraction_overflow_volume': float(ret.get('fraction_overflow_volume', 0.0)),
 	}
 
 
