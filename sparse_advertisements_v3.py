@@ -171,7 +171,14 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		if using_resilience_benefit:
 			assert self.gamma > 0
 			self.resilience_benefit_fn = self.resilience_benefit
-			self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
+			# SCULPTOR_USE_STOCHASTIC_LP_GRAD swaps the SGD-Monte-Carlo RB-grad
+			# for a stochastic-LP-based gradient that computes E[latency over K
+			# failure scenarios] via Gurobi's Multi-Scenario API. K controlled
+			# via SCULPTOR_STOCHASTIC_LP_K (default 16).
+			if os.environ.get('SCULPTOR_USE_STOCHASTIC_LP_GRAD'):
+				self.gradients_resilience_benefit_fn = self.gradients_stochastic_lp
+			else:
+				self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
 		else:
 			self.resilience_benefit_fn = lambda a : 0
 			self.gradients_resilience_benefit_fn = lambda a : np.zeros(a.shape)
@@ -1244,6 +1251,107 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		alpha = 0 ## PoP failures are harder to plan for, so matter less
 		return grad_link_failure + alpha * grad_pop_failure
+
+	def _ensure_stochastic_lp_worker(self):
+		"""Lazy-create a local Path_Distribution_Computer for stochastic LP solves.
+
+		Stochastic LP gradient computation needs synchronous LP solves with a
+		persistent Gurobi model. Unlike the LB-grad path which dispatches
+		asynchronously to workers, we use one local worker for the stochastic
+		LP solves. Acceptable at small scale; at decent/med scale this would
+		become a parallelism bottleneck.
+		"""
+		if getattr(self, '_stoch_worker', None) is not None:
+			return
+		from path_distribution_computer_ray import _LocalPathDistributionComputer
+		from helpers import split_deployment_by_ug
+		subdep = split_deployment_by_ug(self.og_deployment, n_chunks=1)[0]
+		init_kwa = self.get_init_kwa()
+		self._stoch_worker = _LocalPathDistributionComputer(
+			worker_i=999, subdeployment=subdep, init_kwargs=init_kwa)
+
+	def gradients_stochastic_lp(self, advertisement):
+		"""Stochastic-LP-based resilience gradient.
+
+		For K=SCULPTOR_STOCHASTIC_LP_K (default 16) deterministic single-popp
+		failure scenarios, and an importance-sampled set of (popp, prefix)
+		probes (same structure as gradients_resilience_benefit_popp): compute
+		E[latency over K scenarios] with bit ON vs OFF via Gurobi's Multi-
+		Scenario API, take difference, write to gradient component.
+
+		Sign convention: positive grad → "turn this bit on for better
+		resilience" (matches the existing RB gradient's sign).
+		"""
+		from stochastic_lp import solve_stochastic_lp, single_popp_scenarios
+
+		self._ensure_stochastic_lp_worker()
+		worker = self._stoch_worker
+		K = int(os.environ.get('SCULPTOR_STOCHASTIC_LP_K', '16'))
+
+		# Cache the scenario set on first call — same K scenarios each iter
+		# so the gradient signal is deterministic (no per-iter sampling noise).
+		if not hasattr(self, '_stoch_scenarios') or self._stoch_scenarios is None:
+			all_scen = single_popp_scenarios(self.og_deployment, p_any_fail=0.5)
+			if len(all_scen) > K + 1:
+				rng = np.random.default_rng(31415)
+				idx = rng.choice(len(all_scen) - 1, size=K, replace=False) + 1
+				picked = [all_scen[0]] + [all_scen[int(i)] for i in idx]
+				total = sum(p for _, p in picked)
+				self._stoch_scenarios = [(s, p / total) for s, p in picked]
+			else:
+				self._stoch_scenarios = all_scen
+		scenarios = self._stoch_scenarios
+
+		grad_rb = np.zeros(advertisement.shape)
+
+		# Probe selection (importance sample past high-grad probes + random
+		# explore), mirroring gradients_resilience_benefit_popp's structure.
+		total_n = self.gradient_support_settings['popp_rb_support_size']
+		pct_explore = 80
+		N_EXPLORE = int(total_n * pct_explore / 100)
+
+		probes = []
+		try:
+			best_from_last = sorted(
+				self._last_stoch_grad_results.items(),
+				key=lambda el: -abs(el[1]))
+			for (poppi, prefi), val in best_from_last:
+				if (poppi, prefi) in probes:
+					continue
+				if abs(val) < 0.01:
+					continue
+				if abs(ADVERTISEMENT_THRESHOLD - advertisement[poppi, prefi]) > ADVERTISEMENT_THRESHOLD * 7 / 10:
+					continue
+				probes.append((poppi, prefi))
+				if len(probes) >= total_n - N_EXPLORE:
+					break
+		except AttributeError:
+			pass
+
+		# Random explore for remaining budget
+		already_in = set(probes)
+		all_inds = [(p, pr) for p in range(self.n_popp) for pr in range(self.n_prefixes)]
+		candidates = [ind for ind in all_inds if ind not in already_in]
+		n_to_pick = min(N_EXPLORE, len(candidates))
+		if n_to_pick > 0:
+			chosen = np.random.choice(len(candidates), size=n_to_pick, replace=False)
+			for i in chosen:
+				probes.append(candidates[int(i)])
+
+		# Compute gradient component per probe: 2 multi-scenario LPs each.
+		self._last_stoch_grad_results = {}
+		for (poppi, prefi) in probes:
+			tmp_a = copy.copy(advertisement)
+			tmp_a[poppi, prefi] = 1.0
+			res_on = solve_stochastic_lp(worker, tmp_a, scenarios, method='multi_scenario')
+			tmp_a[poppi, prefi] = 0.0
+			res_off = solve_stochastic_lp(worker, tmp_a, scenarios, method='multi_scenario')
+			# Positive = turn ON reduces E[latency] = "turn this on for resilience"
+			diff = res_off.expected_latency - res_on.expected_latency
+			grad_rb[poppi, prefi] = diff
+			self._last_stoch_grad_results[(poppi, prefi)] = diff
+
+		return grad_rb
 
 	def impose_advertisement_constraint(self, a):
 		"""The convex constraint 0 <= a_ij <= 1 has the simple solution to clip."""
