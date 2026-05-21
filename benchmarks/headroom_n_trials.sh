@@ -13,8 +13,6 @@
 # sessions baseline and hard-cuts sustained overage at 32 min.
 
 set -o pipefail
-# Deliberately NOT using `set -u` because we dereference associative arrays
-# that may be empty, which would otherwise trip nounset.
 
 DPSIZE="${1:?usage: $0 <dpsize> <max_iter> <max_concurrent> <seeds...>}"
 MAX_ITER="${2:?usage: $0 <dpsize> <max_iter> <max_concurrent> <seeds...>}"
@@ -33,13 +31,15 @@ ts=$(date +%Y%m%d_%H%M%S)
 
 cd "${REPO}"
 
+# Tracks pid -> seed for active runs.
+pids=()
+pid_seeds=()
+
 launch_one() {
     local seed="$1"
     local tag="hd_seed${seed}_${DPSIZE}"
     local logname="${OUT_DIR}/${tag}_${ts}.log"
-    # Clear per-tag metrics so we don't short-circuit training
     rm -f "${REPO}/cache/popp_failure_latency_comparison_${DPSIZE}_${tag}.pkl"
-    echo "[$(date +%T)] LAUNCH seed=${seed} log=${logname}"
     SCULPTOR_DEPLOYMENT_SEED=${seed} \
         SCULPTOR_RUN_TAG=${tag} \
         SCULPTOR_MAX_ITER=${MAX_ITER} \
@@ -49,42 +49,47 @@ launch_one() {
         ${PY} run_ray.py eval_latency_failure \
             --port $((31400 + seed)) --dpsize ${DPSIZE} \
             > "${logname}" 2>&1 &
-    echo $!  # pid
+    local new_pid=$!
+    pids+=("${new_pid}")
+    pid_seeds+=("${seed}")
+    echo "[$(date +%T)] LAUNCH seed=${seed} pid=${new_pid} log=${logname}"
 }
 
-# Queue with max concurrency
-declare -A PID_TO_SEED
-for seed in "${SEEDS[@]}"; do
-    # Block until we have headroom for another concurrent run
-    while [ "${#PID_TO_SEED[@]}" -ge "${MAX_CONCURRENT}" ]; do
-        # Wait for any one to finish
-        for pid in "${!PID_TO_SEED[@]}"; do
-            if ! kill -0 "${pid}" 2>/dev/null; then
-                done_seed="${PID_TO_SEED[$pid]}"
-                echo "[$(date +%T)] FINISHED seed=${done_seed} pid=${pid}"
-                unset 'PID_TO_SEED[$pid]'
-            fi
-        done
-        if [ "${#PID_TO_SEED[@]}" -ge "${MAX_CONCURRENT}" ]; then
-            sleep 10
+reap_dead() {
+    # Walk current pids, drop ones that are no longer alive.
+    local new_pids=()
+    local new_seeds=()
+    local i=0
+    while [ $i -lt ${#pids[@]} ]; do
+        local p="${pids[$i]}"
+        local s="${pid_seeds[$i]}"
+        if kill -0 "${p}" 2>/dev/null; then
+            new_pids+=("${p}")
+            new_seeds+=("${s}")
+        else
+            echo "[$(date +%T)] FINISHED seed=${s} pid=${p}"
         fi
+        i=$((i+1))
     done
-    new_pid=$(launch_one "${seed}")
-    PID_TO_SEED[${new_pid}]="${seed}"
+    pids=("${new_pids[@]}")
+    pid_seeds=("${new_seeds[@]}")
+}
+
+active_count() {
+    echo "${#pids[@]}"
+}
+
+for seed in "${SEEDS[@]}"; do
+    while [ "$(active_count)" -ge "${MAX_CONCURRENT}" ]; do
+        sleep 10
+        reap_dead
+    done
+    launch_one "${seed}"
 done
 
-# Drain
-while [ "${#PID_TO_SEED[@]}" -gt 0 ]; do
-    for pid in "${!PID_TO_SEED[@]}"; do
-        if ! kill -0 "${pid}" 2>/dev/null; then
-            done_seed="${PID_TO_SEED[$pid]}"
-            echo "[$(date +%T)] FINISHED seed=${done_seed} pid=${pid}"
-            unset 'PID_TO_SEED[$pid]'
-        fi
-    done
-    if [ "${#PID_TO_SEED[@]}" -gt 0 ]; then
-        sleep 10
-    fi
+while [ "$(active_count)" -gt 0 ]; do
+    sleep 10
+    reap_dead
 done
 
 echo "[$(date +%T)] ALL ${#SEEDS[@]} TRIALS DONE for dpsize=${DPSIZE}"
