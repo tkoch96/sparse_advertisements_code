@@ -171,14 +171,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		if using_resilience_benefit:
 			assert self.gamma > 0
 			self.resilience_benefit_fn = self.resilience_benefit
-			# SCULPTOR_USE_STOCHASTIC_LP_GRAD swaps the SGD-Monte-Carlo RB-grad
-			# for a stochastic-LP-based gradient that computes E[latency over K
-			# failure scenarios] via Gurobi's Multi-Scenario API. K controlled
-			# via SCULPTOR_STOCHASTIC_LP_K (default 16).
-			if os.environ.get('SCULPTOR_USE_STOCHASTIC_LP_GRAD'):
-				self.gradients_resilience_benefit_fn = self.gradients_stochastic_lp
-			else:
-				self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
+			self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
 		else:
 			self.resilience_benefit_fn = lambda a : 0
 			self.gradients_resilience_benefit_fn = lambda a : np.zeros(a.shape)
@@ -1012,19 +1005,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				poppi = self.popp_to_ind[popp]
 				tmp_a[poppi,rand_outer_prefix] = 1.0 # Turn this popp on
-				# A/B knob: SCULPTOR_RB_NO_UGS_SUBSET=1 drops the per-call user
-				# subset. Bigger LP per call but enables cache hits on
-				# a_effective AND lets persistent Gurobi warm-start across
-				# consecutive calls (since LP variable set is constant).
-				if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
-					self.latency_benefit(tmp_a)
-				else:
-					self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 				tmp_a[poppi,rand_outer_prefix] = 0.0 # turn this popp off
-				if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
-					self.latency_benefit(tmp_a)
-				else:
-					self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 
 				calls.append((popp, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
@@ -1074,15 +1057,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				continue
 
 			tmp_a[poppi_helper,rand_outer_prefix] = 1.0 # Turn this popp on
-			if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
-				self.latency_benefit(tmp_a)
-			else:
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 			tmp_a[poppi_helper,rand_outer_prefix] = 0.0 # turn this popp off
-			if os.environ.get('SCULPTOR_RB_NO_UGS_SUBSET'):
-				self.latency_benefit(tmp_a)
-			else:
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
+			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
 			calls.append((popp_helper, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
@@ -1247,11 +1224,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		return grad_rb
 
 	def gradients_resilience_benefit(self, advertisement):
-		# SCULPTOR_SKIP_RB_GRAD short-circuits this entire phase to test the
-		# "resilience-via-LP-headroom" formulation. With SCULPTOR_CAPACITY_HEADROOM
-		# set in solve_lp_assignment.py, the inner LP already reserves capacity
-		# for failures, making the SGD-RB gradient unnecessary.
-		if os.environ.get('SCULPTOR_SKIP_RB_GRAD'):
+		# Under SCULPTOR_CAPACITY_HEADROOM>0 the inner LP already reserves
+		# capacity for failures, so the SGD-RB gradient is unnecessary.
+		# Symmetric with resilience_benefit() (the value), which also
+		# short-circuits under headroom.
+		if float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
 			return np.zeros(advertisement.shape)
 
 		grad_link_failure = self.gradients_resilience_benefit_popp(advertisement)
@@ -1259,128 +1236,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		alpha = 0 ## PoP failures are harder to plan for, so matter less
 		return grad_link_failure + alpha * grad_pop_failure
-
-	def _ensure_stochastic_lp_worker(self):
-		"""Lazy-create a local Path_Distribution_Computer for stochastic LP solves.
-
-		Stochastic LP gradient computation needs synchronous LP solves with a
-		persistent Gurobi model. Unlike the LB-grad path which dispatches
-		asynchronously to workers, we use one local worker for the stochastic
-		LP solves. Acceptable at small scale; at decent/med scale this would
-		become a parallelism bottleneck.
-		"""
-		if getattr(self, '_stoch_worker', None) is not None:
-			return
-		from path_distribution_computer_ray import _LocalPathDistributionComputer
-		from helpers import split_deployment_by_ug
-		subdep = split_deployment_by_ug(self.og_deployment, n_chunks=1)[0]
-		init_kwa = self.get_init_kwa()
-		self._stoch_worker = _LocalPathDistributionComputer(
-			worker_i=999, subdeployment=subdep, init_kwargs=init_kwa)
-
-	def gradients_stochastic_lp(self, advertisement):
-		"""Stochastic-LP-based resilience gradient.
-
-		For K=SCULPTOR_STOCHASTIC_LP_K (default 16) deterministic single-popp
-		failure scenarios, and an importance-sampled set of (popp, prefix)
-		probes (same structure as gradients_resilience_benefit_popp): compute
-		E[latency over K scenarios] with bit ON vs OFF via Gurobi's Multi-
-		Scenario API, take difference, write to gradient component.
-
-		Sign convention: positive grad → "turn this bit on for better
-		resilience" (matches the existing RB gradient's sign).
-		"""
-		from stochastic_lp import solve_stochastic_lp, single_popp_scenarios
-
-		self._ensure_stochastic_lp_worker()
-		worker = self._stoch_worker
-		K = int(os.environ.get('SCULPTOR_STOCHASTIC_LP_K', '16'))
-
-		# Scenario set per gradient step. Re-rolled each iter so successive
-		# gradient steps see DIFFERENT samples (unbiased Monte Carlo with
-		# variance ~1/√K). When importance sampling is enabled
-		# (SCULPTOR_STOCHASTIC_LP_IMPORTANCE=1), we weight by prior-iter
-		# per-scenario impact so harder-to-route scenarios get sampled more
-		# often, while keeping the gradient estimator unbiased via the
-		# inverse-probability weighting baked into the returned scenario
-		# probabilities.
-		from stochastic_lp import (
-			pick_gradient_step_scenarios,
-			pick_gradient_step_scenarios_importance,
-			single_popp_scenarios, solve_stochastic_lp,
-		)
-		if os.environ.get('SCULPTOR_STOCHASTIC_LP_IMPORTANCE'):
-			scenarios = pick_gradient_step_scenarios_importance(
-				self.og_deployment, K,
-				iter_seed=31415 + int(self.iter),
-				last_per_scenario_latencies=getattr(self, '_last_per_scenario_latencies', None),
-				exploration_weight=0.1)
-		else:
-			scenarios = pick_gradient_step_scenarios(
-				self.og_deployment, K, iter_seed=31415 + int(self.iter))
-		# Stash for tests / introspection
-		self._last_stoch_scenarios = scenarios
-
-		grad_rb = np.zeros(advertisement.shape)
-
-		# Probe selection (importance sample past high-grad probes + random
-		# explore), mirroring gradients_resilience_benefit_popp's structure.
-		total_n = self.gradient_support_settings['popp_rb_support_size']
-		pct_explore = 80
-		N_EXPLORE = int(total_n * pct_explore / 100)
-
-		probes = []
-		try:
-			best_from_last = sorted(
-				self._last_stoch_grad_results.items(),
-				key=lambda el: -abs(el[1]))
-			for (poppi, prefi), val in best_from_last:
-				if (poppi, prefi) in probes:
-					continue
-				if abs(val) < 0.01:
-					continue
-				if abs(ADVERTISEMENT_THRESHOLD - advertisement[poppi, prefi]) > ADVERTISEMENT_THRESHOLD * 7 / 10:
-					continue
-				probes.append((poppi, prefi))
-				if len(probes) >= total_n - N_EXPLORE:
-					break
-		except AttributeError:
-			pass
-
-		# Random explore for remaining budget
-		already_in = set(probes)
-		all_inds = [(p, pr) for p in range(self.n_popp) for pr in range(self.n_prefixes)]
-		candidates = [ind for ind in all_inds if ind not in already_in]
-		n_to_pick = min(N_EXPLORE, len(candidates))
-		if n_to_pick > 0:
-			chosen = np.random.choice(len(candidates), size=n_to_pick, replace=False)
-			for i in chosen:
-				probes.append(candidates[int(i)])
-
-		# Compute gradient component per probe: 2 multi-scenario LPs each.
-		self._last_stoch_grad_results = {}
-		for (poppi, prefi) in probes:
-			tmp_a = copy.copy(advertisement)
-			tmp_a[poppi, prefi] = 1.0
-			res_on = solve_stochastic_lp(worker, tmp_a, scenarios, method='multi_scenario')
-			tmp_a[poppi, prefi] = 0.0
-			res_off = solve_stochastic_lp(worker, tmp_a, scenarios, method='multi_scenario')
-			# Positive = turn ON reduces E[latency] = "turn this on for resilience"
-			diff = res_off.expected_latency - res_on.expected_latency
-			grad_rb[poppi, prefi] = diff
-			self._last_stoch_grad_results[(poppi, prefi)] = diff
-
-		# If importance sampling is on, refresh `_last_per_scenario_latencies`
-		# by solving the current advertisement against the FULL scenario set.
-		# This is one extra multi-scenario LP per gradient step (~80ms at small)
-		# but gives next iter's IS sampler the freshest "what's hard right now"
-		# signal. Skipped when IS is off to save the LP.
-		if os.environ.get('SCULPTOR_STOCHASTIC_LP_IMPORTANCE'):
-			full_scen = single_popp_scenarios(self.og_deployment, p_any_fail=0.5)
-			full_res = solve_stochastic_lp(worker, advertisement, full_scen, method='multi_scenario')
-			self._last_per_scenario_latencies = list(full_res.per_scenario_latencies)
-
-		return grad_rb
 
 	def impose_advertisement_constraint(self, a):
 		"""The convex constraint 0 <= a_ij <= 1 has the simple solution to clip."""
@@ -1556,9 +1411,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 	def solve_max_information(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""
 		uncertainties = {}
+		_info_t0 = time.time()
 
 		a = np.copy(threshold_a(current_advertisement))
 		current_benefit,_ = self.latency_benefit_fn(a, retnow=True)
+		_info_t_after_curbenefit = time.time()
 		awful_benefit = -1000000
 		uncertainty_alpha = .25
 		# f,ax = plt.subplots(5)
@@ -1736,6 +1593,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				perms = perms + not_in[0:n_left]
 				perm_labs += ["random" for _ in range(n_left)]
 
+			_info_t_before_flush = time.time()
+			print(f"[InfoTiming] build_perms: {_info_t_before_flush - _info_t_after_curbenefit:.3f}s, n_perms={len(perms)}")
 			ts = time.time()
 			print("Starting to measure {} perms".format(len(perms)))
 			for flips in perms:
@@ -1745,6 +1604,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				for flip in flips:
 					a[flip] = 1 - a[flip]
 			all_lb_rets = self.flush_latency_benefit_queue()
+			_info_t_after_flush = time.time()
+			print(f"[InfoTiming] flush_latency_benefit_queue: {_info_t_after_flush - ts:.3f}s ({len(perms)} perms)")
 			print("Measured perms {}s elapsed".format(time.time() - ts))
 
 			for flipi, flips in enumerate(perms):
@@ -1754,6 +1615,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					'label': perm_labs[flipi],
 				}
 
+			_info_t_before_vf = time.time()
 			potential_value_measure = {m:{} for m in ranked_explore_methodologies}
 			max_benefit = {m:-1 * np.inf for m in ranked_explore_methodologies}
 			best_flips = {m: None for m in ranked_explore_methodologies}
@@ -1765,6 +1627,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					if potential_value_measure[m][flips] >= max_benefit[m]:
 						best_flips[m] = flips
 						max_benefit[m] = potential_value_measure[m][flips]
+			print(f"[InfoTiming] value_func loop: {time.time() - _info_t_before_vf:.3f}s")
+			print(f"[InfoTiming] solve_max_information TOTAL: {time.time() - _info_t0:.3f}s")
 			for m in ranked_explore_methodologies:
 				if best_flips[m] is not None:
 					print("Best explore value was {} for {}".format(potential_value_measure[m][best_flips[m]],m))
@@ -1878,10 +1742,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.current_latency_benefit = self.metrics['gt_latency_benefit'][-1]
 		self.current_resilience_benefit = self.metrics['gt_resilience_benefit'][-1]
 
-		# NB: dropped verbose_workers=True (was forcing the worker cache to
-		# bypass, costing ~20s/iter at actual-10). verbose=True is the
-		# driver-side print flag which still fires; worker can serve from
-		# its calc_cache when the advertisement matches a prior solve.
 		self.current_pseudo_objective = self.modeled_objective(advertisement, verbose=True)
 		print(f"[Timing] modeled_objective (pseudo): {time.time() - perf_t:.5f}s")
 		perf_t = time.time()

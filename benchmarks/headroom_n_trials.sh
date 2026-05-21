@@ -48,7 +48,6 @@ launch_one() {
         SCULPTOR_MAX_ITER=${MAX_ITER} \
         SCULPTOR_N_WORKERS=${N_WORKERS} \
         SCULPTOR_CAPACITY_HEADROOM=${HEADROOM} \
-        SCULPTOR_SKIP_RB_GRAD=1 \
         ${PY} run_ray.py eval_latency_failure \
             --port $((31400 + seed)) --dpsize ${DPSIZE} \
             > "${logname}" 2>&1 &

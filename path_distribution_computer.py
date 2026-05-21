@@ -63,20 +63,34 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# print('started in worker {}'.format(self.worker_i))
 
 	def summarize_timing(self):
-		return
+		# Print per-key cumulative LP-solve timings (optimize / get_paths_by_ug /
+		# organizing_results / solve_unified_lp_not_optimize, etc.). Called every
+		# 50 latency_benefit calls in the worker batch loop. Useful for
+		# identifying which sub-step inside the LP solve dominates at scale.
 		total_time = sum(list(self.timing.values()))
-		print("\n\n===============\nWorker {} timing summary".format(self.worker_i))
-		for k in sorted(list(self.timing), key = lambda el : self.timing[el]):
+		if total_time < 1e-6:
+			return
+		print("\n===============\nWorker {} timing summary (cumulative)".format(self.worker_i))
+		for k in sorted(list(self.timing), key=lambda el: -self.timing[el]):
 			pct = round(self.timing[k] * 100.0 / total_time, 2)
-			print("{} - {} pct ({} ms)".format(k, pct, round(self.timing[k]*1000,2)))
-		print("==================\n\n")
+			print("  {:<40s} {:>6.2f}%  ({:.1f} ms)".format(k, pct, self.timing[k] * 1000))
+		print("==================\n")
 
 	def init_persistent_lp(self):
 		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""
 		self.model = gp.Model(f"Worker_{self.worker_i}_Persistent")
 		self.model.Params.LogToConsole = 0
-		self.model.Params.Method = 1  
-		self.model.Params.Threads = 1 
+		self.model.Params.Method = 1
+		self.model.Params.Threads = 1
+		# SCULPTOR_GRB_DUMP=<dir>: emit a Gurobi log per worker and dump the
+		# first ~3 solves as .mps for Gurobi support. Only worker 0 dumps to
+		# keep artifact count small.
+		self._grb_dump_dir = os.environ.get('SCULPTOR_GRB_DUMP')
+		self._grb_dump_count = 0
+		if self._grb_dump_dir and self.worker_i == 0:
+			os.makedirs(self._grb_dump_dir, exist_ok=True)
+			self.model.Params.LogFile = os.path.join(
+				self._grb_dump_dir, f'sculptor_{self.dpsize}_w{self.worker_i}.log')
 
 		# 1. Permanent Dummy Variable for MLU (Y)
 		self.mlu_dummy = self.model.addVar(lb=0.0, obj=0.0, name="mlu_Y")
@@ -169,6 +183,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		self.timing['solve_unified_lp_not_optimize'] = time.time() - ts
 		ts = time.time()
+		if self._grb_dump_dir and self.worker_i == 0 and self._grb_dump_count < 3:
+			mps_path = os.path.join(
+				self._grb_dump_dir,
+				f'sculptor_{self.dpsize}_w{self.worker_i}_solve{self._grb_dump_count}.mps')
+			self.model.write(mps_path)
+			self._grb_dump_count += 1
 		self.model.optimize()
 		self.timing['optimize'] = time.time() - ts
 		if self.model.status == 2:

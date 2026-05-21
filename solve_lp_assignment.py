@@ -7,8 +7,9 @@ gp.setParam("OutputFlag", 0)
 def _apply_capacity_headroom(arr, sas=None):
 	"""Multiply capacities by (1 - SCULPTOR_CAPACITY_HEADROOM env var, default 0).
 	Used to leave headroom in LP capacity constraints so that a single popp
-	failure can be absorbed without re-running the LP. When SCULPTOR_SKIP_RB_GRAD
-	is also set, this fully replaces the SGD-based resilience benefit gradient.
+	failure can be absorbed without re-running the LP. When set >0 this replaces
+	the SGD-based resilience benefit gradient entirely (both the gradient and
+	the value short-circuit automatically; see sparse_advertisements_v3.py).
 
 	Only applies when sas._in_training is True (set/cleared in
 	Sparse_Advertisement_Solver.solve around the gradient loop) -- otherwise the
