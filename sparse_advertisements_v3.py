@@ -673,6 +673,10 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		self.solutions = {}
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
+		# Optional callback to checkpoint partial results after each strategy
+		# completes (e.g. so a crash during painter doesn't lose the already-
+		# computed SCULPTOR advertisement). Receives (solution_type, metrics).
+		on_strategy_complete = kwargs.get('on_strategy_complete', None)
 		for i in range(kwargs.get('n_run', 50)):
 			if verbose:
 				print("Comparing different solutions iteration {}".format(i))
@@ -698,18 +702,32 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 						import traceback
 						traceback.print_exc()
 				else:
-					solve_fns[solution_type](**kwargs)
-					metrics['sparse_objective_vals'][solution_type].append(self.solutions[solution_type]['objective'])
-					metrics['n_advs'][solution_type].append(self.solutions[solution_type]['n_advs'])
-					metrics['adv_solns'][solution_type].append(self.solutions[solution_type]['advertisement'])
-					metrics['latency_benefits'][solution_type].append(self.solutions[solution_type]['latency_benefit'])
-					metrics['norm_penalties'][solution_type].append(self.solutions[solution_type]['norm_penalty'])
-					metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
+					try:
+						solve_fns[solution_type](**kwargs)
+						metrics['sparse_objective_vals'][solution_type].append(self.solutions[solution_type]['objective'])
+						metrics['n_advs'][solution_type].append(self.solutions[solution_type]['n_advs'])
+						metrics['adv_solns'][solution_type].append(self.solutions[solution_type]['advertisement'])
+						metrics['latency_benefits'][solution_type].append(self.solutions[solution_type]['latency_benefit'])
+						metrics['norm_penalties'][solution_type].append(self.solutions[solution_type]['norm_penalty'])
+						metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
 
 
-					adv = self.solutions[solution_type]['advertisement']
-					metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
-					metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
+						adv = self.solutions[solution_type]['advertisement']
+						metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
+						metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
+					except Exception:
+						# Don't abort the whole comparison if one strategy fails.
+						# Without this, a painter / anyopt crash after a successful
+						# sparse solve loses the sparse advertisement entirely.
+						import traceback
+						traceback.print_exc()
+						print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
+				if on_strategy_complete is not None:
+					try:
+						on_strategy_complete(solution_type, metrics)
+					except Exception:
+						import traceback
+						traceback.print_exc()
 
 			if not kwargs.get('dont_update_deployment', False):
 				## Update to new random deployment

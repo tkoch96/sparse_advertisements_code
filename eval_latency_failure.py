@@ -131,8 +131,25 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
 			### Solve the problem for each type of solution (sparse, painter, etc...)
+			# Per-strategy checkpoint: pickle the metrics-so-far after every
+			# solution_type completes, so a crash in (e.g.) painter doesn't
+			# lose the SCULPTOR advertisement we already computed. The
+			# closure captures `metrics` from the outer scope; we stash the
+			# partial compare_rets onto it so downstream eval phases that
+			# read metrics['compare_rets'][random_iter] see what's been
+			# done so far.
+			def _on_strategy_complete(solution_type, partial_metrics):
+				metrics['compare_rets'][random_iter] = partial_metrics
+				try:
+					pickle.dump(metrics, open(performance_metrics_fn, 'wb'))
+					print("[ckpt] saved metrics after strategy={} → {}".format(
+						solution_type, performance_metrics_fn))
+				except Exception:
+					import traceback
+					traceback.print_exc()
 			ret = sas.compare_different_solutions(n_run=1, verbose=True,
-				 dont_update_deployment=True, soln_types=soln_types, **kwargs)
+				 dont_update_deployment=True, soln_types=soln_types,
+				 on_strategy_complete=_on_strategy_complete, **kwargs)
 			metrics['compare_rets'][random_iter] = ret
 			metrics['save_run_dir'][random_iter] = sas.sas.save_run_dir # sparse's save run dir
 			ug_vols = sas.ug_to_vol
