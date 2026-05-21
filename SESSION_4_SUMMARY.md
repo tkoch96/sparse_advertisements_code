@@ -202,10 +202,49 @@ table is overstated by ~2×.
 
 ## Suggested next steps (priority order)
 
+0. **🚨 VERIFY THE STOP_TRACKER CACHE FIX LOCALLY BEFORE TRUSTING ANY
+   PHASE B RESULTS.** Phase B is currently running WITH the fix
+   (verbose_workers=True removed at line 1877). The risk: the cached
+   path reconstructs `(xsumx, psumx)` from `(min, max) + sparse_dict`,
+   not from the raw computation. If those representations differ even
+   slightly, `current_pseudo_objective` and the "Believed: NP/LB/RB"
+   prints diverge from what they'd be without the fix, and SCULPTOR's
+   stopping criterion + reported metrics are using a different signal
+   than the pre-fix runs. The fix's CORRECTNESS depends on the cached
+   and non-cached returns being numerically identical (or close enough
+   that downstream behavior is unchanged).
+
+   **How to verify (local, ~10 min):**
+   - `git stash` the current uncommitted state if any.
+   - Check out HEAD (with the fix).
+   - Run a quick SCULPTOR + eval at `small`, MAX_ITER=10, fixed seed:
+     ```
+     SCULPTOR_DEPLOYMENT_SEED=1 SCULPTOR_RUN_TAG=verify_with_fix \
+       SCULPTOR_MAX_ITER=10 SCULPTOR_N_WORKERS=2 \
+       SCULPTOR_CAPACITY_HEADROOM=0.2 SCULPTOR_SKIP_RB_GRAD=1 \
+       ~/Documents/venv312/bin/python run_ray.py eval_latency_failure \
+       --port 31420 --dpsize small > /tmp/with_fix.log 2>&1
+     ```
+   - Now temporarily REVERT the fix (one-line: put `verbose_workers=True`
+     back at line 1877), and re-run with `SCULPTOR_RUN_TAG=verify_no_fix`
+     and a different port.
+   - Compare: per-iter `Believed: NP / LB / RB` prints,
+     `current_pseudo_objective` (the "GTO:" lines), and final eval
+     metrics. If those agree to ~0.1% across iterations, the fix is
+     safe and Phase B's results are trustworthy. If they diverge,
+     the fix is changing the model's view of "objective" — Phase B's
+     results aren't comparable to anything pre-fix and we need to
+     decide whether the cached or non-cached value is the "correct"
+     one (and possibly fix the cache representation instead).
+
+   This must be done BEFORE doing anything else with Phase B's
+   numbers.
+
 1. **Wait for Phase B to finish, pull results, generate cross-seed CDF
    PDFs** with `benchmarks/cross_seed_phase_a_plot.py` (or its
    actual-10-flavored variant). Report on
-   normal+popp+pop-failure aggregates.
+   normal+popp+pop-failure aggregates. If step 0 invalidates Phase B,
+   skip this until the fix is sorted.
 
 2. **Run Phase A (small × N=3) AGAIN** with the cache fix applied, to
    verify the headroom claims hold under correct timing. The
