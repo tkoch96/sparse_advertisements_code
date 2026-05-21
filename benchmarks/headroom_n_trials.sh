@@ -24,7 +24,10 @@ REPO=/home/ubuntu/sparse_advertisements_code
 PY=/home/ubuntu/venv312/bin/python
 OUT_DIR=/tmp/cluster_runs/headroom_n
 HEADROOM=0.2
-N_WORKERS=2
+# N_WORKERS per trial. Higher = more parallelism on LB-grad probes; user
+# confirmed they've used 64+ without Gurobi WLS issues. Session 3 saw
+# ~37s/iter on actual-10 with N_WORKERS=8 (vs ~120s/iter with N_WORKERS=2).
+N_WORKERS=8
 
 mkdir -p "${OUT_DIR}"
 ts=$(date +%Y%m%d_%H%M%S)
