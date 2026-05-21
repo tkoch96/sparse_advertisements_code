@@ -12,7 +12,9 @@
 # Concurrency cap matters for Gurobi WLS license: it has ~3 concurrent
 # sessions baseline and hard-cuts sustained overage at 32 min.
 
-set -uo pipefail
+set -o pipefail
+# Deliberately NOT using `set -u` because we dereference associative arrays
+# that may be empty, which would otherwise trip nounset.
 
 DPSIZE="${1:?usage: $0 <dpsize> <max_iter> <max_concurrent> <seeds...>}"
 MAX_ITER="${2:?usage: $0 <dpsize> <max_iter> <max_concurrent> <seeds...>}"
