@@ -1288,19 +1288,30 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		worker = self._stoch_worker
 		K = int(os.environ.get('SCULPTOR_STOCHASTIC_LP_K', '16'))
 
-		# Cache the scenario set on first call — same K scenarios each iter
-		# so the gradient signal is deterministic (no per-iter sampling noise).
-		if not hasattr(self, '_stoch_scenarios') or self._stoch_scenarios is None:
-			all_scen = single_popp_scenarios(self.og_deployment, p_any_fail=0.5)
-			if len(all_scen) > K + 1:
-				rng = np.random.default_rng(31415)
-				idx = rng.choice(len(all_scen) - 1, size=K, replace=False) + 1
-				picked = [all_scen[0]] + [all_scen[int(i)] for i in idx]
-				total = sum(p for _, p in picked)
-				self._stoch_scenarios = [(s, p / total) for s, p in picked]
-			else:
-				self._stoch_scenarios = all_scen
-		scenarios = self._stoch_scenarios
+		# Scenario set per gradient step. Re-rolled each iter so successive
+		# gradient steps see DIFFERENT samples (unbiased Monte Carlo with
+		# variance ~1/√K). When importance sampling is enabled
+		# (SCULPTOR_STOCHASTIC_LP_IMPORTANCE=1), we weight by prior-iter
+		# per-scenario impact so harder-to-route scenarios get sampled more
+		# often, while keeping the gradient estimator unbiased via the
+		# inverse-probability weighting baked into the returned scenario
+		# probabilities.
+		from stochastic_lp import (
+			pick_gradient_step_scenarios,
+			pick_gradient_step_scenarios_importance,
+			single_popp_scenarios, solve_stochastic_lp,
+		)
+		if os.environ.get('SCULPTOR_STOCHASTIC_LP_IMPORTANCE'):
+			scenarios = pick_gradient_step_scenarios_importance(
+				self.og_deployment, K,
+				iter_seed=31415 + int(self.iter),
+				last_per_scenario_latencies=getattr(self, '_last_per_scenario_latencies', None),
+				exploration_weight=0.1)
+		else:
+			scenarios = pick_gradient_step_scenarios(
+				self.og_deployment, K, iter_seed=31415 + int(self.iter))
+		# Stash for tests / introspection
+		self._last_stoch_scenarios = scenarios
 
 		grad_rb = np.zeros(advertisement.shape)
 
@@ -1350,6 +1361,16 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			diff = res_off.expected_latency - res_on.expected_latency
 			grad_rb[poppi, prefi] = diff
 			self._last_stoch_grad_results[(poppi, prefi)] = diff
+
+		# If importance sampling is on, refresh `_last_per_scenario_latencies`
+		# by solving the current advertisement against the FULL scenario set.
+		# This is one extra multi-scenario LP per gradient step (~80ms at small)
+		# but gives next iter's IS sampler the freshest "what's hard right now"
+		# signal. Skipped when IS is off to save the LP.
+		if os.environ.get('SCULPTOR_STOCHASTIC_LP_IMPORTANCE'):
+			full_scen = single_popp_scenarios(self.og_deployment, p_any_fail=0.5)
+			full_res = solve_stochastic_lp(worker, advertisement, full_scen, method='multi_scenario')
+			self._last_per_scenario_latencies = list(full_res.per_scenario_latencies)
 
 		return grad_rb
 
@@ -1849,7 +1870,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.current_latency_benefit = self.metrics['gt_latency_benefit'][-1]
 		self.current_resilience_benefit = self.metrics['gt_resilience_benefit'][-1]
 
-		self.current_pseudo_objective = self.modeled_objective(advertisement,verbose_workers=True,verbose=True) 
+		# NB: dropped verbose_workers=True (was forcing the worker cache to
+		# bypass, costing ~20s/iter at actual-10). verbose=True is the
+		# driver-side print flag which still fires; worker can serve from
+		# its calc_cache when the advertisement matches a prior solve.
+		self.current_pseudo_objective = self.modeled_objective(advertisement, verbose=True)
 		print(f"[Timing] modeled_objective (pseudo): {time.time() - perf_t:.5f}s")
 		perf_t = time.time()
 
