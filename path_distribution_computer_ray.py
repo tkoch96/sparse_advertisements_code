@@ -165,6 +165,12 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 				self.summarize_timing()
 				last_timing_summary = time.time()
 			self.check_clear_cache()
+		# Always emit one cumulative summary at end of each batch so that
+		# fine-grained parallelism (e.g. 132 perms ÷ 64 actors = 2 per actor)
+		# doesn't silently skip the i%50 trigger above. Worker 0 alone (the
+		# Ray-dedup'd "[repeated Nx]" message handles the rest).
+		if self.worker_i == 0 and len(data) > 1:
+			self.summarize_timing()
 		return ret
 
 	def _cmd_reset_new_meas_cache(self, _data=None):
