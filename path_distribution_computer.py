@@ -44,7 +44,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.port = base_port
 		self.logging_iter = 0
 		self.timing = { k:0 for k in ['solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug','organizing_results',
-		'get_ingress_probabilities_by_dict_generic', 'sim_rti', 
+		'get_ingress_probabilities_by_dict_generic', 'sim_rti', 'total_rti_calc', 'pmat_organize',
 		'solve_generic_lp_persistent', 'solve_generic_lp_not_persistent']}
 		self.rti_data = {}
 
@@ -181,7 +181,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.model.setAttr("UB", active_vars, [gp.GRB.INFINITY] * len(active_vars))
 		self.model.setAttr("Obj", active_vars, obj_coeffs)
 
-		self.timing['solve_unified_lp_not_optimize'] = time.time() - ts
+		self.timing['solve_unified_lp_not_optimize'] += time.time() - ts
 		ts = time.time()
 		if self._grb_dump_dir and self.worker_i == 0 and self._grb_dump_count < 3:
 			mps_path = os.path.join(
@@ -190,7 +190,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.model.write(mps_path)
 			self._grb_dump_count += 1
 		self.model.optimize()
-		self.timing['optimize'] = time.time() - ts
+		self.timing['optimize'] += time.time() - ts
 		if self.model.status == 2:
 			return self.model
 		return None
@@ -199,7 +199,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""The high-level wrapper that tries Standard first, then MLU."""
 		ts = time.time()
 		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
-		self.timing['get_paths_by_ug'] = time.time() - ts
+		self.timing['get_paths_by_ug'] += time.time() - ts
 		
 		# Pre-calculate objective (latencies)
 		obj_coeffs = []
@@ -262,7 +262,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
 
 		obj_norm = np.sum(self.whole_deployment_ug_vols)
-		self.timing['organizing_results'] = time.time()-ts
+		self.timing['organizing_results'] += time.time()-ts
 		return {
 			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
 			"raw_solution": raw_x,
@@ -353,7 +353,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.pmat_by_prefix[ui][pref_i] = [[],[]]
 				self.pmat_by_prefix[ui][pref_i][0].append(poppi)
 				self.pmat_by_prefix[ui][pref_i][1].append(p)
-		self.timing['pmat_organize'] = time.time() - ts
+		self.timing['pmat_organize'] += time.time() - ts
 
 		## Aggregate by prefix (since we're simulating routes)
 		routed_through_ingress = {}
@@ -404,7 +404,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.rti_data["all_probs"].append(data['probs'])
 				self.rti_data["all_poppis"].append(data['pops'])
 
-		self.timing['pmat_organize'] = time.time() - ts
+		self.timing['pmat_organize'] += time.time() - ts
 
 		# --- Step 2: Memory-Efficient Vectorized Selection ---
 		
@@ -681,7 +681,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# Save this state's logic to cache so we never calculate it again for this pattern
 			self.pattern_cache[tloga] = entries_for_cache
 
-		self.timing['pmat_organize'] = time.time() - ts_total
+		self.timing['pmat_organize'] += time.time() - ts_total
 
 		# --- 3. Vectorized Simulation (Previously sim_rti_better) ---
 		# Now self.rti_data is fully populated. We proceed with the vectorized selection.
@@ -746,7 +746,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# Assuming self.popps is a list/dict of actual POP objects
 				routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
 
-		self.timing['total_rti_calc'] = time.time() - ts_total
+		self.timing['total_rti_calc'] += time.time() - ts_total
 
 		return routed_through_ingress
 
@@ -762,18 +762,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			all_routed_through_ingress = self.sim_rti_better()
 		else:
 			all_routed_through_ingress = self.get_ingress_probabilities_and_sim(a)
-		self.timing['sim_rti'] = time.time() - ts
+		self.timing['sim_rti'] += time.time() - ts
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
 			if obj == "avg_latency" or obj == "per_site_cost":
 				ts = time.time()
 				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
-				self.timing['solve_generic_lp_persistent'] = time.time() - ts
+				self.timing['solve_generic_lp_persistent'] += time.time() - ts
 			else:
 				ts = time.time()
 				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
-				self.timing['solve_generic_lp_not_persistent'] = time.time() - ts
+				self.timing['solve_generic_lp_not_persistent'] += time.time() - ts
 			objs[i] = total_obj
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
@@ -827,7 +827,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if not TEST_BETTER_VERSION:
 			ts = time.time()
 			self.get_ingress_probabilities_by_dict_generic(a_effective, **kwargs) ## populates self.ingress_probabilities
-			self.timing['get_ingress_probabilities_by_dict_generic'] = time.time() - ts
+			self.timing['get_ingress_probabilities_by_dict_generic'] += time.time() - ts
 
 		if subset_ugs: ##### REVISIT
 			which_ugs_this_worker = get_intersection(which_ugs, self.whole_deployment_ugs)

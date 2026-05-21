@@ -60,7 +60,8 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		self.timing = {k: 0 for k in [
 			'solve_unified_lp_not_optimize', 'optimize', 'get_paths_by_ug',
 			'organizing_results', 'get_ingress_probabilities_by_dict_generic',
-			'sim_rti', 'solve_generic_lp_persistent',
+			'sim_rti', 'total_rti_calc', 'pmat_organize',
+			'solve_generic_lp_persistent',
 			'solve_generic_lp_not_persistent']}
 		self.rti_data = {}
 		self.MC_NUM = 5  ## monte carlo simulations to determine distributions
@@ -145,6 +146,12 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		return ret
 
 	def _cmd_calc_compressed_lb(self, data):
+		# Reset self.timing accumulators at the top of each batch so the
+		# end-of-batch summarize_timing() shows per-batch cumulative LP-
+		# solve breakdown (not lifetime-cumulative or last-call-only). The
+		# inner solve_unified_lp etc. now += into self.timing.
+		for k in self.timing:
+			self.timing[k] = 0.0
 		ts = time.time()
 		tlp = time.time()
 		ret = []
