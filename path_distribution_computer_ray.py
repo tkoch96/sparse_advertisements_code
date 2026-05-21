@@ -177,9 +177,10 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 					round(i * 100.0 / len(data), 1),
 					round(1000 * (time.time() - ts) / i)))
 				tlp = time.time()
-			if i % 50 == 0 and i > 0 and time.time() - last_timing_summary > 20:
-				self.summarize_timing()
-				last_timing_summary = time.time()
+			# (intermediate i%50 summarize_timing trigger removed — the
+			# end-of-batch summary below now always fires, giving one clean
+			# per-batch breakdown instead of accumulator-growing intermediate
+			# snapshots.)
 			self.check_clear_cache()
 		# Always emit one cumulative summary at end of each batch so that
 		# fine-grained parallelism (e.g. 132 perms ÷ 64 actors = 2 per actor)
