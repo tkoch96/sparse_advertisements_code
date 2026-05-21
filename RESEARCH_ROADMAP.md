@@ -1,5 +1,43 @@
 # Research roadmap
 
+## ⚠ Session-4 addendum (2026-05-21)
+
+Most of the items below have been touched or completed. **Read
+`SESSION_4_SUMMARY.md` first** — it has the up-to-date state.
+
+Short version of what session 4 did:
+
+- Built Option A (stochastic LP via Gurobi Multi-Scenario API) end-to-end:
+  solver in `stochastic_lp.py`, unit tests, SCULPTOR-loop integration
+  behind `SCULPTOR_USE_STOCHASTIC_LP_GRAD=1`.
+- Empirically: at small × 100 iter (single seed) **headroom beats both
+  RB-grad and stochastic-LP on normal-LP and popp-failure quality**.
+  Pop-failure is the noisy column (range 4 ms across seeds at N=3).
+- IS variant diverged. Math is unbiased on average but per-iter variance
+  too high for SGD. See SESSION_4_SUMMARY.md "IS variance issue".
+- Fixed a perf bug in stop_tracker: `verbose_workers=True` was bypassing
+  the worker LP cache, costing ~20s/iter at actual-10. One-line fix at
+  `sparse_advertisements_v3.py:1877`. **All session-1/2/3 timing numbers
+  are overstated by ~2× as a result.**
+- Phase B (headroom × N=5 at actual-10 × 150 iter) running at end of
+  session.
+
+Items in this file that remain relevant:
+
+- Tier 1 #2 (headroom sweep) — never done; next session should run it.
+- Tier 2 #4 (re-enable summarize_timing) — partially relevant; the
+  [Timing] prints in stop_tracker already exist and gave us the
+  cache-bypass clue.
+- Tier 2 #5 (Gurobi multi-scenario API) — **done**, but its SCULPTOR-loop
+  integration loses to headroom in single-seed testing.
+- Tier 3 #11 (stochastic-LP follow-up paper) — `stochastic_lp.py` is now
+  a working starting point.
+
+---
+
+(Original roadmap, written after session 2, follows. Items partially
+done are not edited inline; see SESSION_4_SUMMARY.md for the truth.)
+
 Next-steps plan for SCULPTOR after session 2 (overnight cluster work
 2026-05-19). Captures what we tried, what worked, what didn't, and what to
 do next — in priority order.
