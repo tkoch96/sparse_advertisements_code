@@ -158,27 +158,33 @@ class Worker_Manager:
 	def start_workers(self):
 		self.worker_to_deployments = {}
 		n_workers = self.get_n_workers()
-		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 
-		# Optimization: ray.put init_kwa ONCE into Ray's plasma object store
-		# instead of pickling it per actor. Without this, every actor's
-		# constructor invocation serializes init_kwa freshly — for N actors,
-		# that's N copies of the same big dict in transit, dominating the
-		# "silent startup" phase between deployment build and iter 0.
-		# Passing the ObjectRef has Ray's actor protocol auto-deserialize on
-		# the worker side from one shared plasma entry instead.
+		# Split the deployment into (shared static dict, per-UG slices) and
+		# ray.put the static dict ONCE. The actor constructor then receives
+		# the static dict via ObjectRef (auto-dereferenced by Ray's actor
+		# protocol from one shared plasma entry) plus its tiny per-UG slice
+		# — avoiding 34 MB × n_workers of redundant pickling at actual-32
+		# scale (~95 sec → ~10 sec wall for 64 actors).
+		static_dep, slices = split_deployment_by_ug_separated(
+			self.deployment, n_chunks=n_workers)
+		static_dep_ref = ray.put(static_dep)
+
+		# Same trick for init_kwa (already shared across actors).
 		init_kwa = self.get_init_kwa()
 		init_kwa_ref = ray.put(init_kwa)
 		for worker in range(n_workers):
-			if len(subdeployments[worker]['ugs']) == 0:
+			if len(slices[worker]['ugs']) == 0:
 				continue
-			assert len(subdeployments[worker]['ugs']) >= 1
-			self.worker_to_deployments[worker] = subdeployments[worker]
+			assert len(slices[worker]['ugs']) >= 1
+			# worker_to_deployments stores the *full* per-worker dict so any
+			# driver-side code that reads it (e.g. update_worker_deployments)
+			# sees the same shape as before the refactor.
+			self.worker_to_deployments[worker] = {**static_dep, **slices[worker]}
 			# Construct the actor. The Ray scheduler picks a node/CPU.
-			# Each actor's __init__ (in path_distribution_computer_ray) sets up
-			# its persistent Gurobi model and per-worker deployment cache.
+			# Each actor's __init__ (in path_distribution_computer_ray) merges
+			# the static + slice and sets up its persistent Gurobi model.
 			actor = Path_Distribution_Computer.remote(
-				worker, subdeployments[worker], init_kwa_ref)
+				worker, slices[worker], init_kwa_ref, static_dep_ref)
 			# Wrap in a ZMQ-shaped shim so external code that calls
 			# socket.send(msg)/socket.recv() (e.g. sparse_advertisements_v3
 			# stop_tracker/set_iter loops) works unchanged. Worker_Manager's

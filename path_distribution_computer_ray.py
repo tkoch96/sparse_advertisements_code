@@ -42,9 +42,18 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 	wrapping this class.
 	"""
 
-	def __init__(self, worker_i, subdeployment, init_kwargs):
+	def __init__(self, worker_i, subdeployment, init_kwargs, static_dep=None):
 		# Replicate the non-ZMQ portion of the original __init__ (lines 42-62
 		# of path_distribution_computer.py). Skip start_connection / run.
+		#
+		# If `static_dep` is provided (an ObjectRef from worker_comms_ray.
+		# start_workers, auto-dereferenced by Ray at actor-init time), the
+		# `subdeployment` arg contains only the per-UG sliced keys and we
+		# merge with the shared static context here. Tests + ad-hoc callers
+		# that pass a full subdeployment dict (static_dep=None) keep working
+		# unchanged.
+		if static_dep is not None:
+			subdeployment = {**static_dep, **subdeployment}
 		self.worker_i = worker_i
 		self.port = 0  # unused under Ray
 		self.logging_iter = 0
