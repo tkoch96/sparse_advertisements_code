@@ -332,6 +332,14 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# when peers are knocked out
 		if not self.simulated or self.generic_objective.obj not in ["avg_latency"] or self.gamma == 0:
 			return 0
+		# Under headroom mode (SCULPTOR_CAPACITY_HEADROOM>0), resilience is
+		# absorbed into the LP via reserved capacity, so we don't use the
+		# RB-grad for optimization. The N_popps+1 LP flush here is purely to
+		# populate the "Believed: RB" print and pseudo_objective stopping
+		# signal — both can run RB-free without harming convergence. Skipping
+		# saves ~18s/iter at actual-10.
+		if float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
+			return 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
 		cpkwargs['retnow'] = False
