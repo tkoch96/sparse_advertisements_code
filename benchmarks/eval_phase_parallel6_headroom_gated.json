@@ -1,0 +1,96 @@
+{
+  "tag": "parallel6_headroom_gated",
+  "dpsize": "small",
+  "max_iter": 10,
+  "n_workers": 4,
+  "overall_wall_s": 57.64,
+  "phase_wall_s": {
+    "strategy_compare": 12.09,
+    "pct_volume_within_latency": 0.22,
+    "failure_resilience": 1.32,
+    "volume_multipliers": 1.62,
+    "diurnal": 18.6,
+    "flash_crowd": 23.8
+  },
+  "phase_enter_count": {
+    "strategy_compare": 1,
+    "pct_volume_within_latency": 1,
+    "failure_resilience": 1,
+    "volume_multipliers": 1,
+    "diurnal": 1,
+    "flash_crowd": 1
+  },
+  "crash_info": null,
+  "metrics": {
+    "strategies_with_adv": [
+      "sparse",
+      "anyopt",
+      "painter",
+      "anycast",
+      "one_per_pop",
+      "one_per_peering"
+    ],
+    "failure": {
+      "popp_failures_latency_optimal_specific": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ],
+      "pop_failures_latency_optimal_specific": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "flash_crowd": {
+      "resilience_to_congestion": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "diurnal": {
+      "diurnal": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "pct_volume_within_latency": {
+      "pct_volume_within_latency": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "volume_multipliers": {
+      "volume_multipliers": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "n_tracebacks_in_log": 0,
+    "first_tracebacks": []
+  },
+  "pkl_path": "cache/popp_failure_latency_comparison_small_parallel6_headroom_gated.pkl",
+  "log_path": "benchmarks/eval_phase_parallel6_headroom_gated.log"
+}

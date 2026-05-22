@@ -393,7 +393,11 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# populate the "Believed: RB" print and pseudo_objective stopping
 		# signal — both can run RB-free without harming convergence. Skipping
 		# saves ~18s/iter at actual-10.
-		if float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
+		#
+		# Gated on _in_training so a future caller that wants the real RB
+		# value for reporting (e.g. paper-figure stats) gets it back. Headroom
+		# is a training-time approximation only.
+		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
 			return 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
@@ -1374,8 +1378,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# Under SCULPTOR_CAPACITY_HEADROOM>0 the inner LP already reserves
 		# capacity for failures, so the SGD-RB gradient is unnecessary.
 		# Symmetric with resilience_benefit() (the value), which also
-		# short-circuits under headroom.
-		if float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
+		# short-circuits under headroom. Gated on _in_training so this is
+		# strictly a training-time approximation -- non-training callers
+		# get the real gradient.
+		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
 			return np.zeros(advertisement.shape)
 
 		grad_link_failure = self.gradients_resilience_benefit_popp(advertisement)
@@ -2172,145 +2178,149 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# Enter training mode: gates SCULPTOR_CAPACITY_HEADROOM in
 		# solve_lp_assignment._apply_capacity_headroom (driver) and in the
 		# workers' persistent Gurobi (Path_Distribution_Computer.set_training_mode).
-		# Eval phase runs after solve() returns, with this flag cleared below.
+		# Eval phase runs after solve() returns, with this flag cleared in
+		# the finally below so an exception in the SGD loop can't leak
+		# training-mode caps into subsequent eval LPs.
 		self._broadcast_training_mode(True)
 
-		while not self.stop:
+		try:
+			while not self.stop:
 
-			timers = []
-			t_last = time.time()
+				timers = []
+				t_last = time.time()
 
-			if self.verbose:
-				print("\n\n")
-				print("LEARNING ITERATION : {}".format(self.iter))
-				print("\n\n")
-			self.ts_loop = time.time()
-
-			# calculate gradients
-			if self.verbose:
-				print("calcing grads")
-			grads = self.gradient_fn(self.optimization_advertisement)
-
-			## grads
-			timers.append(time.time() - t_last)
-			t_last = time.time()
-
-			self.recent_grads = grads
-			# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
-			a_k = self.optimization_advertisement
-			w_k = a_k - self.alpha * grads + self.beta * (a_k - self.last_advertisement)
-			if self.proximal:
-				self.optimization_advertisement = self.apply_prox_l1(w_k)
-			else:
-				self.optimization_advertisement = w_k
-			self.last_advertisement = copy.copy(a_k)
-
-			# another constraint we may want is 0 <= a_ij <= 1
-			# the solution is just clipping to be in the set
-			# clipping can mess with gradient descent
-			self.optimization_advertisement = self.impose_advertisement_constraint(self.optimization_advertisement)
- 
-			self.metrics['advertisements'].append(copy.copy(self.optimization_advertisement))
-			self.metrics['grads'].append(self.optimization_advertisement - a_k)
-
-			if self.simulated:
-				# Take a gradient step and update measured paths + probabilities
-				if not np.array_equal(threshold_a(self.optimization_advertisement), threshold_a(self.last_advertisement)):
-					if self.verbose:
-						print("Gradient stepped to a new advertisement, issuing measurement.")
-						print("Changed Indices: {}".format(np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_advertisement)))))
-					self.measure_ingresses(self.optimization_advertisement)
-					opt_adv_on_off = threshold_a(self.optimization_advertisement)
-					self.optimization_advertisement_representation = {}
-					for poppi,prefi in zip(*np.where(opt_adv_on_off)):
-						self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
-			else:
-				NUM_PREFS_TRIGGER_CHANGE = 2 # N prefixes change
-				NUM_TOTAL_TRIGGER_CHANGE = 4 # N popps change
-				measured_this_round = False
-				differences = np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_measured_advertisement)))
-				print("Differences in advertisement so far : {}".format(differences))
-				prefs_changed = {}
-				if len(differences) > 0:
-					## Change in the advertisement, update the actual-deployment-specific tracker
-					opt_adv_on_off = threshold_a(self.optimization_advertisement)
-					self.optimization_advertisement_representation = {}
-					for poppi,prefi in zip(*np.where(opt_adv_on_off)):
-						self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
-
-				for poppi,prefi in zip(*differences):
-					prefs_changed[prefi] = None
-				if len(prefs_changed) >= NUM_PREFS_TRIGGER_CHANGE or len(differences[0]) >= NUM_TOTAL_TRIGGER_CHANGE:
-					print("Indices: {}, Prefixes : {} changed, so measuring now...".format(differences, list(prefs_changed)))
-					self.measure_ingresses(self.optimization_advertisement)
-					self.last_gti = self.calculate_ground_truth_ingress(self.optimization_advertisement)
-					measured_this_round = True
-					self.last_measured_advertisement = self.optimization_advertisement.copy()
-				
-			## measure
-			timers.append(time.time() - t_last)
-			t_last = time.time()
-
-			# Calculate, advertise & measure information about the prefix that would 
-			# give us the most new information
-			if self.verbose:
-				tsmaxinfo = time.time()
-			if self.simulated: ## maybe tmp
-				for maxinfoi in range(self.n_max_info_iter):
-					maximally_informative_advertisement = self.solve_max_information(self.optimization_advertisement)
-					if maximally_informative_advertisement is not None:
-						print("Found an interesting advertisement on iteration {}, so measuring...".format(maxinfoi))
-						self.measure_ingresses(maximally_informative_advertisement)
-					else:
-						if self.verbose:
-							print("No further maximally informative advertisement to measure.")
-						break
 				if self.verbose:
-					print("finding max info took {}s ".format(round(time.time() - tsmaxinfo,2)))
+					print("\n\n")
+					print("LEARNING ITERATION : {}".format(self.iter))
+					print("\n\n")
+				self.ts_loop = time.time()
+
+				# calculate gradients
+				if self.verbose:
+					print("calcing grads")
+				grads = self.gradient_fn(self.optimization_advertisement)
+
+				## grads
+				timers.append(time.time() - t_last)
+				t_last = time.time()
+
+				self.recent_grads = grads
+				# update advertisement by taking a gradient step with momentum and then applying the proximal gradient for L1
+				a_k = self.optimization_advertisement
+				w_k = a_k - self.alpha * grads + self.beta * (a_k - self.last_advertisement)
+				if self.proximal:
+					self.optimization_advertisement = self.apply_prox_l1(w_k)
+				else:
+					self.optimization_advertisement = w_k
+				self.last_advertisement = copy.copy(a_k)
+
+				# another constraint we may want is 0 <= a_ij <= 1
+				# the solution is just clipping to be in the set
+				# clipping can mess with gradient descent
+				self.optimization_advertisement = self.impose_advertisement_constraint(self.optimization_advertisement)
+ 
+				self.metrics['advertisements'].append(copy.copy(self.optimization_advertisement))
+				self.metrics['grads'].append(self.optimization_advertisement - a_k)
+
+				if self.simulated:
+					# Take a gradient step and update measured paths + probabilities
+					if not np.array_equal(threshold_a(self.optimization_advertisement), threshold_a(self.last_advertisement)):
+						if self.verbose:
+							print("Gradient stepped to a new advertisement, issuing measurement.")
+							print("Changed Indices: {}".format(np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_advertisement)))))
+						self.measure_ingresses(self.optimization_advertisement)
+						opt_adv_on_off = threshold_a(self.optimization_advertisement)
+						self.optimization_advertisement_representation = {}
+						for poppi,prefi in zip(*np.where(opt_adv_on_off)):
+							self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+				else:
+					NUM_PREFS_TRIGGER_CHANGE = 2 # N prefixes change
+					NUM_TOTAL_TRIGGER_CHANGE = 4 # N popps change
+					measured_this_round = False
+					differences = np.where(np.abs(threshold_a(self.optimization_advertisement) - threshold_a(self.last_measured_advertisement)))
+					print("Differences in advertisement so far : {}".format(differences))
+					prefs_changed = {}
+					if len(differences) > 0:
+						## Change in the advertisement, update the actual-deployment-specific tracker
+						opt_adv_on_off = threshold_a(self.optimization_advertisement)
+						self.optimization_advertisement_representation = {}
+						for poppi,prefi in zip(*np.where(opt_adv_on_off)):
+							self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
+
+					for poppi,prefi in zip(*differences):
+						prefs_changed[prefi] = None
+					if len(prefs_changed) >= NUM_PREFS_TRIGGER_CHANGE or len(differences[0]) >= NUM_TOTAL_TRIGGER_CHANGE:
+						print("Indices: {}, Prefixes : {} changed, so measuring now...".format(differences, list(prefs_changed)))
+						self.measure_ingresses(self.optimization_advertisement)
+						self.last_gti = self.calculate_ground_truth_ingress(self.optimization_advertisement)
+						measured_this_round = True
+						self.last_measured_advertisement = self.optimization_advertisement.copy()
+				
+				## measure
+				timers.append(time.time() - t_last)
+				t_last = time.time()
+
+				# Calculate, advertise & measure information about the prefix that would 
+				# give us the most new information
+				if self.verbose:
+					tsmaxinfo = time.time()
+				if self.simulated: ## maybe tmp
+					for maxinfoi in range(self.n_max_info_iter):
+						maximally_informative_advertisement = self.solve_max_information(self.optimization_advertisement)
+						if maximally_informative_advertisement is not None:
+							print("Found an interesting advertisement on iteration {}, so measuring...".format(maxinfoi))
+							self.measure_ingresses(maximally_informative_advertisement)
+						else:
+							if self.verbose:
+								print("No further maximally informative advertisement to measure.")
+							break
+					if self.verbose:
+						print("finding max info took {}s ".format(round(time.time() - tsmaxinfo,2)))
 			
-			## info
-			timers.append(time.time() - t_last)
-			t_last = time.time()
+				## info
+				timers.append(time.time() - t_last)
+				t_last = time.time()
 			
-			if self.simulated:
-				## Check stopping conditions
-				self.stop_tracker(self.optimization_advertisement)
-			else:
-				## Check stopping conditions if we measured this round, to avoid excessive measurements
-				if measured_this_round:
+				if self.simulated:
+					## Check stopping conditions
 					self.stop_tracker(self.optimization_advertisement)
 				else:
-					self.stop_tracker(self.optimization_advertisement, skip_measuring=True)
+					## Check stopping conditions if we measured this round, to avoid excessive measurements
+					if measured_this_round:
+						self.stop_tracker(self.optimization_advertisement)
+					else:
+						self.stop_tracker(self.optimization_advertisement, skip_measuring=True)
 
 
-			self.iter += 1
+				self.iter += 1
 
-			## stop
-			timers.append(time.time() - t_last)
-			t_last = time.time()
+				## stop
+				timers.append(time.time() - t_last)
+				t_last = time.time()
 
-			self.t_per_iter = (time.time() - t_start) / self.iter
-			if self.iter % PRINT_FREQUENCY(self.dpsize) == 0 and self.verbose:
-				print("Optimizing, iter: {}, t_per_iter : {}s, GTO: {}, RD: {}, RDE: {}, {} path measures".format(
-					self.iter, round(self.t_per_iter,2), 
-					self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff,
-					self.path_measures))
+				self.t_per_iter = (time.time() - t_start) / self.iter
+				if self.iter % PRINT_FREQUENCY(self.dpsize) == 0 and self.verbose:
+					print("Optimizing, iter: {}, t_per_iter : {}s, GTO: {}, RD: {}, RDE: {}, {} path measures".format(
+						self.iter, round(self.t_per_iter,2), 
+						self.metrics['actual_nonconvex_objective'][-1],self.rolling_delta, self.rolling_delta_eff,
+						self.path_measures))
 
-				try:
-					self.make_plots()
-				except:
-					import traceback
-					traceback.print_exc()
+					try:
+						self.make_plots()
+					except:
+						import traceback
+						traceback.print_exc()
 
-			for t,lab in zip(timers, ['grads','measure','info','stop']):
-				print("Timer: {} -- {} s".format(lab, round(t,2)))
-			self.calc_times = list(zip(timers, ['grads','measure','info','stop']))
+				for t,lab in zip(timers, ['grads','measure','info','stop']):
+					print("Timer: {} -- {} s".format(lab, round(t,2)))
+				self.calc_times = list(zip(timers, ['grads','measure','info','stop']))
 
-			print("Updated numbers of popps on per prefix.")
-			print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
+				print("Updated numbers of popps on per prefix.")
+				print(np.sum(threshold_a(self.optimization_advertisement),axis=0))
 
-		# Exit training mode before the eval phase touches the same LPs.
-		self._broadcast_training_mode(False)
+		finally:
+			# Exit training mode before the eval phase touches the same LPs.
+			self._broadcast_training_mode(False)
 
 		# After finishing, end the optimization
 		self.output_optimization_state()
