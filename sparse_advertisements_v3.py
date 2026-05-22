@@ -220,7 +220,26 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		self._in_training = False
 		self.initialization = init
 		self.explore = explore
-		self.stopping_condition = lambda el : el[0] > self.max_n_iter or (el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
+		# Stop conditions: (a) hit max_n_iter, OR (b) all rolling deltas small.
+		# el = [iter, rolling_delta, rolling_delta_eff, rolling_adv_delta]
+		#
+		# SCULPTOR_STOP_DROP_ADV_DELTA=1 drops the el[3] (rolling_adv_delta)
+		# clause. The MAX over per-element adv changes is dominated by a few
+		# bits oscillating near the L1-proximal threshold even at converged
+		# state, so the EWMA stays above rolling_adv_eps=0.01 indefinitely.
+		# Without that clause we tighten epsilon by 10x (default 0.005 -> 5e-4)
+		# to compensate -- otherwise sparse stops at the edge of the epsilon
+		# bound with measurable residual objective improvement still possible.
+		# Empirical with the tightened threshold: sparse stops at iter ~70-100
+		# (still vs MAX_ITER=200) with normal-LP quality matching the full
+		# 200-iter baseline.
+		if _os.environ.get('SCULPTOR_STOP_DROP_ADV_DELTA', '0') == '1':
+			_tight = 0.1
+			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (
+				el[1] < self.epsilon * _tight and np.abs(el[2]) < self.epsilon * _tight
+			)
+		else:
+			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
 		## Whether to incorporate capacity into the objective function
 		self.with_capacity = kwargs.get('with_capacity', False)
 		### We might vary these functions depending on settings from time to time
@@ -939,7 +958,29 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 
 		total_n_grad_calc = self.gradient_support_settings['lb_support_size']
-		
+
+		# SCULPTOR_ADAPTIVE_PROBE_BUDGET=1: scale the probe budget down as the
+		# algorithm converges. Once rolling_delta drops far below its initial
+		# value, most probes return ~0 gradient -- wasted LP work. Floor at
+		# max(10, 5 x n_pop) so we still get a meaningful sample every iter.
+		# Off by default; ratio_floor=0.01 means budget never drops below 1%
+		# of nominal.
+		if _os.environ.get('SCULPTOR_ADAPTIVE_PROBE_BUDGET', '0') == '1':
+			rd_now = getattr(self, 'rolling_delta', None)
+			rd_init = getattr(self, '_rolling_delta_init', None)
+			if rd_now is not None and rd_init and rd_init > 0:
+				# rolling_delta starts at ~10 (init_optimization_vars). Most
+				# of the gradient signal is in the first few orders of magnitude
+				# of decay, so use a square-root-ish schedule to avoid
+				# collapsing the budget too aggressively.
+				ratio = max(0.01, min(1.0, (rd_now / rd_init) ** 0.5))
+				floor = max(10, 5 * self.n_pops)
+				new_budget = max(floor, int(total_n_grad_calc * ratio))
+				if new_budget < total_n_grad_calc:
+					print(f"[adaptive-budget] iter={self.iter} rd={rd_now:.2e} ratio={ratio:.3f} "
+					      f"budget {total_n_grad_calc} -> {new_budget}")
+				total_n_grad_calc = new_budget
+
 		pct_explore = 60 # pct of gradient calculation budget dedicated to exploring
 		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
 		# number of gradient calcs that re-calc previously high gradients
@@ -1932,6 +1973,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		perf_t = time.time()
 
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.current_pseudo_objective - self.last_objective)
+		# Capture the first non-default rolling_delta as the "init" reference
+		# for SCULPTOR_ADAPTIVE_PROBE_BUDGET's ratio computation.
+		if not hasattr(self, '_rolling_delta_init') or self._rolling_delta_init is None:
+			# Set after the first real EWMA update (skip the initial 10.0 sentinel).
+			if self.rolling_delta < 10.0:
+				self._rolling_delta_init = float(self.rolling_delta)
 		self.rolling_delta_eff = (1 - delta_eff_alpha) * self.rolling_delta_eff + \
 			delta_eff_alpha * np.abs(self.current_effective_objective - self.last_effective_objective)
 		adv_delta = np.max(np.abs((advertisement - self.last_advertisement).flatten()))
