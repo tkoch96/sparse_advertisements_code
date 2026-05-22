@@ -1,0 +1,101 @@
+{
+  "tag": "fix1",
+  "dpsize": "small",
+  "max_iter": 10,
+  "n_workers": 4,
+  "overall_wall_s": 62.29,
+  "phase_wall_s": {
+    "strategy_compare": 13.16,
+    "pct_volume_within_latency": 0.29,
+    "failure_resilience": 1.58,
+    "volume_multipliers": 1.59,
+    "diurnal": 19.46,
+    "flash_crowd": 26.2
+  },
+  "phase_enter_count": {
+    "strategy_compare": 1,
+    "pct_volume_within_latency": 1,
+    "failure_resilience": 1,
+    "volume_multipliers": 1,
+    "diurnal": 1,
+    "flash_crowd": 1
+  },
+  "crash_info": null,
+  "metrics": {
+    "strategies_with_adv": [
+      "sparse",
+      "anyopt",
+      "painter",
+      "anycast",
+      "one_per_pop",
+      "one_per_peering"
+    ],
+    "failure": {
+      "popp_failures_latency_optimal_specific": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ],
+      "pop_failures_latency_optimal_specific": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "flash_crowd": {
+      "resilience_to_congestion": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "diurnal": {
+      "diurnal": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "pct_volume_within_latency": {
+      "pct_volume_within_latency": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "volume_multipliers": {
+      "volume_multipliers": [
+        "sparse",
+        "anyopt",
+        "painter",
+        "anycast",
+        "one_per_pop",
+        "one_per_peering"
+      ]
+    },
+    "n_tracebacks_in_log": 4,
+    "first_tracebacks": [
+      "Traceback (most recent call last):\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 1267, in make_plots\n    compare_estimated_actual_per_user(self.dpsize)\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 64, in compare_estimated_actual_per_user\n    uis = list(sorted(list(actual_user_lats[itrs[0]])))\n                                            ~~~~^^^\nIndexError: list index out of range\nTimer: grads -- 0.2 s\nTimer: measure -- 0.02 s\nTimer: info -- 0.12 s\nTimer: stop -- 0.08 s\nUpdated numbers of popps on per prefix.\n[51. 13. 19. 18.  3.  0.]",
+      "Traceback (most recent call last):\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 1267, in make_plots\n    compare_estimated_actual_per_user(self.dpsize)\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 64, in compare_estimated_actual_per_user\n    uis = list(sorted(list(actual_user_lats[itrs[0]])))\n                                            ~~~~^^^\nIndexError: list index out of range\nTimer: grads -- 0.22 s\nTimer: measure -- 0.02 s\nTimer: info -- 0.14 s\nTimer: stop -- 0.1 s\nUpdated numbers of popps on per prefix.\n[50. 13. 19. 18.  3.  2.]",
+      "Traceback (most recent call last):\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 1267, in make_plots\n    compare_estimated_actual_per_user(self.dpsize)\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 64, in compare_estimated_actual_per_user\n    uis = list(sorted(list(actual_user_lats[itrs[0]])))\n                                            ~~~~^^^\nIndexError: list index out of range\nTimer: grads -- 0.22 s\nTimer: measure -- 0.02 s\nTimer: info -- 0.27 s\nTimer: stop -- 0.04 s\nUpdated numbers of popps on per prefix.\n[50. 13. 19. 17.  4.  5.]",
+      "Traceback (most recent call last):\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 1267, in make_plots\n    compare_estimated_actual_per_user(self.dpsize)\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 64, in compare_estimated_actual_per_user\n    uis = list(sorted(list(actual_user_lats[itrs[0]])))\n                                            ~~~~^^^\nIndexError: list index out of range\nTimer: grads -- 0.26 s\nTimer: measure -- 0.0 s\nTimer: info -- 0.15 s\nTimer: stop -- 0.04 s\nUpdated numbers of popps on per prefix.\n[50. 13. 19. 17.  5.  8.]\nSaving optimization state, dont exit...\nDone saving\nSCULPTOR_MAX_ITER override active: max_n_iter=10\nSCULPTOR_N_WORKERS override active: n_workers=4\nIn main function computing sub-deployments...\nDone, took 0.00010013580322265625s\nPickling kwa took 3.1948089599609375e-05s\nSCULPTOR_N_WORKERS override active: n_workers=4\nSending/receiving kwa took 0.0053060054779052734s\nPickling subdeployments took 0.0044820308685302734s\nSCULPTOR_N_WORKERS override active: n_workers=4\nSend/rcv subdeployments took 0.02454996109008789s\n[50 13 19 17  5  8]\nStopped train loop on 12, t per iter: 0.59s, 21 path measures, O:3.0617557169493232, RD: 0.7425474357894791, RDE: 0.7425386838054929\nTraceback (most recent call last):\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 1267, in make_plots\n    compare_estimated_actual_per_user(self.dpsize)\n  File \"/Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/dreamy-gauss-475467/sparse_advertisements_v3.py\", line 64, in compare_estimated_actual_per_user\n    uis = list(sorted(list(actual_user_lats[itrs[0]])))\n                                            ~~~~^^^\nIndexError: list index out of range\nActual: NP: 112.0, LB: -10.85, RB: 0, Total: -2.71, Obj: 2.71\nIn outer LB -10.845615461680065\n[ckpt] saved metrics after strategy=sparse \u2192 cache/popp_failure_latency_comparison_small_fix1.pkl"
+    ]
+  },
+  "pkl_path": "cache/popp_failure_latency_comparison_small_fix1.pkl",
+  "log_path": "benchmarks/eval_phase_fix1.log"
+}

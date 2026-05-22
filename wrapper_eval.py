@@ -591,9 +591,16 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 					latency_deltas.append(new_lat - old_lat)
 					vols.append(vol)
 				### structure this as ug,poppi -> val
-				path_to_path_val = {}
-				for path_val, (ug,poppi) in zip(soln_adv['raw_solution'], soln_adv['available_paths']):
-					path_to_path_val[ug,poppi] = path_val
+				## The persistent-LP path returns raw_solution as a dict
+				## {(ug,poppi): vol_amt}; the older non-persistent path returns
+				## it as a numpy array aligned with available_paths. Handle both.
+				raw = soln_adv['raw_solution']
+				if isinstance(raw, dict):
+					path_to_path_val = dict(raw)
+				else:
+					path_to_path_val = {}
+					for path_val, (ug, poppi) in zip(raw, soln_adv['available_paths']):
+						path_to_path_val[ug, poppi] = path_val
 				if previous_hour_solution is not None:
 					## sqrt mean squared difference in traffic assignments
 					total_diff = 0
@@ -736,7 +743,7 @@ def metro_to_diurnal_factor(metro, hour):
 		if hour_of_day < 2:
 			return 0.6
 		elif hour_of_day < 6:
-			return 0.1 * hour_of_day + 0.4 
+			return 0.1 * hour_of_day + 0.4
 		elif hour_of_day < 10:
 			return -0.225 * hour_of_day + 2.35
 		elif hour_of_day < 14:
@@ -745,8 +752,21 @@ def metro_to_diurnal_factor(metro, hour):
 			return 0.5/6 * hour_of_day - 16/15
 		else:
 			return 0.6
-		
-	hour_of_day = (POP2TIMEZONE[metro] + 12 + hour) % 24
+
+	## Synthetic deployments (dpsize='small'/'decent'/'med') use integer metro
+	## indices that aren't in POP2TIMEZONE. Fall back to a deterministic, varied
+	## timezone derived from the metro identifier so each synthetic metro still
+	## peaks at a different time of day -- which is the whole point of this
+	## metric. At actual-N scale, real metro names hit POP2TIMEZONE directly
+	## and behavior is unchanged.
+	try:
+		tz = POP2TIMEZONE[metro]
+	except KeyError:
+		import hashlib
+		# stable across runs/python sessions (Python's builtin hash() isn't)
+		h = int(hashlib.md5(str(metro).encode()).hexdigest()[:8], 16)
+		tz = (h % 24) - 12
+	hour_of_day = (tz + 12 + hour) % 24
 	return diurnal_factor(hour_of_day)
 
 def get_diurnal_deployments(sas, diurnal_intensities):

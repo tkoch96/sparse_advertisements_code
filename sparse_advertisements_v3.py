@@ -1262,13 +1262,17 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def make_plots(self, *args, **kwargs):
 
-		## Takes a while (plots from logs)
+		## Takes a while (plots from logs). These plot helpers fail when the
+		## per-iter log file is sparse (e.g. MAX_ITER=10 / small / fresh cache):
+		## the exception is harmless but spams stderr every SCULPTOR iter.
+		## Silence unless SCULPTOR_VERBOSE_PLOT_ERRORS is set.
 		try:
 			compare_estimated_actual_per_user(self.dpsize)
 			investigate_congestion_events()
-		except:
-			import traceback
-			traceback.print_exc()
+		except Exception:
+			if os.environ.get('SCULPTOR_VERBOSE_PLOT_ERRORS'):
+				import traceback
+				traceback.print_exc()
 		
 
 		n_sp = 9

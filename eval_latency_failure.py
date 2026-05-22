@@ -870,7 +870,10 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 							all_lats[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val][0][0])
 							all_churns[ri].append(metrics['diurnal'][ri][solution]['metrics'][Y_val][X_val][0][1])
 							all_congestions[ri].append(metrics['diurnal'][ri][solution]['fraction_congested_volume'][Y_val][X_val])
-						except KeyError:	
+						except (KeyError, TypeError, IndexError):
+							# TypeError fires when the diurnal phase populated an
+							# empty default (a list) instead of the eval dict --
+							# don't let the plotting kill the whole driver
 							continue
 
 					lat_med = np.average(all_lats[ri])
