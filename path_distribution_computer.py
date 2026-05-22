@@ -238,15 +238,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Distribution is the amount of volume (not percent) placed on each path
 		## a path is specified by a <user, popp>
-		# Batched read on the small active set instead of iterating the
-		# entire var_pool. At decent var_pool grows to ~223k entries
-		# (and the upper bound at actual-32 is ~4M); the active set is
-		# typically a few thousand. The previous code did one Gurobi
-		# `.X` C-call per var in var_pool (incl. the many UB=0 stale
-		# vars whose .X is 0). getAttr-batched is one C-call returning
-		# a list of len(active_vars).
-		x_vals = self.model.getAttr("X", self._last_active_vars)
-		raw_x = {key: x for key, x in zip(self._last_active_paths, x_vals) if x > 1e-7}
+		# Two implementations, gated by SCULPTOR_DISABLE_RAW_X_BATCH so the
+		# bench harness can compare them in one pytest invocation. Default
+		# (unset): batched getAttr("X", active_vars) — one Gurobi C-call
+		# on the small active set. Set: legacy per-var .X loop over the
+		# entire var_pool (which grows to 100k-2M entries at scale).
+		if os.environ.get('SCULPTOR_DISABLE_RAW_X_BATCH'):
+			raw_x = {key: var.X for key, var in self.var_pool.items() if var.X > 1e-7}
+		else:
+			x_vals = self.model.getAttr("X", self._last_active_vars)
+			raw_x = {key: x for key, x in zip(self._last_active_paths, x_vals) if x > 1e-7}
 	
 		# Initialize result containers
 		lats_by_ug_arr = np.zeros(self.whole_deployment_n_ug)
