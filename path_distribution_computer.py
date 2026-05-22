@@ -232,9 +232,30 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
 
 		if model_res is None:
-			print("Infeasible problem, exiting")
-			exit(0)
-			return {'solved': False}
+			# LP is infeasible (e.g. failure scenario removed the last route
+			# for some users). Used to call exit(0), which killed the Ray
+			# actor and propagated as RayActorError -> caught silently by
+			# the per-strategy try/except in eval_latency_failure ->
+			# strategy's failure-mode fields stayed empty for every
+			# strategy. Suspected root cause of the actual-32 failure-eval
+			# data loss called out in HANDOFF_SESSION_6.md.
+			#
+			# Return a "no-route" sentinel: every UG gets NO_ROUTE_LATENCY,
+			# fraction_congested_volume=1.0, empty path mappings. Downstream
+			# consumers (assess_failure_resilience, flash-crowd, diurnal)
+			# already treat NO_ROUTE_LATENCY as the infeasible signal.
+			print("Infeasible problem, returning no-route sentinel (was exit(0))")
+			n_ug = self.whole_deployment_n_ug
+			return {
+				"objective": NO_ROUTE_LATENCY,
+				"raw_solution": {},
+				"paths_by_ug": {},
+				"lats_by_ug": np.full(n_ug, NO_ROUTE_LATENCY, dtype=float),
+				"available_paths": [],
+				"solved": False,
+				"vols_by_poppi": {pi: 0.0 for pi in range(len(self.static_caps))},
+				"fraction_congested_volume": 1.0,
+			}
 
 		## Distribution is the amount of volume (not percent) placed on each path
 		## a path is specified by a <user, popp>
