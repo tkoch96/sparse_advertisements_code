@@ -180,6 +180,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		active_vars = [self.var_pool[ug, poppi] for ug, poppi in available_paths]
 		self.model.setAttr("UB", active_vars, [gp.GRB.INFINITY] * len(active_vars))
 		self.model.setAttr("Obj", active_vars, obj_coeffs)
+		# Stash for solve_generic_lp_persistent's raw_x extraction:
+		# iterating self.var_pool there (which can hit 100k-1M entries
+		# in production) and doing a Gurobi `.X` API call per var costs
+		# tens of ms per LP solve at scale. Instead, batch-read X from
+		# the small active set using getAttr("X", active_vars) — one
+		# C-call, results in a numpy/list of len(active_vars).
+		self._last_active_paths = available_paths
+		self._last_active_vars = active_vars
 
 		self.timing['solve_unified_lp_not_optimize'] += time.time() - ts
 		ts = time.time()
@@ -230,7 +238,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Distribution is the amount of volume (not percent) placed on each path
 		## a path is specified by a <user, popp>
-		raw_x = {key: var.X for key, var in self.var_pool.items() if var.X > 1e-7}
+		# Batched read on the small active set instead of iterating the
+		# entire var_pool. At decent var_pool grows to ~223k entries
+		# (and the upper bound at actual-32 is ~4M); the active set is
+		# typically a few thousand. The previous code did one Gurobi
+		# `.X` C-call per var in var_pool (incl. the many UB=0 stale
+		# vars whose .X is 0). getAttr-batched is one C-call returning
+		# a list of len(active_vars).
+		x_vals = self.model.getAttr("X", self._last_active_vars)
+		raw_x = {key: x for key, x in zip(self._last_active_paths, x_vals) if x > 1e-7}
 	
 		# Initialize result containers
 		lats_by_ug_arr = np.zeros(self.whole_deployment_n_ug)

@@ -207,19 +207,45 @@ def test_bench_calc_compressed_lb(worker_factory, real_init_advertisement,
                                    dpsize, seed, n_perms):
     """Time the worker's calc_compressed_lb on a real deployment.
 
-    Run twice: cold (worker fresh) and warm (caches populated). Print
-    a structured timing block + the per-key cumulative timing summary
-    so a baseline can be recorded before changing internals.
+    Run a series of distinct warmup batches first (different advertisement
+    + perturbation seed each) so var_pool grows to a representative
+    production size. Then run the cold-measured batch on a fully-warmed-
+    up Gurobi shell. This is critical because at production scale
+    var_pool has 100k-1M entries, and any optimization that interacts
+    with `for var in var_pool.items()` or `setAttr(UB, all_vars, ...)`
+    must be measured against that size.
     """
     worker = worker_factory(dpsize, seed, n_prefixes=6)
-    deployment = worker.whole_deployment_ugs  # for cache invalidation
-    # Reset persistent caches that accumulate across calls in production.
+    # Reset transient caches that accumulate across calls in production.
     if hasattr(worker, 'pattern_cache'):
         worker.pattern_cache = {}
     if hasattr(worker, 'calc_cache'):
         worker.calc_cache.clear_all_caches()
+
+    # ----- WARMUP -----
+    # Do N_WARMUP distinct LP batches so var_pool reaches a representative
+    # size before we measure. Each warmup batch uses a DIFFERENT
+    # advertisement seed so the routing distribution is different,
+    # broadening the (ug, poppi) coverage in var_pool.
+    N_WARMUP = 5
+    for w_i in range(N_WARMUP):
+        w_adv = real_init_advertisement(
+            {'popps': worker.popps}, n_prefixes=6, mode='normal',
+            seed=seed * 100 + w_i)
+        w_rng = np.random.default_rng(seed * 100 + w_i)
+        w_data = make_calc_compressed_lb_batch(w_adv, n_perms=min(n_perms, 32), perm_rng=w_rng)
+        np.random.seed(42 + w_i)
+        worker._cmd_calc_compressed_lb(w_data)
+    print(f"  [warmup] var_pool after {N_WARMUP} prep batches: {len(worker.var_pool)}")
+
+    # Reset accumulators between warmup and the measurement so we capture
+    # only the measured-batch time.
     for k in worker.timing:
         worker.timing[k] = 0.0
+    if hasattr(worker, 'pattern_cache'):
+        worker.pattern_cache = {}
+    if hasattr(worker, 'calc_cache'):
+        worker.calc_cache.clear_all_caches()
 
     # Build the advertisement from the same seed convention as v3.py
     # init_advertisement does — guarantees reproducibility.
@@ -252,8 +278,10 @@ def test_bench_calc_compressed_lb(worker_factory, real_init_advertisement,
     cold_fp = fingerprint_results(ret_cold)
     warm_fp = fingerprint_results(ret_warm)
 
+    var_pool_size = len(worker.var_pool) if hasattr(worker, 'var_pool') else -1
     print(f"\n[bench] dpsize={dpsize} seed={seed} n_perms={n_perms}")
     print(f"  cold: {cold_s:.3f}s    warm: {warm_s:.3f}s    speedup: {cold_s/max(warm_s, 1e-6):.1f}x")
+    print(f"  var_pool size after this batch: {var_pool_size} (n_ugs={worker.whole_deployment_n_ug}, n_popps={worker.n_popps})")
     print(f"  cold-breakdown:")
     for k in sorted(cold_breakdown, key=lambda k: -cold_breakdown[k]):
         if cold_breakdown[k] > 0.001:
