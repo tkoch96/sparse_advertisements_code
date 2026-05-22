@@ -252,10 +252,19 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 	# strategies the cache would otherwise grow to ~25 GB of per-LP result
 	# dicts on the driver, OOM-ing the head. See wrapper_eval.py header for
 	# the memory writeup.
+	#
+	# light_result=True: this function only reads lats_by_ug,
+	# fraction_congested_volume, and (selectively for catchment UGs)
+	# paths_by_ug from each LP result. raw_solution + available_paths are
+	# ~80% of each per-LP result's memory at actual-32; stripping them on
+	# driver receive cuts per-strategy peak from ~10 GB to ~2 GB. This was
+	# the OOM cause on the cluster head during the actual-32 eval-resume
+	# (RSS climbed 11 -> 53 GB over 3 strategy iterations before being
+	# killed at 55 GB / 6 GB available).
 	if use_lagrange:
-		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, worker_cmd='solve_lp_lagrange', cache_key='lagrange', cache_res=False, **kwargs)
+		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, worker_cmd='solve_lp_lagrange', cache_key='lagrange', cache_res=False, light_result=True, **kwargs)
 	else:
-		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False, **kwargs)
+		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False, light_result=True, **kwargs)
 
 	for i,iteri in enumerate(iterover):	
 

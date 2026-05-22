@@ -6,6 +6,40 @@ from solve_lp_assignment import *
 import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
 from sparse_advertisements_v3 import *
 
+
+def _release_memory(label=""):
+	"""Force GC + return freed heap pages back to the OS.
+
+	Python's per-strategy peak memory in the failure-eval phase is ~2 GB
+	even with light_result stripping, but glibc malloc doesn't return
+	freed pages to the OS by default. Across 6 strategies that's enough
+	monotonic RSS growth to OOM the 64 GB cluster head -- which is exactly
+	what we observed on the first actual-32 eval-resume attempt (RSS
+	climbed 11 -> 53 GB before we aborted).
+	"""
+	import gc
+	gc.collect()
+	try:
+		import ctypes
+		ctypes.CDLL("libc.so.6").malloc_trim(0)
+	except (OSError, AttributeError):
+		# macOS / non-glibc: malloc_trim isn't available. gc.collect()
+		# alone is still useful (it forces refcount cycles to be reaped).
+		pass
+	if label:
+		try:
+			import resource
+			import sys as _sys
+			raw = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+			# Linux: ru_maxrss is KB. macOS: ru_maxrss is bytes.
+			if _sys.platform == 'darwin':
+				rss_gb = raw / (1024.0 ** 3)
+			else:
+				rss_gb = raw / (1024.0 ** 2)
+			print(f"[mem-release] {label}: peak RSS ~ {rss_gb:.2f} GB")
+		except Exception:
+			pass
+
 def calc_pct_volume_within_latency(sas, adv):
 	routed_through_ingress, _ = sas.calculate_ground_truth_ingress(adv)
 	## want latency -> amt of volume that can reach popp within that latency / amt of volume that could possibly reach it
@@ -322,6 +356,10 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 						metrics['popp_failures_sticky_latency_optimal_specific'][random_iter][solution] = ret['sticky']['latency_delta_specific']
 						metrics['popp_failures_sticky_latency_before'][random_iter][solution] = ret['sticky']['latency_delta_before']
 
+						# Free the popps ret dict before allocating the pops one, so
+						# both don't sit simultaneously in memory.
+						del ret
+
 						ret = assess_failure_resilience(sas, adv, which='pops')
 						metrics['pop_failures_congestion'][random_iter][solution] = ret['mutable']['congestion_delta']
 						metrics['pop_failures_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
@@ -332,10 +370,25 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 						metrics['pop_failures_sticky_latency_optimal'][random_iter][solution] = ret['sticky']['latency_delta_optimal']
 						metrics['pop_failures_sticky_latency_optimal_specific'][random_iter][solution] = ret['sticky']['latency_delta_specific']
 						metrics['pop_failures_sticky_latency_before'][random_iter][solution] = ret['sticky']['latency_delta_before']
+						del ret
 					except:
 						import traceback
 						traceback.print_exc()
 						continue
+					finally:
+						# Return per-strategy LP heap back to OS so RSS doesn't
+						# monotonically grow across the 6 strategies. Also
+						# checkpoint the metrics pickle so a later OOM doesn't
+						# wipe out completed strategies (mirrors the
+						# on_strategy_complete pattern from
+						# compare_different_solutions).
+						_release_memory(label=f"after failure-eval strategy={solution}")
+						try:
+							pickle.dump(metrics, open(performance_metrics_fn, 'wb'))
+							print(f"[ckpt] saved metrics after failure-eval strategy={solution}")
+						except Exception:
+							import traceback
+							traceback.print_exc()
 
 
 		if changed:

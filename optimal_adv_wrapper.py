@@ -317,6 +317,27 @@ class Optimal_Adv_Wrapper:
 						self.linear_prog_soln_cache[cache_key][cache_rep, False] = ret
 			return all_rets
 
+		# light_result=True: caller only needs the small fields (lats_by_ug,
+		# fraction_congested_volume, paths_by_ug). Strip the heavy fields
+		# (raw_solution, available_paths, vols_by_poppi, solved, objective)
+		# from each LP result before storing in all_rets. At actual-32 each
+		# raw_solution+available_paths is ~1.5 MB; with 1622 results per
+		# failure_resilience call that's ~2.4 GB of dead weight per strategy
+		# that otherwise accumulates in driver RSS (glibc heap fragmentation
+		# prevents return-to-OS even after lp_rets goes out of scope). Used
+		# by assess_failure_resilience and similar eval phases that don't
+		# read the heavy fields.
+		light_result = kwargs.get('light_result', False)
+		LIGHT_KEEP_FIELDS = {'lats_by_ug', 'fraction_congested_volume', 'paths_by_ug'}
+
+		def _maybe_strip(answer):
+			if not light_result or not isinstance(answer, dict):
+				return answer
+			for k in list(answer.keys()):
+				if k not in LIGHT_KEEP_FIELDS:
+					answer.pop(k, None)
+			return answer
+
 		if len(advs) > 0:
 			max_n_in_flight = 350
 			n_advs = len(advs)
@@ -331,6 +352,7 @@ class Optimal_Adv_Wrapper:
 				for worker_i, ret in from_workers.items():
 					for tr in ret:
 						adv_i, answer = tr
+						answer = _maybe_strip(answer)
 						all_rets[adv_i] = answer
 						if kwargs.get('cache_res', False):
 							cache_rep = adv_i_to_cache_rep[adv_i]
