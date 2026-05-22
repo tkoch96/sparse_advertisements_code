@@ -333,6 +333,33 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					sas.update_deployment(deployment)
 				changed=True
 
+				# Compute one-per-peering reference LPs once and share across
+				# all strategies. The OPP-ref LP depends only on
+				# (which, failed_popp_or_pop), not on the strategy -- so the
+				# legacy assess_failure_resilience was solving the same set
+				# of 811 reference LPs 6 times (once per strategy). At
+				# actual-32 that's ~3900 redundant LP solves per phase.
+				# Skip the precompute if every remaining strategy is already
+				# in the metrics pickle (resume case).
+				strats_needing_work = [
+					s for s in soln_types
+					if RECALC_FAILURE_METRICS
+					or metrics[k_of_interest][random_iter][s] == default_metrics[k_of_interest][0][s]
+				]
+				opp_refs_popps = None
+				opp_refs_pops = None
+				if len(strats_needing_work) > 0:
+					print("[opp-ref] precomputing one-per-peering reference LPs for {} strategies".format(
+						len(strats_needing_work)))
+					t0 = time.time()
+					opp_refs_popps = precompute_one_per_peering_failure_lps(sas, which='popps')
+					print("[opp-ref] popps precompute: {:.1f}s ({} scenarios)".format(
+						time.time() - t0, len(opp_refs_popps)))
+					t0 = time.time()
+					opp_refs_pops = precompute_one_per_peering_failure_lps(sas, which='pops')
+					print("[opp-ref] pops precompute: {:.1f}s ({} scenarios)".format(
+						time.time() - t0, len(opp_refs_pops)))
+
 				for solution in soln_types:
 					if not RECALC_FAILURE_METRICS:
 						if metrics[k_of_interest][random_iter][solution]  != \
@@ -345,7 +372,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 						print("No solution for {}".format(solution))
 						continue
 					try:
-						ret = assess_failure_resilience(sas, adv, which='popps')
+						ret = assess_failure_resilience(sas, adv, which='popps', opp_ref_results=opp_refs_popps)
 						metrics['popp_failures_congestion'][random_iter][solution] = ret['mutable']['congestion_delta']
 						metrics['popp_failures_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
 						metrics['popp_failures_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']
@@ -360,7 +387,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 						# both don't sit simultaneously in memory.
 						del ret
 
-						ret = assess_failure_resilience(sas, adv, which='pops')
+						ret = assess_failure_resilience(sas, adv, which='pops', opp_ref_results=opp_refs_pops)
 						metrics['pop_failures_congestion'][random_iter][solution] = ret['mutable']['congestion_delta']
 						metrics['pop_failures_latency_optimal'][random_iter][solution] = ret['mutable']['latency_delta_optimal']
 						metrics['pop_failures_latency_optimal_specific'][random_iter][solution] = ret['mutable']['latency_delta_specific']

@@ -973,7 +973,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
 				self.check_load_rw_measure_wrapper()
 
-				rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
+				# do_cache=True populates calc_cache.all_caches['gti'] so
+				# subsequent LP calls whose adv shares per-prefix active sets
+				# can short-circuit the O(prefixes x ugs x active_popps) rti
+				# recompute. Failure-eval scenarios differ from a base adv by
+				# only one popp row being zeroed, so most prefixes' cache_rep
+				# tuples are unchanged across the 1622 scenarios -> high
+				# hit rate. The cache is wiped when update_dep=True forces
+				# clear_caches above, so flash_crowd/diurnal (different dep
+				# per call) don't accumulate stale entries.
+				rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=True)
 				this_ret = solve_generic_lp_with_failure_catch(self, rti, deployment.get('generic_objective'))
 				if update_dep:
 					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)

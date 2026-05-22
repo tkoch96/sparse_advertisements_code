@@ -182,7 +182,46 @@ def assess_failure_resilience_one_per_peering(sas, adv, which='popps'):
 
 	return ret
 
-def assess_failure_resilience(sas, adv, which='popps', **kwargs):
+def precompute_one_per_peering_failure_lps(sas, which='popps', **kwargs):
+	"""LP-solve every failure scenario under a one-per-peering advertisement.
+
+	The result depends ONLY on (which, failed_popp_or_pop), not on the
+	strategy being evaluated. So we compute these reference LPs once per
+	failure-eval session and share them across all 6 strategies, instead
+	of recomputing inside every assess_failure_resilience call.
+
+	At actual-32 this saves ~50% of failure-eval LP work: each of the ~811
+	failure scenarios was being solved 6 extra times (once per strategy)
+	for the OPP reference, in addition to the strategy-specific LP. With
+	this dedup, OPP-ref LPs run once and the per-strategy work is half.
+
+	Returns dict {iteri: lp_result} where lp_result is the light_result
+	form (just lats_by_ug + fraction_congested_volume + paths_by_ug;
+	paths_by_ug is unused for OPP-refs but kept by the worker default).
+	"""
+	if which == 'popps':
+		iterover = sas.popps
+	else: # pops
+		iterover = sas.pops
+	dep = sas.output_deployment()
+	call_args = []
+	for iteri in iterover:
+		one_per_peer_adv = np.eye(sas.n_popps)
+		if which == 'popps':
+			one_per_peer_adv[sas.popp_to_ind[iteri],:] = 0
+		else:
+			for popp in sas.popps:
+				if popp[0] == iteri:
+					one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
+		call_args.append((one_per_peer_adv, dep, False))
+	# Use the same light_result + cache_res=False discipline as
+	# assess_failure_resilience.
+	lp_rets = sas.solve_lp_with_failure_catch_mp(
+		call_args, cache_res=False, light_result=True, **kwargs)
+	return {iteri: lp_rets[i] for i, iteri in enumerate(iterover)}
+
+
+def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **kwargs):
 	ret = {redirection_mode: {'congestion_delta': [], 'latency_delta_optimal': [], 'latency_delta_before': [], 'latency_delta_specific': []}
 		for redirection_mode in ['sticky', 'mutable']}
 	if which == 'popps':
@@ -196,6 +235,16 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 
 	use_penalty = kwargs.get('penalty', False)
 	use_lagrange = kwargs.get('lagrange', False)
+
+	# If the caller didn't precompute one-per-peering reference LPs (the
+	# fast path used by the failure-eval phase loop), compute them inline
+	# so this function remains correct for one-off callers. Strategy-loop
+	# callers pass opp_ref_results=precompute_one_per_peering_failure_lps(...)
+	# to amortize the work across all 6 strategies.
+	have_precomputed_opp = opp_ref_results is not None
+	if not have_precomputed_opp and not use_penalty:
+		opp_ref_results = precompute_one_per_peering_failure_lps(
+			sas, which=which, **{k: v for k, v in kwargs.items() if k != 'penalty' and k != 'lagrange'})
 
 	for ugi in ug_catchments:
 		ug = sas.ugs[ugi]
@@ -212,6 +261,9 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 				except KeyError:
 					iteri_to_ugs[iteri[0]] = [(ug,v)]
 
+	# Per-scenario strategy-specific call_args. With opp_ref_results, we
+	# emit ONE call per scenario (the failed-strategy adv). The legacy
+	# path (use_penalty + no precompute) emits two interleaved calls.
 	for i,iteri in enumerate(iterover):
 		adv_cpy = np.copy(adv)
 		if which == 'popps':
@@ -222,58 +274,51 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 			adv_cpy[these_popps,:] = 0
 		## q: what is latency experienced for these ugs compared to optimal?
 		if use_penalty:
+			# Legacy two-call-per-scenario penalty path. Not used by the
+			# failure-eval phase loop in eval_latency_failure.py.
 			opt_adv = np.eye(sas.n_popps)
 			if which == 'popps':
 				opt_adv[sas.popp_to_ind[iteri],:] = 0
 			else:
 				these_popps = np.array([sas.popp_to_ind[popp] for popp in sas.popps if popp[0] == iteri])
 				opt_adv[these_popps,:] = 0
-			call_args.append((adv_cpy, opt_adv, dep, i%20==0))
+			call_args.append((adv_cpy, opt_adv, dep, False))
+			one_per_peer_adv = np.eye(sas.n_popps)
+			if which == 'popps':
+				one_per_peer_adv[sas.popp_to_ind[iteri],:] = 0
+			else:
+				for popp in sas.popps:
+					if popp[0] == iteri:
+						one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
+			call_args.append((one_per_peer_adv, dep, False))
 		else:
-			call_args.append((adv_cpy, dep, i%20==0))
+			# Fast path: only failed-strategy adv per scenario. The OPP-ref
+			# result comes from opp_ref_results (precomputed once, shared
+			# across all strategies in the phase loop).
+			call_args.append((adv_cpy, dep, False))
 
-		## best user latencies is not necessarily just lowest latency
-		## need to factor in capacity
-		one_per_peer_adv = np.eye(sas.n_popps)
-		if which == 'popps':
-			one_per_peer_adv[sas.popp_to_ind[iteri],:] = 0
-		else:
-			for popp in sas.popps:
-				if popp[0] == iteri:
-					one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
-		call_args.append((one_per_peer_adv, dep, i%20==0))
-	
 	base_soln = sas.solve_lp_with_failure_catch(adv)
 	base_user_latencies = base_soln['lats_by_ug']
 
-	# cache_res=False here: every failure scenario emits a unique cache_rep
-	# (one row of the eye matrix differs per failure), so caching gives 0
-	# hit-rate and only memory cost. At actual-32 with ~1600 scenarios x 6
-	# strategies the cache would otherwise grow to ~25 GB of per-LP result
-	# dicts on the driver, OOM-ing the head. See wrapper_eval.py header for
-	# the memory writeup.
-	#
-	# light_result=True: this function only reads lats_by_ug,
-	# fraction_congested_volume, and (selectively for catchment UGs)
-	# paths_by_ug from each LP result. raw_solution + available_paths are
-	# ~80% of each per-LP result's memory at actual-32; stripping them on
-	# driver receive cuts per-strategy peak from ~10 GB to ~2 GB. This was
-	# the OOM cause on the cluster head during the actual-32 eval-resume
-	# (RSS climbed 11 -> 53 GB over 3 strategy iterations before being
-	# killed at 55 GB / 6 GB available).
+	# See assess_failure_resilience header / clear_lp_caches docstring for
+	# why cache_res=False and light_result=True here.
 	if use_lagrange:
 		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, worker_cmd='solve_lp_lagrange', cache_key='lagrange', cache_res=False, light_result=True, **kwargs)
 	else:
 		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False, light_result=True, **kwargs)
 
-	for i,iteri in enumerate(iterover):	
+	for i,iteri in enumerate(iterover):
 
 		## q: what is latency experienced for these ugs compared to optimal?
-		this_soln = lp_rets[i*2]
+		if use_penalty:
+			this_soln = lp_rets[i*2]
+			best_soln = lp_rets[i*2+1]
+		else:
+			this_soln = lp_rets[i]
+			best_soln = opp_ref_results[iteri]
 		user_latencies = this_soln['lats_by_ug']
 		## best user latencies is not necessarily just lowest latency
 		## need to factor in capacity
-		best_soln = lp_rets[i*2+1]
 		best_user_latencies = best_soln['lats_by_ug']
 
 		ret['mutable']['congestion_delta'].append(this_soln['fraction_congested_volume'] - best_soln['fraction_congested_volume'])
