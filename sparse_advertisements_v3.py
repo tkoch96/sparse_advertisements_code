@@ -1,6 +1,9 @@
 import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, warnings, tqdm, glob
 import gurobipy as gp
 from subprocess import call, check_output
+import concurrent.futures
+import multiprocessing as _mp
+import os as _os
 np.setbufsize(262144*8)
 np.set_printoptions(precision=3)
 # np.random.seed(31415)
@@ -143,6 +146,65 @@ def investigate_congestion_events():
 	plt.savefig("figures/reported_failure_events_during_training.pdf")
 	plt.clf()
 	plt.close()
+
+
+# Strategies that can run in an isolated subprocess (no Ray workers needed).
+# Their solve_X methods only use local single-LP via solve_lp_assignment +
+# pure-Python heuristics, so they parallelize with sparse cleanly.
+#
+# 'anyopt' is included even though its monte-carlo phase normally uses
+# solve_lp_with_failure_catch_mp (which needs Ray workers): the mp method
+# falls back to serial single-LP when worker_manager is None. Slower than
+# the Ray path but lets anyopt overlap with sparse. At actual-N the 100-MC
+# serial cost is ~100s of single-LP -- still a win against sparse running
+# for hours in the main process.
+_PARALLEL_STRATEGY_NAMES = frozenset({
+	'painter', 'anyopt', 'one_per_pop', 'anycast', 'random', 'one_per_peering',
+})
+
+
+def _solve_one_strategy_in_subprocess(strategy_name, deployment, init_kwa,
+                                      kwargs_for_solve):
+	"""Module-level worker for ProcessPoolExecutor.
+
+	Each subprocess constructs its OWN Sparse_Advertisement_Eval without
+	a worker_manager. The cheap strategies only need local LP (which uses
+	in-process Gurobi via solve_lp_assignment, no Ray), so we sidestep the
+	whole worker pool. Returns (strategy_name, solution_dict).
+	"""
+	# Defensive: never recurse into parallel mode inside a subprocess.
+	_os.environ['SCULPTOR_DISABLE_PARALLEL_STRATEGIES'] = '1'
+
+	# Re-import inside the fork-child to make sure we hit the module-state-
+	# fresh code path. With fork start method this is essentially a no-op
+	# since the imports are inherited, but it shields against spawn fallback.
+	from sparse_advertisements_v3 import Sparse_Advertisement_Eval
+
+	sas = Sparse_Advertisement_Eval(deployment, **init_kwa)
+	sas.update_deployment(deployment)
+	# solve_X methods write into sas.solutions, which is normally initialised
+	# inside compare_different_solutions; we're bypassing that here so do it
+	# manually.
+	sas.solutions = {}
+
+	solve_fns = {
+		'painter': sas.solve_painter,
+		'anyopt': sas.solve_anyopt,
+		'one_per_pop': sas.solve_one_per_pop,
+		'anycast': sas.solve_anycast,
+		'random': sas.solve_random,
+		'one_per_peering': sas.solve_one_per_peering,
+	}
+	if strategy_name not in solve_fns:
+		raise ValueError("strategy {} not parallelizable".format(strategy_name))
+
+	t0 = time.time()
+	solve_fns[strategy_name](**kwargs_for_solve)
+	elapsed = time.time() - t0
+	soln = sas.solutions[strategy_name]
+	soln['_subprocess_wall'] = elapsed
+	return strategy_name, soln
+
 
 class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def __init__(self, *args, init={'type':'using_objective'}, explore='bimodality',
@@ -646,7 +708,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 
 	def compare_different_solutions(self, **kwargs):
 		verbose = kwargs.get('verbose', True)
-		
+
 		if kwargs.get('soln_types') is not None:
 			solution_types = kwargs.get('soln_types')
 		else:
@@ -677,57 +739,124 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 		# completes (e.g. so a crash during painter doesn't lose the already-
 		# computed SCULPTOR advertisement). Receives (solution_type, metrics).
 		on_strategy_complete = kwargs.get('on_strategy_complete', None)
+
+		# Parallelism gate. When enabled (default), each non-sparse strategy
+		# runs in an isolated fork()'d subprocess concurrently with sparse.
+		# Cheap strategies don't need Ray workers -- they only use local
+		# single-LP solves via solve_lp_assignment. Disable via env var or
+		# kwargs for serial behavior (e.g. for debugging).
+		parallel_enabled = (
+			self.simulated  # subprocess path is only validated for simulated mode
+			and not _os.environ.get('SCULPTOR_DISABLE_PARALLEL_STRATEGIES')
+			and not kwargs.get('disable_parallel_strategies', False)
+		)
+
+		def _record_simulated(solution_type, soln):
+			"""Pull the per-strategy fields from a solution dict into metrics."""
+			metrics['sparse_objective_vals'][solution_type].append(soln['objective'])
+			metrics['n_advs'][solution_type].append(soln.get('n_advs', 1))
+			metrics['adv_solns'][solution_type].append(soln['advertisement'])
+			metrics['latency_benefits'][solution_type].append(soln['latency_benefit'])
+			metrics['norm_penalties'][solution_type].append(soln['norm_penalty'])
+			metrics['prefix_cost'][solution_type].append(soln['prefix_cost'])
+			adv = soln['advertisement']
+			# These two metrics need a working SAS to compute (they call
+			# get_ground_truth_user_latencies / get_ground_truth_latency_benefit
+			# on the *main-process* SAS, which has the real deployment loaded).
+			metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
+			metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
+
+		def _record_actual(solution_type, soln):
+			metrics['sparse_objective_vals'][solution_type].append(soln['objective'])
+			metrics['n_advs'][solution_type].append(soln.get('n_advs', 1))
+			metrics['adv_solns'][solution_type].append(soln['advertisement'])
+			metrics['adv_representation_solns'][solution_type].append(
+				soln.get('advertisement_representation', {}))
+			metrics['latency_benefits'][solution_type].append(soln['latency_benefit'])
+			metrics['norm_penalties'][solution_type].append(soln['norm_penalty'])
+			metrics['prefix_cost'][solution_type].append(soln['prefix_cost'])
+
+		_record = _record_simulated if self.simulated else _record_actual
+
+		def _fire_callback(solution_type):
+			if on_strategy_complete is None: return
+			try:
+				on_strategy_complete(solution_type, metrics)
+			except Exception:
+				import traceback
+				traceback.print_exc()
+
 		for i in range(kwargs.get('n_run', 50)):
 			if verbose:
 				print("Comparing different solutions iteration {}".format(i))
-			for solution_type in solution_types:
+
+			# Partition: serial-in-main runs anything that needs Ray workers
+			# (sparse), plus everything in non-simulated mode (which we haven't
+			# validated subprocess-safe yet). Parallel-in-subprocess gets the
+			# cheap strategies in simulated mode.
+			if parallel_enabled:
+				serial_types = [s for s in solution_types if s not in _PARALLEL_STRATEGY_NAMES]
+				parallel_types = [s for s in solution_types if s in _PARALLEL_STRATEGY_NAMES]
+			else:
+				serial_types = list(solution_types)
+				parallel_types = []
+
+			# Launch parallel subprocesses BEFORE sparse so they run truly
+			# concurrently with the main-process sparse solve.
+			executor = None
+			futures = {}
+			if parallel_types:
+				ctx = _mp.get_context('fork')
+				executor = concurrent.futures.ProcessPoolExecutor(
+					max_workers=len(parallel_types), mp_context=ctx)
+				deployment_for_sub = self.output_deployment()
+				init_kwa_for_sub = self.get_init_kwa()
+				# Strip kwargs that don't apply (the subprocess builds its own
+				# SAS so things like on_strategy_complete shouldn't propagate).
+				sub_kwargs = {k: v for k, v in kwargs.items()
+					if k not in {'on_strategy_complete', 'soln_types', 'verbose'}}
 				if verbose:
-					print("\n---solving {}---\n".format(solution_type))
-				if not self.simulated:
-					try:
-						solve_fns[solution_type](**kwargs)
-						metrics['sparse_objective_vals'][solution_type].append(self.solutions[solution_type]['objective'])
-						metrics['n_advs'][solution_type].append(self.solutions[solution_type]['n_advs'])
-						metrics['adv_solns'][solution_type].append(self.solutions[solution_type]['advertisement'])
-						metrics['adv_representation_solns'][solution_type].append(self.solutions[solution_type]['advertisement_representation'])
-						metrics['latency_benefits'][solution_type].append(self.solutions[solution_type]['latency_benefit'])
-						metrics['norm_penalties'][solution_type].append(self.solutions[solution_type]['norm_penalty'])
-						metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
+					print("[parallel] launching {} non-sparse strategies in subprocesses: {}".format(
+						len(parallel_types), parallel_types))
+				for s in parallel_types:
+					fut = executor.submit(
+						_solve_one_strategy_in_subprocess,
+						s, deployment_for_sub, init_kwa_for_sub, sub_kwargs)
+					futures[fut] = s
 
+			# Run serial strategies (sparse) in main process with full Ray pool.
+			for solution_type in serial_types:
+				if verbose:
+					print("\n---solving {} (main process)---\n".format(solution_type))
+				try:
+					solve_fns[solution_type](**kwargs)
+					_record(solution_type, self.solutions[solution_type])
+				except Exception:
+					import traceback
+					traceback.print_exc()
+					print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
+				_fire_callback(solution_type)
 
-						# adv = self.solutions[solution_type]['advertisement']
-						# metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
-						# metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
-					except:
-						import traceback
-						traceback.print_exc()
-				else:
-					try:
-						solve_fns[solution_type](**kwargs)
-						metrics['sparse_objective_vals'][solution_type].append(self.solutions[solution_type]['objective'])
-						metrics['n_advs'][solution_type].append(self.solutions[solution_type]['n_advs'])
-						metrics['adv_solns'][solution_type].append(self.solutions[solution_type]['advertisement'])
-						metrics['latency_benefits'][solution_type].append(self.solutions[solution_type]['latency_benefit'])
-						metrics['norm_penalties'][solution_type].append(self.solutions[solution_type]['norm_penalty'])
-						metrics['prefix_cost'][solution_type].append(self.solutions[solution_type]['prefix_cost'])
+			# Collect parallel results as they complete.
+			for fut in concurrent.futures.as_completed(futures):
+				solution_type = futures[fut]
+				try:
+					_, soln = fut.result()
+					self.solutions[solution_type] = soln
+					if verbose:
+						sub_wall = soln.get('_subprocess_wall')
+						if sub_wall is not None:
+							print("[parallel] {} finished in {:.2f}s (subprocess)".format(
+								solution_type, sub_wall))
+					_record(solution_type, soln)
+				except Exception:
+					import traceback
+					traceback.print_exc()
+					print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
+				_fire_callback(solution_type)
 
-
-						adv = self.solutions[solution_type]['advertisement']
-						metrics['painter_objective_vals'][solution_type].append(self.painter_objective(adv))
-						metrics['anyopt_objective_vals'][solution_type].append(self.anyopt_objective(adv))
-					except Exception:
-						# Don't abort the whole comparison if one strategy fails.
-						# Without this, a painter / anyopt crash after a successful
-						# sparse solve loses the sparse advertisement entirely.
-						import traceback
-						traceback.print_exc()
-						print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
-				if on_strategy_complete is not None:
-					try:
-						on_strategy_complete(solution_type, metrics)
-					except Exception:
-						import traceback
-						traceback.print_exc()
+			if executor is not None:
+				executor.shutdown(wait=True)
 
 			if not kwargs.get('dont_update_deployment', False):
 				## Update to new random deployment

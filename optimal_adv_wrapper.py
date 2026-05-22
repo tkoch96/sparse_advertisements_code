@@ -37,16 +37,42 @@ class Optimal_Adv_Wrapper:
 		self.worker_manager = wm
 
 	def get_worker_manager(self):
-		return self.worker_manager
+		# Safe access: subprocesses (parallel-strategies path) never call
+		# set_worker_manager and thus don't have the attribute. Callers that
+		# need the manager handle None / AttributeError defensively.
+		return getattr(self, 'worker_manager', None)
 
 	def get_n_workers(self):
-		return self.worker_manager.get_n_workers()
+		# Raise AttributeError when no workers so existing try/except blocks
+		# (e.g. update_deployment's worker-sync clause) detect "no workers"
+		# and gracefully skip. Callsites that need a numeric default should
+		# use _get_n_workers_safe() instead.
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
+			raise AttributeError("worker_manager is None (no Ray pool)")
+		return wm.get_n_workers()
+
+	def _get_n_workers_safe(self):
+		"""Like get_n_workers but returns 0 instead of raising when no pool."""
+		try:
+			return self.get_n_workers()
+		except AttributeError:
+			return 0
 
 	def send_receive_workers(self, msg):
-		return self.worker_manager.send_receive_workers(msg)
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
+			# No-op: cheap-strategy subprocess has no worker pool, but a few
+			# code paths (clear_caches, measure_ingresses' cache reset) still
+			# emit broadcast messages. Silently drop them.
+			return None
+		return wm.send_receive_workers(msg)
 
 	def send_receive_worker(self, worker_i, msg):
-		return self.worker_manager.send_receive_worker(worker_i, msg)
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
+			return None
+		return wm.send_receive_worker(worker_i, msg)
 
 	def clear_caches(self):
 		self.measured_prefs = {ug: {popp: Ing_Obj(popp) for popp in \
@@ -67,7 +93,13 @@ class Optimal_Adv_Wrapper:
 		self.calc_cache.clear_new_measurement_caches()
 		self.this_time_ip_cache = {}
 		msg = pickle.dumps(['reset_new_meas_cache',()])
-		self.send_receive_workers(msg)
+		try:
+			self.send_receive_workers(msg)
+		except AttributeError:
+			# No worker_manager set (e.g. running in a parallel-strategies
+			# subprocess that doesn't have access to the Ray pool). The
+			# clear_caches sibling has the same guard.
+			pass
 
 	def get_cache(self):
 		return self.calc_cache.get_cache()
@@ -246,6 +278,25 @@ class Optimal_Adv_Wrapper:
 			advs = new_advs
 		else:
 			advs = advs_with_iternum
+
+		# Parallel-strategies subprocess fallback: when there's no Ray worker
+		# pool (e.g. anyopt running in a subprocess), do the LP solves serially
+		# in-process via the same solve_lp_with_failure_catch path. Slower at
+		# scale but correct, and only triggers in the subprocess context.
+		if len(advs) > 0 and self._get_n_workers_safe() == 0:
+			for fields in advs:
+				if len(fields) == 4:
+					adv_i, adv, dep, _flag = fields
+					ret = self.solve_lp_with_failure_catch(adv, dont_update_deployment=True)
+				else:
+					adv_i, adv, opt_adv, dep, _flag = fields
+					ret = self.solve_lp_with_failure_catch_weighted_penalty(adv, opt_adv, dont_update_deployment=True)
+				all_rets[adv_i] = ret
+				if kwargs.get('cache_res', False):
+					cache_rep = adv_i_to_cache_rep.get(adv_i)
+					if cache_rep is not None:
+						self.linear_prog_soln_cache[cache_key][cache_rep, False] = ret
+			return all_rets
 
 		if len(advs) > 0:
 			max_n_in_flight = 350
@@ -1472,22 +1523,24 @@ class Optimal_Adv_Wrapper:
 		self.update_parent_tracker_workers()
 		print("updating parent tracker took {}s".format(time.time() - ts))
 	
-	def update_parent_tracker_workers(self):	
+	def update_parent_tracker_workers(self):
 		## Update workers about new parent tracker information
 		ts = time.time()
-		try:
-			self.worker_manager
-		except AttributeError:
+		# Safe check that handles both "attribute never set" (e.g. cheap
+		# strategies that don't set_worker_manager at all) and "attribute is
+		# None" (parallel-strategies subprocess that explicitly leaves it None).
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
 			return # no workers to update
 
 		## TODO -- could just send deltas
 		msgs = {}
 		msg = pickle.dumps(('update_parent_tracker', self.calc_cache.all_caches['parents_on']))
-		for worker in self.worker_manager.worker_sockets:
+		for worker in wm.worker_sockets:
 			msgs[worker] = msg
 		print("pickling messages took {}s".format(time.time()-ts))
 		ts = time.time()
-		self.worker_manager.send_messages_workers(msgs)
+		wm.send_messages_workers(msgs)
 		print("sending messages took {}s".format(time.time() - ts))
 
 	def measure_ingresses(self, a, **kwargs):
