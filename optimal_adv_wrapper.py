@@ -74,6 +74,25 @@ class Optimal_Adv_Wrapper:
 			return None
 		return wm.send_receive_worker(worker_i, msg)
 
+	def clear_lp_caches(self):
+		"""Drop the driver-side LP solution cache.
+
+		Each cached LP result at actual-32 is ~2-3 MB (raw_solution dict +
+		paths_by_ug + available_paths + per-UG latency array). The eval
+		phases populate thousands of unique entries (one per failure
+		scenario × per inflated deployment × per strategy), which adds up
+		to multiple GB on the driver -- enough to OOM the head node when
+		combined with sparse / painter accumulated state. Eval phases
+		don't share LP results across phases, so it's safe to drop the
+		whole cache between phases.
+		"""
+		self.linear_prog_soln_cache = {
+			'regular': {},
+			'failure_catch': {},
+			'penalty': {},
+			'lagrange': {},
+		}
+
 	def clear_caches(self):
 		self.measured_prefs = {ug: {popp: Ing_Obj(popp) for popp in \
 			self.ug_perfs[ug]} for ug in self.ugs}

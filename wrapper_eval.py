@@ -246,10 +246,16 @@ def assess_failure_resilience(sas, adv, which='popps', **kwargs):
 	base_soln = sas.solve_lp_with_failure_catch(adv)
 	base_user_latencies = base_soln['lats_by_ug']
 
+	# cache_res=False here: every failure scenario emits a unique cache_rep
+	# (one row of the eye matrix differs per failure), so caching gives 0
+	# hit-rate and only memory cost. At actual-32 with ~1600 scenarios x 6
+	# strategies the cache would otherwise grow to ~25 GB of per-LP result
+	# dicts on the driver, OOM-ing the head. See wrapper_eval.py header for
+	# the memory writeup.
 	if use_lagrange:
-		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, worker_cmd='solve_lp_lagrange', cache_key='lagrange', cache_res=True, **kwargs)
+		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, worker_cmd='solve_lp_lagrange', cache_key='lagrange', cache_res=False, **kwargs)
 	else:
-		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=True, **kwargs)
+		lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False, **kwargs)
 
 	for i,iteri in enumerate(iterover):	
 
@@ -365,7 +371,10 @@ def assess_failure_resilience_actual_deployment(sas, adv_rep, solution, which='p
 				if popp[0] == iteri:
 					one_per_peer_adv[sas.popp_to_ind[popp],:] = 0
 		call_args.append((one_per_peer_adv, dep, False))
-	lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=True)
+	# Same reasoning as the cache_res=False above in assess_failure_resilience:
+	# each failure scenario yields a unique cache key; caching wastes ~MB per
+	# call with no hit-rate benefit.
+	lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False)
 
 	best_solutions = {}
 	for i,iteri in enumerate(iterover):	

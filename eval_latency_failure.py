@@ -218,6 +218,14 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# 	import traceback
 	# 	traceback.print_exc()
 
+	# Drop the driver-side LP solution cache between phases. The eval LPs
+	# don't reuse keys across phases (each scenario has a unique cache_rep),
+	# so the cache only accumulates memory -- enough to OOM the head at
+	# actual-32 if left to grow across all 6 eval phases. See clear_lp_caches
+	# docstring in optimal_adv_wrapper.
+	if sas is not None:
+		sas.clear_lp_caches()
+
 	RECALC_PCT_VOL_IN_LAT_MULTIPLIERS = False
 	try:
 		for random_iter in range(N_TO_SIM):
@@ -260,6 +268,8 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	except:
 		import traceback
 		traceback.print_exc()
+
+	if sas is not None: sas.clear_lp_caches()
 
 	RECALC_FAILURE_METRICS = False
 	try:
@@ -335,6 +345,8 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
+	if sas is not None: sas.clear_lp_caches()
+
 	RECALC_VOL_MULTIPLIERS = False
 	volume_multiply_values = np.linspace(0,29,num=20)
 	try:
@@ -391,6 +403,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
+	if sas is not None: sas.clear_lp_caches()
 
 	RECALC_DIURNAL = False
 	diurnal_multipliers = [25,50,65,70,75,85,95,105,115,125,150]
@@ -448,6 +461,8 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
+
+	if sas is not None: sas.clear_lp_caches()
 
 	### Calculates some measure of practical resilience for each strategy
 	### current resilience measure is flash crowd / DDoS attack in a region
