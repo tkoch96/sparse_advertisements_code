@@ -82,25 +82,32 @@ if var.X > 1e-7}` iterates *all* `var_pool` entries calling per-var `.X`
 (a Gurobi API access). Replacing with `getAttr("X", active_vars)` (batched
 read on the small active set) should eliminate the var_pool-size penalty.
 
-**Implementation:** stashed `_last_active_paths` and `_last_active_vars`
-in `solve_unified_lp`; used them in `solve_generic_lp_persistent` for a
-batched X-read.
+**Initial measurement:** ran the bench with a cold/empty `var_pool` →
+inconclusive (savings appeared real but were within run-to-run noise at
+that scale). Diagnosed the cause: an empty var_pool doesn't expose the
+overhead this optimization targets.
 
-**Result:** ⚠ **INCONCLUSIVE at one-sample bench:**
-- inferred outer-wrapper python: 99s → 16s (−83s, the targeted win)
-- but `solve_unified_lp_not_optimize`: 113s → 153s (+40s)
-- and `optimize`: 103s → 142s (+39s)
-- cold wall: 347s → 354s (essentially flat)
-- correctness fingerprint matches
+**Bench-realism fix:** added a 5-batch warmup before the measured call
+so `var_pool` reaches representative production size. **Measured**:
+- decent: 0 → 228k entries
+- actual-32 (projected): 0 → ~0.5-2M entries
 
-The targeted savings appear real (the unaccounted outer-wrapper time
-shrinks by ~80s). But run-to-run variance on the other components is
-of similar magnitude. Single-sample comparison can't distinguish a true
-net-zero from a true net-positive masked by noise.
+Far bigger than I'd guessed (I'd said 30k). The original
+`for var in var_pool.items() ... var.X` loop was doing 228k × Gurobi
+C-calls per LP solve at decent, × 660 LP solves = ~150M `.X` calls per
+batch — easily the bulk of the outer wrapper time.
 
-**Status:** REVERTED pending a multi-sample (N≥3) bench to estimate the
-noise floor and decide. Likely a real win at actual-32 scale where the
-outer wrapper grows faster than the LP itself.
+**Result with warmed-up bench:** ✅ **NET WIN at decent**:
+- cold wall: 141.55s → 131.92s (−9.6s, −6.8%)
+- solve_generic_lp_persistent: 133.9s → 123.0s (−10.9s, the targeted savings)
+- correctness fingerprint matches (`c0075d78e6593b32` both pre+post)
+- run-to-run noise on `optimize` and `solve_unified_lp_not_optimize` is
+  ~±20s but the cold wall net is solidly negative
+
+Projected at actual-32: var_pool is 5-10× larger → savings scale
+proportionally → ~50-100s saved per `calc_compressed_lb` batch.
+
+**Status:** ✅ **SHIPPED in commit `90110ea`.**
 
 ### Run-to-run noise at decent scale
 
