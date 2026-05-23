@@ -366,3 +366,138 @@ def test_volume_conservation_under_varying_advertisement_density(density):
 	assert math.isclose(total_alloc, total_vol, rel_tol=1e-3, abs_tol=1e-3), (
 		"Volume conservation broken at density {}: allocated={} vs total={}"
 		.format(density, total_alloc, total_vol))
+
+
+# ---------------------------------------------------------------------------#
+# Backup-capacity / static_failure tests removed -- those objectives were
+# retired in the registry cleanup. The site_failure objective subsumed their
+# use cases. See git log for the original test code.
+# ---------------------------------------------------------------------------#
+
+
+
+
+# ---------------------------------------------------------------------------#
+# Site-failure objective tests.
+#
+# Steady-state avg-latency LP + EXHAUSTIVE mean over per-PoP failures, with
+# user->prefix frozen to the steady-state assignment.
+# ---------------------------------------------------------------------------#
+
+def _solve_site_failure(worker, adv, rti, beta=0.5, no_route_penalty=20.0):
+	from solve_lp_assignment import solve_lp_assignment_site_failure
+	return solve_lp_assignment_site_failure(
+		worker, rti, 'site_failure', adv=adv,
+		site_failure_beta=beta, site_failure_no_route_penalty=no_route_penalty)
+
+
+@pytest.mark.unit
+@pytest.mark.gurobi
+def test_site_failure_enumerates_all_pops():
+	"""The site_failure LP must evaluate failures for every PoP in the
+	deployment, not a sample. Falsifiable: site_failure_n_sites must equal
+	the number of unique PoPs in sas.popps."""
+	worker, deployment, _, _ = _setup('really_friggin_small')
+	n_popps = len(deployment['popps'])
+	adv = np.ones((n_popps, 3))
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+	ret = _solve_site_failure(worker, adv, rti)
+	assert ret['solved']
+	# Compute expected unique PoP count from sas.popps.
+	unique_pops = {p for p, _ in worker.popps}
+	assert ret['site_failure_n_sites'] == len(unique_pops), (
+		"Expected {} site failures, got {}. Site-failure LP must enumerate "
+		"every PoP exhaustively (no sampling).".format(
+			len(unique_pops), ret['site_failure_n_sites']))
+
+
+@pytest.mark.unit
+@pytest.mark.gurobi
+def test_site_failure_decomposition_with_no_failures_yields_steady():
+	"""When beta=0 the combined objective should be identical to the steady
+	avg-latency objective -- the failure term contributes 0 weight."""
+	worker, deployment, _, _ = _setup('really_friggin_small')
+	n_popps = len(deployment['popps'])
+	rng = np.random.default_rng(7)
+	adv = (rng.random((n_popps, 3)) < 0.6).astype(float)
+	for j in range(adv.shape[1]):
+		if adv[:, j].sum() == 0:
+			adv[rng.integers(n_popps), j] = 1.0
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+
+	ret_b0 = _solve_site_failure(worker, adv, rti, beta=0.0)
+	from solve_lp_assignment import solve_generic_lp_with_failure_catch
+	steady = solve_generic_lp_with_failure_catch(worker, rti, 'avg_latency')
+	assert math.isclose(ret_b0['objective'], steady['objective'], rel_tol=1e-6, abs_tol=1e-6), (
+		"beta=0 must reproduce steady-state objective exactly. Got combined={}, steady={}"
+		.format(ret_b0['objective'], steady['objective']))
+
+
+@pytest.mark.unit
+@pytest.mark.gurobi
+def test_site_failure_combined_objective_is_convex_in_beta():
+	"""For fixed adv, the combined objective is a linear interpolation
+	between steady-state and mean-failure values: combined =
+	(1-beta)*steady + beta*mean_failure. Test by computing at beta=0 and
+	beta=1, then verifying beta=0.5 produces their midpoint."""
+	worker, deployment, _, _ = _setup('really_friggin_small')
+	n_popps = len(deployment['popps'])
+	adv = np.ones((n_popps, 3))
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+
+	r0 = _solve_site_failure(worker, adv, rti, beta=0.0)
+	r1 = _solve_site_failure(worker, adv, rti, beta=1.0)
+	rmid = _solve_site_failure(worker, adv, rti, beta=0.5)
+	expected_mid = 0.5 * r0['objective'] + 0.5 * r1['objective']
+	assert math.isclose(rmid['objective'], expected_mid, rel_tol=1e-5, abs_tol=1e-5), (
+		"Combined objective must linearly interpolate beta. Got "
+		"r(b=0)={}, r(b=0.5)={}, r(b=1)={}, expected midpoint={}"
+		.format(r0['objective'], rmid['objective'], r1['objective'], expected_mid))
+
+
+@pytest.mark.unit
+@pytest.mark.gurobi
+def test_site_failure_split_penalty_no_route_heavier_than_congestion():
+	"""For a given failure scenario where all degradation is 'true no-route'
+	(user has no surviving popp on pinned prefix), increasing no_route_penalty
+	from X to 2X should DOUBLE the penalty contribution. Increasing
+	congestion_penalty from Y to 2Y should not change the objective when
+	there is no congestion."""
+	worker, deployment, _, _ = _setup('really_friggin_small')
+	n_popps = len(deployment['popps'])
+	# Sparse adv -- 1-hot per prefix, ensure users have nothing to fall back to.
+	# When a site fails, users routed to that site go no-route.
+	adv = np.zeros((n_popps, 3))
+	for j in range(3): adv[j, j] = 1.0
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+
+	from solve_lp_assignment import solve_lp_assignment_site_failure
+	r_low = solve_lp_assignment_site_failure(
+		worker, rti, 'site_failure', adv=adv,
+		site_failure_beta=1.0,  # ignore steady, just measure failure term
+		site_failure_no_route_penalty=10.0,
+		site_failure_congestion_penalty=10.0)
+	r_high_noroute = solve_lp_assignment_site_failure(
+		worker, rti, 'site_failure', adv=adv,
+		site_failure_beta=1.0,
+		site_failure_no_route_penalty=20.0,  # 2x
+		site_failure_congestion_penalty=10.0)
+	r_high_congest = solve_lp_assignment_site_failure(
+		worker, rti, 'site_failure', adv=adv,
+		site_failure_beta=1.0,
+		site_failure_no_route_penalty=10.0,
+		site_failure_congestion_penalty=20.0)  # 2x
+	# Doubling no_route_penalty should make objective worse (more negative).
+	# Doubling congestion_penalty should change less (since no_route dominates).
+	delta_noroute = r_high_noroute['objective'] - r_low['objective']
+	delta_congest = r_high_congest['objective'] - r_low['objective']
+	assert delta_noroute < -1e-3, (
+		"Doubling no_route_penalty must decrease objective (more negative). "
+		"Got delta={}".format(delta_noroute))
+	assert abs(delta_noroute) > abs(delta_congest), (
+		"no_route_penalty should have larger impact than congestion_penalty "
+		"on a sparse adv where most failures cause true no-route. "
+		"|delta_noroute|={}, |delta_congest|={}".format(
+			abs(delta_noroute), abs(delta_congest)))
+
+
