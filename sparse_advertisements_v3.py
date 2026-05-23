@@ -5,6 +5,35 @@ import concurrent.futures
 import multiprocessing as _mp
 import os as _os
 np.setbufsize(262144*8)
+
+# Memory instrumentation. Linux-only (reads /proc); silent on macOS. Gated by
+# SCULPTOR_LOG_MEM (default ON) so this is opt-out for local debugging.
+def _log_mem(tag, **extra):
+	if _os.environ.get('SCULPTOR_LOG_MEM', '1') == '0':
+		return
+	rss_kb = vms_kb = peak_kb = sys_avail_kb = -1
+	try:
+		with open('/proc/self/status', 'r') as f:
+			for line in f:
+				if line.startswith('VmRSS:'):    rss_kb    = int(line.split()[1])
+				elif line.startswith('VmSize:'): vms_kb    = int(line.split()[1])
+				elif line.startswith('VmPeak:'): peak_kb   = int(line.split()[1])
+		with open('/proc/meminfo', 'r') as f:
+			for line in f:
+				if line.startswith('MemAvailable:'):
+					sys_avail_kb = int(line.split()[1]); break
+	except (FileNotFoundError, PermissionError):
+		return
+	bits = [f'tag={tag}',
+	        f'rss_mb={rss_kb//1024}',
+	        f'vms_mb={vms_kb//1024}',
+	        f'peak_mb={peak_kb//1024}',
+	        f'sys_avail_mb={sys_avail_kb//1024}',
+	        f'pid={_os.getpid()}',
+	        f't={time.time():.2f}']
+	for k, v in extra.items():
+		bits.append(f'{k}={v}')
+	print('[mem] ' + ' '.join(bits), flush=True)
 np.set_printoptions(precision=3)
 # np.random.seed(31415)
 # import random
@@ -2030,6 +2059,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def output_optimization_state(self):
 		print("Saving optimization state, dont exit...")
+		_log_mem('save_state_enter', iter=self.iter)
 		self.optimization_vars = {}
 		for k in self.optimization_var_names:
 			self.optimization_vars[k] = getattr(self, k)
@@ -2049,6 +2079,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'metrics': self.metrics,
 		}
 		pickle.dump(save_state, open(out_fn, 'wb'))
+		_log_mem('save_state_done', iter=self.iter, pkl_mb=_os.path.getsize(out_fn)//(1024*1024))
 		print("Done saving")
 
 	def load_optimization_state(self, specific_iter=None):
@@ -2195,25 +2226,31 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			worker_socket.recv()
 
 	def solve(self, **kwargs):
+		_log_mem('solve_enter', dpsize=getattr(self, 'dpsize', '?'))
 		try:
 			## If we're hot-starting, load the optimization state. But this will throw an error if we're not
 			self.load_optimization_state()
+			_log_mem('solve_post_load_state', iter=self.iter, mode='hotstart')
 			if self.iter >= self.max_n_iter:
-				self.reset_ugs() 
+				self.reset_ugs()
 				return
 		except ValueError:
 			print("\n=====NOT HOT STARTING======\n")
+			_log_mem('solve_cold_start')
 			self.modify_ugs()
+			_log_mem('solve_post_modify_ugs')
 			self.optimization_advertisement = self.init_advertisement()
 			self.last_advertisement = copy.copy(self.optimization_advertisement)
 			if not self.simulated:
 				## This is our first measurement
 				self.calculate_ground_truth_ingress(self.optimization_advertisement)
-				
+
 			self.init_optimization_vars()
+			_log_mem('solve_post_init_optim_vars')
 
 			# Measure where we start, update model of path probabilities
 			self.measure_ingresses(self.optimization_advertisement)
+			_log_mem('solve_post_first_measure_ingresses')
 
 
 		t_start = time.time()
@@ -2241,11 +2278,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					print("LEARNING ITERATION : {}".format(self.iter))
 					print("\n\n")
 				self.ts_loop = time.time()
+				_log_mem('iter_start', iter=self.iter)
 
 				# calculate gradients
 				if self.verbose:
 					print("calcing grads")
 				grads = self.gradient_fn(self.optimization_advertisement)
+				_log_mem('iter_post_grad', iter=self.iter)
 
 				## grads
 				timers.append(time.time() - t_last)
@@ -2306,8 +2345,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				## measure
 				timers.append(time.time() - t_last)
 				t_last = time.time()
+				_log_mem('iter_post_measure', iter=self.iter)
 
-				# Calculate, advertise & measure information about the prefix that would 
+				# Calculate, advertise & measure information about the prefix that would
 				# give us the most new information
 				if self.verbose:
 					tsmaxinfo = time.time()
@@ -2338,7 +2378,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					else:
 						self.stop_tracker(self.optimization_advertisement, skip_measuring=True)
 
-
+				_log_mem('iter_post_stop_tracker', iter=self.iter)
 				self.iter += 1
 
 				## stop

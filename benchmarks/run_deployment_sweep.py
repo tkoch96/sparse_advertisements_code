@@ -58,6 +58,27 @@ from eval_latency_failure import evaluate_all_metrics  # noqa: E402
 from wrapper_eval import global_performance_metrics_fn  # noqa: E402
 
 
+def _log_mem(tag, **extra):
+    """Minimal /proc-based driver memory snapshot. Mirrors the helper in
+    sparse_advertisements_v3.py so the sweep launcher can drop a marker at
+    dpsize boundaries without importing v3 just for this."""
+    rss_kb = sys_avail_kb = -1
+    try:
+        with open('/proc/self/status', 'r') as f:
+            for line in f:
+                if line.startswith('VmRSS:'):
+                    rss_kb = int(line.split()[1]); break
+        with open('/proc/meminfo', 'r') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    sys_avail_kb = int(line.split()[1]); break
+    except (FileNotFoundError, PermissionError):
+        return
+    extras = ' '.join(f'{k}={v}' for k, v in extra.items())
+    print(f'[mem] tag={tag} rss_mb={rss_kb//1024} sys_avail_mb={sys_avail_kb//1024} '
+          f'pid={os.getpid()} t={time.time():.2f} {extras}', flush=True)
+
+
 def _find_save_run_dir_for_dpsize(dpsize):
     """Find the latest <ts>-testing_feature-actual-{dpsize}-sparse directory
     in RUN_DIR. Used for hot-starting sparse training from a previous run's
@@ -152,8 +173,10 @@ def main():
         print(f"[sweep] no existing cache, starting fresh")
 
     overall_start = time.time()
+    _log_mem('sweep_start')
     for dpsize in dpsizes:
         dp_start = time.time()
+        _log_mem('dpsize_start', dpsize=dpsize)
         # Use the same naming convention as pull_results_new for cache reuse
         dpsize_str = f"testing_feature-actual-{dpsize}"
         # Tag the per-dpsize eval pickle so this run is separable from any
@@ -213,6 +236,7 @@ def main():
         dp_wall = time.time() - dp_start
         print(f"[sweep] dpsize={dpsize} done in {dp_wall:.1f}s "
               f"(cumulative {time.time()-overall_start:.1f}s)", flush=True)
+        _log_mem('dpsize_done', dpsize=dpsize, wall_s=int(dp_wall))
 
     overall = time.time() - overall_start
     print(f"\n[sweep] ALL DONE in {overall:.1f}s ({overall/60:.1f} min). "

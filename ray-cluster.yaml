@@ -110,7 +110,9 @@ available_node_types:
                       - Key: role
                         Value: worker
         resources: {}
-        min_workers: 0
+        # TEMPORARILY set to 1 for the actual-32 eval-resume session;
+        # revert to 0 after teardown so autoscaler reverts to lazy mode.
+        min_workers: 1
         max_workers: 5
 
 head_node_type: ray.head.default

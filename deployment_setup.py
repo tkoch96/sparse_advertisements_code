@@ -101,7 +101,7 @@ def get_random_ingress_priorities(deployment):
 	return ingress_priorities
 
 
-def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=1.3, verb=True, **kwargs):
+def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_factor=1.1, verb=True, **kwargs):
 
 	popps = deployment['popps']
 	ug_perfs = deployment['ug_perfs']
@@ -225,7 +225,7 @@ def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_
 	
 	return link_capacities
 
-def get_link_capacities(deployment, scale_factor=1.3, verb=True, **kwargs):
+def get_link_capacities(deployment, scale_factor=1.1, verb=True, **kwargs):
 
 	if not deployment.get('simulated',True):
 		## we set these by actually measuring things
