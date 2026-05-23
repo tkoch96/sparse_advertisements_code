@@ -1,4 +1,4 @@
-import numpy as np,  scipy, time
+import numpy as np,  scipy, time, math
 from helpers import *
 from scipy.sparse import csr_matrix
 import gurobipy as gp
@@ -176,8 +176,12 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	model.addConstr(volume_conservation_A @ b == bulk_conservation_b)
 	## another constraint could be like bulk oversubscription is at most N X normal capacity, where N can be 10 or something
 	## BULK_CAP_LIMIT = 3.0 # sigcomm 2025 value
-	BULK_CAP_LIMIT = 100.0 # temporary to debug
-	model.addConstr(cap_constraint_A @ (b + x) <= BULK_CAP_LIMIT * caps)
+	## BULK_CAP_LIMIT = 100.0 # historical default in this codebase (labeled "temporary to debug" but
+	## existing priority experiments produced their results under this value, so it is preserved as
+	## the default to avoid invalidating prior results. Override via kwargs.get('bulk_cap_limit', ...)
+	## from the objective spec.
+	bulk_cap_limit = kwargs.get('bulk_cap_limit', 100.0)
+	model.addConstr(cap_constraint_A @ (b + x) <= bulk_cap_limit * caps)
 
 	obj_fn = oversubscribe @ significances #+ 100 * oversubscribe @ np.ones(n_popps)
 	
@@ -604,9 +608,166 @@ def solve_lp_assignment_with_site_cost(sas, routed_through_ingress, obj, site_co
 	}
 
 
+def _failure_obj_split(sas, fail_ret, no_route_penalty, congestion_penalty):
+	"""Two-component failure-scenario objective:
+	  soft = -avg_lat_routed
+	         - no_route_penalty * frac_true_no_route
+	         - congestion_penalty * frac_congested
+
+	Where the LP marks BOTH true-no-route (user has no surviving popp on their
+	pinned prefix) AND congested-popp (popp inundated) as lat=NO_ROUTE_LATENCY,
+	but we separate them via the LP's `fraction_congested_volume`:
+	  frac_no_route_total = users with lat >= NO_ROUTE_LATENCY (counts both)
+	  frac_congested      = LP's fraction_congested_volume (only inundated popps)
+	  frac_true_no_route  = frac_no_route_total - frac_congested
+
+	no_route_penalty is "bad" (user has literally no route -- DNS pin + no
+	surviving popp on that prefix). congestion_penalty is "sort of bad"
+	(user routed to popp, popp overloaded -- a constraint violation in the
+	Lagrangian sense). Pick no_route_penalty >> congestion_penalty so the
+	optimizer prioritizes avoiding the unrecoverable case.
+	"""
+	if not fail_ret.get('solved'):
+		# LP infeasible -> worst case, full true-no-route.
+		return -no_route_penalty
+	lats = np.asarray(fail_ret.get('lats_by_ug', []), dtype=float)
+	vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float).flatten()
+	if lats.size == 0 or vols.size == 0:
+		return -no_route_penalty
+	n = min(lats.size, vols.size)
+	lats, vols = lats[:n], vols[:n]
+	total_vol = vols.sum()
+	if total_vol <= 0:
+		return -no_route_penalty
+
+	no_route_mask = lats >= NO_ROUTE_LATENCY - 1e-9
+	frac_no_route_total = float(vols[no_route_mask].sum() / total_vol)
+	frac_congested = float(fail_ret.get('fraction_congested_volume', 0.0) or 0.0)
+	# Cap at the total, since fraction_congested_volume can occasionally
+	# overshoot in MLU-mode reporting (handled by the LP's loose bounds).
+	frac_congested = min(frac_congested, frac_no_route_total)
+	frac_true_no_route = max(0.0, frac_no_route_total - frac_congested)
+
+	routed_vols = vols[~no_route_mask]
+	if routed_vols.sum() > 0:
+		avg_lat_routed = float(np.average(lats[~no_route_mask], weights=routed_vols))
+	else:
+		avg_lat_routed = 0.0
+	return (-avg_lat_routed
+			- no_route_penalty * frac_true_no_route
+			- congestion_penalty * frac_congested)
+
+
+
+
+
+
+
+def solve_lp_assignment_site_failure(sas, routed_through_ingress, obj, **kwargs):
+	"""Steady-state avg-latency LP + EXHAUSTIVE mean over per-PoP (site) failures,
+	with user->prefix frozen to the steady-state assignment.
+
+	Same shape as static_failure but:
+	  - Site failures (entire PoP down), not popp failures.
+	  - Exhaustive over all n_pops sites -> no sampling noise.
+	  - Deterministic gradient: same set of scenarios every call.
+
+	n_pops is typically ~3-30 for the SCULPTOR deployments, so exhaustive
+	enumeration is tractable (1 + n_pops LP solves per call).
+
+	Required kwargs (from Generic_Objective):
+	  adv: (n_popp, n_prefix) advertisement matrix.
+
+	Optional kwargs (from ObjectiveSpec.lp_kwargs):
+	  site_failure_beta:               weight on the failure term. Default 0.5.
+	  site_failure_no_route_penalty:   per-unit no-route penalty in
+	                                    `_failure_obj_split`. Default 20.0.
+	"""
+	adv = kwargs.get('adv')
+	beta = float(kwargs.get('site_failure_beta', 0.5))
+	# Two-component failure penalty. no_route is the unrecoverable case
+	# (user's pinned prefix has zero surviving popps) -- make it heavy.
+	# congestion is the soft-failure case (user routed but popp overloaded)
+	# -- moderately bad, scales linearly with violation. Pick
+	# no_route_penalty >> congestion_penalty so the optimizer prioritises
+	# avoiding unrecoverable failures.
+	no_route_penalty = float(kwargs.get('site_failure_no_route_penalty', 50.0))
+	congestion_penalty = float(kwargs.get('site_failure_congestion_penalty', 10.0))
+
+	inner_kwargs = {k: v for k, v in kwargs.items() if k not in (
+		'adv', 'site_failure_beta', 'site_failure_no_route_penalty',
+		'site_failure_congestion_penalty')}
+
+	# 1. Steady-state solve.
+	steady = solve_generic_lp_with_failure_catch(
+		sas, routed_through_ingress, 'avg_latency', **inner_kwargs)
+	if not steady.get('solved'):
+		return steady
+	if adv is None:
+		# No adv to evaluate -> return steady as-is. Worker callers must
+		# pass adv via the **kwargs path (see path_distribution_computer.py).
+		return steady
+
+	# 2. Derive user->prefix pinning from the steady solution. Primary popp =
+	#    largest-volume popp in the steady LP routing; pinned prefix = the
+	#    prefix that routes the user to that primary.
+	user_to_prefix = {}
+	for ugi, pathvols in steady.get('paths_by_ug', {}).items():
+		if not pathvols:
+			continue
+		ug = sas.whole_deployment_ugs[ugi]
+		best_poppi = max(pathvols, key=lambda pv: pv[1])[0]
+		for prefix_i, ug_to_popp in routed_through_ingress.items():
+			popp_tuple = ug_to_popp.get(ug)
+			if popp_tuple is not None and sas.popp_to_ind[popp_tuple] == best_poppi:
+				user_to_prefix[ug] = prefix_i
+				break
+
+	# 3. Build the {pop -> [popp_indices]} map ONCE.
+	pop_to_popp_inds = {}
+	for popp_i, (pop_name, _) in enumerate(sas.popps):
+		pop_to_popp_inds.setdefault(pop_name, []).append(popp_i)
+
+	# 4. For each PoP, fail all its popps simultaneously and solve a
+	#    constrained avg-latency LP (paths restricted to each user's pinned
+	#    prefix, surviving popps only).
+	failure_objs = []
+	for pop_name, failed_popp_inds in pop_to_popp_inds.items():
+		a_fail = adv.copy()
+		for popp_i in failed_popp_inds:
+			a_fail[popp_i, :] = 0
+		fail_routed, _ = sas.calculate_ground_truth_ingress(a_fail)
+
+		constrained = {pref_i: {} for pref_i in fail_routed}
+		for ug, pinned in user_to_prefix.items():
+			if pinned in fail_routed:
+				popp = fail_routed[pinned].get(ug)
+				if popp is not None:
+					constrained[pinned][ug] = popp
+
+		fail_ret = solve_generic_lp_with_failure_catch(
+			sas, constrained, 'avg_latency', **inner_kwargs)
+		soft = _failure_obj_split(sas, fail_ret, no_route_penalty, congestion_penalty)
+		failure_objs.append(soft)
+
+	steady_obj = steady['objective']
+	mean_failure = float(np.mean(failure_objs)) if failure_objs else steady_obj
+	combined = (1.0 - beta) * steady_obj + beta * mean_failure
+	steady['objective'] = combined
+	steady['site_failure_steady_obj'] = float(steady_obj)
+	steady['site_failure_mean_failure_obj'] = mean_failure
+	steady['site_failure_n_sites'] = len(failure_objs)
+	steady['site_failure_beta'] = beta
+	steady['site_failure_no_route_penalty'] = no_route_penalty
+	steady['site_failure_congestion_penalty'] = congestion_penalty
+	return steady
+
+
+
 generic_lp_functions = {
 	'joint_latency_bulk_download': solve_joint_latency_bulk_download,
 	'per_site_cost': solve_lp_assignment_with_site_cost_with_failure_catch,
+	'site_failure': solve_lp_assignment_site_failure,
 }
 
 ## Objectives that solve_generic_lp_persistent (in path_distribution_computer.py)
