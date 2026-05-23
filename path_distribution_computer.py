@@ -1,4 +1,4 @@
-import numpy as np, pickle, copy, zmq, time, random
+import numpy as np, pickle, copy, zmq, time, random, os
 from collections import defaultdict
 random.seed(31415)
 from constants import *
@@ -12,6 +12,33 @@ import gurobipy as gp
 from scipy.sparse import csr_matrix
 
 gp.setParam("OutputFlag", 0)
+
+
+def _log_mem_worker(worker_i, tag, **extra):
+	"""Worker-side memory snapshot to stdout (captured into the sweep log).
+	Mirrors the driver's _log_mem in run_deployment_sweep.py so we can see
+	per-worker RSS at key points. Stays cheap; called at deployment-update /
+	init checkpoints, NOT per-iter.
+
+	Output format mirrors the driver: `[mem-worker idx=N tag=TAG rss_mb=R sys_avail_mb=A pid=P ...]`
+	so post-hoc log parsing can grep both `[mem]` (driver) and `[mem-worker]`.
+	"""
+	rss_kb = sys_avail_kb = -1
+	try:
+		with open('/proc/self/status', 'r') as f:
+			for line in f:
+				if line.startswith('VmRSS:'):
+					rss_kb = int(line.split()[1]); break
+		with open('/proc/meminfo', 'r') as f:
+			for line in f:
+				if line.startswith('MemAvailable:'):
+					sys_avail_kb = int(line.split()[1]); break
+	except (FileNotFoundError, PermissionError):
+		return
+	extras = ' '.join(f'{k}={v}' for k, v in extra.items())
+	print(f'[mem-worker idx={worker_i} tag={tag} rss_mb={rss_kb//1024} '
+		  f'sys_avail_mb={sys_avail_kb//1024} pid={os.getpid()} t={time.time():.2f} {extras}',
+		  flush=True)
 
 
 remeasure_a = None
@@ -210,6 +237,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.timing['get_paths_by_ug'] += time.time() - ts
 		
 		# Pre-calculate objective (latencies)
+		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
 		obj_coeffs = []
 		for ug, poppi in available_paths:
 			if poppi == NO_PATH_INGRESS(self):
@@ -220,7 +248,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				elif obj == "per_site_cost":
 					pop, _ = self.popps[poppi]
 					site_cost = self.site_costs[pop]
-					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + DEFAULT_SITE_COST * site_cost)
+					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + site_cost_alpha * site_cost)
 				else:
 					raise ValueError("obj {} not supported in solve_generic_lp_persistent".format(obj))
 
@@ -342,6 +370,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def start_connection(self):
 		context = zmq.Context()
 		print("Worker {} starting on port {}".format(self.worker_i,self.worker_i+self.port))
+		_log_mem_worker(self.worker_i, 'worker_proc_start')
 		self.main_socket = context.socket(zmq.REP)
 		self.main_socket.setsockopt(zmq.RCVTIMEO, 1000)
 		self.main_socket.bind('tcp://*:{}'.format(self.worker_i+self.port))
@@ -354,6 +383,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.main_socket.send(pickle.dumps('ACK'))
 		msg_decoded = pickle.loads(init_msg)
 		_, data = msg_decoded
+		_log_mem_worker(self.worker_i, 'worker_init_msg_received')
 		return data
 
 	def increment_iter(self):
@@ -810,7 +840,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.timing['solve_generic_lp_persistent'] += time.time() - ts
 			else:
 				ts = time.time()
-				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj)['objective']
+				# Pass the adv matrix `a` through so multi-LP objectives
+				# (static_failure, backup_capacity) can recover it. Plain
+				# objectives ignore the kwarg.
+				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj, adv=a)['objective']
 				self.timing['solve_generic_lp_not_persistent'] += time.time() - ts
 			objs[i] = total_obj
 		### return x and distribution of x
@@ -1034,7 +1067,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			ret = "ACK"
 		elif cmd == 'update_deployment':
 			deployment, kwargs = data
+			_log_mem_worker(self.worker_i, 'update_deployment_enter',
+							dpsize=deployment.get('dpsize', '?'))
 			self.update_deployment(deployment, **kwargs)
+			_log_mem_worker(self.worker_i, 'update_deployment_done',
+							dpsize=deployment.get('dpsize', '?'))
 			ret = "ACK"
 		elif cmd == 'update_kwa':
 			new_kwa = data

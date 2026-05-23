@@ -136,7 +136,7 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 
 			rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
 			this_ret = solve_generic_lp_with_failure_catch(
-				self, rti, deployment.get('generic_objective'))
+				self, rti, deployment.get('generic_objective'), adv=adv)
 			if update_dep:
 				self.update_deployment(deployment_save, quick_update=True,
 					verb=False, exit_on_impossible=False)

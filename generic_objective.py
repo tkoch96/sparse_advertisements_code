@@ -7,10 +7,21 @@ class Generic_Objective:
 	def __init__(self, sas, obj, **kwargs):
 		self.sas = sas # SAS object
 		self.obj = obj # string identifying the objective. e.g., avg_latency
+		# Extra kwargs (e.g., site_cost_alpha, bulk_cap_limit) forwarded to every
+		# LP call. Set by the experiment driver from the ObjectiveSpec.lp_kwargs.
+		# Empty {} preserves prior behavior since the LP functions all use
+		# kwargs.get('foo', <existing_default>).
+		self.lp_kwargs = kwargs.get('lp_kwargs', {}) or {}
 
 	def get_latency_benefit_adv(self, a):
 		routed_through_ingress, _ = self.sas.calculate_ground_truth_ingress(a)
-		ret = solve_generic_lp_with_failure_catch(self.sas, routed_through_ingress, self.obj)
+		# Pass `adv` through to the LP function so multi-LP objectives (e.g.,
+		# static_failure) that need to simulate adv-row failures can recover
+		# `a` without reconstructing it from routed_through_ingress + actives.
+		# Existing single-LP objectives just ignore the kwarg.
+		ret = solve_generic_lp_with_failure_catch(
+			self.sas, routed_through_ingress, self.obj,
+			adv=a, **self.lp_kwargs)
 		return ret
 
 	def get_ground_truth_latency_benefit(self, a, **kwargs):
