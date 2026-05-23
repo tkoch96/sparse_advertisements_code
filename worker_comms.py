@@ -27,6 +27,17 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
+		# Env var override mirrors the Ray Worker_Manager path so the same
+		# SCULPTOR_N_WORKERS=N knob works in local (non-Ray) runs too. When
+		# unset, behavior is unchanged: min(cpu_count, dpsize-suggested).
+		env_override = os.environ.get('SCULPTOR_N_WORKERS')
+		if env_override is not None:
+			try:
+				n = int(env_override)
+				print("SCULPTOR_N_WORKERS override active: n_workers={}".format(n))
+				return n
+			except ValueError:
+				print("WARNING: SCULPTOR_N_WORKERS={!r} is not an int; falling back".format(env_override))
 		cpu_count = multiprocessing.cpu_count()
 		suggested_num_workers = get_n_workers(self.dpsize)
 		return min(cpu_count, suggested_num_workers)
@@ -66,7 +77,17 @@ class Worker_Manager:
 		# print("Splitting deployment into subdeployments.")
 		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
 		# print("Done splitting deployment into subdeployments.")
-		
+		# SCULPTOR_WORKER_INIT_STAGGER_SEC: lightweight offset between worker
+		# spawns. Workers still init in PARALLEL, but with staggered start
+		# times so their memory peaks (~few seconds into init, when var_pool
+		# + RB backups build) don't perfectly overlap. Default 0 preserves
+		# original simultaneous-spawn behaviour. Small values (1-3s) give most
+		# of the memory-smoothing benefit at small wall-time cost
+		# (n_workers * stagger_sec added during init only).
+		stagger_sec = float(os.environ.get('SCULPTOR_WORKER_INIT_STAGGER_SEC', '0') or 0)
+		if stagger_sec > 0:
+			print("Worker init spawn-staggered: {}s offset between spawns".format(stagger_sec))
+
 		context = zmq.Context()
 		for worker in range(n_workers):
 			if len(subdeployments[worker]['ugs']) == 0: continue
@@ -84,6 +105,11 @@ class Worker_Manager:
 			self.worker_sockets[worker].connect('tcp://localhost:{}'.format(base_port+worker))
 			msg = pickle.dumps(('init',(args,kwargs)))
 			self.worker_sockets[worker].send(msg)
+			# Offset the next spawn without waiting for ACK. Workers init in
+			# parallel; ACKs are collected in the second pass below.
+			if stagger_sec > 0 and worker + 1 < n_workers:
+				time.sleep(stagger_sec)
+		# Collect ACKs in parallel (single pass regardless of stagger).
 		for worker in range(n_workers):
 			while True:
 				try:

@@ -16,6 +16,7 @@ which unpacks and dispatches them on the actor side.
 import os
 import pickle
 import multiprocessing
+import time
 
 import ray
 
@@ -172,6 +173,18 @@ class Worker_Manager:
 		# Same trick for init_kwa (already shared across actors).
 		init_kwa = self.get_init_kwa()
 		init_kwa_ref = ray.put(init_kwa)
+		# SCULPTOR_WORKER_INIT_STAGGER_SEC: lightweight offset between actor
+		# constructs. Actors still init in PARALLEL via Ray (we don't wait
+		# for each __init__ to finish), but their start times are offset so
+		# the per-actor transient memory peak doesn't overlap perfectly across
+		# all 32 actors. Default 0 preserves original simultaneous-construct.
+		# Small values (1-3s) give most of the memory-smoothing benefit at
+		# small wall-time cost (n_workers * stagger_sec added during init only).
+		stagger_sec = float(os.environ.get('SCULPTOR_WORKER_INIT_STAGGER_SEC', '0') or 0)
+		if stagger_sec > 0:
+			print("[Ray] Worker init spawn-staggered: {}s offset between .remote() calls"
+				  .format(stagger_sec), flush=True)
+
 		for worker in range(n_workers):
 			if len(slices[worker]['ugs']) == 0:
 				continue
@@ -191,6 +204,11 @@ class Worker_Manager:
 			# own methods still use `.handle_msg.remote(...)` via the shim's
 			# pass-through `handle_msg` property.
 			self.worker_sockets[worker] = _ActorSocketShim(actor)
+			# Offset next .remote() call without blocking on this actor's init.
+			# Actors keep initializing in parallel under Ray; only their start
+			# times differ. ray.get on all ping refs (below) is the actual sync.
+			if stagger_sec > 0 and worker + 1 < n_workers:
+				time.sleep(stagger_sec)
 
 		# Block until every actor has finished __init__ -- matches the
 		# behaviour of the original which waited for an ACK before returning.
