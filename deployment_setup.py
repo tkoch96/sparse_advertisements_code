@@ -227,6 +227,13 @@ def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_
 
 def get_link_capacities(deployment, scale_factor=1.1, verb=True, **kwargs):
 
+	# SCULPTOR_SCALE_FACTOR overrides the headroom-over-anycast multiplier
+	# used in the jiangchen-sigcomm methodology. 1.0 = caps exactly match
+	# anycast load (zero slack); >1 adds headroom.
+	_sf_env = os.environ.get('SCULPTOR_SCALE_FACTOR')
+	if _sf_env is not None:
+		scale_factor = float(_sf_env)
+
 	if not deployment.get('simulated',True):
 		## we set these by actually measuring things
 		return {popp: NON_SIMULATED_LINK_CAPACITY for popp in deployment['popps']}
@@ -1540,7 +1547,16 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	asns = np.arange(sizes['n_asn'])
 	# ug_to_vol = {(metro,asn): np.power(2,np.random.uniform(1,10)) for metro in metros for asn in asns}
 	# ug_to_vol = {(metro,asn): np.random.uniform(1,100) for metro in metros for asn in asns}
-	ug_to_vol = {(metro,asn): 1 + 10 * np.random.random() for metro in metros for asn in asns}
+	# SCULPTOR_VOL_SPREAD: when set to s, draw volumes log-uniformly as
+	# exp(s * U) with U ~ Uniform[0,1]. s=0 → all volumes 1.0 (no variance);
+	# s grows → larger CV (s=2 ≈ 0.56, s=4 ≈ 1.04, s=6 ≈ 1.42). When unset
+	# the original uniform [1, 11] draw is used (same RNG consumption per UG).
+	_vs_env = os.environ.get('SCULPTOR_VOL_SPREAD')
+	if _vs_env is not None:
+		_vs = float(_vs_env)
+		ug_to_vol = {(metro,asn): float(np.exp(_vs * np.random.random())) for metro in metros for asn in asns}
+	else:
+		ug_to_vol = {(metro,asn): 1 + 10 * np.random.random() for metro in metros for asn in asns}
 	ug_perfs = {ug: {} for ug in ug_to_vol}
 	peers = np.arange(0,sizes['n_peer'])
 	popps = []
