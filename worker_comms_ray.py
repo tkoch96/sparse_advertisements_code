@@ -237,7 +237,37 @@ class Worker_Manager:
 		print("Waiting for deployment ACK messages...")
 		ray.get(refs)
 
+	def _collect_and_emit_worker_mem_logs(self):
+		"""Pull each Ray actor's per-process mem log file and echo to stdout
+		so the lines land in the driver sweep log. Necessary because Ray's
+		log_to_driver forwarding is unreliable in this cluster setup (zero
+		[mem-worker] lines reached the boost2532 sweep log despite hooks
+		firing inside the actors). Best-effort: any worker that errors is
+		skipped silently. Must run BEFORE ray.kill empties the actors.
+		"""
+		try:
+			msg = pickle.dumps(('dump_mem_log', None))
+			results = self.send_receive_workers(msg)
+		except Exception as e:
+			print('[worker_mem_collect] failed: {}'.format(e), flush=True)
+			return
+		for worker_i in sorted(results):
+			content = results.get(worker_i) or ''
+			if content:
+				print('--- worker {} mem log start ---'.format(worker_i), flush=True)
+				print(content, end='' if content.endswith('\n') else '\n', flush=True)
+				print('--- worker {} mem log end ---'.format(worker_i), flush=True)
+
 	def stop_workers(self):
+		# Pull per-worker mem logs BEFORE killing the actors (ray.kill is
+		# terminal; the actor's file content would be lost otherwise --
+		# even though the file persists on the worker host's /tmp, we
+		# don't have a separate path to retrieve it without going through
+		# the actor RPC).
+		try:
+			self._collect_and_emit_worker_mem_logs()
+		except Exception as e:
+			print('[worker_mem_collect] outer error: {}'.format(e), flush=True)
 		for worker, sock in list(self.worker_sockets.items()):
 			# `sock` is an _ActorSocketShim wrapping the actor handle. ray.kill
 			# wants the raw actor.

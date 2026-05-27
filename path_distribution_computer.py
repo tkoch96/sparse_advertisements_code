@@ -14,31 +14,63 @@ from scipy.sparse import csr_matrix
 gp.setParam("OutputFlag", 0)
 
 
-def _log_mem_worker(worker_i, tag, **extra):
-	"""Worker-side memory snapshot to stdout (captured into the sweep log).
-	Mirrors the driver's _log_mem in run_deployment_sweep.py so we can see
-	per-worker RSS at key points. Stays cheap; called at deployment-update /
-	init checkpoints, NOT per-iter.
+# Per-worker mem-log file path cache. Each worker's _log_mem_worker
+# appends here in addition to stdout. The driver collects via the
+# dump_mem_log RPC at end of run -- needed because Ray's log_to_driver
+# silently drops worker stdout in some configurations (observed empirically:
+# 0 [mem-worker] lines reached the boost2532 sweep log despite hooks firing
+# in path_distribution_computer.update_deployment).
+_WORKER_MEM_LOG_PATHS = {}
 
-	Output format mirrors the driver: `[mem-worker idx=N tag=TAG rss_mb=R sys_avail_mb=A pid=P ...]`
-	so post-hoc log parsing can grep both `[mem]` (driver) and `[mem-worker]`.
+
+def _get_worker_mem_log_path(worker_i):
+	if worker_i not in _WORKER_MEM_LOG_PATHS:
+		log_dir = os.environ.get('SCULPTOR_WORKER_MEM_LOG_DIR', '/tmp')
+		_WORKER_MEM_LOG_PATHS[worker_i] = os.path.join(
+			log_dir, 'sculptor_worker_{}_{}.log'.format(worker_i, os.getpid()))
+	return _WORKER_MEM_LOG_PATHS[worker_i]
+
+
+def _log_mem_worker(worker_i, tag, **extra):
+	"""Worker-side memory snapshot. Writes to a per-worker file (collected
+	by the driver via dump_mem_log RPC at end of run) AND prints to stdout
+	(best-effort; under Ray, stdout often doesn't reach the driver -- the
+	file is the authoritative copy).
+
+	Output format matches helpers.log_mem so parse_mem.py treats driver
+	and worker lines uniformly: `[mem-worker idx=N] tag=TAG rss_mb=R ...`.
 	"""
-	rss_kb = sys_avail_kb = -1
+	if os.environ.get('SCULPTOR_LOG_MEM', '1') == '0':
+		return
+	rss_kb = vms_kb = peak_kb = sys_avail_kb = -1
 	try:
 		with open('/proc/self/status', 'r') as f:
 			for line in f:
-				if line.startswith('VmRSS:'):
-					rss_kb = int(line.split()[1]); break
+				if line.startswith('VmRSS:'):    rss_kb  = int(line.split()[1])
+				elif line.startswith('VmSize:'): vms_kb  = int(line.split()[1])
+				elif line.startswith('VmPeak:'): peak_kb = int(line.split()[1])
 		with open('/proc/meminfo', 'r') as f:
 			for line in f:
 				if line.startswith('MemAvailable:'):
 					sys_avail_kb = int(line.split()[1]); break
 	except (FileNotFoundError, PermissionError):
 		return
-	extras = ' '.join(f'{k}={v}' for k, v in extra.items())
-	print(f'[mem-worker idx={worker_i} tag={tag} rss_mb={rss_kb//1024} '
-		  f'sys_avail_mb={sys_avail_kb//1024} pid={os.getpid()} t={time.time():.2f} {extras}',
-		  flush=True)
+	bits = ['tag={}'.format(tag),
+	        'rss_mb={}'.format(rss_kb//1024),
+	        'vms_mb={}'.format(vms_kb//1024),
+	        'peak_mb={}'.format(peak_kb//1024),
+	        'sys_avail_mb={}'.format(sys_avail_kb//1024),
+	        'pid={}'.format(os.getpid()),
+	        't={:.2f}'.format(time.time())]
+	for k, v in extra.items():
+		bits.append('{}={}'.format(k, v))
+	line = '[mem-worker idx={}] '.format(worker_i) + ' '.join(bits)
+	print(line, flush=True)
+	try:
+		with open(_get_worker_mem_log_path(worker_i), 'a') as f:
+			f.write(line + '\n')
+	except Exception:
+		pass
 
 
 remeasure_a = None
@@ -960,6 +992,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.calc_cache.all_caches['lb'] = {}
 
 
+	def dump_mem_log(self):
+		"""Return the contents of this worker's [mem-worker] log file.
+		Driver calls this via send_receive_workers (ZMQ) or Ray RPC at the
+		end of a run to collect per-worker memory data, since Ray's stdout
+		forwarding to the driver is unreliable in our setup.
+		"""
+		try:
+			with open(_get_worker_mem_log_path(self.worker_i), 'r') as f:
+				return f.read()
+		except (FileNotFoundError, PermissionError):
+			return ''
+
 	def clear_new_meas_caches(self):
 		# print("Clearing caches in worker {}".format(self.worker_i))
 		self.this_time_ip_cache = {}
@@ -1094,6 +1138,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		elif cmd == 'reset_cache':
 			self.clear_caches()
 			ret = "ACK"
+		elif cmd == 'dump_mem_log':
+			ret = self.dump_mem_log()
 		elif cmd == 'init':
 			self.start_connection()
 			return

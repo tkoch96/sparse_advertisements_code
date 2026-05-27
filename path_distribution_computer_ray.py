@@ -27,7 +27,10 @@ import ray
 
 # Inherit ALL the heavy logic (latency_benefit, solve_*_lp, monte-carlo, etc.)
 # from the original module by importing it. We override only what changes.
-from path_distribution_computer import Path_Distribution_Computer as _BasePathDistComputer
+from path_distribution_computer import (
+	Path_Distribution_Computer as _BasePathDistComputer,
+	_log_mem_worker,
+)
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from solve_lp_assignment import solve_generic_lp_with_failure_catch
 from constants import LOG_DIR
@@ -78,6 +81,11 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 
 		self.init_all_vars()
 		# Note: no run() loop and no main_socket. Ray dispatches method calls.
+		# Equivalent of the ZMQ version's `worker_proc_start` mem-snapshot,
+		# fired at the end of actor __init__ (post init_all_vars so the
+		# Gurobi shell + Optimal_Adv_Wrapper state are loaded).
+		_log_mem_worker(self.worker_i, 'worker_proc_start',
+		                dpsize=getattr(self, 'dpsize', '?'))
 
 	# ------------------------------------------------------------------ #
 	# Pickled-tuple dispatcher. Worker_Manager_ray calls this so the
@@ -207,8 +215,19 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		# fan-out branch when self.worker_manager is unset (AttributeError
 		# guard), which is the case inside a worker actor.
 		deployment, kwargs = data
+		_log_mem_worker(self.worker_i, 'update_deployment_enter',
+		                dpsize=deployment.get('dpsize', '?'))
 		self.update_deployment(deployment, **kwargs)
+		_log_mem_worker(self.worker_i, 'update_deployment_done',
+		                dpsize=deployment.get('dpsize', '?'))
 		return "ACK"
+
+	def _cmd_dump_mem_log(self, _data=None):
+		# Exposes the inherited dump_mem_log() to the cmd dispatcher so
+		# Worker_Manager_ray._collect_and_emit_worker_mem_logs can pull
+		# per-worker mem files at end of run via the standard
+		# send_receive_workers API.
+		return self.dump_mem_log()
 
 	def _cmd_update_kwa(self, new_kwa):
 		if new_kwa.get('n_prefixes') is not None:

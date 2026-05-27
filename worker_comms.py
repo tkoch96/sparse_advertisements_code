@@ -119,7 +119,33 @@ class Worker_Manager:
 				except:
 					time.sleep(.5)
 
+	def _collect_and_emit_worker_mem_logs(self):
+		"""Pull each worker's per-process mem log file and echo to stdout
+		so the lines land in the sweep log alongside driver [mem] events.
+		Best-effort: any worker that errors is skipped silently. Must run
+		BEFORE workers are sent 'end' / killed, since it relies on the
+		ZMQ socket loop to dispatch the dump_mem_log cmd.
+		"""
+		try:
+			msg = pickle.dumps(('dump_mem_log', None))
+			results = self.send_receive_workers(msg)
+		except Exception as e:
+			print('[worker_mem_collect] failed: {}'.format(e), flush=True)
+			return
+		for worker_i in sorted(results):
+			content = results.get(worker_i) or ''
+			if content:
+				print('--- worker {} mem log start ---'.format(worker_i), flush=True)
+				print(content, end='' if content.endswith('\n') else '\n', flush=True)
+				print('--- worker {} mem log end ---'.format(worker_i), flush=True)
+
 	def stop_workers(self):
+		# Pull per-worker mem logs BEFORE we send 'end' (which causes the
+		# worker to close its socket and exit, dropping its log file).
+		try:
+			self._collect_and_emit_worker_mem_logs()
+		except Exception as e:
+			print('[worker_mem_collect] outer error: {}'.format(e), flush=True)
 		for worker, socket in self.worker_sockets.items():
 			try:
 				socket.recv()
