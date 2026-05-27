@@ -1,186 +1,356 @@
-# Sparse Advertisements Code
+# Sparse Advertisements Code (SCULPTOR)
 
-## Key commands
+Research codebase for **SCULPTOR**, an SGD-based optimizer for BGP
+advertisement strategies that minimizes average user latency while staying
+resilient to PoP/popp failures. Compares SCULPTOR against PAINTER, AnyOpt,
+anycast, and several baseline strategies across simulated and
+real-deployment scenarios.
 
-To, in principle, generate most of the plots in the paper, you would just need to do
+---
 
-"python evaluate_over_deployment_sizes.py --port 31415" # conduct emulated experiments
+## 📍 Where to start
 
-"python actual_deploymenteval_lateny_failure && python make_actual_deployment_plots.py" # conduct real-deployment experiments
+| You are... | Read |
+|---|---|
+| A new contributor | This README, then [tests/README.md](tests/README.md) |
+| Picking up mid-stream | The most recent `HANDOFF_SESSION_N.md` (currently [HANDOFF_SESSION_9.md](HANDOFF_SESSION_9.md)) — earlier handoffs are kept as history |
+| Standing up the AWS cluster | [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) |
+| Looking for the research backlog | [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md) |
 
-In practice, each of these scripts usually needs babysitting and they also take several days to run. So, for a given change or experiment, you want to call subsets of that analysis with small deployments and then scale your way up to the largest sizes. The key tool for doing so is:
+Older handoffs (`HANDOFF.md`, `HANDOFF_SESSION_6/7/8.md`, `SESSION_4/5_SUMMARY.md`,
+`OVERNIGHT_SUMMARY.md`) are point-in-time snapshots — useful for archaeology,
+not authoritative for current state.
 
-"python eval_latency_failure.py --port 31415 --dpsize small" # completely simulated deployment, fake latencies
+---
 
-or, if you want to use real latencies
-"python eval_latency_failure.py --port 31415 --dpsize actual-10" # actual 10 means use real latencies, emulated deployment, for 10 random sites
+## Quick start
 
-Most of the scripts must be run on a specific port. The port is the port that the leader script communicates on to direct the worker scripts. Calling two different evaluations at the same time on the same port will confuse the workers and likely ruin all the simulations. Hence, it's very important that, if you're running many evaluations at once, you use *different* ports. 
+### Local smoke (laptop, ~2 min)
 
+```bash
+# In your venv:
+python -m experiments.run_objective \
+    --obj avg_latency --dpsize small --port 31510 --max-iter 20
+```
+
+This builds a tiny 3-pop deployment, runs all strategies (sparse, painter,
+anyopt, anycast, one_per_pop, one_per_peering, random), and writes a
+markdown summary to `cache/experiments/run_obj_avg_latency_small.md`.
+Sparse uses Ray actors locally — Ray initializes its own local instance on
+first import.
+
+### Sweep over deployment sizes (laptop or cluster)
+
+```bash
+SCULPTOR_DEPLOYMENT_SWEEP_SIZES=3,5,10 SCULPTOR_DEPLOYMENT_SWEEP_NSIM=1 \
+SCULPTOR_MAX_ITER=50 \
+python benchmarks/run_deployment_sweep.py --port 31510
+```
+
+Iterates `evaluate_all_metrics` over each dpsize, hot-starts from saved
+state where possible. See `benchmarks/run_deployment_sweep.py` docstring
+for all env vars (per-dpsize NSIM lists, headroom, etc.).
+
+### AWS cluster
+
+See [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) for full setup.
+Short version:
+
+```bash
+ray up ray-cluster.yaml -y                    # 5-30 min
+ray exec ray-cluster.yaml '... eval_latency_failure.py ...'
+./teardown.sh                                 # ALWAYS at end of session
+```
+
+---
+
+## Architecture overview
+
+```
+                    ┌─────────────────────────────────┐
+                    │  Driver process (head node)     │
+                    │                                 │
+   evaluate_all_   ─▶│  Sparse_Advertisement_Eval     │
+   metrics()        │  ├─ training loop (SGD)        │
+                    │  ├─ compare_different_solutions │
+                    │  │  ├─ sparse (this process)    │
+                    │  │  └─ painter, anyopt, …       │  ◀── fork subprocesses
+                    │  │     (parallel ProcessPool)   │
+                    │  └─ eval phases                 │
+                    │       (failure resilience,      │
+                    │        flash crowd, diurnal)    │
+                    └────────┬────────────────────────┘
+                             │  (Ray actor RPC)
+                             ▼
+                    ┌─────────────────────────────────┐
+                    │  Ray actors (worker node)        │
+                    │  N × Path_Distribution_Computer │
+                    │  - latency_benefit calc          │
+                    │  - LP solve (persistent Gurobi) │
+                    │  - per-worker UG slice           │
+                    └─────────────────────────────────┘
+```
+
+Key concepts:
+
+- **Sparse training (SGD)** lives in `sparse_advertisements_v3.py`
+  (`Sparse_Advertisement_Solver`). The main loop does gradient probes →
+  step → measure → stop-check, ~80s/iter at dpsize=25 with 32 workers.
+- **Workers** are Ray actors (`path_distribution_computer_ray.py`)
+  managed by `Worker_Manager` (`worker_comms_ray.py`). Each holds a
+  persistent Gurobi model + cached deployment slice.
+- **Strategies (painter, anyopt, etc.)** run concurrently as forked
+  subprocesses on the head, in `compare_different_solutions`. They
+  don't use Ray workers — they solve via single LPs.
+- **Objectives** are registered in `experiments/objectives.py`. New
+  objectives are added by registering an `ObjectiveSpec` + an LP function
+  in `solve_lp_assignment.py`. See "Adding a new objective" below.
+- **Eval phases** are the post-training assessments (LP latencies under
+  failure scenarios, percent of volume within latency targets, etc.),
+  implemented in `wrapper_eval.py` + `eval_latency_failure.py`.
+
+---
+
+## Code map
+
+### Top-level scripts
+
+| File | Role |
+|---|---|
+| `sparse_advertisements_v3.py` | SCULPTOR algorithm (SGD), `Sparse_Advertisement_Solver`, `compare_different_solutions` |
+| `painter.py` | PAINTER + unicast baselines |
+| `anyopt.py` | AnyOpt baseline |
+| `optimal_adv_wrapper.py` | Base class `Optimal_Adv_Wrapper`: deployment loading, common LP helpers, `measure_ingresses` |
+| `optimal_adv_wrapper_ray.py` | Variant used by Ray-aware code paths |
+| `path_distribution_computer.py` | Worker-side LP / latency_benefit logic (LP cache, Gurobi shell). Imported by `_ray.py` for actor body |
+| `path_distribution_computer_ray.py` | Ray actor wrapper around the above |
+| `worker_comms.py` | Thin re-export of `worker_comms_ray` (kept for backward-compat imports) |
+| `worker_comms_ray.py` | `Worker_Manager`: spawn / fanout / tear down Ray actors |
+| `solve_lp_assignment.py` | All LP objective implementations (avg_latency, per_site_cost, joint_priority, site_failure) + the persistent-Gurobi solve loop |
+| `generic_objective.py` | `Generic_Objective` — runtime dispatch from objective name → LP function |
+| `deployment_setup.py` | Build synthetic + actual deployments, link capacities, user volumes |
+| `wrapper_eval.py` | Eval phase implementations (failure resilience, flash crowd, diurnal) |
+| `eval_latency_failure.py` | `evaluate_all_metrics()` — primary driver invoked by sweeps |
+| `actual_deployment_eval_latency_failure.py` | Real-deployment variant (less commonly used) |
+| `evaluate_over_deployment_sizes.py` | Sweep + plot SCULPTOR vs others as dpsize varies (paper plots) |
+| `evaluate_over_n_prefixes.py` | Sweep + plot vs number of prefixes (paper plots) |
+| `make_actual_deployment_plots.py` | Paper plots for the real-deployment results |
+| `paper_plotting_functions.py` | Plot styling primitives |
+| `graph_utils.py` | Plotting helpers (font sizes, dimensions) |
+| `realworld_measure_wrapper.py` | Real-deployment glue (RIPE Atlas, advertisement caching) |
+| `helpers.py` | Generic utilities (logging, mem snapshots, deployment splitting, etc.) |
+| `constants.py` | NO_ROUTE_LATENCY, NON_SIMULATED_LINK_CAPACITY, dpsize→n_pop mapping |
+| `testing_feature.py` | Variant of `evaluate_over_deployment_sizes.py` with a feature toggle |
+| `testing_generic_objective.py`, `testing_priorities.py`, `testing_site_costs.py` | Legacy per-objective drivers, mostly superseded by `experiments/run_objective.py` |
+| `count_solutions.py` | Count IPs / /24s / ASes covered by an emulation |
+| `get_smaller_anycast_lats.py` | Sub-sample the anycast latency CSV for faster local testing |
+| `get_apnic_pop.py` | APNIC PoP / latency data prep |
+| `weathermap_investigation.py` | OVH cloud motivation analysis |
+| `eval_modeling_assumptions.py` | (Incomplete) modeling-assumption robustness tests |
+| `gradient_descent_exploration_plot.py` | One-off plot of grad-descent trajectory |
+| `just_prior.py`, `specific_deployment.py`, `evals.py` | Older legacy drivers; superseded |
+| `test_polyphase.py` | Legacy objective method, kept for reference |
+| `killitall.py` | Kill all processes on a given port (debugging) |
+
+### `experiments/`
+
+Newer per-objective + per-experiment drivers. Each script has its own docstring.
+
+| File | Role |
+|---|---|
+| `experiments/objectives.py` | Registry: `ObjectiveSpec` dataclass + map of all objectives |
+| `experiments/run_objective.py` | Single CLI driver (`python -m experiments.run_objective --obj <name> --dpsize <size>`) |
+| `experiments/site_failure.py` | `site_failure` objective spec (steady + mean-over-PoP-failures with frozen user→prefix) |
+| `experiments/static_failure_eval.py` | BGP-fallback failure eval phase shared by site_failure |
+| `experiments/painter_hypothesis_sweep.py` | 2D sweep of (scale_factor, vol_spread) testing the painter-degradation hypothesis |
+
+### `benchmarks/`
+
+Sweep + perf-investigation harnesses with structured output.
+
+| File | Role |
+|---|---|
+| `benchmarks/run_deployment_sweep.py` | Cluster-friendly sweep over dpsizes with per-size NSIM, hot-start, env-var config |
+| `benchmarks/eval_phase_baseline.py` | Per-phase timing + crash diagnostics for `evaluate_all_metrics` |
+
+### `tests/`
+
+12 pytest files covering LP correctness, worker behaviour, convergence, perf
+sweep. See [tests/README.md](tests/README.md) for fixtures + markers.
+
+### Directories
+
+| Dir | Purpose |
+|---|---|
+| `data/` | External inputs (AS relationships, latency CSVs, IP lists). Pulled from Drive — see Setup |
+| `cache/` | Generated artefacts: deployment pickles, per-experiment metrics, plot inputs |
+| `runs/` | Per-training-run state (`state-N.pkl` checkpoints every 5 iters, per-iter stats) |
+| `logs/` | Worker stdout/stderr captures; session forensics |
+| `figures/` | Generated plots (paper-quality PDFs + diagnostic PNGs) |
+| `old_scripts/` | Pre-v3 implementations kept for reference; don't import |
+
+---
 
 ## Setup
-These instructions are a WIP
 
-0. Get an environment. To run the largest sizes in a day, it generally helps to have 50+ CPUs. I think I used a m7g.8xlarge. Make sure to only use this size when you actively need it, as it is really expensive. (There might be even better generations of VM these days, just use the best one.) I would use a python virtual environment for python package management.
-1. Install all the python packages. It would help if folks could contribute to the requirements.txt file to enable quick setup.
-2. Get the data from the drive. You might want to consider getting your own data as, over time, this data will grow stale. I will try to upload everything that's needed [here](https://drive.google.com/drive/folders/1PvGOPRgkvjTaeq5m2ogyh0zSZ4r6JLcJ)
-3. Get a gurobi license and configure it on your machine. I think it involves putting the license file in your home directory, but I'm not sure. It's a WSL student license: https://www.gurobi.com/academia/academic-program-and-licenses/
-
-
-## Key directories
-
-### data
-Holds "data" which is anything I pull from somewhere and is generally external from the codebase. Things like AS relationships, latency measurements, lists of IP addresses.
-
-### figures
-Holds all figures for evaluation, etc
-
-### graphs
-unused
-
-### old_scripts
-unused scripts but keeping just in case
-
-### cache
-Holds data generated during 
-
-### runs
-Holds state that is meant to 
-1. give useful debugging information
-2. give us metrics that allow us to conduct analysis in the future without needing to rerun the training
-3. restart a run from partway through the learning process if it got stopped or ran into an error
-4. hold measurements from when we actually deploy things on the Internet
-
-### logs
-Holds logs from workers threads, debugging.
-
-### .
-The main directory holds all the scripts we use in no logically organized way :)
-
-## Key types of scripts
-
-### Solely Plotting Scripts
-A small number of scripts just plot clean results for the paper, assuming all the evaluations have been done and that those results have been stored somewhere.
-
-*make_actual_deployment_plots.py*: Makes plots for the paper related to the actual deployment on the Internet.
-
-
-### Evaluations
-These call the algorithms, collect metrics, call the evaluators, and plot the results. They are used to generate most/all plots in the paper. Evaluations often fall into the following run-flow
-
-1. Collect settings pertaining to the evaluation such as the size of the deployment we want to emulate.
-2. Run the advertisement allocation algorithms, possibly several times across many emulated deployments for statistical significance. Many evaluation scripts support starting from where a prior run stopped in case the process accidentally finish early.
-3. Collect and cache the output from the runs (mostly the advertisement solutions).
-4. Conduct the evaluations: there are usually several different evaluations across several different settings and potentially many different "runs". 
-5. Plot the results, usually across runs/settings.
-
-These evaluation scripts are of two types. There are scripts that call the evaluations, and then scripts that actually implement the evaluation. For example, I can evaluate how a solution handles flash crowds by (a) writing a script that conducts flash crowd analysis and (b) writing a script that invokes that analysis over many deployments
-
-##### Evaluation Implementations
-*wrapper_eval.py*: Implements most if not all of the actual evaluations like assessing resilience to flash crowds.
-
-
-##### Evaluation Callers
-*eval_latency_failure.py*: What I usually use to conduct the key evaluations. It was built to emulate a bunch of random deployments, solve each of the various advertisement solutions on these deployments, and evaluate how they did on average over all the randomly emulated deployments.
-
-*eval_modeling_assumptions.py*: Never got it working correctly, but the intention was to assess resilience to various assumptions we make in the paper. For example, "change_model_capacities" is meant to assess how resilient we would be to changing the capacity on one or more paths. For example, if the bottleneck capacity was somewhere else along the path. Sharad's/Ethan's impression was that this analysis was not important and that we could explain-away reviewer concerns.
-
-*just_prior.py*: calls key evaluations for everything except SCULPTOR
-
-*specific_deployment.py*: calls key evaluations for a specific emulated deployment, rather than randomly generating a new deployment or using whatever the default deployment was
-
-*evaluate_over_deployment_sizes.py*: Evaluates/plots how SCULPTOR compares to other methods as we vary the deployment size. Used to generate a lot of plots in the paper.
-
-*evaluate_over_n_prefixes.py*: Evaluates/plots how SCULPTOR compares to other methods as we vary the number of prefixes we use. The key finding was that SCULPTOR does about as well as other methods until the number of prefixes exceeds the number of sites.
-
-*testing_feature.py* (clunky) Carbon copy of evaluate_over_deployment_sizes.py except we're toggling some arbitrary feature of the way we do things, to see if SCULPTOR does any better compared to other methods. Also used for a lot of plots in the paper.
-
-*testing_generic_objective.py*: Same as eval_latency_failure except calls with an objective other than average latency. Used more for testing implementation that feautre iirc, so not really used anymore.
-
-*testing_priorities.py*: Tests multipriority traffic for the B4/SWAN evaluation in the paper. Could potentially be improved/explored further but reviewers didn't seem to have a problem with it.
-
-### Algorithms
-Contain the implementations of each of the key algorithms we're comparing. "sparse_advertisements_v3.py" contains SCULPTOR, "painter.py" contains unicast and PAINTER, and "anyopt.py" contains AnyOpt.
-
-Also here is:
-
-*optimal_adv_wrapper.py* which wraps each of the solutions and contains a lot of generic helpful scripts like learning from measurements and so on.
-
-*path_distribution_computer.py*: In SCULPTOR, we have to evaluate the objective lots of times whether this be for exploration or gradient descent. This script/class is a worker bee for computing that objective. 
-
-*realworld_measure_wrapper.py*: For actual deployments on the Internet, we need to conduct advertisements. This class interfaces with another package to conduct those advertisements, caches results, invokes RIPE Atlas traceroutes, parses measurements, etc. 
-
-*solve_lp_assignment.py*: Interfaces with Gurobi to solve traffic allocations. I.e., for eah given objective specified by "generic_objective.py", this file implements a way of calling Gurobi with the appropriate constraints etc... that map user traffic onto available routes so as to optimize that objective. 
-
-
-
-### Generic Helper/Config Scripts
-This is what most of the scripts here fall under, and each has their own purpose. Highlighting the key ones here.
-
-*constants.py*: contains things that we expect to be held constant 
-
-*deployment_setup.py* : Emulates deployments, routing preferences, loads latencies, etc.
-
-
-*helpers.py*: Miscellaneous functions. Any generic utilities that I'd use here or across other projects.
-
-*kilitall.py*: We run evaluations over sometimes 50+ workers, each of which is an OS process. If something bad happens, sometimes there can be tons of processes which are annoying to kill. Sometimes you may have multiple simulations running, so you don't just want to kill absolutely all the processes. This script kills the processes solely associated with one simulation, UIDed by the port that the main process is listening on.
-
-*test_polyphase.py* (tech debt -- need to remove) Used to use this to compute the objective but have since moved to monte-carlo methods.
-
-*worker_comms.py*: Starts up / tears down sockets/processes related to communicating with worker bees.
-
-
-### Specific/one-off analysis for the paper
-
-*count_solutions.py*: counts the representativeness of the emulations in terms of # of IPs, /24s,/ ASes 
-
-*get_smaller_anycast_lats.py*: helps get a small subset of the latency measurements to work with. better to work with a small set of measurements for testing new code since it will just be faster.
-
-*graph_utils.py*: not perfectly adopted everywhere but an attempt at standardization of figure plotting settings so that we don't have to worry about dimensions, font sizes, etc.
-
-*paper_plotting_functions.py*: Also an attempt to standardize how we plot things.
-
-*weathermap_investigation.py*: OVH cloud motivation.
-
-
-
-## Specific Demos / Control Flows / Evaluations
-
-### Objective Functions
-
-Adding a new objective function consists of (a) defining the name of the objective function and (b) implementing that objective function in *solve_lp_assignment.py*. 
-
-Let's say our new objective function is "cool_objective". To implement this objective function, we add a function called *solve_cool_objective* that takes 3 arguments:
-1. an instance of sparse_advertisements_v3:Sparse_Advertisement_Solver (sas). sas provides us the properties of the deployment such as the user groups and their traffic volumes. 
-2. routed_through_ingress which is a dictionary mapping prefixes -> user indices -> path. The interpretation of this object is that it is one possible realization of how all the users route to the different prefixes. For the most part, this object should be passed to solve_lp_assignment:get_paths_by_ug which returns a list of all <UG, popp> pairs and a dictionary mapping users to all their available paths.
-3. objective function name string
-
-In addition to this new function, update the function mapping in generic_lp_functions. You may also be interested in updating 'get_obj_fn', although that is not necessary.
-
-
-Given these arguments, *solve_cool_objective* should return a dictionary of results containing:
-1. objective: the final objective function value
-2. solved: the status from the gurobi solver
-3. paths_by_ug: a dictionary mapping users to a list of (poppi, vol_pct) where poppi is a path the user takes and vol_pct is the percent of that users traffic volume allocated to a path. All vol_pcts for a given user should add to 1.
-4. other results
-
-The other results usually involve the "solution", i.e., how traffic should be allocated to paths. For example, this might be a user_group, prefix -> volume amount mapping or something similar. You can use the other functions in this file as examples.
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
+### Local (Mac/Linux)
+
+```bash
+# 1. Python 3.12 venv:
+python3.12 -m venv ~/Documents/venv312
+source ~/Documents/venv312/bin/activate
+pip install --upgrade pip
+
+# 2. Install deps (requirements.txt is incomplete; install transitively):
+pip install numpy scipy matplotlib tqdm pandas pickle5 \
+            gurobipy scikit-learn scikit-image geopy geoip2 \
+            ray[default] boto3 \
+            pyzmq pytest
+
+# 3. Gurobi license (academic WLS):
+#    https://www.gurobi.com/academia/academic-program-and-licenses/
+#    Drop ~/gurobi.lic
+#    Confirm: python -c "import gurobipy as g; g.Model().optimize()"
+
+# 4. Data files from Drive (https://drive.google.com/drive/folders/1PvGOPRgkvjTaeq5m2ogyh0zSZ4r6JLcJ):
+#    data/vultr_peers_inferred.csv
+#    cache/vultr_ingress_latencies_by_dst.csv      (~4.5 GB)
+#    cache/vultr_anycast_latency_smaller.csv       (~52 MB)
+#    cache/vultr_provider_popps.csv                (~2 KB)
+
+# 5. Sanity check:
+python -m experiments.run_objective --obj avg_latency --dpsize small \
+    --port 31510 --max-iter 5
+```
+
+### AWS cluster
+
+See [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) for the IAM perms,
+`ray-cluster.yaml` walkthrough, and the standard tear-down ritual. Short
+checklist:
+
+- IAM user with `AmazonEC2FullAccess` + `IAMFullAccess`
+- `aws configure` locally
+- `~/gurobi.lic` (WLS academic; 3 concurrent sessions baseline)
+- `pip install "ray[default]" boto3` in the local venv
+- `ray up ray-cluster.yaml -y`
+
+---
+
+## Running experiments
+
+### Environment variables
+
+These knobs control behaviour without code changes. Set via shell env or
+in `os.environ` from a launcher.
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SCULPTOR_MAX_ITER` | unset | Override `Sparse_Advertisement_Solver.solve(max_iter=…)` |
+| `SCULPTOR_N_WORKERS` | min(cpu_count, dpsize_suggested) | Max Ray-actor pool size |
+| `SCULPTOR_N_WORKERS_DURING_PARALLEL` | unset | If set, sparse training starts with this many workers; ramps up to `SCULPTOR_N_WORKERS` once concurrent parallel strategies finish |
+| `SCULPTOR_CAPACITY_HEADROOM` | 0.0 | Multiplier `cap × (1+h)` applied during training only (relaxes the LP cap constraint to give SGD slack); restored to true cap for eval |
+| `SCULPTOR_DISABLE_PARALLEL_STRATEGIES` | unset | Run painter / anyopt / etc. serially after sparse instead of concurrently in subprocesses |
+| `SCULPTOR_DEPLOYMENT_SEED` | unset | Pin the deployment RNG for reproducible smoke tests |
+| `SCULPTOR_DEPLOYMENT_SWEEP_SIZES` | `3,5,10,15,20,25,<n_vultr>` | Comma-separated dpsize list for `benchmarks/run_deployment_sweep.py` |
+| `SCULPTOR_DEPLOYMENT_SWEEP_NSIM` | `1` | Single int OR comma list parallel to SIZES (per-dpsize random_iter count) |
+| `SCULPTOR_DEPLOYMENT_SWEEP_TAG` | `dep_sweep` | Suffix on per-dpsize eval pickles |
+| `SCULPTOR_RUN_TAG` | unset | Tag for the per-dpsize eval pickle within `evaluate_all_metrics` |
+| `SCULPTOR_ADAPTIVE_PROBE_BUDGET` | unset | Shrink gradient probe budget over iters |
+| `SCULPTOR_STOP_DROP_ADV_DELTA` | unset | Early-stop threshold on advertisement change |
+| `SCULPTOR_LOG_MEM` | `1` | Set to `0` to silence `[mem]` instrumentation |
+| `SCULPTOR_WORKER_INIT_STAGGER_SEC` | `0` | Offset between worker spawns (smooths per-actor RAM peaks during init) |
+| `SCULPTOR_WORKER_MEM_LOG_DIR` | `/tmp` | Per-worker mem log file directory (Linux only) |
+
+### Port discipline
+
+Each evaluation needs its own port (defaults to 31510 / 31415 / 31618). If
+two runs share a port, their workers cross-talk and silently corrupt
+results. When running concurrent experiments, pick distinct ports.
+
+### "Scripts need babysitting"
+
+Almost every driver in this repo can run for hours to days at large dpsizes
+and routinely hits transient issues (Gurobi WLS throttling, OOM, Ray actor
+death, disk space). Hot-start logic exists in most drivers (look for
+`state-N.pkl` checkpoints in `runs/`), but always assume any single run
+might need to be restarted. For new code changes, smoke at `dpsize=small`
+or `dpsize=actual-3` first, then scale up.
+
+---
+
+## Adding new things
+
+### A new objective function
+
+Two pieces: register it + implement the LP.
+
+```python
+# 1. In experiments/<name>.py:
+from experiments.objectives import ObjectiveSpec, register
+register(ObjectiveSpec(
+    name='my_new_objective',
+    lp_obj_string='my_new_objective',     # the string sas.compare_different_solutions's LP layer expects
+    description='What this minimises',
+    lp_kwargs={'my_knob': 1.0},
+    eval_phases=('static_failure_resilience',),  # plus whatever post-training evals
+    gamma=0, using_resilience_benefit=True,
+))
+
+# 2. In solve_lp_assignment.py: add a function
+def solve_lp_assignment_my_new_objective(sas, routed_through_ingress, obj, **kwargs):
+    """Return dict with keys:
+        objective: float (final LP value)
+        solved:    str (Gurobi solution status)
+        paths_by_ug: {ug_index: [(poppi, vol_pct), ...]}
+        lats_by_ug: numpy array of per-UG latencies
+        ... plus any objective-specific fields
+    """
+    paths_by_ug, available_paths = get_paths_by_ug(sas, routed_through_ingress)
+    # ... build Gurobi model, optimize, extract solution ...
+
+# 3. Register the LP function:
+generic_lp_functions['my_new_objective'] = solve_lp_assignment_my_new_objective
+
+# 4. Import the spec module from experiments/run_objective.py so it registers at import time.
+
+# 5. (optional) Unit-test in tests/test_lp_correctness.py for a hand-verifiable case.
+```
+
+### A new strategy
+
+Add a `solve_<name>` method to `Sparse_Advertisement_Wrapper` (in
+`sparse_advertisements_v3.py`) that populates `self.solutions[name]` with
+the same dict shape as the existing strategies (see `solve_painter` for
+the simplest reference). Add the name to `solution_types` and, if it
+should run concurrently with sparse, to `_PARALLEL_STRATEGY_NAMES`.
+
+### A new eval phase
+
+Add a function to `wrapper_eval.py` that takes `(sas, metrics, …)` and
+populates `metrics[<phase_name>][random_iter][solution_type]`. Add the
+phase name to the relevant `ObjectiveSpec.eval_phases` tuple. Implement
+the same shape as the existing phases (e.g. `assess_failure_resilience`).
+
+---
+
+## Common gotchas
+
+- **Gurobi WLS license is rate-limited.** Academic WLS allows ~3
+  sustained concurrent sessions; we routinely run with 32 worker actors.
+  Throttling shows up as "Overage for too long" warnings and silently
+  slows things down. Avoid running local Gurobi while a cluster sweep
+  is active.
+- **`actual_deployment_eval_latency_failure.py`** is the real-deployment
+  path (RIPE Atlas measurements, actual BGP advertisements). It's the
+  same shape as `eval_latency_failure.py` but with real-world measurement
+  glue. Most active development uses the simulated path.
+- **dpsize naming.** Synthetic deployments use names like `small` /
+  `decent` / `med` (defined in `constants.py`). Actual deployments use
+  `actual-N` where N is the number of PoPs (e.g. `actual-25` = use real
+  latencies for 25 randomly-chosen Vultr PoPs).
+- **State pickle growth.** `runs/<ts>-*/state-N.pkl` checkpoints grow
+  linearly with iteration count (~3 MB/iter at dpsize=25). Old run dirs
+  can eat all the disk on the head node — periodically clean up.
+- **macOS vs Linux.** `_log_mem_worker` reads `/proc` and is a silent
+  no-op on macOS. Mem-instrumentation only fires under Linux (cluster).
