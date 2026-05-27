@@ -4,6 +4,7 @@ from subprocess import call, check_output
 import concurrent.futures
 import multiprocessing as _mp
 import os as _os
+import threading as _threading
 np.setbufsize(262144*8)
 
 # Memory instrumentation. Linux-only (reads /proc); silent on macOS. Gated by
@@ -875,6 +876,37 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 						_solve_one_strategy_in_subprocess,
 						s, deployment_for_sub, init_kwa_for_sub, sub_kwargs)
 					futures[fut] = s
+
+				# Adaptive worker resize: if the Worker_Manager was started
+				# with a reduced pool (SCULPTOR_N_WORKERS_DURING_PARALLEL),
+				# spawn a watcher thread that asks it to grow to the full
+				# SCULPTOR_N_WORKERS target as soon as the parallel-strategy
+				# subprocesses finish. The Worker_Manager queues the request;
+				# actual add_workers runs at the next sparse iter boundary
+				# via wm.process_pending_resize (no concurrent fanouts).
+				wm = getattr(self, 'worker_manager', None)
+				if wm is not None and hasattr(wm, 'request_add_workers'):
+					try:
+						target = wm._target_n_workers()
+						current = len(getattr(wm, 'worker_sockets', {}) or {})
+						n_to_add = max(0, target - current)
+					except Exception:
+						n_to_add = 0
+					if n_to_add > 0:
+						future_list = list(futures.keys())
+						def _watch_parallel_done(_futs, _wm, _n):
+							concurrent.futures.wait(_futs,
+								return_when=concurrent.futures.ALL_COMPLETED)
+							_wm.request_add_workers(_n)
+						t = _threading.Thread(
+							target=_watch_parallel_done,
+							args=(future_list, wm, n_to_add),
+							daemon=True, name='sculptor-worker-ramp')
+						t.start()
+						if verbose:
+							print("[adaptive-workers] watcher armed: will request +{} "
+								"workers when {} parallel strategies finish".format(
+									n_to_add, len(future_list)))
 
 			# Run serial strategies (sparse) in main process with full Ray pool.
 			for solution_type in serial_types:
@@ -2284,6 +2316,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					print("\n\n")
 				self.ts_loop = time.time()
 				_log_mem('iter_start', iter=self.iter)
+				# Adaptive worker resize hook: if the watcher thread set up
+				# in compare_different_solutions has flagged a ramp-up
+				# (parallel-strategy subprocesses finished), grow the Ray
+				# actor pool now. Runs synchronously on the main thread, so
+				# no concurrent fanouts are in flight. No-op when no ramp
+				# is pending (the common case).
+				_wm = getattr(self, 'worker_manager', None)
+				if _wm is not None and hasattr(_wm, 'process_pending_resize'):
+					_wm.process_pending_resize()
 
 				# calculate gradients
 				if self.verbose:

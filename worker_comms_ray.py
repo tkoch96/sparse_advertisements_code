@@ -16,6 +16,7 @@ which unpacks and dispatches them on the actor side.
 import os
 import pickle
 import multiprocessing
+import threading
 import time
 
 import ray
@@ -128,11 +129,32 @@ class Worker_Manager:
 		self.dpsize = self.deployment['dpsize']
 		self.worker_sockets = {}          # worker_i -> Ray actor handle
 		self.worker_to_deployments = {}
+		# Adaptive-resize state. compare_different_solutions spawns a watcher
+		# thread that calls request_add_workers when concurrent parallel
+		# strategies finish; the actual resize happens at the next sparse
+		# iter boundary via process_pending_resize (single-threaded, no
+		# concurrent fanouts in flight). See SCULPTOR_N_WORKERS_DURING_PARALLEL.
+		self._resize_lock = threading.Lock()
+		self._pending_add_workers = 0
 
 	def get_init_kwa(self):
 		return self.kwa_settings
 
 	def get_n_workers(self):
+		# Once workers are running, return the actual count. Partitioning
+		# code (split_deployment_by_ug, send_receive_messages_workers
+		# preallocators in optimal_adv_wrapper) calls this; after a
+		# request_add_workers ramp, callers should see the new size.
+		if self.worker_sockets:
+			return len(self.worker_sockets)
+		return self._target_n_workers()
+
+	def _target_n_workers(self):
+		# Original get_n_workers logic — the configured target count from
+		# env var / heuristic. Used at start_workers time (before
+		# self.worker_sockets is populated) and as the ceiling for
+		# the post-parallel ramp-up.
+		#
 		# Same heuristic as the original: min(cpu_count, suggested_for_dpsize).
 		# Allow env var override to escape the multiprocessing.cpu_count() trap
 		# when the driver runs on a small head node but workers are larger
@@ -145,7 +167,6 @@ class Worker_Manager:
 			try:
 				suggested_num_workers = get_n_workers(self.dpsize)
 				n = min(int(env_override), suggested_num_workers)
-				print("SCULPTOR_N_WORKERS override active: n_workers={}".format(n))
 				return n
 			except ValueError:
 				print("WARNING: SCULPTOR_N_WORKERS={!r} is not an int; falling back".format(env_override))
@@ -156,9 +177,24 @@ class Worker_Manager:
 	# ------------------------------------------------------------------ #
 	# Lifecycle
 	# ------------------------------------------------------------------ #
-	def start_workers(self):
+	def start_workers(self, n_workers_override=None):
+		"""Spawn the initial pool of Ray actors.
+
+		`n_workers_override` lets evaluate_all_metrics start with a smaller
+		pool than SCULPTOR_N_WORKERS during the
+		concurrent-parallel-strategies window. The remaining slots are
+		added later via request_add_workers -> process_pending_resize.
+		"""
 		self.worker_to_deployments = {}
-		n_workers = self.get_n_workers()
+		if n_workers_override is not None:
+			n_workers = n_workers_override
+			print("[adaptive-workers] start_workers using override n_workers={}"
+				  " (target={})".format(n_workers, self._target_n_workers()), flush=True)
+		else:
+			n_workers = self._target_n_workers()
+			env_override = os.environ.get('SCULPTOR_N_WORKERS')
+			if env_override is not None:
+				print("SCULPTOR_N_WORKERS override active: n_workers={}".format(n_workers))
 
 		# Split the deployment into (shared static dict, per-UG slices) and
 		# ray.put the static dict ONCE. The actor constructor then receives
@@ -216,6 +252,116 @@ class Worker_Manager:
 		ready_refs = [self.worker_sockets[w].ping.remote()
 					  for w in self.worker_sockets]
 		ray.get(ready_refs)
+
+	# ------------------------------------------------------------------ #
+	# Adaptive resize (request from any thread; apply on main thread only)
+	# ------------------------------------------------------------------ #
+	def request_add_workers(self, n_add):
+		"""Thread-safe request to grow the actor pool by `n_add`. The
+		actual spawn + re-partition happens at the next
+		process_pending_resize() call (typically the next sparse iter
+		boundary), so we never mutate worker_sockets while a fanout is
+		mid-flight. Called from the watcher thread spawned in
+		compare_different_solutions when concurrent parallel-strategy
+		subprocesses finish.
+		"""
+		with self._resize_lock:
+			self._pending_add_workers += int(n_add)
+			print("[adaptive-workers] request_add_workers(+{}) (pending={}, current={})".format(
+				n_add, self._pending_add_workers, len(self.worker_sockets)), flush=True)
+
+	def process_pending_resize(self):
+		"""Main-thread consumer. Sparse's training loop calls this at iter
+		boundary; if a pending add was requested, this spawns the new
+		actors, re-slices UGs across the (now larger) pool, sends new
+		slices to all workers via update_deployment, and atomically
+		merges new workers into self.worker_sockets.
+
+		Single-threaded by contract: only one fanout in flight at a
+		time, and resize runs between iters so no fanouts are active.
+		"""
+		with self._resize_lock:
+			n_add = self._pending_add_workers
+			self._pending_add_workers = 0
+		if n_add <= 0:
+			return
+		try:
+			self._do_add_workers(n_add)
+		except Exception as e:
+			import traceback
+			traceback.print_exc()
+			print("[adaptive-workers] _do_add_workers({}) FAILED: {}".format(n_add, e), flush=True)
+
+	def _do_add_workers(self, n_add):
+		"""Spawn `n_add` Ray actors, re-partition the deployment across the
+		new total, send updated slices to all (existing + new) workers,
+		and merge new actors into self.worker_sockets.
+
+		Stale entries in existing workers' caches (left from their
+		previous UG slice) are not explicitly cleared — they remain
+		valid as cache entries, just unused under the new slice, and
+		Calc_Cache's MAX_CACHE_SIZE LRU will eventually evict them.
+		"""
+		n_existing = len(self.worker_sockets)
+		n_total = n_existing + n_add
+		print("[adaptive-workers] growing pool: {} -> {} (+{})".format(
+			n_existing, n_total, n_add), flush=True)
+		t0 = time.time()
+
+		# Re-shard the deployment for the NEW total. split_deployment_by_ug_separated
+		# returns (static_dep, [slice for each chunk]). Stable mapping:
+		# index i in slices corresponds to worker_i.
+		static_dep, slices = split_deployment_by_ug_separated(
+			self.deployment, n_chunks=n_total)
+		static_dep_ref = ray.put(static_dep)
+		init_kwa_ref = ray.put(self.get_init_kwa())
+
+		# 1) Spawn the new actors with their slices. Same construct pattern
+		#    as start_workers — they boot their Gurobi shell + init_all_vars
+		#    in parallel.
+		new_sockets = {}
+		stagger_sec = float(os.environ.get('SCULPTOR_WORKER_INIT_STAGGER_SEC', '0') or 0)
+		for i in range(n_existing, n_total):
+			if len(slices[i]['ugs']) == 0:
+				continue
+			actor = Path_Distribution_Computer.remote(
+				i, slices[i], init_kwa_ref, static_dep_ref)
+			new_sockets[i] = _ActorSocketShim(actor)
+			if stagger_sec > 0 and i + 1 < n_total:
+				time.sleep(stagger_sec)
+
+		# 2) Wait for new actors to finish __init__.
+		if new_sockets:
+			ready_refs = [s.ping.remote() for s in new_sockets.values()]
+			ray.get(ready_refs)
+		t_init = time.time() - t0
+
+		# 3) Re-shard existing workers — they need their NEW slice (which
+		#    is a smaller portion of UGs than before). update_deployment
+		#    on each.
+		reshard_refs = []
+		for i in range(n_existing):
+			if i not in self.worker_sockets:
+				continue
+			if len(slices[i]['ugs']) == 0:
+				continue
+			new_subdep = {**static_dep, **slices[i]}
+			self.worker_to_deployments[i] = new_subdep
+			msg = pickle.dumps(('update_deployment', (new_subdep, {})))
+			reshard_refs.append(self.worker_sockets[i].handle_msg.remote(msg))
+		if reshard_refs:
+			ray.get(reshard_refs)
+		t_reshard = time.time() - t0 - t_init
+
+		# 4) Merge new actors into worker_sockets. No lock needed because
+		#    this method is called only from the main thread between iter
+		#    boundaries (no concurrent fanouts).
+		for i, sock in new_sockets.items():
+			self.worker_sockets[i] = sock
+			self.worker_to_deployments[i] = {**static_dep, **slices[i]}
+
+		print("[adaptive-workers] pool now {} workers; init={:.1f}s reshard={:.1f}s".format(
+			len(self.worker_sockets), t_init, t_reshard), flush=True)
 
 	def update_worker_deployments(self, new_deployment):
 		self.deployment = new_deployment

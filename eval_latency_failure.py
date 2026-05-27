@@ -161,7 +161,22 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			metrics['settings'][random_iter] = sas.get_init_kwa()
 			if wm is None:
 				wm = Worker_Manager(sas.get_init_kwa(), deployment)
-				wm.start_workers()
+				# Adaptive resize: start with SCULPTOR_N_WORKERS_DURING_PARALLEL
+				# workers if set, so the concurrent parallel-strategy
+				# subprocesses (painter etc.) launched by
+				# compare_different_solutions face less Ray-side contention.
+				# After those subprocesses finish, a watcher thread requests
+				# ramp-up to the SCULPTOR_N_WORKERS target via
+				# wm.request_add_workers, applied at the next sparse iter
+				# boundary via wm.process_pending_resize.
+				_dp_env = os.environ.get('SCULPTOR_N_WORKERS_DURING_PARALLEL')
+				_dp_initial = None
+				if _dp_env is not None:
+					try:
+						_dp_initial = int(_dp_env)
+					except ValueError:
+						print("WARNING: SCULPTOR_N_WORKERS_DURING_PARALLEL={!r} is not an int; ignoring".format(_dp_env))
+				wm.start_workers(n_workers_override=_dp_initial)
 			sas.set_worker_manager(wm)
 			sas.update_deployment(deployment)
 			### Solve the problem for each type of solution (sparse, painter, etc...)
