@@ -1008,6 +1008,22 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.calc_cache.all_caches['lb'] = {}
 
 
+	def get_node_mem_avail_mb(self):
+		"""Return this Ray-actor node's /proc/meminfo MemAvailable in MB.
+		Used by the driver-side autoscale policy to monitor worker-node
+		memory pressure (the existing policy only knew about the HEAD
+		node, but at 64 workers x ~2 GB the worker node can pressure
+		first). None if /proc isn't readable.
+		"""
+		try:
+			with open('/proc/meminfo', 'r') as f:
+				for line in f:
+					if line.startswith('MemAvailable:'):
+						return int(line.split()[1]) // 1024
+		except (FileNotFoundError, PermissionError):
+			return None
+		return None
+
 	def dump_mem_log(self):
 		"""Return the contents of this worker's [mem-worker] log file.
 		Driver calls this via send_receive_workers (ZMQ) or Ray RPC at the

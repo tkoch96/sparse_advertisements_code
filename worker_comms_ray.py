@@ -359,47 +359,77 @@ class Worker_Manager:
 		if os.environ.get('SCULPTOR_AUTOSCALE_WORKERS', '0') != '1':
 			return
 		try:
-			headroom_mb = int(os.environ.get('SCULPTOR_MEM_HEADROOM_MB', '8000'))
+			head_headroom_mb = int(os.environ.get('SCULPTOR_MEM_HEADROOM_MB', '8000'))
 		except ValueError:
-			headroom_mb = 8000
+			head_headroom_mb = 8000
+		try:
+			worker_headroom_mb = int(os.environ.get('SCULPTOR_WORKER_NODE_HEADROOM_MB', '8000'))
+		except ValueError:
+			worker_headroom_mb = 8000
 		try:
 			min_workers = int(os.environ.get('SCULPTOR_MIN_WORKERS', '1'))
 		except ValueError:
 			min_workers = 1
 
-		avail_mb = _read_sys_avail_mb()
-		if avail_mb is None:
-			# /proc not readable (e.g. macOS, restricted container). Loudly
-			# warn ONCE so the user doesn't silently lose autoscaling
-			# without knowing -- a common foot-gun (set SCULPTOR_AUTOSCALE_WORKERS=1
-			# and assume it's working, but actually no-op'd because /proc
-			# couldn't be read).
+		head_avail = _read_sys_avail_mb()
+		if head_avail is None:
 			if not getattr(self, '_autoscale_warned_no_proc', False):
 				print("[autoscale] WARNING: SCULPTOR_AUTOSCALE_WORKERS=1 set, but "
-					  "/proc/meminfo is not readable. Autoscale DISABLED. "
+					  "/proc/meminfo on the head is not readable. Autoscale DISABLED. "
 					  "Verify you're on Linux and /proc is mounted.", flush=True)
 				self._autoscale_warned_no_proc = True
 			return
 
+		# Worker-node probe -- the head and worker live on different boxes,
+		# and with 64 actors at ~2 GB each we can OOM the worker node before
+		# the head feels pressure. Probe one Ray actor for its node's
+		# MemAvailable. Best-effort: if probe fails (no actors yet, network
+		# flake), worker_avail stays None and we fall through to head-only.
+		worker_avail = self._read_worker_node_avail_mb()
+		worker_tight = (worker_avail is not None and worker_avail < worker_headroom_mb)
+		worker_ok = (worker_avail is None or worker_avail >= 2 * worker_headroom_mb)
+
 		current = len(self.worker_sockets)
 		target = self._target_n_workers()
 
-		decision = None
-		if avail_mb < headroom_mb and current > min_workers:
+		# SHRINK if either side is tight.
+		if (head_avail < head_headroom_mb or worker_tight) and current > min_workers:
 			self.request_remove_workers(1)
-			decision = 'remove'
-		elif avail_mb >= 2 * headroom_mb and current < target:
+			reason = 'head' if head_avail < head_headroom_mb else 'worker'
+			decision = 'remove({})'.format(reason)
+		# GROW only if both sides comfortable (or worker probe unavailable).
+		elif head_avail >= 2 * head_headroom_mb and worker_ok and current < target:
 			self.request_add_workers(1)
 			decision = 'add'
 		else:
 			decision = 'hold'
 
 		self._last_autoscale_decision = {
-			'decision': decision, 'avail_mb': avail_mb, 'headroom_mb': headroom_mb,
+			'decision': decision,
+			'head_avail_mb': head_avail, 'worker_avail_mb': worker_avail,
+			'head_headroom_mb': head_headroom_mb, 'worker_headroom_mb': worker_headroom_mb,
 			'current': current, 'target': target,
 		}
-		print("[autoscale] decision={} avail_mb={} headroom_mb={} current={} target={}".format(
-			decision, avail_mb, headroom_mb, current, target), flush=True)
+		print("[autoscale] decision={} head_avail_mb={} worker_avail_mb={} "
+			  "(head_hr={}, worker_hr={}) current={} target={}".format(
+				decision, head_avail, worker_avail,
+				head_headroom_mb, worker_headroom_mb, current, target), flush=True)
+
+	def _read_worker_node_avail_mb(self):
+		"""Probe any Ray actor for its node's /proc/meminfo MemAvailable.
+		Returns int MB, or None if probe fails. Used by _maybe_autoscale
+		to monitor worker-node memory pressure separately from the head.
+		"""
+		if not self.worker_sockets:
+			return None
+		any_sock = next(iter(self.worker_sockets.values()))
+		actor = getattr(any_sock, 'actor', any_sock)
+		try:
+			msg = pickle.dumps(('get_node_mem_avail_mb', None))
+			ref = actor.handle_msg.remote(msg)
+			return ray.get(ref, timeout=5)
+		except Exception:
+			return None
 
 	def _do_add_workers(self, n_add):
 		"""Spawn `n_add` Ray actors, re-partition the deployment across the

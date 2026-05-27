@@ -229,6 +229,13 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		# send_receive_workers API.
 		return self.dump_mem_log()
 
+	def _cmd_get_node_mem_avail_mb(self, _data=None):
+		# Exposes the inherited get_node_mem_avail_mb() so the driver
+		# can probe worker-node memory via the standard cmd dispatch.
+		# Used by Worker_Manager._maybe_autoscale to monitor worker-node
+		# memory pressure (head and worker live on different boxes).
+		return self.get_node_mem_avail_mb()
+
 	def _cmd_update_kwa(self, new_kwa):
 		if new_kwa.get('n_prefixes') is not None:
 			self.n_prefixes = new_kwa.get('n_prefixes')
