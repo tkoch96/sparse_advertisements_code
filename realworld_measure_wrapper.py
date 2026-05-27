@@ -1,3 +1,18 @@
+"""Real-deployment glue: BGP advertisements + RIPE Atlas traceroutes.
+
+`Realworld_Measure_Wrapper` is the class that talks to the actual
+Internet measurement plane when running on the real Vultr deployment:
+issues BGP advertisements via the external `Advertisement_Experiments`
+helper, schedules RIPE Atlas traceroutes against the advertised
+prefixes, parses the measurement results, and caches them.
+
+Used by `actual_deployment_eval_latency_failure.py`. Most simulated runs
+don't touch this file — `Optimal_Adv_Wrapper.simulated=True` short-
+circuits the wrappers.
+
+Depends on the external `advertisement_experiments` module (sibling
+repo, not bundled here).
+"""
 import os, numpy as np, time, glob, json, copy, tqdm
 # from advertisement_experiments import Advertisement_Experiments
 from helpers import *

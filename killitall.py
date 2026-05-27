@@ -1,3 +1,16 @@
+"""Kill all SCULPTOR processes bound to a given port.
+
+Usage:
+    python killitall.py <port>
+
+Finds every Python process whose command line contains the port number
+and SIGKILLs it. Useful when a run crashes and leaves orphan workers /
+strategy subprocesses pinned to a port — without this, the next run on
+the same port silently cross-talks with the orphans.
+
+Only matches by port number so multiple concurrent simulations on
+different ports don't interfere with each other.
+"""
 from subprocess import call, check_output,time, sys
 import re
 port = int(sys.argv[1])

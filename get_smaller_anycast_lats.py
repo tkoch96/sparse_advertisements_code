@@ -1,3 +1,11 @@
+"""Subsample the anycast latency CSV for fast local testing.
+
+The full `cache/vultr_ingress_latencies_by_dst.csv` is ~4.5 GB and slow
+to load. This script writes `cache/vultr_anycast_latency_smaller.csv`
+with a subset that's small enough for laptop runs but large enough to
+exercise the deployment-building code. Run once after pulling the data
+from Drive.
+"""
 from helpers import *
 from constants import *
 import tqdm,os

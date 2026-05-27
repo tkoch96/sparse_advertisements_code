@@ -1,3 +1,13 @@
+"""One-off plot: SGD trajectory in the optimization landscape.
+
+Reads `state-N.pkl` checkpoints from a `runs/<ts>-*-sparse/` directory
+and plots the gradient-descent trajectory (advertisement values + grad
+magnitudes per iter) to help debug convergence problems. Diagnostic
+tool, not part of the training pipeline.
+
+Usage:
+    python gradient_descent_exploration_plot.py --run-dir runs/<ts>-<dpsize>-sparse
+"""
 import pickle, os, argparse, re, glob, numpy as np
 
 from helpers import *

@@ -1,3 +1,9 @@
+"""Generic graph-IO + plot-styling utilities.
+
+Attempt at standardizing figure dimensions / font sizes / file-format
+conventions across the codebase. Not perfectly adopted everywhere — many
+older `make_*_plots.py` files still set their own matplotlib rc params.
+"""
 import numpy as np, json, os
 from helpers import *
 GRAPH_DIR = "graphs"

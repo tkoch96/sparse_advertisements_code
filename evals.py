@@ -1,3 +1,10 @@
+"""LEGACY: pre-`eval_latency_failure.py` driver.
+
+An earlier monolithic eval driver. Mostly superseded by
+`eval_latency_failure.py` + `wrapper_eval.py`. Kept because some older
+paper-plot pipelines reference output pickles produced by this script.
+Don't extend.
+"""
 from constants import *
 from helpers import *
 

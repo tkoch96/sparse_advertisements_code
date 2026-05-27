@@ -1,3 +1,11 @@
+"""LEGACY: polyphase-filter-based objective evaluation.
+
+Was used in an earlier SCULPTOR version to compute the smooth-objective
+estimate via polyphase filtering / scipy.signal. The current
+implementation uses monte-carlo sampling in
+`Path_Distribution_Computer.latency_benefit` instead. Kept because some
+test code still imports symbols from this module; don't extend.
+"""
 import numpy as np, matplotlib.pyplot as plt, time
 import scipy.signal as sg
 from constants import *

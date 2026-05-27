@@ -1,3 +1,13 @@
+"""APNIC PoP / latency data prep.
+
+One-off ingestion script: parses APNIC measurement data and writes
+processed PoP info into `cache/` for use by `deployment_setup`. Run
+once after pulling fresh APNIC dumps; not part of any training run.
+
+Depends on `../peering_measurements/generic_measurement_utils.py` —
+external sibling repo (not in this codebase). Will fail to import on
+hosts that don't have that sibling checked out.
+"""
 from helpers import *
 import csv
 import sys

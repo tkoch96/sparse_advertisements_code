@@ -1,3 +1,9 @@
+"""Paper-quality plot styling primitives.
+
+Sets up matplotlib rcParams for paper-grade PDFs (TrueType fonts, proper
+sizes, etc.), and provides helpers used across the various
+`make_*_plots.py` files. Imported, not run directly.
+"""
 import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42

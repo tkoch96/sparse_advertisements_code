@@ -1,3 +1,11 @@
+"""One-off motivation analysis: OVH weathermap.
+
+Parses OVH's public network weather-map yaml dumps to argue (in the
+paper's motivation section) that real-world backbone congestion is
+common — motivating why SCULPTOR cares about capacity-aware path
+selection rather than pure latency. Generates a single motivation
+figure; not part of the main training/eval pipeline.
+"""
 import glob, os, yamlloader,yaml, numpy as np,  re, tqdm, time, pickle, re, zipfile
 from constants import *
 from helpers import *

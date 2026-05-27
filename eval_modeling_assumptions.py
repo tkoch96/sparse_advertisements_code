@@ -1,3 +1,11 @@
+"""INCOMPLETE: modeling-assumption robustness tests.
+
+Was intended to assess how SCULPTOR's results change under perturbed
+modeling assumptions (path preference changes, latency changes,
+capacity changes). The advisor consensus was that this analysis wasn't
+needed for the paper, so it was never finished. Don't import in
+production — most code paths are stubs.
+"""
 ### path preference changes
 ### latency changes
 ### capacity changes

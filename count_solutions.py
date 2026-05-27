@@ -1,3 +1,10 @@
+"""One-off analysis: count emulation representativeness.
+
+Reports how many distinct IPs, /24s, and ASes the emulated deployments
+cover. Used to argue in the paper that our simulated UG population is
+representative of real Internet traffic. Pure analysis — no training,
+no LP solves.
+"""
 import pickle, os
 from helpers import *
 import traceback
