@@ -1,5 +1,16 @@
 # Research roadmap
 
+## 🎯 Current north star (session 9, 2026-05-26)
+
+**Scale SCULPTOR emulations to evaluate quickly on generic, cheap
+compute** — spot instances + computational efficiency inside SCULPTOR.
+The work below should be evaluated against: does it let us run on
+smaller, cheaper, more-interruptible hardware? **See
+`HANDOFF_SESSION_9.md` for the current state, the critical-path OOM
+diagnosis work, and the longer-term perf opportunities in
+`path_distribution_computer.py`, the parallel-soln_types architecture,
+and Gurobi usage.**
+
 ## ⚠ Session-4 addendum (2026-05-21)
 
 Most of the items below have been touched or completed. **Read
