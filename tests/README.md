@@ -18,8 +18,8 @@ pytest -m "not gurobi"                # skip anything that needs Gurobi
 
 The hard part of testing this code is setup: building a deployment dict the
 worker accepts, splitting it the way `Worker_Manager` does, and constructing
-a worker without ZMQ. All of that lives in `conftest.py`. Once those
-fixtures exist, individual tests stay tiny.
+a worker synchronously (no Ray actor protocol). All of that lives in
+`conftest.py`. Once those fixtures exist, individual tests stay tiny.
 
 Key fixtures:
 

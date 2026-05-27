@@ -1,4 +1,4 @@
-import numpy as np, pickle, copy, zmq, time, random, os
+import numpy as np, pickle, copy, time, random, os
 from collections import defaultdict
 random.seed(31415)
 from constants import *
@@ -98,6 +98,15 @@ def get_a_cache_rep(a):
 	return tuple(sorted(tups))
 
 class Path_Distribution_Computer(Optimal_Adv_Wrapper):
+	"""Base class holding the per-worker LP / latency-benefit logic.
+
+	Constructed in production only via the Ray actor subclass
+	(path_distribution_computer_ray._LocalPathDistributionComputer), which
+	calls Optimal_Adv_Wrapper.__init__ directly with the subdeployment +
+	init_kwa it was handed by Worker_Manager. The base __init__ below
+	only sets the cheap per-instance state and is callable in debug mode
+	for unit tests that exercise the LP methods in isolation.
+	"""
 	def __init__(self, worker_i, base_port, **kwargs):
 		self.worker_i = worker_i
 		self.port = base_port
@@ -112,14 +121,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if kwargs.get('debug', False):
 			self.n_prefixes = None
 			return
-		args, kwargs = self.start_connection()
-		super().__init__(*args, **kwargs)
-
-		with open(os.path.join(LOG_DIR, 'worker_{}_log-{}.txt'.format(self.worker_i, self.dpsize)),'w') as f:
-			pass
-		self.init_all_vars()
-		self.run()
-		# print('started in worker {}'.format(self.worker_i))
+		# Non-debug instantiation of this class was historically the worker
+		# subprocess's entry point (ZMQ socket bind + handshake + run-loop).
+		# That path is gone. Production callers go through
+		# path_distribution_computer_ray.Path_Distribution_Computer.remote(...)
+		# via worker_comms.Worker_Manager; the Ray subclass calls
+		# Optimal_Adv_Wrapper.__init__ directly and never hits this branch.
+		raise RuntimeError(
+			"Path_Distribution_Computer must be constructed via the Ray actor "
+			"(use worker_comms.Worker_Manager). Pass debug=True for unit tests.")
 
 	def summarize_timing(self):
 		# Print per-key cumulative LP-solve timings (optimize / get_paths_by_ug /
@@ -398,25 +408,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		self.iter = 0
 		self.init_persistent_lp() # Setup the Gurobi shell
-
-	def start_connection(self):
-		context = zmq.Context()
-		print("Worker {} starting on port {}".format(self.worker_i,self.worker_i+self.port))
-		_log_mem_worker(self.worker_i, 'worker_proc_start')
-		self.main_socket = context.socket(zmq.REP)
-		self.main_socket.setsockopt(zmq.RCVTIMEO, 1000)
-		self.main_socket.bind('tcp://*:{}'.format(self.worker_i+self.port))
-		while True:
-			try:
-				init_msg = self.main_socket.recv()
-				break
-			except zmq.error.Again:
-				time.sleep(.01)
-		self.main_socket.send(pickle.dumps('ACK'))
-		msg_decoded = pickle.loads(init_msg)
-		_, data = msg_decoded
-		_log_mem_worker(self.worker_i, 'worker_init_msg_received')
-		return data
 
 	def increment_iter(self):
 		self.iter += 1
@@ -1010,156 +1001,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.pattern_cache = {}
 		self.calc_cache.clear_new_measurement_caches()
 
-	def check_for_commands(self):
-		# print("checking for commands in worker {}".format(self.worker_i))
-		try:
-			msg = self.main_socket.recv()
-			# print("Received message in worker with length : {}".format(len(msg)))
-		except zmq.error.Again:
-			return
-		try:
-			msg = pickle.loads(msg)
-		except:
-			print(msg)
-			print("Failed parsing message of length : {}, sending back error message".format(len(msg)))
-			pickle.dump(msg, open('error_{}_{}.pkl'.format(int(time.time()), self.worker_i),'wb'))
-			self.main_socket.send(pickle.dumps("ERROR")) # should hopefully generate an error in the main thread
-			return
-		cmd, data = msg
-		# print("received command {} in worker {}".format(cmd, self.worker_i))
-		if cmd == 'calc_lb':
-			ret = []
-			self.this_time_ip_cache = {}
-			for (args,kwargs) in data:
-				ret.append(self.latency_benefit(*args, **kwargs))
-			del self.this_time_ip_cache
-
-		elif cmd == "solve_lp":
-			ret = []
-			ts = time.time()
-			n_iters,t_per_iter = 0,0
-			self.check_load_rw_measure_wrapper()
-			for fields in sorted(data, key = lambda el : el[0]):
-				if len(fields) == 4:
-					adv_i, adv, deployment, update_dep = fields
-				else:
-					adv_i, adv, opt_adv, deployment, update_dep = fields
-				if update_dep:
-					deployment_save = self.output_deployment()
-					self.clear_caches()
-					self.update_deployment(deployment,quick_update=True,verb=False,exit_on_impossible=False)
-				self.check_load_rw_measure_wrapper()
-
-				# do_cache=True populates calc_cache.all_caches['gti'] so
-				# subsequent LP calls whose adv shares per-prefix active sets
-				# can short-circuit the O(prefixes x ugs x active_popps) rti
-				# recompute. Failure-eval scenarios differ from a base adv by
-				# only one popp row being zeroed, so most prefixes' cache_rep
-				# tuples are unchanged across the 1622 scenarios -> high
-				# hit rate. The cache is wiped when update_dep=True forces
-				# clear_caches above, so flash_crowd/diurnal (different dep
-				# per call) don't accumulate stale entries.
-				rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=True)
-				this_ret = solve_generic_lp_with_failure_catch(self, rti, deployment.get('generic_objective'))
-				if update_dep:
-					self.update_deployment(deployment_save,quick_update=True,verb=False,exit_on_impossible=False)
-					self.check_load_rw_measure_wrapper()
-				ret.append((adv_i, this_ret))
-				n_iters += 1
-
-				t_per_iter = round((time.time() - ts)/n_iters,2)
-		elif cmd == 'calc_compressed_lb':
-			ts = time.time()
-			tlp = time.time()
-			ret = []
-			base_args,base_kwa = data[0]
-			base_adv, = base_args
-			base_adv = base_adv.astype(bool)
-			ret.append({'ans': self.latency_benefit(base_adv, **base_kwa), 'job_id': base_kwa.get('job_id', -1)})
-			i=0
-			last_timing_summary = 0
-			for diff, kwa in data[1:]:
-				kwa['verbose_workers'] = base_kwa.get('verbose_workers',False) or kwa.get('verbose_workers',False)
-				for ind in zip(*diff):
-					base_adv[ind] = not base_adv[ind]
-				ret.append({'ans': self.latency_benefit(base_adv, **kwa), 'job_id': kwa.get('job_id',-1)})
-				for ind in zip(*diff):
-					base_adv[ind] = not base_adv[ind]
-				i += 1
-				# kwa['verb'] = True
-				if time.time() - tlp > 100:
-					self.print("{} pct. done calcing latency benefits, {}ms per iter".format( 
-						round(i * 100.0 /len(data),1), round(1000*(time.time() - ts) / i)))
-					tlp = time.time()
-				if i % 50 == 0 and i > 0 and time.time() - last_timing_summary > 20:
-					self.summarize_timing()
-					last_timing_summary = time.time()
-				self.check_clear_cache()
-			# if len(data)>10:
-			#   print("Worker {} calcs took {}s".format(self.worker_i, int(time.time() - ts)))
-		
-		elif cmd == 'reset_new_meas_cache':
-			self.clear_new_meas_caches()
-			ret = "ACK"
-		elif cmd == 'update_parent_tracker':
-			parents_on = data
-			for ug in parents_on:
-				for beaten_ingress, routed_ingress in parents_on[ug]:
-					self.parent_tracker[ug, beaten_ingress, routed_ingress] = True
-			if len(parents_on) > 0:
-				self.clear_new_meas_caches()
-			ret = "ACK"
-		elif cmd == 'update_deployment':
-			deployment, kwargs = data
-			_log_mem_worker(self.worker_i, 'update_deployment_enter',
-							dpsize=deployment.get('dpsize', '?'))
-			self.update_deployment(deployment, **kwargs)
-			_log_mem_worker(self.worker_i, 'update_deployment_done',
-							dpsize=deployment.get('dpsize', '?'))
-			ret = "ACK"
-		elif cmd == 'update_kwa':
-			new_kwa = data
-			if new_kwa.get('n_prefixes') is not None:
-				self.n_prefixes = new_kwa.get('n_prefixes')
-			if new_kwa.get('gamma') is not None:
-				self.gamma = new_kwa.get('gamma')
-			if new_kwa.get('with_capacity') is not None:
-				self.with_capacity = new_kwa.get('with_capacity')
-			ret = 'ACK'
-		elif cmd == 'increment_iter':
-			self.increment_iter()
-			ret = "ACK"
-		elif cmd == 'set_iter':
-			self.iter = data
-			ret = "ACK"
-		elif cmd == 'set_training_mode':
-			self.set_training_mode(data)
-			ret = "ACK"
-		elif cmd == 'reset_cache':
-			self.clear_caches()
-			ret = "ACK"
-		elif cmd == 'dump_mem_log':
-			ret = self.dump_mem_log()
-		elif cmd == 'init':
-			self.start_connection()
-			return
-		elif cmd == 'end':
-			print("Received end command in worker {}, stopping".format(self.worker_i))
-			self.stop = True
-			self.main_socket.close()
-			return
-		else:
-			print("Invalid CMD in worker {} : {}".format(self.worker_i, cmd))
-			exit(0)
-		self.main_socket.send(pickle.dumps(ret))
-
-	def run(self):
-		while not self.stop:
-			self.check_for_commands()
-			time.sleep(.01)
-		print("Ended run loop in worker {}".format(self.worker_i))
-
-if __name__ == "__main__":
-	worker_i = int(sys.argv[1])
-	base_port = int(sys.argv[2])
-	pdc = Path_Distribution_Computer(worker_i, base_port)
+	# The ZMQ command dispatcher (`check_for_commands`), the worker run loop
+	# (`run`), and the `if __name__ == "__main__":` script entrypoint that
+	# used to live here were removed when the project went Ray-only. The
+	# equivalent dispatch for the Ray actor lives in
+	# path_distribution_computer_ray._LocalPathDistributionComputer as a set
+	# of `_cmd_*` methods routed via `handle_msg`. See git history for the
+	# old ZMQ implementation.

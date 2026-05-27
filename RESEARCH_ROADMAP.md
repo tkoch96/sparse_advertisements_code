@@ -193,13 +193,12 @@ Implementation lives in `path_distribution_computer.py:solve_generic_lp_persiste
 and `init_persistent_lp` (~lines 74-145 area). Budget: half-day to wire
 up, half-day to test correctness against current.
 
-### 6. Refactor `worker_comms.py:11-16` hardcoded venv paths
+### 6. ~~Refactor `worker_comms.py:11-16` hardcoded venv paths~~ **OBSOLETE**
 
-The current code asserts that one of a hardcoded list of Python venv paths
-exists on the host. We worked around it with a symlink in setup_commands.
-The real fix: replace the list with `sys.executable`. Three-line change,
-eliminates "venv path doesn't match" bugs on every new deployment host
-forever.
+Resolved by the Ray-only refactor (session 10, 2026-05-27). The hardcoded
+venv `PYTHON` paths were used by the old ZMQ Worker_Manager to spawn
+`path_distribution_computer.py` as subprocesses. The ZMQ path is gone;
+workers are Ray actors and no subprocess-spawn step exists anymore.
 
 ### 7. Replace relative paths with `os.path.dirname(__file__)`-based absolutes
 
@@ -302,7 +301,7 @@ opportunistically:
 
 - `gradients_resilience_benefit_pop` (line 1108 of v3.py) is unused
   (alpha=0). Remove or document why kept.
-- `worker_comms.py:11-16` hardcoded paths (#6 above).
+- ~~`worker_comms.py:11-16` hardcoded paths (#6 above)~~ — gone with the Ray-only refactor.
 - `path_distribution_computer.py:66` `summarize_timing` `return` (#4 above).
 - All `os.path.join` calls in driver/worker code paths should use
   `__file__`-based absolute paths (#7 above).

@@ -5,7 +5,11 @@ from constants import *
 from helpers import *
 from subprocess import call, check_output
 from generic_objective import Generic_Objective
-from worker_comms import Worker_Manager
+# Worker_Manager is set on instances externally via set_worker_manager();
+# the class itself isn't referenced here. Importing it would create an
+# import cycle through worker_comms -> worker_comms_ray ->
+# path_distribution_computer_ray -> path_distribution_computer ->
+# optimal_adv_wrapper.
 from solve_lp_assignment import *
 from scipy.sparse import csr_matrix, lil_matrix
 

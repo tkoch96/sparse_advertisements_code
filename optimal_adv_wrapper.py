@@ -5,7 +5,12 @@ from constants import *
 from helpers import *
 from subprocess import call, check_output
 from generic_objective import Generic_Objective
-from worker_comms import Worker_Manager
+# Worker_Manager is set on instances externally via set_worker_manager()
+# from the driver (e.g. eval_latency_failure, experiments.run_objective).
+# Importing it here would create a worker_comms -> worker_comms_ray ->
+# path_distribution_computer_ray -> path_distribution_computer ->
+# optimal_adv_wrapper cycle; this module only needs the *instance* on
+# `self.worker_manager`, not the class itself.
 from solve_lp_assignment import *
 from scipy.sparse import csr_matrix, lil_matrix
 

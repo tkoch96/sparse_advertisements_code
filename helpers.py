@@ -1,4 +1,4 @@
-import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, zmq, copy
+import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, copy
 from bisect import bisect_left
 from constants import *
 
