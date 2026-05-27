@@ -121,21 +121,44 @@ def _dpsize_already_completed(dpsize, tag):
     """Check whether this dpsize's eval pickle is fully populated -- i.e.,
     compare_rets[0]['n_advs'] exists and has data for every strategy. If
     so, evaluate_all_metrics will skip strategy_compare via its own
-    metrics['compare_rets'][random_iter]['n_advs'] guard."""
+    metrics['compare_rets'][random_iter]['n_advs'] guard.
+
+    Note: this only checks random_iter=0. Callers that care about full
+    nsim coverage should use _count_random_iters_done().
+    """
+    return _count_random_iters_done(dpsize, tag, 1) >= 1
+
+
+def _count_random_iters_done(dpsize, tag, max_check):
+    """Return how many random_iters of this dpsize have populated
+    compare_rets in the eval pickle. Counts contiguously from 0 (i.e.
+    if compare_rets[0] is populated but compare_rets[2] isn't and we
+    haven't reached compare_rets[2] yet, returns 1).
+
+    Used by the hot-start path so we can hot-start random_iter=N when
+    random_iters 0..N-1 are already done but N hasn't started/finished.
+    """
     os.environ['SCULPTOR_RUN_TAG'] = f"{tag}_{dpsize}"
     pkl_path = global_performance_metrics_fn(f"testing_feature-actual-{dpsize}")
     if not os.path.exists(pkl_path):
-        return False
+        return 0
     try:
         m = pickle.load(open(pkl_path, 'rb'))
     except Exception:
-        return False
-    cr = m.get('compare_rets', {}).get(0)
-    if not isinstance(cr, dict): return False
-    n_advs = cr.get('n_advs')
-    if not isinstance(n_advs, dict): return False
-    # Need every soln_type to have at least one entry
-    return all(isinstance(v, list) and len(v) > 0 for v in n_advs.values())
+        return 0
+    compare_rets = m.get('compare_rets', {}) or {}
+    done = 0
+    for ri in range(max_check):
+        cr = compare_rets.get(ri)
+        if not isinstance(cr, dict):
+            break
+        n_advs = cr.get('n_advs')
+        if not isinstance(n_advs, dict):
+            break
+        if not all(isinstance(v, list) and len(v) > 0 for v in n_advs.values()):
+            break
+        done += 1
+    return done
 
 
 def main():
@@ -203,36 +226,60 @@ def main():
         print(f"[sweep] === dpsize={dpsize}  dpsize_str={dpsize_str}  nsim={nsim_dp} ===", flush=True)
         print(f"{'='*72}", flush=True)
 
-        # Hot-start logic:
-        # - If the per-dpsize eval pickle has compare_rets[0]['n_advs']
-        #   already populated, every soln_type already trained -- skip
-        #   save_run_dir so evaluate_all_metrics enters its
-        #   "already calculated, continue" branch and only re-runs missing
-        #   eval phases.
-        # - Otherwise, look in RUN_DIR for the latest
-        #   <ts>-testing_feature-actual-{dp}-sparse directory. If one
-        #   exists, pass it as save_run_dir so sparse hot-starts from its
-        #   last saved state (state-N.pkl, saved every 5 iters).
+        # Hot-start logic (NSIM-aware):
+        # - Count how many random_iters are already done in the eval pickle.
+        # - If all `nsim_dp` random_iters are done, training is skipped entirely;
+        #   pass save_run_dir=None and evaluate_all_metrics will only fill
+        #   missing eval phases.
+        # - If some are done and some aren't, build a per-random_iter list:
+        #   None for done ones (skipped by inner loop), latest-run-dir for the
+        #   FIRST un-done one (hot-starts from state-N.pkl), None for any
+        #   further un-done ones (start fresh in a new run dir; we never
+        #   point multiple un-done iters at the same hot-start dir because
+        #   they'd corrupt each other's state-N.pkl writes).
+        # - If none are done and we have a prior run dir, hot-start
+        #   random_iter=0 from it.
+        n_done = _count_random_iters_done(dpsize, tag, nsim_dp)
         save_run_dir_for_dp = None
-        if _dpsize_already_completed(dpsize, tag):
-            print(f"[sweep] dpsize={dpsize} compare_rets already populated; "
+        if n_done >= nsim_dp:
+            print(f"[sweep] dpsize={dpsize} all {n_done}/{nsim_dp} random_iters complete; "
                   f"evaluate_all_metrics will skip training and only fill missing eval phases.",
                   flush=True)
         else:
             cand = _find_save_run_dir_for_dpsize(dpsize)
-            if cand:
-                save_run_dir_for_dp = cand
-                # Count saved state files for visibility
-                try:
-                    n_states = len([f for f in os.listdir(os.path.join(RUN_DIR, cand))
-                                    if f.startswith('state-') and f.endswith('.pkl')])
-                except OSError:
-                    n_states = '?'
-                print(f"[sweep] dpsize={dpsize} HOT-START from {cand} ({n_states} saved state files)",
-                      flush=True)
+            if nsim_dp > 1:
+                # Always pass a list of length nsim_dp when nsim>1
+                # (evaluate_all_metrics asserts on shape).
+                save_run_dir_for_dp = [None] * nsim_dp
+                if cand:
+                    save_run_dir_for_dp[n_done] = cand   # hot-start the first un-done
+                    try:
+                        n_states = len([f for f in os.listdir(os.path.join(RUN_DIR, cand))
+                                        if f.startswith('state-') and f.endswith('.pkl')])
+                    except OSError:
+                        n_states = '?'
+                    print(f"[sweep] dpsize={dpsize} {n_done}/{nsim_dp} done; "
+                          f"HOT-START random_iter={n_done} from {cand} ({n_states} saves); "
+                          f"random_iters {n_done+1}..{nsim_dp-1} start fresh.",
+                          flush=True)
+                else:
+                    print(f"[sweep] dpsize={dpsize} {n_done}/{nsim_dp} done; "
+                          f"no prior run dir; remaining random_iters start fresh.",
+                          flush=True)
             else:
-                print(f"[sweep] dpsize={dpsize} no prior save_run_dir; starting fresh",
-                      flush=True)
+                # nsim_dp == 1 -- single value, original semantics.
+                if cand:
+                    save_run_dir_for_dp = cand
+                    try:
+                        n_states = len([f for f in os.listdir(os.path.join(RUN_DIR, cand))
+                                        if f.startswith('state-') and f.endswith('.pkl')])
+                    except OSError:
+                        n_states = '?'
+                    print(f"[sweep] dpsize={dpsize} HOT-START from {cand} ({n_states} saved state files)",
+                          flush=True)
+                else:
+                    print(f"[sweep] dpsize={dpsize} no prior save_run_dir; starting fresh",
+                          flush=True)
 
         try:
             metrics = evaluate_all_metrics(
