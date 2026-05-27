@@ -34,6 +34,7 @@ Env vars:
 from __future__ import annotations
 
 import argparse
+import gc
 import os
 import pickle
 import sys
@@ -249,10 +250,17 @@ def main():
         # Extract just the stats_* keys (matches pull_results_new)
         metrics_by_dpsize[dpsize] = {k: v for k, v in metrics.items() if 'stats' in k}
         pickle.dump(metrics_by_dpsize, open(cache_fn, 'wb'))
+        # Force GC at dpsize boundary so any unreferenced state from this
+        # dpsize's SAS / wm / metrics dict doesn't carry into the next
+        # dpsize's iov_enter (session 9 forensics showed ~6 GB sticking
+        # across the transition). Cheap, no risk -- if there's nothing
+        # to collect, gc.collect() just returns quickly.
+        n_collected = gc.collect()
         dp_wall = time.time() - dp_start
         print(f"[sweep] dpsize={dpsize} done in {dp_wall:.1f}s "
-              f"(cumulative {time.time()-overall_start:.1f}s)", flush=True)
-        _log_mem('dpsize_done', dpsize=dpsize, wall_s=int(dp_wall))
+              f"(cumulative {time.time()-overall_start:.1f}s); "
+              f"gc.collect freed {n_collected} objects", flush=True)
+        _log_mem('dpsize_done', dpsize=dpsize, wall_s=int(dp_wall), gc_freed=n_collected)
 
     overall = time.time() - overall_start
     print(f"\n[sweep] ALL DONE in {overall:.1f}s ({overall/60:.1f} min). "

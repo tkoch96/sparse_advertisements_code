@@ -369,7 +369,16 @@ class Worker_Manager:
 
 		avail_mb = _read_sys_avail_mb()
 		if avail_mb is None:
-			# /proc not readable (e.g. macOS) -- can't make a decision.
+			# /proc not readable (e.g. macOS, restricted container). Loudly
+			# warn ONCE so the user doesn't silently lose autoscaling
+			# without knowing -- a common foot-gun (set SCULPTOR_AUTOSCALE_WORKERS=1
+			# and assume it's working, but actually no-op'd because /proc
+			# couldn't be read).
+			if not getattr(self, '_autoscale_warned_no_proc', False):
+				print("[autoscale] WARNING: SCULPTOR_AUTOSCALE_WORKERS=1 set, but "
+					  "/proc/meminfo is not readable. Autoscale DISABLED. "
+					  "Verify you're on Linux and /proc is mounted.", flush=True)
+				self._autoscale_warned_no_proc = True
 			return
 
 		current = len(self.worker_sockets)
@@ -402,7 +411,22 @@ class Worker_Manager:
 		valid as cache entries, just unused under the new slice, and
 		Calc_Cache's MAX_CACHE_SIZE LRU will eventually evict them.
 		"""
+		# Defensive: clamp n_add so we never overshoot the configured
+		# target. The watcher thread armed in compare_different_solutions
+		# computes `n_to_add = target - current_at_arm_time` and stores it
+		# in a closure; if autoscale's own `_maybe_autoscale` grows the
+		# pool in the interim, current_now > current_at_arm_time and the
+		# watcher's request would push past target. This clamp makes the
+		# add request idempotent w.r.t. concurrent grow decisions.
 		n_existing = len(self.worker_sockets)
+		target = self._target_n_workers()
+		clamped_n_add = max(0, min(n_add, target - n_existing))
+		if clamped_n_add < n_add:
+			print("[adaptive-workers] clamping add: {} -> {} (target={}, current={})".format(
+				n_add, clamped_n_add, target, n_existing), flush=True)
+		if clamped_n_add <= 0:
+			return
+		n_add = clamped_n_add
 		n_total = n_existing + n_add
 		print("[adaptive-workers] growing pool: {} -> {} (+{})".format(
 			n_existing, n_total, n_add), flush=True)
