@@ -2147,13 +2147,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
 	def init_optimization_vars(self):
+		_log_mem('iov_enter')
 		self.clear_caches()
-		
+		_log_mem('iov_post_clear_caches')
+
 		self.set_alpha() # momentum parameter
 
 		self.calc_times = []
 		self.measured = {}
-		self.path_measures = 0 
+		self.path_measures = 0
 		self.last_gti = None
 
 		## Track which popps are on/off, helpful for use in the actual deployment
@@ -2161,7 +2163,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.optimization_advertisement_representation = {}
 		for poppi,prefi in zip(*np.where(opt_adv_on_off)):
 			self.optimization_advertisement_representation[self.popps[poppi], prefi] = None
-		
+
 		if self.verbose:
 			# self.print_adv(advertisement)
 			print("Optimizing over {} peers and {} ugs".format(self.n_popp, self.n_ug))
@@ -2173,8 +2175,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		# Add to metrics / init vars
 		self.current_objective = self.measured_objective(self.optimization_advertisement, save_ug_ingress_decisions=True)
+		_log_mem('iov_post_measured_objective')
 		self.current_latency_benefit = self.get_ground_truth_latency_benefit(self.optimization_advertisement, verb=True, save_ug_ingress_decisions=True)
+		_log_mem('iov_post_gt_latency_benefit')
 		self.current_resilience_benefit = self.get_ground_truth_resilience_benefit(self.optimization_advertisement, store_metrics=True)
+		_log_mem('iov_post_gt_resilience_benefit')
 
 		self.current_pseudo_objective = self.modeled_objective(self.optimization_advertisement)
 		self.current_effective_objective = self.modeled_objective(threshold_a(self.optimization_advertisement))

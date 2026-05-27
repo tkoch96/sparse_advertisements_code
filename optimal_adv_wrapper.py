@@ -1588,6 +1588,7 @@ class Optimal_Adv_Wrapper:
 		"""Between rounds, measure ingresses from users to deployment given advertisement a."""
 		### i.e., this is an actual advertisement measurement, we should aim to limit these :)
 		print("Entering measure ingresses")
+		log_mem('mi_enter')
 		ts = time.time()
 		self.enforce_loaded_rwmw()
 
@@ -1603,19 +1604,23 @@ class Optimal_Adv_Wrapper:
 
 		## Reset benefit calculations cache since we now have more info
 		self.clear_new_measurement_caches()
+		log_mem('mi_post_clear_caches')
 
 		self.path_measures += 1
 		cnucts = time.time()
 		self.calculate_user_choice(a, get_ug_catchments=True, **kwargs)
 		print("cnuc took {}s".format(time.time()-cnucts))
+		log_mem('mi_post_calc_user_choice')
 		a = threshold_a(a)
 		rtits = time.time()
 		routed_through_ingress, actives = self.calculate_ground_truth_ingress(a, verb=True, **kwargs)
 		print("rti took {}s".format(time.time() - rtits))
+		log_mem('mi_post_gt_ingress')
 
 		empts = time.time()
 		self.enforce_measured_prefs(routed_through_ingress, actives)
 		print("empts took {}s".format(time.time() - empts))
+		log_mem('mi_post_enforce_prefs')
 		self.measured[tuple(a.flatten())] = None
 		print("Leaving measure ingresses : {}s".format(time.time() - ts))
 			
