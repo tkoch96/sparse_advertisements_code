@@ -78,6 +78,12 @@ or orphaned. Set up in session 10 (2026-05-27).
     avoids false positives during deployment warm-up (loading the 4.5 GB
     latency CSV easily takes one 10-min cron tick without log growth).
 - **Alert dedup:** 60 min per tag, so a persistent issue doesn't spam.
+- **Heartbeat cron (additional):** every 3 hours on the hour, sends a
+  proof-of-life SMS with iter / dpsize / pool size / driver RSS /
+  sys_avail / autoscale state / mem-worker count / error count /
+  recent-alert tally. Stays silent when config `active=false`. Script:
+  `~/.sculptor_cluster_alert/heartbeat.py`. Cron line:
+  `0 */3 * * * /Users/tomkoch/Documents/venv312/bin/python /Users/tomkoch/.sculptor_cluster_alert/heartbeat.py >> /Users/tomkoch/.sculptor_cluster_alert/cron.log 2>&1`
 - **Telemetry:** `~/.sculptor_cluster_alert/alert.log` (alert history),
   `~/.sculptor_cluster_alert/state.json` (last-check delta state),
   `~/.sculptor_cluster_alert/cron.log` (cron stderr).
