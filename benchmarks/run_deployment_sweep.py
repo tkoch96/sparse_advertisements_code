@@ -18,8 +18,13 @@ Usage (on the cluster head):
   /home/ubuntu/venv312/bin/python -u benchmarks/run_deployment_sweep.py --port 31520
 
 Env vars:
-  SCULPTOR_DEPLOYMENT_SWEEP_NSIM   -- nsim per dpsize (default 1). Override
-                                       to scale up later runs.
+  SCULPTOR_DEPLOYMENT_SWEEP_NSIM   -- nsim per dpsize. Single int (applied
+                                       to all sizes, default 1) OR a
+                                       comma-separated list parallel to
+                                       SCULPTOR_DEPLOYMENT_SWEEP_SIZES
+                                       (mirrors evaluate_over_deployment_sizes
+                                       n_sim_by_dpsize). Example: SIZES=25,32
+                                       NSIM=3,2 -> 3 sims at 25, 2 at 32.
   SCULPTOR_DEPLOYMENT_SWEEP_SIZES  -- comma-separated explicit dpsize list
                                        (default: 3,5,10,15,20,25,<n_vultr>).
                                        Use to re-run only specific sizes.
@@ -148,13 +153,23 @@ def main():
     else:
         dpsizes = default_sizes
 
-    nsim = int(os.environ.get('SCULPTOR_DEPLOYMENT_SWEEP_NSIM', '1'))
+    nsim_env = os.environ.get('SCULPTOR_DEPLOYMENT_SWEEP_NSIM', '1')
+    nsim_parts = [int(x.strip()) for x in nsim_env.split(',') if x.strip()]
+    if len(nsim_parts) == 1:
+        nsim_by_dpsize = {dp: nsim_parts[0] for dp in dpsizes}
+    elif len(nsim_parts) == len(dpsizes):
+        nsim_by_dpsize = dict(zip(dpsizes, nsim_parts))
+    else:
+        raise SystemExit(
+            f"SCULPTOR_DEPLOYMENT_SWEEP_NSIM={nsim_env!r} has {len(nsim_parts)} "
+            f"values but SIZES has {len(dpsizes)} ({dpsizes}). Pass a single "
+            f"int or a list of the same length.")
     tag = os.environ.get('SCULPTOR_DEPLOYMENT_SWEEP_TAG', 'dep_sweep')
 
     print("="*72)
     print(f"=== deployment sweep ===")
     print(f"  dpsizes:           {dpsizes}")
-    print(f"  nsim per dpsize:   {nsim}")
+    print(f"  nsim per dpsize:   {[nsim_by_dpsize[dp] for dp in dpsizes]}")
     print(f"  MAX_ITER:          {os.environ.get('SCULPTOR_MAX_ITER', '(default)')}")
     print(f"  N_WORKERS:         {os.environ.get('SCULPTOR_N_WORKERS', '(default)')}")
     print(f"  CAPACITY_HEADROOM: {os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '(default)')}")
@@ -182,8 +197,9 @@ def main():
         # Tag the per-dpsize eval pickle so this run is separable from any
         # leftover state (per evaluate_all_metrics' SCULPTOR_RUN_TAG handling).
         os.environ['SCULPTOR_RUN_TAG'] = f"{tag}_{dpsize}"
+        nsim_dp = nsim_by_dpsize[dpsize]
         print(f"\n{'='*72}", flush=True)
-        print(f"[sweep] === dpsize={dpsize}  dpsize_str={dpsize_str}  nsim={nsim} ===", flush=True)
+        print(f"[sweep] === dpsize={dpsize}  dpsize_str={dpsize_str}  nsim={nsim_dp} ===", flush=True)
         print(f"{'='*72}", flush=True)
 
         # Hot-start logic:
@@ -220,7 +236,7 @@ def main():
         try:
             metrics = evaluate_all_metrics(
                 dpsize_str, args.port,
-                save_run_dir=save_run_dir_for_dp, nsim=nsim)
+                save_run_dir=save_run_dir_for_dp, nsim=nsim_dp)
         except KeyboardInterrupt:
             print(f"[sweep] interrupted during dpsize={dpsize}", flush=True)
             raise
