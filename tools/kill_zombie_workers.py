@@ -100,20 +100,88 @@ def kill_on_node(ip, dry_run=False):
     print('  {} (after):  {} matching actor procs'.format(ip, after))
 
 
+def find_head_ip():
+    """Discover the SCULPTOR head IP via AWS (m7g.* instance type)."""
+    rc, out, err = _run(
+        '{aws} ec2 describe-instances '
+        '--filters "Name=tag:project,Values=sculptor" '
+        '"Name=instance-state-name,Values=running" '
+        '--query "Reservations[].Instances[].[InstanceType,PublicIpAddress]" '
+        '--output text'.format(aws=AWS_BIN))
+    if rc != 0:
+        return None
+    for line in out.splitlines():
+        parts = line.split()
+        if len(parts) >= 2 and parts[0].startswith('m7g.'):
+            return parts[1]
+    return None
+
+
+def kill_head_orphan_drivers(head_ip, dry_run=False):
+    """Find any orphan run_deployment_sweep.py drivers on the head.
+    The "current" sweep is whichever PID is in /tmp/cluster_runs/latest.pid;
+    anything else with that argv is an orphan from a previous kill that
+    didn't fully tear down. These are head-side (driver) zombies,
+    distinct from worker-node (actor) zombies.
+    """
+    # Get all matching PIDs and the current one.
+    # Wrap remote command in SINGLE quotes so the local shell doesn't
+    # expand $(cat ...) and $current -- they must run remotely.
+    rc, out, err = _run(
+        "ssh -i {key} -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
+        "-o BatchMode=yes ubuntu@{ip} "
+        "'current=$(cat /tmp/cluster_runs/latest.pid 2>/dev/null || echo NONE); "
+        " echo current_pid=$current; "
+        " pgrep -af \"[r]un_deployment_sweep.py\"'".format(
+            key=SSH_KEY, ip=head_ip), timeout=30)
+    if rc != 0:
+        print('  could not list head processes (rc={})'.format(rc))
+        return
+    current_pid = None
+    orphans = []
+    for line in out.splitlines():
+        line = line.strip()
+        if line.startswith('current_pid='):
+            current_pid = line.split('=', 1)[1]
+            continue
+        parts = line.split(None, 1)
+        if len(parts) >= 1 and parts[0].isdigit():
+            pid = parts[0]
+            if pid != current_pid:
+                orphans.append((pid, parts[1] if len(parts) > 1 else ''))
+    print('  head {} (current pid={}, orphans={})'.format(head_ip, current_pid, len(orphans)))
+    for pid, argv in orphans:
+        print('    - pid={} {}'.format(pid, argv[:80]))
+    if dry_run or not orphans:
+        return
+    pids = ' '.join(p for p, _ in orphans)
+    _run(
+        "ssh -i {key} -o StrictHostKeyChecking=no -o ConnectTimeout=15 "
+        "-o BatchMode=yes ubuntu@{ip} "
+        "'kill -9 {pids} 2>/dev/null; sleep 1; "
+        " pgrep -af \"[r]un_deployment_sweep.py\" | wc -l'".format(
+            key=SSH_KEY, ip=head_ip, pids=pids), timeout=30)
+    print('  killed {} orphan driver(s) on head'.format(len(orphans)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--dry-run', action='store_true',
                     help='List what would be killed, but do not kill.')
     args = ap.parse_args()
 
+    print('== head-side orphan drivers ==')
+    head_ip = find_head_ip()
+    if head_ip:
+        kill_head_orphan_drivers(head_ip, dry_run=args.dry_run)
+    else:
+        print('  no head instance found via AWS')
+
+    print()
+    print('== worker-side orphan actors ==')
     workers = find_worker_ips()
     if not workers:
-        print('No SCULPTOR worker nodes found via AWS describe-instances.')
-        return 1
-    print('Found {} worker node(s):'.format(len(workers)))
-    for itype, ip in workers:
-        print('  {} {}'.format(itype, ip))
-    print()
+        print('  no worker nodes found via AWS')
     for itype, ip in workers:
         kill_on_node(ip, dry_run=args.dry_run)
     return 0
