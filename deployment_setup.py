@@ -1,3 +1,27 @@
+"""Deployment construction — synthetic and actual.
+
+Builds the `deployment` dict that drives every algorithm. Key entry
+points:
+
+  - `get_random_deployment(dpsize, **kw)`            synthesize a random
+                                                     deployment of the
+                                                     requested size
+  - `get_random_deployment_by_size(problem_size)`    same with size as a
+                                                     numeric key
+  - `get_link_capacities(deployment, scale_factor)`  derive capacities
+                                                     from anycast load
+                                                     (jiangchen-sigcomm
+                                                     methodology)
+
+The deployment dict contains: `popps` (PoP+peer pairs), `ugs` (user
+groups), `ug_perfs` (per-UG latency to each popp), `ug_to_vol` (per-UG
+traffic volume), `link_capacities`, `ingress_priorities` (BGP rank order
+per UG), `n_prefixes`, `dpsize`, and various derived caches.
+
+Env-var hooks (used by experiments/painter_hypothesis_sweep.py):
+  - `SCULPTOR_SCALE_FACTOR`  override the link-capacity headroom factor
+  - `SCULPTOR_VOL_SPREAD`    log-uniform per-UG volume spread
+"""
 import tqdm, numpy as np
 from constants import *
 from helpers import *

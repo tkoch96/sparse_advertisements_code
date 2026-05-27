@@ -1,3 +1,12 @@
+"""Ray-aware variant of Optimal_Adv_Wrapper.
+
+Mirrors optimal_adv_wrapper.py but with Ray-specific behaviour where it
+matters (typically how fanout payloads are constructed for the actor
+pool). Imported instead of the non-Ray version in some callers, but
+since the project went Ray-only this distinction is largely vestigial —
+both files share most of their body. See optimal_adv_wrapper.py for the
+shared semantics.
+"""
 import numpy as np, time, tqdm, multiprocessing
 np.setbufsize(262144*8)
 np.set_printoptions(precision=5)

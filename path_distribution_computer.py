@@ -1,3 +1,28 @@
+"""Worker-side LP / latency-benefit logic for SCULPTOR.
+
+`Path_Distribution_Computer` holds the per-worker LP machinery: a
+persistent Gurobi model (built once at init via `init_persistent_lp`),
+an LP cache, monte-carlo routing probabilities, and the `latency_benefit`
+function the driver calls thousands of times per gradient probe.
+
+In production this class is constructed as a Ray actor via
+`path_distribution_computer_ray._LocalPathDistributionComputer`
+(see that file for the Ray dispatch surface). The base `__init__` here
+raises in non-debug mode — direct subprocess instantiation is gone with
+the ZMQ removal (May 2026).
+
+Key methods used by the driver:
+  - `latency_benefit(adv, **kw)`  monte-carlo estimate, hot path during
+                                   gradient probes
+  - `solve_generic_lp_persistent` reuse the Gurobi shell for one LP
+                                   evaluation (gradient probes)
+  - `update_deployment(dep)`      re-shard when the deployment changes
+                                   (per-dpsize boundary or adaptive resize)
+  - `dump_mem_log()`              return this worker's [mem-worker] file
+                                   content (driver collects at end of run)
+
+Unit-test instantiation: pass `debug=True` to skip the run guard.
+"""
 import numpy as np, pickle, copy, time, random, os
 from collections import defaultdict
 random.seed(31415)

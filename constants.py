@@ -1,3 +1,22 @@
+"""Project-wide constants and the dpsize -> n_pops mapping.
+
+Imported with `from constants import *` in most modules — anything added
+here is global. Keep additions to truly constant config; per-experiment
+knobs belong in env vars (see README.md "Environment variables").
+
+Notable values:
+  - NO_ROUTE_LATENCY        sentinel latency for users with no feasible
+                            path. Also used as a numeric value in LP
+                            objective contributions (so changes here
+                            affect both the sentinel-check semantics
+                            AND avg-latency arithmetic).
+  - NON_SIMULATED_LINK_CAPACITY  capacity used for actual-deployment
+                                  popps where we don't have a measured
+                                  cap
+  - `dpsize_to_n_pops`       mapping from named dpsize strings ('small',
+                             'decent', 'med', 'large',
+                             'really_friggin_small') to PoP counts
+"""
 CACHE_DIR = "cache"
 DATA_DIR = "data"
 GRAPH_DIR = "graphs"

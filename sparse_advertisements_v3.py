@@ -1,3 +1,39 @@
+"""SCULPTOR: SGD-based BGP advertisement optimization.
+
+This is the core of the codebase. The class hierarchy:
+
+    Optimal_Adv_Wrapper                 (optimal_adv_wrapper.py)
+      └─ Sparse_Advertisement_Wrapper   (this file, ~line 100)
+            ├─ Sparse_Advertisement_Solver  (this file, ~line 920) — SGD
+            └─ Sparse_Advertisement_Eval    (this file, near end) — eval entry
+
+`Sparse_Advertisement_Eval` is the public entry-point used by drivers
+(`eval_latency_failure.evaluate_all_metrics`, `experiments.run_objective`).
+It instantiates a `Sparse_Advertisement_Solver`, calls `compare_different_solutions`
+to run sparse + the baseline strategies (painter, anyopt, anycast, etc.),
+and exposes the solved advertisement matrices to downstream eval phases.
+
+`compare_different_solutions` (line ~760) is the orchestrator: forks
+non-sparse strategies into a `ProcessPoolExecutor` (so they run
+concurrently with sparse on the head), then runs sparse in the main
+process backed by the Ray actor pool managed by `Worker_Manager`.
+
+`Sparse_Advertisement_Solver.solve()` is the training loop (line ~2230).
+Each iter: gradient probe → SGD step (with momentum, optional proximal
+L1) → measure ingresses on changed prefixes → optional max-info probe →
+stop-tracker check. Saves `state-N.pkl` checkpoints every 5 iters under
+`runs/<ts>-<dpsize>-sparse/` so a crashed run can hot-start.
+
+Hot loops to know about:
+  - Gradient probing fan-out: `latency_benefit_fn` (line ~360) builds
+    per-worker message lists and calls `wm.send_receive_messages_workers`
+  - Adaptive worker resize: `Worker_Manager.process_pending_resize` is
+    called at the top of each training iter (line ~2300); a watcher
+    thread armed in `compare_different_solutions` triggers ramp-up
+    when concurrent parallel strategies finish
+
+See README.md "Architecture overview" for the bigger picture.
+"""
 import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, warnings, tqdm, glob
 import gurobipy as gp
 from subprocess import call, check_output

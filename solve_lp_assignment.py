@@ -1,3 +1,37 @@
+"""LP objective implementations (Gurobi).
+
+All objectives SCULPTOR optimizes against are implemented here as
+`solve_lp_assignment_<name>(sas, routed_through_ingress, obj, **kwargs)`
+functions. The active set is registered in `generic_lp_functions` at the
+bottom of the file:
+
+  - avg_latency        baseline; minimize traffic-weighted avg user latency
+  - per_site_cost      avg_latency + alpha * sum(active site cost)
+  - joint_priority     HPrio LP solved first (strict-priority semantics),
+                       bulk traffic fills in around it
+  - site_failure       (1-β)·steady avg_latency + β·mean over per-PoP
+                       failures with user→prefix mapping frozen to
+                       steady-state (no-DNS-update semantic)
+
+Each function returns a dict with at least:
+  objective     final LP value (Gurobi's ObjVal)
+  solved        Gurobi status string ('optimal', 'infeasible', ...)
+  paths_by_ug   {ug_index: [(poppi, vol_pct), ...]} — how each UG routes
+  lats_by_ug    np.ndarray of per-UG latencies (use NO_ROUTE_LATENCY for
+                users with no feasible path)
+
+`solve_generic_lp_with_failure_catch` (top of file) is the public wrapper
+that all callers use. It dispatches via `generic_lp_functions[obj]` and
+catches `GurobiError` to return a no-route sentinel rather than crashing
+the training loop on transient infeasibility.
+
+`solve_generic_lp_persistent` (in path_distribution_computer.py) is the
+hot-path version used by the gradient probes — it reuses a persistent
+Gurobi model rather than rebuilding from scratch for each call.
+
+Adding a new objective: see README.md "Adding new things" → "A new
+objective function".
+"""
 import numpy as np,  scipy, time, math
 from helpers import *
 from scipy.sparse import csr_matrix

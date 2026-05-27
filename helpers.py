@@ -1,3 +1,17 @@
+"""Cross-module utilities.
+
+Catch-all for things used everywhere: file paths, deployment splitting
+for fanout (`split_deployment_by_ug`, `split_deployment_by_ug_separated`),
+IP / prefix / ASN parsing, memory snapshots (`log_mem(tag, worker_i, **)`),
+the standard `[mem]` log format, dpsize → n_workers heuristics, and
+miscellaneous one-off helpers.
+
+`log_mem` is the canonical driver-side mem-snapshot helper; the
+worker-side equivalent is `_log_mem_worker` in
+path_distribution_computer.py. Both emit the same parseable format so
+post-hoc analysis (e.g. logs/session_10_forensics/parse_mem.py) can grep
+both with a single regex.
+"""
 import numpy as np, csv, socket, struct, os, re, matplotlib.pyplot as plt, sys, pickle, time, copy
 from bisect import bisect_left
 from constants import *

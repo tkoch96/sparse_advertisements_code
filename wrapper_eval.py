@@ -1,3 +1,26 @@
+"""Post-training evaluation phase implementations.
+
+After `compare_different_solutions` produces per-strategy advertisement
+matrices, the eval phases simulate each strategy under various scenarios
+and record the result in the `metrics` dict that `evaluate_all_metrics`
+serializes to disk.
+
+Phases implemented here:
+  - `assess_failure_resilience`     popp-failure and pop-failure latency,
+                                     congestion, no-route fractions
+  - flash-crowd assessment           per-traffic-multiplier latency
+  - diurnal scenarios                latency under time-of-day load shifts
+  - capacity-modification scenarios  modeling-assumption sweeps (mostly
+                                     unused)
+
+Result shape: each phase writes into
+`metrics[phase_name][random_iter][solution_type]`. See the relevant
+function for the per-phase nested dict shape.
+
+The phases use `sas.solve_lp_with_failure_catch(adv, ...)` which is the
+public LP-solving entry point on Sparse_Advertisement_Eval. That call
+goes through `solve_lp_assignment.solve_generic_lp_with_failure_catch`.
+"""
 import tqdm, numpy as np, os, copy
 from constants import *
 gamma = 4

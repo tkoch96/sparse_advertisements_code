@@ -1,3 +1,25 @@
+"""Optimal_Adv_Wrapper — shared base class for all advertisement strategies.
+
+Holds the per-deployment state (UG list, popps, link capacities, BGP
+preferences, traffic volumes, LP caches) and the cross-strategy helpers
+that operate on it (`measure_ingresses`, `update_deployment`,
+`calculate_user_choice`, `solve_lp_with_failure_catch`, etc.).
+
+`Sparse_Advertisement_Wrapper` (in sparse_advertisements_v3.py), `Painter_Adv_Solver`
+(painter.py), and `Anyopt_Adv_Solver` (anyopt.py) all extend this class.
+The Ray actor `Path_Distribution_Computer` (path_distribution_computer.py,
+wrapped by _ray.py) also extends it, so workers have the same deployment
+state shape as the driver.
+
+The worker pool is attached externally via `set_worker_manager(wm)` rather
+than constructed here, to keep the cycle worker_comms → wrapper → solver
+avoidable. `get_worker_manager()` returns the optional `self.worker_manager`
+attribute that callers like the gradient probe rely on.
+
+`clear_lp_caches()` drops the driver-side `linear_prog_soln_cache` between
+eval phases. Each cached LP at actual-32 is ~2-3 MB; without periodic
+clears the cache grows to multi-GB across the full eval pipeline.
+"""
 import numpy as np, time, tqdm, multiprocessing
 np.setbufsize(262144*8)
 np.set_printoptions(precision=5)

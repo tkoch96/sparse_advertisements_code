@@ -1,3 +1,13 @@
+"""Generic_Objective: runtime dispatch from objective name to LP function.
+
+Used by Sparse_Advertisement_Wrapper to evaluate the per-iter objective
+inside the SGD loop. The objective name (e.g. 'avg_latency', 'site_failure')
+is set via the deployment dict or kwargs, and Generic_Objective looks it
+up in `solve_lp_assignment.generic_lp_functions` to find the matching
+LP function.
+
+This is a thin shim. The heavy lifting is in solve_lp_assignment.py.
+"""
 from solve_lp_assignment import solve_generic_lp_with_failure_catch
 from helpers import *
 from constants import *

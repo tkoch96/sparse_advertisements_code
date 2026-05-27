@@ -1,3 +1,14 @@
+"""AnyOpt baseline strategy.
+
+Implements `Anyopt_Adv_Solver`, the AnyOpt baseline SCULPTOR is compared
+against. AnyOpt does monte-carlo random search over advertisement
+matrices; for each sampled advertisement, it estimates the expected
+latency benefit and keeps the best one seen.
+
+Invoked from `Sparse_Advertisement_Wrapper.solve_anyopt` in
+sparse_advertisements_v3.py. Runs in a forked subprocess concurrently
+with sparse training (see `_PARALLEL_STRATEGY_NAMES`).
+"""
 import numpy as np,time, tqdm, copy
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
 from helpers import *

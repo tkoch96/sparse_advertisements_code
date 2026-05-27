@@ -1,3 +1,13 @@
+"""PAINTER + unicast baseline strategies.
+
+Implements `Painter_Adv_Solver`, the PAINTER baseline (greedy + geo-based
+heuristic) SCULPTOR is compared against. Also provides the trivial
+unicast baseline (every popp gets its own prefix) used as a sanity floor.
+
+Invoked from `Sparse_Advertisement_Wrapper.solve_painter` in
+sparse_advertisements_v3.py. Runs in a forked subprocess concurrently
+with sparse training (see `_PARALLEL_STRATEGY_NAMES`).
+"""
 import geopy.distance, numpy as np, copy, time
 from helpers import *
 from optimal_adv_wrapper import Optimal_Adv_Wrapper
