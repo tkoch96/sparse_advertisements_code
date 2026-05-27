@@ -21,6 +21,21 @@ import time
 
 import ray
 
+
+def _read_sys_avail_mb():
+	"""Read MemAvailable from /proc/meminfo (Linux only). Returns int MB
+	or None when the file isn't readable (macOS, restricted containers).
+	Used by the autoscale policy in Worker_Manager._maybe_autoscale.
+	"""
+	try:
+		with open('/proc/meminfo', 'r') as f:
+			for line in f:
+				if line.startswith('MemAvailable:'):
+					return int(line.split()[1]) // 1024
+	except (FileNotFoundError, PermissionError):
+		return None
+	return None
+
 from helpers import *
 from constants import *
 
@@ -134,8 +149,15 @@ class Worker_Manager:
 		# strategies finish; the actual resize happens at the next sparse
 		# iter boundary via process_pending_resize (single-threaded, no
 		# concurrent fanouts in flight). See SCULPTOR_N_WORKERS_DURING_PARALLEL.
+		#
+		# When SCULPTOR_AUTOSCALE_WORKERS=1, process_pending_resize also runs
+		# a memory-pressure policy that may request_add_workers or
+		# request_remove_workers based on /proc/meminfo MemAvailable
+		# against SCULPTOR_MEM_HEADROOM_MB.
 		self._resize_lock = threading.Lock()
 		self._pending_add_workers = 0
+		self._pending_remove_workers = 0
+		self._last_autoscale_decision = None  # for telemetry / debugging
 
 	def get_init_kwa(self):
 		return self.kwa_settings
@@ -263,34 +285,112 @@ class Worker_Manager:
 		boundary), so we never mutate worker_sockets while a fanout is
 		mid-flight. Called from the watcher thread spawned in
 		compare_different_solutions when concurrent parallel-strategy
-		subprocesses finish.
+		subprocesses finish; also from the autoscale policy in
+		process_pending_resize.
 		"""
 		with self._resize_lock:
 			self._pending_add_workers += int(n_add)
-			print("[adaptive-workers] request_add_workers(+{}) (pending={}, current={})".format(
+			print("[adaptive-workers] request_add_workers(+{}) (pending_add={}, current={})".format(
 				n_add, self._pending_add_workers, len(self.worker_sockets)), flush=True)
+
+	def request_remove_workers(self, n_remove):
+		"""Thread-safe request to SHRINK the actor pool by `n_remove`.
+		Symmetric to request_add_workers. Used by the autoscale policy
+		when head free memory drops below SCULPTOR_MEM_HEADROOM_MB.
+
+		Highest-indexed workers are removed first (their cached LP
+		state is not warmer than the others -- the cache hit rate is
+		roughly uniform across workers since the gradient probes
+		fan out evenly).
+		"""
+		with self._resize_lock:
+			self._pending_remove_workers += int(n_remove)
+			print("[adaptive-workers] request_remove_workers(-{}) (pending_remove={}, current={})".format(
+				n_remove, self._pending_remove_workers, len(self.worker_sockets)), flush=True)
 
 	def process_pending_resize(self):
 		"""Main-thread consumer. Sparse's training loop calls this at iter
-		boundary; if a pending add was requested, this spawns the new
-		actors, re-slices UGs across the (now larger) pool, sends new
-		slices to all workers via update_deployment, and atomically
-		merges new workers into self.worker_sockets.
+		boundary. Consumes pending add/remove deltas AND (if autoscale
+		is enabled) runs the memory-headroom policy. All worker pool
+		mutations happen here; no other code path should mutate
+		self.worker_sockets while training is live.
 
 		Single-threaded by contract: only one fanout in flight at a
 		time, and resize runs between iters so no fanouts are active.
 		"""
+		# Memory-pressure policy may add to the pending counters before
+		# we consume them. Runs first so its decisions get applied this
+		# iter rather than waiting one more.
+		self._maybe_autoscale()
+
 		with self._resize_lock:
 			n_add = self._pending_add_workers
+			n_remove = self._pending_remove_workers
 			self._pending_add_workers = 0
-		if n_add <= 0:
+			self._pending_remove_workers = 0
+
+		# Net out add vs remove so opposing requests in the same iter cancel.
+		net = n_add - n_remove
+		if net > 0:
+			try:
+				self._do_add_workers(net)
+			except Exception as e:
+				import traceback
+				traceback.print_exc()
+				print("[adaptive-workers] _do_add_workers({}) FAILED: {}".format(net, e), flush=True)
+		elif net < 0:
+			try:
+				self._do_remove_workers(-net)
+			except Exception as e:
+				import traceback
+				traceback.print_exc()
+				print("[adaptive-workers] _do_remove_workers({}) FAILED: {}".format(-net, e), flush=True)
+
+	def _maybe_autoscale(self):
+		"""Memory-headroom policy. No-op unless SCULPTOR_AUTOSCALE_WORKERS=1.
+
+		Below SCULPTOR_MEM_HEADROOM_MB free -> request_remove_workers(1)
+		Above 2 * headroom free, and current < target -> request_add_workers(1)
+		Between -> no change.
+
+		One delta per call (per iter) gives natural hysteresis. The
+		consumer below clamps net change to >=1 worker remaining.
+		"""
+		if os.environ.get('SCULPTOR_AUTOSCALE_WORKERS', '0') != '1':
 			return
 		try:
-			self._do_add_workers(n_add)
-		except Exception as e:
-			import traceback
-			traceback.print_exc()
-			print("[adaptive-workers] _do_add_workers({}) FAILED: {}".format(n_add, e), flush=True)
+			headroom_mb = int(os.environ.get('SCULPTOR_MEM_HEADROOM_MB', '8000'))
+		except ValueError:
+			headroom_mb = 8000
+		try:
+			min_workers = int(os.environ.get('SCULPTOR_MIN_WORKERS', '1'))
+		except ValueError:
+			min_workers = 1
+
+		avail_mb = _read_sys_avail_mb()
+		if avail_mb is None:
+			# /proc not readable (e.g. macOS) -- can't make a decision.
+			return
+
+		current = len(self.worker_sockets)
+		target = self._target_n_workers()
+
+		decision = None
+		if avail_mb < headroom_mb and current > min_workers:
+			self.request_remove_workers(1)
+			decision = 'remove'
+		elif avail_mb >= 2 * headroom_mb and current < target:
+			self.request_add_workers(1)
+			decision = 'add'
+		else:
+			decision = 'hold'
+
+		self._last_autoscale_decision = {
+			'decision': decision, 'avail_mb': avail_mb, 'headroom_mb': headroom_mb,
+			'current': current, 'target': target,
+		}
+		print("[autoscale] decision={} avail_mb={} headroom_mb={} current={} target={}".format(
+			decision, avail_mb, headroom_mb, current, target), flush=True)
 
 	def _do_add_workers(self, n_add):
 		"""Spawn `n_add` Ray actors, re-partition the deployment across the
@@ -362,6 +462,93 @@ class Worker_Manager:
 
 		print("[adaptive-workers] pool now {} workers; init={:.1f}s reshard={:.1f}s".format(
 			len(self.worker_sockets), t_init, t_reshard), flush=True)
+
+	def _do_remove_workers(self, n_remove):
+		"""Remove the highest-indexed `n_remove` actors from the pool and
+		re-shard the deployment across the smaller pool.
+
+		Steps:
+		  1) Pick the worker_i keys to drop (highest indices first).
+		  2) Pull their [mem-worker] log via dump_mem_log RPC and echo to
+		     stdout (so the records are preserved in the sweep log even
+		     though the actor is about to die).
+		  3) Re-shard the deployment for the new (smaller) total.
+		  4) Send each remaining worker its new (larger) UG slice via
+		     update_deployment.
+		  5) ray.kill the removed actors. The kill is forcible -- any
+		     in-flight method call on a removed actor will error, which
+		     is why this must run between iters (no fanouts in flight).
+		"""
+		n_existing = len(self.worker_sockets)
+		# Floor at 1 worker -- can't run training with zero.
+		actual_remove = min(n_remove, max(0, n_existing - 1))
+		if actual_remove <= 0:
+			print("[adaptive-workers] _do_remove_workers({}) skipped (already at min)".format(
+				n_remove), flush=True)
+			return
+		n_total = n_existing - actual_remove
+		print("[adaptive-workers] shrinking pool: {} -> {} (-{})".format(
+			n_existing, n_total, actual_remove), flush=True)
+		t0 = time.time()
+
+		# 1) Highest indices first, but skip any missing keys (defensive).
+		all_keys = sorted(self.worker_sockets.keys())
+		to_remove = all_keys[-actual_remove:]
+		to_keep = all_keys[:-actual_remove]
+
+		# 2) Collect mem logs from the workers we're about to kill so we
+		#    don't lose their records.
+		dump_msg = pickle.dumps(('dump_mem_log', None))
+		for worker_i in to_remove:
+			try:
+				ref = self.worker_sockets[worker_i].handle_msg.remote(dump_msg)
+				content = ray.get(ref)
+				if content:
+					print('--- worker {} mem log (removed) start ---'.format(worker_i), flush=True)
+					print(content, end='' if content.endswith('\n') else '\n', flush=True)
+					print('--- worker {} mem log (removed) end ---'.format(worker_i), flush=True)
+			except Exception:
+				pass
+
+		# 3) Re-shard for the new smaller total. We use the SAME indexing
+		#    scheme as start_workers / _do_add_workers (slice[i] -> worker_i)
+		#    by re-running split_deployment_by_ug_separated with n_chunks=n_total
+		#    and then assigning those slices to the kept worker_i values in
+		#    sorted order.
+		static_dep, slices = split_deployment_by_ug_separated(
+			self.deployment, n_chunks=n_total)
+		# Note: slices is a list of n_total dicts. We map slices[k] -> kept worker
+		# `to_keep[k]`. After this, the kept workers' worker_to_deployments
+		# entries no longer match their physical worker_i (which is fine --
+		# downstream code keys off worker_i, not slice index).
+
+		# 4) Send each kept worker its new slice.
+		reshard_refs = []
+		for k, kept_i in enumerate(to_keep):
+			if k >= len(slices) or len(slices[k]['ugs']) == 0:
+				continue
+			new_subdep = {**static_dep, **slices[k]}
+			self.worker_to_deployments[kept_i] = new_subdep
+			msg = pickle.dumps(('update_deployment', (new_subdep, {})))
+			reshard_refs.append(self.worker_sockets[kept_i].handle_msg.remote(msg))
+		if reshard_refs:
+			ray.get(reshard_refs)
+		t_reshard = time.time() - t0
+
+		# 5) ray.kill the removed actors and drop them from worker_sockets.
+		for worker_i in to_remove:
+			sock = self.worker_sockets.pop(worker_i, None)
+			self.worker_to_deployments.pop(worker_i, None)
+			if sock is None:
+				continue
+			actor = getattr(sock, 'actor', sock)
+			try:
+				ray.kill(actor)
+			except Exception:
+				pass
+
+		print("[adaptive-workers] pool now {} workers; reshard+kill={:.1f}s".format(
+			len(self.worker_sockets), time.time() - t0), flush=True)
 
 	def update_worker_deployments(self, new_deployment):
 		self.deployment = new_deployment

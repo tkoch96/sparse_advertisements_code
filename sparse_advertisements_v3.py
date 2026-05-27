@@ -229,6 +229,45 @@ _PARALLEL_STRATEGY_NAMES = frozenset({
 })
 
 
+def _read_sys_avail_mb_local():
+	"""Linux-only sys-avail read for the subprocess concurrency cap.
+	Returns int MB or None when /proc isn't readable (macOS, restricted
+	containers)."""
+	try:
+		with open('/proc/meminfo', 'r') as f:
+			for line in f:
+				if line.startswith('MemAvailable:'):
+					return int(line.split()[1]) // 1024
+	except (FileNotFoundError, PermissionError):
+		return None
+	return None
+
+
+def _max_concurrent_strategies(n_parallel_types):
+	"""Cap how many fork()'d strategy subprocesses run concurrently, based
+	on current head free memory and a per-subprocess RSS estimate.
+
+	Returns int >= 1. Falls back to n_parallel_types (no cap) when
+	/proc/meminfo isn't readable (macOS) so local dev smoke runs aren't
+	throttled artificially.
+	"""
+	avail_mb = _read_sys_avail_mb_local()
+	if avail_mb is None:
+		return n_parallel_types
+	try:
+		headroom_mb = int(_os.environ.get('SCULPTOR_HEAD_RAM_HEADROOM_MB', '8000'))
+	except ValueError:
+		headroom_mb = 8000
+	try:
+		per_est_mb = int(_os.environ.get('SCULPTOR_STRATEGY_RSS_ESTIMATE_MB', '8000'))
+	except ValueError:
+		per_est_mb = 8000
+	usable = avail_mb - headroom_mb
+	if usable <= 0 or per_est_mb <= 0:
+		return 1
+	return max(1, min(n_parallel_types, usable // per_est_mb))
+
+
 def _solve_one_strategy_in_subprocess(strategy_name, deployment, init_kwa,
                                       kwargs_for_solve):
 	"""Module-level worker for ProcessPoolExecutor.
@@ -896,8 +935,22 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			futures = {}
 			if parallel_types:
 				ctx = _mp.get_context('fork')
+				# Concurrency cap based on current head free memory. Each
+				# forked strategy subprocess inherits the driver's memory
+				# at fork time (copy-on-write); as it touches pages they
+				# diverge and count toward its RSS. Limit how many can run
+				# concurrently so we don't overrun the head.
+				#
+				# `max_concurrent` = floor((avail - headroom) / per_strategy_est).
+				# Knobs:
+				#   SCULPTOR_HEAD_RAM_HEADROOM_MB     reserve this much (default 8 GB)
+				#   SCULPTOR_STRATEGY_RSS_ESTIMATE_MB per-subprocess budget (default 8 GB)
+				# When either is unset and /proc unreadable (macOS), falls
+				# back to launching all strategies concurrently (legacy
+				# behaviour) so this never breaks local dev smoke runs.
+				max_concurrent = _max_concurrent_strategies(len(parallel_types))
 				executor = concurrent.futures.ProcessPoolExecutor(
-					max_workers=len(parallel_types), mp_context=ctx)
+					max_workers=max_concurrent, mp_context=ctx)
 				deployment_for_sub = self.output_deployment()
 				init_kwa_for_sub = self.get_init_kwa()
 				# Strip kwargs that don't apply (the subprocess builds its own
@@ -905,8 +958,12 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				sub_kwargs = {k: v for k, v in kwargs.items()
 					if k not in {'on_strategy_complete', 'soln_types', 'verbose'}}
 				if verbose:
-					print("[parallel] launching {} non-sparse strategies in subprocesses: {}".format(
-						len(parallel_types), parallel_types))
+					if max_concurrent < len(parallel_types):
+						print("[parallel] launching {} non-sparse strategies with concurrency cap {}: {}".format(
+							len(parallel_types), max_concurrent, parallel_types))
+					else:
+						print("[parallel] launching {} non-sparse strategies in subprocesses: {}".format(
+							len(parallel_types), parallel_types))
 				for s in parallel_types:
 					fut = executor.submit(
 						_solve_one_strategy_in_subprocess,
