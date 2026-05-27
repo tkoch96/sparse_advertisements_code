@@ -34,7 +34,7 @@ unmodified.
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   SCULPTOR_MAX_ITER=10 SCULPTOR_N_WORKERS=32 nohup /home/ubuntu/venv312/bin/python \
-    run_ray.py eval_latency_failure --port 31415 --dpsize actual-32 \
+    eval_latency_failure.py --port 31415 --dpsize actual-32 \
     > /tmp/cluster_runs/${ts}.log 2>&1 < /dev/null &
   echo $! > /tmp/cluster_runs/${ts}.pid
   ln -sfn ${ts}.log /tmp/cluster_runs/latest.log
@@ -114,7 +114,6 @@ sparse_advertisements_code/
 ├── RESEARCH_ROADMAP.md                ← next-steps + experiment plans
 ├── ray-cluster.yaml                   ← Ray cluster config (use as-is)
 ├── teardown.sh                        ← end-of-session script (use as-is)
-├── run_ray.py                         ← Ray-backend launcher
 ├── sparse_advertisements_v3.py        ← SCULPTOR algorithm
 ├── eval_latency_failure.py            ← primary driver
 ├── worker_comms_ray.py                ← Ray Worker_Manager
@@ -224,7 +223,7 @@ to survive wifi flakes, laptop sleep, etc. The pattern we settled on:
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   <ENV_VARS> nohup /home/ubuntu/venv312/bin/python \
-    run_ray.py eval_latency_failure --port 31415 --dpsize <dpsize> \
+    eval_latency_failure.py --port 31415 --dpsize <dpsize> \
     > /tmp/cluster_runs/${ts}_<name>.log 2>&1 < /dev/null &
   pid=$!
   echo $pid > /tmp/cluster_runs/${ts}_<name>.pid
