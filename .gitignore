@@ -136,3 +136,9 @@ cache
 logs
 .DS_Store
 recovered_actual32/*.pkl
+
+#  Local outputs / session state -- not for the repo
+.claude/
+benchmarks/out/
+data/
+runs/
