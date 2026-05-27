@@ -201,7 +201,18 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 	)
 
 	wm = Worker_Manager(sas.get_init_kwa(), deployment)
-	wm.start_workers()
+	# Adaptive resize: if SCULPTOR_N_WORKERS_DURING_PARALLEL is set, start
+	# with the reduced pool; compare_different_solutions's watcher will
+	# request_add_workers up to the SCULPTOR_N_WORKERS target when the
+	# concurrent parallel-strategy subprocesses finish.
+	_dp_env = os.environ.get('SCULPTOR_N_WORKERS_DURING_PARALLEL')
+	_dp_initial = None
+	if _dp_env is not None:
+		try:
+			_dp_initial = int(_dp_env)
+		except ValueError:
+			print("WARNING: SCULPTOR_N_WORKERS_DURING_PARALLEL={!r} is not an int; ignoring".format(_dp_env))
+	wm.start_workers(n_workers_override=_dp_initial)
 	try:
 		sas.set_worker_manager(wm)
 		sas.update_deployment(deployment)
