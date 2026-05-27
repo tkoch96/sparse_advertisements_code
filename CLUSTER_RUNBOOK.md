@@ -60,12 +60,23 @@ or orphaned. Set up in session 10 (2026-05-27).
   via stop+start, sweep relaunch, tear down).
 - **Script:** `~/.sculptor_cluster_alert/liveness_check.py` — what cron runs.
 - **Crontab entry:** `*/10 * * * * /Users/tomkoch/Documents/venv312/bin/python /Users/tomkoch/.sculptor_cluster_alert/liveness_check.py >> /Users/tomkoch/.sculptor_cluster_alert/cron.log 2>&1`
-- **Alerts (via ntfy topic `sculptor-tk-95c9decb99ed7220` + macOS notification):**
-  - `vm_crashed` — config active=true but AWS shows instance stopped/terminated
+- **Alert channels** (in order of how reliably they reach the user):
+  1. **SMS via Gmail email-to-SMS gateway** (primary) — same pattern as
+     `~/Documents/budgeter`. Reuses `~/Documents/budgeter/emailer.py`'s
+     `send_notification()` so the Gmail app password lives in one place.
+     Phone vibrates whether or not the Mac is online.
+  2. ntfy.sh push to topic `sculptor-tk-95c9decb99ed7220` (fallback).
+  3. macOS desktop notification via `osascript` (only seen at the Mac).
+- **Alert tags:**
+  - `vm_crashed` — config active=true but AWS shows instance stopped/terminated (CRIT)
   - `orphan_vm` — config active=false but AWS shows instance running (agent forgot to tear down OR forgot to update config)
   - `stale_config` — config active=true and last_updated > 24h ago
-  - `vm_unreachable` — SSH fails while AWS shows instance running
-  - `sweep_pid_dead` / `sweep_stalled` — process gone or log not growing
+  - `vm_unreachable` — SSH fails while AWS shows instance running (CRIT)
+  - `sweep_pid_dead` — kill -0 says the sweep process is gone (CRIT)
+  - `sweep_stalled` — log hasn't grown by `min_log_growth_per_check_lines`
+    for **3 consecutive checks** (~30 min). The consecutive threshold
+    avoids false positives during deployment warm-up (loading the 4.5 GB
+    latency CSV easily takes one 10-min cron tick without log growth).
 - **Alert dedup:** 60 min per tag, so a persistent issue doesn't spam.
 - **Telemetry:** `~/.sculptor_cluster_alert/alert.log` (alert history),
   `~/.sculptor_cluster_alert/state.json` (last-check delta state),
