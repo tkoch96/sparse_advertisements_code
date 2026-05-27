@@ -49,6 +49,32 @@ unmodified.
 ./teardown.sh
 ```
 
+## 📡 Local liveness monitoring
+
+A cron-based liveness checker runs every 10 min on the local laptop and
+alerts via ntfy + macOS notification if the cluster looks dead, stuck,
+or orphaned. Set up in session 10 (2026-05-27).
+
+- **Config:** `~/.sculptor_cluster_alert/active_cluster.json` — agents
+  MUST update this on every cluster lifecycle event (bring up, IP change
+  via stop+start, sweep relaunch, tear down).
+- **Script:** `~/.sculptor_cluster_alert/liveness_check.py` — what cron runs.
+- **Crontab entry:** `*/10 * * * * /Users/tomkoch/Documents/venv312/bin/python /Users/tomkoch/.sculptor_cluster_alert/liveness_check.py >> /Users/tomkoch/.sculptor_cluster_alert/cron.log 2>&1`
+- **Alerts (via ntfy topic `sculptor-tk-95c9decb99ed7220` + macOS notification):**
+  - `vm_crashed` — config active=true but AWS shows instance stopped/terminated
+  - `orphan_vm` — config active=false but AWS shows instance running (agent forgot to tear down OR forgot to update config)
+  - `stale_config` — config active=true and last_updated > 24h ago
+  - `vm_unreachable` — SSH fails while AWS shows instance running
+  - `sweep_pid_dead` / `sweep_stalled` — process gone or log not growing
+- **Alert dedup:** 60 min per tag, so a persistent issue doesn't spam.
+- **Telemetry:** `~/.sculptor_cluster_alert/alert.log` (alert history),
+  `~/.sculptor_cluster_alert/state.json` (last-check delta state),
+  `~/.sculptor_cluster_alert/cron.log` (cron stderr).
+
+**Disabling alerts when no cluster is up:** set `active: false` in the
+config — the script will still detect orphan VMs but won't alert on
+missing process/log.
+
 ---
 
 ## AWS account prereqs (one-time per account)
