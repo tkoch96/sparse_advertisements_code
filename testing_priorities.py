@@ -1,3 +1,14 @@
+"""Multi-priority (B4 / SWAN) evaluation driver.
+
+Tests SCULPTOR's `joint_priority` objective: a strict-priority-like LP
+where HPrio traffic is solved first and bulk fills in around it. Used
+for the B4/SWAN comparison plots in the paper.
+
+LEGACY — modern equivalent is `python -m experiments.run_objective --obj
+joint_priority --dpsize <size>` (the objective registry takes care of
+the lp_kwargs, eval phases, etc.). Kept because some paper-plot scripts
+expect this file's output shape.
+"""
 from deployment_setup import get_random_deployment, get_bulk_vol, get_link_capacities
 from sparse_advertisements_v3 import Sparse_Advertisement_Eval
 from worker_comms import Worker_Manager

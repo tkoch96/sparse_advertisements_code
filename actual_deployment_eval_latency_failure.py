@@ -1,3 +1,14 @@
+"""Real-deployment driver: `evaluate_all_metrics` for actual BGP runs.
+
+Same shape as `eval_latency_failure.py` but with real-Internet glue
+(RIPE Atlas measurements, real advertisement caching via
+`realworld_measure_wrapper.py`) instead of simulated routing.
+
+Most active development happens on the simulated path
+(`eval_latency_failure.py`). This file is used when running on the actual
+Vultr deployment for paper experiments; the per-strategy advertisements
+get pushed to live BGP, measurements come from RIPE probes.
+"""
 from constants import *
 from helpers import *
 from wrapper_eval import *

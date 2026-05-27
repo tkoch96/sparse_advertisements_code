@@ -1,3 +1,15 @@
+"""Feature-toggle variant of `evaluate_over_deployment_sizes.py`.
+
+Same structure as `evaluate_over_deployment_sizes.py` but with an extra
+"feature on/off" toggle baked into the deployment-loop loop, so we can
+A/B compare SCULPTOR with one specific code path enabled or disabled.
+Was used heavily for paper-plot regeneration when iterating on
+algorithmic changes.
+
+Newer per-objective experiments should go through
+`experiments/run_objective.py` rather than copying this file. Kept
+because some paper-plot scripts read its outputs.
+"""
 from constants import *
 from eval_latency_failure import evaluate_all_metrics
 import numpy as np, os, pickle

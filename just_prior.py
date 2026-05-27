@@ -1,3 +1,10 @@
+"""Run the key evaluations for everything EXCEPT SCULPTOR.
+
+Calls `evaluate_all_metrics` configured to skip the sparse training step
+(useful when iterating only on the baselines, or when SCULPTOR results
+are already cached and you want to regenerate the baseline columns of
+a paper plot).
+"""
 import pickle
 from constants import *
 from deployment_setup import *

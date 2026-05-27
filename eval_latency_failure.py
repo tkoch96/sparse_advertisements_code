@@ -1,3 +1,32 @@
+"""Primary driver: `evaluate_all_metrics(dpsize, port, **kw)`.
+
+This is the main entry point that nearly every sweep / experiment driver
+ultimately calls. It:
+
+  1. Loads (or initialises) the per-dpsize metrics pickle.
+  2. For each `random_iter`, builds a fresh `Sparse_Advertisement_Eval`,
+     attaches a Ray `Worker_Manager`, calls `compare_different_solutions`
+     to run sparse + parallel-strategy baselines, and records the
+     per-strategy advertisement matrices.
+  3. Runs the post-training eval phases (latency, pct-volume-within-latency,
+     failure resilience, flash-crowd, diurnal) on each random_iter's
+     solutions. The phases are implemented in `wrapper_eval.py`.
+  4. Periodically pickles the metrics dict to disk after each phase so a
+     crash mid-eval doesn't lose work.
+  5. Calls `wm.stop_workers()` in a finally block so the Ray actor pool
+     is always torn down (also pulls per-worker mem logs to the driver
+     log on the way out).
+
+Adaptive-workers integration: the env var
+`SCULPTOR_N_WORKERS_DURING_PARALLEL` is read at `wm.start_workers()`
+time and triggers the watcher-thread + ramp-up flow in
+`compare_different_solutions`. See README.md "Environment variables".
+
+`python eval_latency_failure.py --dpsize <name> --port <p>` invokes it
+directly from the shell. Sweep drivers (`benchmarks/run_deployment_sweep.py`,
+`evaluate_over_deployment_sizes.py`, etc.) call it from a loop over
+dpsizes.
+"""
 from constants import *
 from helpers import *
 from wrapper_eval import *

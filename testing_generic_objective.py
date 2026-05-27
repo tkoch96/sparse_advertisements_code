@@ -1,3 +1,10 @@
+"""Generic-objective evaluation driver.
+
+Same as `eval_latency_failure.py` but parametric over the objective name
+— originally used to test new objectives before adding them to the
+registry. Mostly superseded by `experiments/run_objective.py` (the new
+objective registry handles the same job with less boilerplate).
+"""
 import numpy as np, sys, glob, re, copy
 
 from deployment_setup import get_random_deployment

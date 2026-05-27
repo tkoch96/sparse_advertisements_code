@@ -1,3 +1,17 @@
+"""Sweep + plot: how does SCULPTOR compare to baselines as deployment size varies?
+
+For each dpsize in a default list (or env-var override), calls
+`evaluate_all_metrics` to train sparse + all baseline strategies, then
+aggregates per-strategy results across dpsizes into the paper plots
+(`figures/paper/average_latency_over_deployment_size_*.pdf` and
+percent-within-X-ms variants).
+
+`pull_results_new()` is the per-dpsize execution loop;
+`make_paper_plots()` is the plotting entry-point.
+
+For cluster-friendly invocation with env-var config, see
+`benchmarks/run_deployment_sweep.py` (newer, recommended).
+"""
 from constants import *
 from eval_latency_failure import evaluate_all_metrics
 import numpy as np, os, pickle

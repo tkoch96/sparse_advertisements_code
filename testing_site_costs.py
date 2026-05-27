@@ -1,3 +1,12 @@
+"""Site-cost objective evaluation driver.
+
+Tests SCULPTOR's `per_site_cost` objective: avg_latency + alpha * sum of
+active site costs. Used to evaluate latency vs. transit-cost trade-offs.
+
+LEGACY — modern equivalent is `python -m experiments.run_objective --obj
+per_site_cost --dpsize <size>`. Kept for backward-compat with existing
+paper-plot pipelines.
+"""
 from deployment_setup import get_random_deployment, get_bulk_vol, get_link_capacities
 from sparse_advertisements_v3 import Sparse_Advertisement_Eval
 from worker_comms import Worker_Manager

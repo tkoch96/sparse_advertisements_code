@@ -1,3 +1,10 @@
+"""Run the key evaluations on a specific (named / cached) deployment.
+
+Variant of `eval_latency_failure.py` that loads a specific pre-built
+deployment from `cache/` instead of generating a random one. Useful for
+reproducing exact paper figures or debugging a specific deployment that
+exposes a bug.
+"""
 import pickle
 from wrapper_eval import *
 from constants import *

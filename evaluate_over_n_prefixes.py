@@ -1,3 +1,9 @@
+"""Sweep + plot: how does SCULPTOR compare to baselines as number of prefixes varies?
+
+Mirrors `evaluate_over_deployment_sizes.py` but the swept axis is
+`n_prefixes` instead of dpsize. Used for the paper plot showing that
+SCULPTOR's advantage holds until n_prefixes exceeds the number of sites.
+"""
 from constants import *
 from helpers import *
 from eval_latency_failure import evaluate_all_metrics
