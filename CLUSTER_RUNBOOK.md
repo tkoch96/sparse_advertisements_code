@@ -72,7 +72,16 @@ or orphaned. Set up in session 10 (2026-05-27).
   - `orphan_vm` — config active=false but AWS shows instance running (agent forgot to tear down OR forgot to update config)
   - `stale_config` — config active=true and last_updated > 24h ago
   - `vm_unreachable` — SSH fails while AWS shows instance running (CRIT)
-  - `sweep_pid_dead` — kill -0 says the sweep process is gone (CRIT)
+  - `sweep_pid_dead` — kill -0 says the sweep process is gone (CRIT).
+    Skipped automatically when ANY of:
+      (a) log contains `[sweep] ALL DONE` → fires `sweep_completed`
+          (INFO) instead -- sweep finished normally
+      (b) pidfile mtime < 180s ago → we're catching a transition
+          between runs (kill + relaunch); next tick will see new PID
+      (c) log mtime < 60s ago → process just exited, will reassess
+          next tick
+  - `sweep_completed` (INFO) — `[sweep] ALL DONE` in the log + PID
+    dead. Fires once per completion (60 min dedup).
   - `sweep_stalled` — log hasn't grown by `min_log_growth_per_check_lines`
     for **3 consecutive checks** (~30 min). The consecutive threshold
     avoids false positives during deployment warm-up (loading the 4.5 GB
