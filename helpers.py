@@ -19,6 +19,37 @@ private_ips = [("0.0.0.0", 8), ("10.0.0.0", 8), ("100.64.0.0", 10), ("127.0.0.0"
 ### This file contains helper functions. I use these helper functions in all my projects
 ### so some of them might be irrelevant.
 
+# Linux-only memory snapshot (reads /proc); no-op on macOS. Gated by SCULPTOR_LOG_MEM
+# (default ON). Output is grepable as `[mem]` (driver) or `[mem-worker]` (worker_i set).
+def log_mem(tag, worker_i=None, **extra):
+	if os.environ.get('SCULPTOR_LOG_MEM', '1') == '0':
+		return
+	rss_kb = vms_kb = peak_kb = sys_avail_kb = -1
+	try:
+		with open('/proc/self/status', 'r') as f:
+			for line in f:
+				if line.startswith('VmRSS:'):    rss_kb    = int(line.split()[1])
+				elif line.startswith('VmSize:'): vms_kb    = int(line.split()[1])
+				elif line.startswith('VmPeak:'): peak_kb   = int(line.split()[1])
+		with open('/proc/meminfo', 'r') as f:
+			for line in f:
+				if line.startswith('MemAvailable:'):
+					sys_avail_kb = int(line.split()[1]); break
+	except (FileNotFoundError, PermissionError):
+		return
+	prefix = '[mem]' if worker_i is None else f'[mem-worker idx={worker_i}]'
+	bits = [f'tag={tag}',
+	        f'rss_mb={rss_kb//1024}',
+	        f'vms_mb={vms_kb//1024}',
+	        f'peak_mb={peak_kb//1024}',
+	        f'sys_avail_mb={sys_avail_kb//1024}',
+	        f'pid={os.getpid()}',
+	        f't={time.time():.2f}']
+	for k, v in extra.items():
+		bits.append(f'{k}={v}')
+	print(prefix + ' ' + ' '.join(bits), flush=True)
+
+
 def pref_to_ip(pref):
 	return ".".join(pref.split(".")[0:3]) + ".1"
 
