@@ -1,3 +1,6 @@
+> 📜 **HISTORICAL** — session-5 snapshot. For current state see
+> [README.md](README.md) and the highest-numbered `HANDOFF_SESSION_*.md`.
+
 # Session 5 summary (2026-05-21)
 
 Starts where SESSION_4_SUMMARY.md left off. Goal this session: verify

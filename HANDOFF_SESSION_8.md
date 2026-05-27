@@ -1,3 +1,9 @@
+> 📜 **HISTORICAL** — session-8 snapshot (titled "Handoff to session 9"
+> because that's where it was pointing). For current state see
+> [README.md](README.md) and the highest-numbered `HANDOFF_SESSION_*.md`.
+> File:line references in this document may be stale against current code
+> (ZMQ Worker_Manager described here was removed in session 10).
+
 # Handoff to session 9
 
 Picking up a SCULPTOR research codebase mid-stride. **Read this doc first**;

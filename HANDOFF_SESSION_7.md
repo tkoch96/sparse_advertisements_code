@@ -1,3 +1,7 @@
+> 📜 **HISTORICAL** — session-7 snapshot. For current state see
+> [README.md](README.md) and the highest-numbered `HANDOFF_SESSION_*.md`.
+> File:line references in this document may be stale against current code.
+
 # Handoff to session 7
 
 Picking up a SCULPTOR research codebase with an actively-running cluster

@@ -1,3 +1,9 @@
+> 📜 **HISTORICAL** — session-1 snapshot, pre-AWS / pre-Ray. For current
+> state see [README.md](README.md) and the highest-numbered
+> `HANDOFF_SESSION_*.md`. File:line references here are stale against
+> current code (the ZMQ Worker_Manager / run_ray.py / hardcoded venv
+> paths described below were all removed in the May 2026 Ray-only refactor).
+
 # Handoff: scaling SCULPTOR to actual-32 in hours, not days
 
 ## ⚠️ Updated 2026-05-19 — read the session-2 docs first

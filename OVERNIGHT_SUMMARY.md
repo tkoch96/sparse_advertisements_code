@@ -1,3 +1,7 @@
+> 📜 **HISTORICAL** — session-2 snapshot. For current state see
+> [README.md](README.md) and the highest-numbered `HANDOFF_SESSION_*.md`.
+> File:line references in this document may be stale against current code.
+
 # Overnight session 2026-05-18 → 2026-05-19
 
 Starts where HANDOFF.md left off. Goal of this session: stand up an AWS Ray
