@@ -279,4 +279,13 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 
 # Public Ray actor: the same class above wrapped with @ray.remote.
 # Worker_Manager_ray imports this name unchanged.
-Path_Distribution_Computer = ray.remote(num_cpus=1)(_LocalPathDistributionComputer)
+#
+# max_restarts=-1: if the actor's node is lost (e.g. AWS reclaims the spot
+# worker), Ray may restart the actor on another live node instead of leaving
+# it permanently dead. This is defence-in-depth — the Worker_Manager also does
+# an app-level rebuild+retry on RayActorError (worker_comms_ray._with_recovery),
+# which is the primary recovery path and re-applies deployment state. We do NOT
+# set max_task_retries: a transparently-retried task would run against a
+# restarted actor that lost its post-__init__ state (update_deployment is not
+# replayed by Ray), so we drive the retry at the app level instead.
+Path_Distribution_Computer = ray.remote(num_cpus=1, max_restarts=-1)(_LocalPathDistributionComputer)

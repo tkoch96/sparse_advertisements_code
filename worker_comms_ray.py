@@ -20,6 +20,14 @@ import threading
 import time
 
 import ray
+from ray.exceptions import RayActorError
+
+# Worker-actor death. A Ray actor dies permanently when its node is lost (e.g.
+# AWS reclaims the spot worker). Calls to a dead actor raise RayActorError
+# (ActorDiedError / ActorUnavailableError both subclass it). Normal task
+# exceptions are RayTaskError — NOT a subclass — so they propagate unchanged;
+# we only recover from genuine actor death.
+_ACTOR_DEATH_EXC = (RayActorError,)
 
 
 def _read_sys_avail_mb():
@@ -666,6 +674,66 @@ class Worker_Manager:
 		self.worker_sockets = {}
 
 	# ------------------------------------------------------------------ #
+	# Fault tolerance: recover from worker-actor death (e.g. spot reclaim)
+	# ------------------------------------------------------------------ #
+	def _rebuild_worker_pool(self):
+		"""A worker actor died (typically AWS reclaiming the spot worker
+		node). Tear down any surviving handles and re-spawn a fresh pool so
+		the caller can retry. Blocks until the cluster has enough CPUs for the
+		target pool -- after a reclaim the autoscaler boots a replacement node,
+		which takes ~30-120s. Raises RuntimeError if capacity never returns
+		within SCULPTOR_RECOVER_NODE_TIMEOUT_S (default 900s).
+
+		Re-spawn re-shards self.deployment (the pool's init deployment). Any
+		per-run state pushed later via update_deployment is NOT replayed here;
+		the retried operation re-applies it (update_deployment messages carry
+		their own subdeployments, and the eval phase re-runs update_deployment
+		before each strategy), so the retry is self-correcting for the call
+		paths that reach this.
+		"""
+		print("[ray-recover] worker actor death detected; rebuilding pool", flush=True)
+		for w, sock in list(self.worker_sockets.items()):
+			try:
+				ray.kill(sock.actor)
+			except Exception:
+				pass
+		self.worker_sockets = {}
+		target = self._target_n_workers()
+		timeout_s = float(os.environ.get('SCULPTOR_RECOVER_NODE_TIMEOUT_S', '900'))
+		deadline = time.time() + timeout_s
+		while True:
+			try:
+				cpus = ray.cluster_resources().get('CPU', 0)
+			except Exception:
+				cpus = 0
+			if cpus >= target:
+				break
+			if time.time() >= deadline:
+				raise RuntimeError(
+					"[ray-recover] cluster never regained {} CPUs within {:.0f}s "
+					"(have {:.0f}); cannot rebuild worker pool".format(
+						target, timeout_s, cpus))
+			print("[ray-recover] waiting for cluster CPUs: have {:.0f}, need {} "
+				  "(replacement node booting?)".format(cpus, target), flush=True)
+			time.sleep(10)
+		self.start_workers()
+		print("[ray-recover] rebuilt pool with {} workers".format(
+			len(self.worker_sockets)), flush=True)
+
+	def _with_recovery(self, fn):
+		"""Run fn(); on worker-actor death, rebuild the pool once and retry.
+		A second failure propagates so the caller's error handling still runs
+		-- now after a genuine recovery attempt, not a silent swallow. fn must
+		re-read self.worker_sockets each call (pass a lambda), since recovery
+		replaces every handle."""
+		try:
+			return fn()
+		except _ACTOR_DEATH_EXC as e:
+			print("[ray-recover] {}: {}".format(type(e).__name__, str(e)[:300]), flush=True)
+			self._rebuild_worker_pool()
+			return fn()
+
+	# ------------------------------------------------------------------ #
 	# Message-passing primitives
 	# ------------------------------------------------------------------ #
 	def _fanout(self, items):
@@ -683,17 +751,20 @@ class Worker_Manager:
 
 	def send_receive_workers(self, msg, L_TIMEOUT=100 * 60):
 		# Same msg to every worker. Original returns dict {worker_i: result}.
-		return self._fanout([(w, msg) for w in self.worker_sockets])
+		return self._with_recovery(
+			lambda: self._fanout([(w, msg) for w in self.worker_sockets]))
 
 	def send_receive_messages_workers(self, msgs, L_TIMEOUT=100 * 60, **kwargs):
 		# msgs is a list indexed by worker_i (matches original semantics).
 		n_workers = kwargs.get('n_workers', self.get_n_workers())
 		assert len(msgs) == n_workers
-		return self._fanout([(i, msgs[i]) for i in range(n_workers)
-							 if i in self.worker_sockets])
+		return self._with_recovery(
+			lambda: self._fanout([(i, msgs[i]) for i in range(n_workers)
+								  if i in self.worker_sockets]))
 
 	def send_receive_worker(self, worker_i, msg):
-		return ray.get(self.worker_sockets[worker_i].handle_msg.remote(msg))
+		return self._with_recovery(
+			lambda: ray.get(self.worker_sockets[worker_i].handle_msg.remote(msg)))
 
 	def send_messages_workers(self, msgs):
 		"""Send (possibly distinct) messages to workers. The original waits for
@@ -706,11 +777,13 @@ class Worker_Manager:
 			items = list(msgs.items())
 		else:
 			items = list(enumerate(msgs))
-		refs = []
-		for worker_i, msg in items:
-			if worker_i not in self.worker_sockets:
-				continue
-			refs.append(self.worker_sockets[worker_i].handle_msg.remote(msg))
-		# Block on completion. (The original's send_messages_workers also
-		# tries to recv ACKs, just without using them.)
-		ray.get(refs)
+		def _do():
+			refs = []
+			for worker_i, msg in items:
+				if worker_i not in self.worker_sockets:
+					continue
+				refs.append(self.worker_sockets[worker_i].handle_msg.remote(msg))
+			# Block on completion. (The original's send_messages_workers also
+			# tries to recv ACKs, just without using them.)
+			ray.get(refs)
+		self._with_recovery(_do)

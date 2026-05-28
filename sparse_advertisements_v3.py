@@ -338,13 +338,21 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# Empirical with the tightened threshold: sparse stops at iter ~70-100
 		# (still vs MAX_ITER=200) with normal-LP quality matching the full
 		# 200-iter baseline.
+		# SCULPTOR_MIN_ITER: floor on training iters. The convergence clause
+		# cannot fire before this iter, so a hot-started run that loaded an
+		# already-converged state still trains forward to the floor. The hard
+		# max_n_iter cap is unaffected. Default 0 == original behaviour.
+		self._min_n_iter = int(_os.environ.get('SCULPTOR_MIN_ITER', '0') or 0)
 		if _os.environ.get('SCULPTOR_STOP_DROP_ADV_DELTA', '0') == '1':
 			_tight = 0.1
 			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (
-				el[1] < self.epsilon * _tight and np.abs(el[2]) < self.epsilon * _tight
+				el[0] >= self._min_n_iter
+				and el[1] < self.epsilon * _tight and np.abs(el[2]) < self.epsilon * _tight
 			)
 		else:
-			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
+			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (
+				el[0] >= self._min_n_iter
+				and el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
 		## Whether to incorporate capacity into the objective function
 		self.with_capacity = kwargs.get('with_capacity', False)
 		### We might vary these functions depending on settings from time to time
@@ -861,6 +869,11 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 			'one_per_pop': self.solve_one_per_pop, 'anycast': self.solve_anycast, 'random': self.solve_random,
 			'one_per_peering': self.solve_one_per_peering,}
 		self.solutions = {}
+		# Strategies that raised even after worker-pool recovery. Recorded so
+		# the run never silently claims success while dropping comparison/eval
+		# data (the spot-reclaim incident: dp32 finished with no baselines but
+		# the sweep reported "ALL DONE").
+		self._failed_strategies = []
 		if not self.simulated:
 			self.get_realworld_measure_wrapper()
 		# Optional callback to checkpoint partial results after each strategy
@@ -1011,6 +1024,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				except Exception:
 					import traceback
 					traceback.print_exc()
+					self._failed_strategies.append(solution_type)
 					print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
 				_fire_callback(solution_type)
 
@@ -1029,6 +1043,7 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				except Exception:
 					import traceback
 					traceback.print_exc()
+					self._failed_strategies.append(solution_type)
 					print("Strategy {} failed; continuing with remaining strategies.".format(solution_type))
 				_fire_callback(solution_type)
 
@@ -1041,6 +1056,27 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 				self.update_deployment(new_deployment)
 			if verbose:
 				print(metrics['sparse_objective_vals'])
+
+		# Loudly surface any strategy that failed even after pool recovery, and
+		# drop a marker file in the run dir so a sweep / downstream eval can
+		# tell that this dpsize's comparison data is incomplete.
+		metrics['failed_strategies'] = list(self._failed_strategies)
+		if self._failed_strategies:
+			banner = "!" * 72
+			print("\n{0}\n[INCOMPLETE] {1} strategy/strategies failed after recovery: {2}\n"
+				  "Comparison/eval data for dpsize={3} is INCOMPLETE.\n{0}\n".format(
+					  banner, len(self._failed_strategies),
+					  sorted(set(self._failed_strategies)), getattr(self, 'dpsize', '?')),
+				  flush=True)
+			save_dir = getattr(self, 'save_run_dir', None)
+			if save_dir:
+				try:
+					with open(os.path.join(save_dir, 'BASELINES_INCOMPLETE.txt'), 'w') as _f:
+						_f.write("dpsize={}\nfailed_strategies={}\n".format(
+							getattr(self, 'dpsize', '?'),
+							sorted(set(self._failed_strategies))))
+				except Exception:
+					pass
 
 		return metrics
 
@@ -2118,11 +2154,9 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['frac_latency_benefit_calls'].append(len(self.n_latency_benefit_calls) / (self.n_popps * self.n_prefixes))
 		self.metrics['frac_resilience_benefit_calls'].append(len(self.n_resilience_benefit_popp_calls) / (self.n_popps * self.n_popps * self.n_prefixes))
 
-		### Notify workers of new training iteration
-		for worker, worker_socket in self.worker_manager.worker_sockets.items():
-			msg = pickle.dumps(('increment_iter', "meep"))
-			worker_socket.send(msg)
-			worker_socket.recv()
+		### Notify workers of new training iteration (recovery-wrapped: a spot
+		### reclaim mid-training rebuilds the pool and retries instead of dying)
+		self.worker_manager.send_receive_workers(pickle.dumps(('increment_iter', "meep")))
 		print(f"[Timing] Worker notification loop: {time.time() - perf_t:.5f}s")
 		perf_t = time.time()
 
@@ -2262,11 +2296,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.update_ug_ingress_decisions()
 		print(np.sum(self.optimization_advertisement>.5,axis=0))
 
-		### Notify workers of current training iteration
-		for worker, worker_socket in self.worker_manager.worker_sockets.items():
-			msg = pickle.dumps(('set_iter', self.iter))
-			worker_socket.send(msg)
-			worker_socket.recv()
+		### Notify workers of current training iteration (recovery-wrapped)
+		self.worker_manager.send_receive_workers(pickle.dumps(('set_iter', self.iter)))
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
 		print(np.sum(self.optimization_advertisement>.5,axis=0))
@@ -2350,10 +2381,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		wm = getattr(self, 'worker_manager', None)
 		if wm is None:
 			return
-		for worker, worker_socket in wm.worker_sockets.items():
-			msg = pickle.dumps(('set_training_mode', self._in_training))
-			worker_socket.send(msg)
-			worker_socket.recv()
+		wm.send_receive_workers(pickle.dumps(('set_training_mode', self._in_training)))
 
 	def solve(self, **kwargs):
 		_log_mem('solve_enter', dpsize=getattr(self, 'dpsize', '?'))
