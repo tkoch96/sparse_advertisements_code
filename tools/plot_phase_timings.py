@@ -175,6 +175,200 @@ def extract_phase_timings(parsed):
 # ---------------------------------------------------------------------- #
 # Plotting                                                                #
 # ---------------------------------------------------------------------- #
+def _dpsize_palette(dpsizes):
+    """Stable color per dpsize across all subplots."""
+    cmap = plt.cm.viridis
+    n = max(1, len(dpsizes) - 1)
+    return {d: cmap(i / n) for i, d in enumerate(sorted(dpsizes))}
+
+
+def _rolling_median(xs, ys, window=5):
+    """Rolling median over a uniform iter axis. xs must be sorted."""
+    if len(ys) < window:
+        return xs, ys
+    half = window // 2
+    sm = []
+    for i in range(len(ys)):
+        lo = max(0, i - half)
+        hi = min(len(ys), i + half + 1)
+        sm.append(float(np.median(ys[lo:hi])))
+    return xs, sm
+
+
+def _ylim_clip(values, lo_quantile=0.0, hi_quantile=0.99, pad=0.05):
+    """Compute (ymin, ymax) clipped to percentiles to suppress outliers.
+    Negative values are dropped (a negative duration means clock skew or
+    parser miscount and is never meaningful)."""
+    arr = np.array([v for v in values if v is not None and v >= 0])
+    if arr.size == 0:
+        return (0, 1)
+    lo = max(0.0, float(np.quantile(arr, lo_quantile)))
+    hi = float(np.quantile(arr, hi_quantile))
+    span = max(1e-6, hi - lo)
+    return (max(0, lo - pad * span), hi + pad * span)
+
+
+def plot_combined_dashboard(per_iter_by_log, out_path):
+    """Single combined figure with:
+      - Top-left:   stacked bar phase breakdown (median per-iter) by dpsize
+      - Top-right:  total iter-time distribution by dpsize (box, outliers off)
+      - Mid row:    per-iter trajectories for grad and measure phases
+      - Bot row:    per-iter trajectories for stop and total phases
+    Trajectories show raw points (small) + rolling median (window=5) per
+    dpsize. y-axes clipped to the 99th percentile (per phase) so a few
+    long-tail iters don't compress the rest of the trace.
+    """
+    # Aggregate (filter negatives -- a negative duration means the parser
+    # crossed a sweep boundary and is not meaningful).
+    by_dp = defaultdict(lambda: {'grad': [], 'measure': [], 'stop': [], 'total': [],
+                                  'iter_grad': [], 'iter_meas': [], 'iter_stop': [],
+                                  'iter_total': []})
+    for per_iter in per_iter_by_log.values():
+        for rec in per_iter:
+            d = by_dp[rec['dpsize']]
+            if rec['grad_s']     >= 0: d['grad'].append(rec['grad_s']);    d['iter_grad'].append(rec['iter'])
+            if rec['measure_s']  >= 0: d['measure'].append(rec['measure_s']); d['iter_meas'].append(rec['iter'])
+            if rec['stop_s']     >= 0: d['stop'].append(rec['stop_s']);    d['iter_stop'].append(rec['iter'])
+            if rec['total_s']    >= 0: d['total'].append(rec['total_s']);  d['iter_total'].append(rec['iter'])
+    dpsizes = sorted(by_dp.keys())
+    if not dpsizes:
+        return False
+    color = _dpsize_palette(dpsizes)
+
+    fig = plt.figure(figsize=(14, 11))
+    gs = fig.add_gridspec(3, 2, hspace=0.40, wspace=0.22)
+
+    # ---- top-left: stacked bar by dpsize (median grad/measure/stop) ----
+    ax = fig.add_subplot(gs[0, 0])
+    xs = np.arange(len(dpsizes))
+    grad_meds = [np.median(by_dp[d]['grad'])    if by_dp[d]['grad']    else 0 for d in dpsizes]
+    meas_meds = [np.median(by_dp[d]['measure']) if by_dp[d]['measure'] else 0 for d in dpsizes]
+    stop_meds = [np.median(by_dp[d]['stop'])    if by_dp[d]['stop']    else 0 for d in dpsizes]
+    totals    = [np.median(by_dp[d]['total'])   if by_dp[d]['total']   else 0 for d in dpsizes]
+    ax.bar(xs, grad_meds, label='grad', color='#1f77b4')
+    ax.bar(xs, meas_meds, bottom=grad_meds, label='measure', color='#ff7f0e')
+    ax.bar(xs, stop_meds,
+           bottom=np.array(grad_meds) + np.array(meas_meds),
+           label='stop (incl. max_information)', color='#2ca02c')
+    ax.set_xticks(xs)
+    ax.set_xticklabels(['{}'.format(d) for d in dpsizes])
+    ax.set_xlabel('deployment size')
+    ax.set_ylabel('median per-iter wall time (s)')
+    ax.set_title('phase breakdown by dpsize (median)')
+    ax.set_ylim(0, max(totals) * 1.18 if totals else 1)
+    ax.legend(loc='upper left', fontsize=8)
+    ax.grid(True, axis='y', alpha=0.3)
+    for x, t, n in zip(xs, totals, [len(by_dp[d]['total']) for d in dpsizes]):
+        ax.text(x, t + 0.02 * max(totals), '{:.0f}s\nn={}'.format(t, n),
+                ha='center', fontsize=8)
+
+    # ---- top-right: boxplot of total iter time (outliers suppressed) ----
+    ax = fig.add_subplot(gs[0, 1])
+    data = [by_dp[d]['total'] for d in dpsizes]
+    bp = ax.boxplot(data, tick_labels=[str(d) for d in dpsizes],
+                    showmeans=True, patch_artist=True, showfliers=False)
+    for patch, d in zip(bp['boxes'], dpsizes):
+        patch.set_facecolor(color[d])
+        patch.set_alpha(0.55)
+    ax.set_xlabel('deployment size')
+    ax.set_ylabel('total per-iter wall time (s)')
+    ax.set_title('total iter-time distribution (outliers clipped)')
+    all_totals = [v for d in dpsizes for v in by_dp[d]['total']]
+    ax.set_ylim(_ylim_clip(all_totals, hi_quantile=0.99))
+    ax.grid(True, axis='y', alpha=0.3)
+
+    # ---- mid/bot rows: per-iter trajectories, one panel per phase ----
+    phase_specs = [
+        ('grad',    'iter_grad',  'gradient probe (grad_s)',           gs[1, 0]),
+        ('measure', 'iter_meas',  'measure_ingresses (measure_s)',     gs[1, 1]),
+        ('stop',    'iter_stop',  'stop_tracker incl. max_info (stop_s)', gs[2, 0]),
+        ('total',   'iter_total', 'total iter time (total_s)',         gs[2, 1]),
+    ]
+    for key, iter_key, title, gsspec in phase_specs:
+        ax = fig.add_subplot(gsspec)
+        all_vals = []
+        for d in dpsizes:
+            vals = by_dp[d][key]
+            its = by_dp[d][iter_key]
+            if not vals:
+                continue
+            # Sort by iter for the rolling median line.
+            order = np.argsort(its)
+            its_s = [its[i] for i in order]
+            vals_s = [vals[i] for i in order]
+            all_vals.extend(vals_s)
+            ax.scatter(its_s, vals_s, color=color[d], s=6, alpha=0.35)
+            xs_sm, ys_sm = _rolling_median(its_s, vals_s, window=5)
+            ax.plot(xs_sm, ys_sm, color=color[d], linewidth=1.6,
+                    label='dpsize={}  (n={})'.format(d, len(vals_s)))
+        ax.set_xlabel('training iter')
+        ax.set_ylabel('seconds')
+        ax.set_title(title)
+        ax.set_ylim(_ylim_clip(all_vals, hi_quantile=0.99))
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, loc='upper right', ncol=1)
+
+    fig.suptitle('SCULPTOR phase-timing dashboard '
+                 '(points = per-iter; lines = 5-iter rolling median; '
+                 'y-axes clipped to p99)',
+                 fontsize=11)
+    fig.savefig(out_path)
+    plt.close(fig)
+    return True
+
+
+def plot_phases_over_iter_condensed(per_iter_by_log, out_path):
+    """Single-panel-per-phase compact: shows grad/measure/stop/total on a
+    single axis with all dpsizes overlaid. Same data as the dashboard's
+    bottom four panels but tighter -- one figure, 4 stacked subplots."""
+    by_dp = defaultdict(lambda: {'iter': [], 'grad': [], 'measure': [],
+                                  'stop': [], 'total': []})
+    for per_iter in per_iter_by_log.values():
+        for rec in per_iter:
+            d = by_dp[rec['dpsize']]
+            d['iter'].append(rec['iter'])
+            d['grad'].append(max(0, rec['grad_s']))
+            d['measure'].append(max(0, rec['measure_s']))
+            d['stop'].append(max(0, rec['stop_s']))
+            d['total'].append(max(0, rec['total_s']))
+    dpsizes = sorted(by_dp.keys())
+    if not dpsizes:
+        return False
+    color = _dpsize_palette(dpsizes)
+
+    fig, axes = plt.subplots(4, 1, figsize=(10, 11), sharex=True)
+    phases = [('grad',    'gradient probe (grad_s)'),
+              ('measure', 'measure_ingresses (measure_s)'),
+              ('stop',    'stop_tracker incl. max_information (stop_s)'),
+              ('total',   'total iter time (total_s)')]
+    for ax, (key, title) in zip(axes, phases):
+        all_vals = []
+        for d in dpsizes:
+            its = by_dp[d]['iter']
+            vals = by_dp[d][key]
+            order = np.argsort(its)
+            its_s = [its[i] for i in order]
+            vals_s = [vals[i] for i in order]
+            all_vals.extend(vals_s)
+            ax.scatter(its_s, vals_s, color=color[d], s=6, alpha=0.30)
+            xs_sm, ys_sm = _rolling_median(its_s, vals_s, window=5)
+            ax.plot(xs_sm, ys_sm, color=color[d], linewidth=1.8,
+                    label='dpsize={}'.format(d))
+        ax.set_ylabel(title + '\n(s)', fontsize=9)
+        ax.set_ylim(_ylim_clip(all_vals, hi_quantile=0.99))
+        ax.grid(True, alpha=0.3)
+        ax.legend(fontsize=7, ncol=len(dpsizes), loc='upper right')
+    axes[-1].set_xlabel('training iter')
+    fig.suptitle('SCULPTOR phase time over training iters '
+                 '(points = raw per-iter; lines = 5-iter rolling median; '
+                 'y-axes clipped to p99)',
+                 fontsize=11)
+    fig.tight_layout(rect=[0, 0, 1, 0.97])
+    fig.savefig(out_path)
+    plt.close(fig)
+    return True
+
+
 def plot_phase_breakdown_by_dpsize(per_iter_by_log, out_path):
     """One figure: median per-iter phase time (grad / measure / stop) as
     a stacked bar per dpsize, with whiskers showing min/max."""
@@ -381,7 +575,17 @@ def main():
                     rec['grad_s'], rec['measure_s'], rec['stop_s'], rec['total_s']))
     print('Wrote {}'.format(csv_path), file=sys.stderr)
 
-    # Plots.
+    # Plots. The two new "combined" outputs are the headline figures
+    # (per user request: everything on one figure, axes cleaned up,
+    # per-phase trajectories shown across iters). The standalone PDFs
+    # are kept for backward-compatibility with anyone bookmarking them.
+    p_dash = os.path.join(args.out_dir, 'dashboard.pdf')
+    if plot_combined_dashboard(per_iter_by_log, p_dash):
+        print('Wrote {}'.format(p_dash), file=sys.stderr)
+    p_traj = os.path.join(args.out_dir, 'phases_over_iter.pdf')
+    if plot_phases_over_iter_condensed(per_iter_by_log, p_traj):
+        print('Wrote {}'.format(p_traj), file=sys.stderr)
+
     p1 = os.path.join(args.out_dir, 'phase_breakdown_by_dpsize.pdf')
     if plot_phase_breakdown_by_dpsize(per_iter_by_log, p1):
         print('Wrote {}'.format(p1), file=sys.stderr)

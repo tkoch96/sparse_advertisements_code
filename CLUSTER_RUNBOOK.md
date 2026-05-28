@@ -49,6 +49,31 @@ unmodified.
 ./teardown.sh
 ```
 
+## 📊 Local timing dashboard
+
+A cron job (every 10 min) pulls the cluster logs to the laptop, persists timing
+stats into a local SQLite DB (so they survive teardown), and regenerates a
+refreshing dashboard. Set up session 10 (2026-05-28).
+
+- **Tool:** [tools/cluster_dashboard.py](tools/cluster_dashboard.py) — pull → ingest → plot → html.
+- **Wrapper / cron entry:** `tools/sculptor_dashboard_refresh.sh`, run by
+  `*/10 * * * *`.
+- **State dir:** `~/sculptor_dashboard/` — `sculptor_timings.db` (SQLite),
+  `raw/` (mirrored logs, never-lose), `plots/*.png`, `index.html`.
+- **View:** `open ~/sculptor_dashboard/index.html` (auto-refreshes every 60s).
+- **What it tracks:**
+  - Driver per-iter phase timing (grad/measure/stop) for the active run, via the
+    reused [tools/plot_phase_timings.py](tools/plot_phase_timings.py) parser.
+  - **Per-worker (worker 0) per-computation LP timing over time** — parsed from
+    the `Worker N timing summary` blocks the actor prints each gradient batch
+    (`solve_generic_lp_persistent`, `sim_rti`, `total_rti_calc`, …). Each block
+    is a per-batch snapshot, so this is the "did my change move sub-step X"
+    view. Only worker 0 emits (Ray dedups the rest).
+- **DB keeps ALL runs** (keyed by run tag) for cross-run before/after
+  comparison; the live plots show the active run (newest iter timestamp).
+- Manual: `python tools/cluster_dashboard.py --plot-only` (replot from DB),
+  `--no-pull` (re-ingest mirrored logs), `--ingest LOG` (one local log).
+
 ## 📡 Local liveness monitoring
 
 A cron-based liveness checker runs every 10 min on the local laptop and
