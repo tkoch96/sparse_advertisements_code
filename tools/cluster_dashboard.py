@@ -51,6 +51,10 @@ import plot_phase_timings as ppt   # noqa: E402
 # --------------------------------------------------------------------------- #
 DASH_DIR = os.path.expanduser('~/sculptor_dashboard')
 RAW_DIR = os.path.join(DASH_DIR, 'raw')
+# Drop any older / off-cluster sweep logs here (e.g. session-9 forensics with
+# dpsize 3-20) and they're ingested into the DB on every refresh -- so the
+# dashboard's cross-size view isn't limited to whatever is on the live head.
+EXTRA_LOGS_DIR = os.path.join(DASH_DIR, 'extra_logs')
 DB_PATH = os.path.join(DASH_DIR, 'sculptor_timings.db')
 PLOT_DIR = os.path.join(DASH_DIR, 'plots')
 HTML_PATH = os.path.join(DASH_DIR, 'index.html')
@@ -279,9 +283,33 @@ def plot_worker_timing(db, out_path, run_tag=None):
 
 
 def _sweep_logs():
-    """Mirrored head sweep logs, excluding the latest.log symlink dup."""
-    return [p for p in sorted(glob.glob(os.path.join(RAW_DIR, 'head', '*.log')))
+    """All logs to ingest: mirrored head logs (minus the latest.log symlink
+    dup) plus any off-cluster historical logs dropped in EXTRA_LOGS_DIR."""
+    head = [p for p in sorted(glob.glob(os.path.join(RAW_DIR, 'head', '*.log')))
             if os.path.basename(p) != 'latest.log']
+    extra = sorted(glob.glob(os.path.join(EXTRA_LOGS_DIR, '*.log')))
+    return head + extra
+
+
+def _driver_per_iter_all_dpsizes(db):
+    """One clean per-iter series per dpsize, taken from the most-recent run
+    that covers that dpsize (so dp25/32 don't blend the resilience-on and
+    resilience-off regimes, and dp3-20 come from whatever historical run has
+    them). This is the cross-size scaling view."""
+    pairs = db.execute("""
+        SELECT dpsize, run_tag FROM iter_timing it
+        WHERE COALESCE(iter_start_ts,0) = (
+            SELECT MAX(COALESCE(iter_start_ts,0)) FROM iter_timing i2
+            WHERE i2.dpsize = it.dpsize)
+        GROUP BY dpsize""").fetchall()
+    per_iter = []
+    for dp, tag in pairs:
+        for r in db.execute(
+                "SELECT iter,grad_s,measure_s,stop_s,total_s FROM iter_timing "
+                "WHERE dpsize=? AND run_tag=? ORDER BY iter", [dp, tag]):
+            per_iter.append({'dpsize': dp, 'iter': r[0], 'grad_s': r[1],
+                             'measure_s': r[2], 'stop_s': r[3], 'total_s': r[4]})
+    return per_iter
 
 
 def _active_tag(db):
@@ -302,25 +330,21 @@ def regenerate_plots(db, active_tag):
     view; the DB retains all runs for cross-run comparison."""
     os.makedirs(PLOT_DIR, exist_ok=True)
     made = []
-    if not active_tag:
-        return made
-    # Driver per-iter series straight from the DB (no log re-parse).
-    rows = db.execute(
-        "SELECT dpsize,iter,grad_s,measure_s,stop_s,total_s FROM iter_timing "
-        "WHERE run_tag=? ORDER BY dpsize,iter", [active_tag]).fetchall()
-    per_iter = [{'dpsize': r[0], 'iter': r[1], 'grad_s': r[2], 'measure_s': r[3],
-                 'stop_s': r[4], 'total_s': r[5]} for r in rows]
+    # Driver dashboard: ALL dpsizes (latest run per size) -> cross-size view.
+    per_iter = _driver_per_iter_all_dpsizes(db)
     if per_iter:
-        by_log = {active_tag: per_iter}
+        by_log = {'all-runs': per_iter}
         p = os.path.join(PLOT_DIR, 'driver_dashboard.png')
         if ppt.plot_combined_dashboard(by_log, p):
             made.append('driver_dashboard.png')
         p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter.png')
         if ppt.plot_phases_over_iter_condensed(by_log, p2):
             made.append('driver_phases_over_iter.png')
-    p = os.path.join(PLOT_DIR, 'worker0_timing.png')
-    if plot_worker_timing(db, p, run_tag=active_tag):
-        made.append('worker0_timing.png')
+    # Worker plot: active run only (per-run "did my change help" view).
+    if active_tag:
+        p = os.path.join(PLOT_DIR, 'worker0_timing.png')
+        if plot_worker_timing(db, p, run_tag=active_tag):
+            made.append('worker0_timing.png')
     return made
 
 

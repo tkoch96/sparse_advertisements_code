@@ -69,8 +69,13 @@ refreshing dashboard. Set up session 10 (2026-05-28).
     (`solve_generic_lp_persistent`, `sim_rti`, `total_rti_calc`, …). Each block
     is a per-batch snapshot, so this is the "did my change move sub-step X"
     view. Only worker 0 emits (Ray dedups the rest).
-- **DB keeps ALL runs** (keyed by run tag) for cross-run before/after
-  comparison; the live plots show the active run (newest iter timestamp).
+- **DB keeps ALL runs** (keyed by run tag) for cross-run comparison. The
+  driver dashboard shows **all dpsizes** (latest run per size = the cross-size
+  scaling view); the worker plot shows the active run only.
+- **Off-cluster history:** drop older logs (e.g. session-9 `boost` logs with
+  dpsize 3-20) into `~/sculptor_dashboard/extra_logs/*.log` — they're ingested
+  on every refresh, so the cross-size view isn't limited to what's on the live
+  head (which only carries the current dpsize 25/32 sweeps).
 - Manual: `python tools/cluster_dashboard.py --plot-only` (replot from DB),
   `--no-pull` (re-ingest mirrored logs), `--ingest LOG` (one local log).
 
