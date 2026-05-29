@@ -95,6 +95,20 @@ def make_paper_plots(cache_fn, **kwargs):
 
 	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
 
+	# Robustness: the cross-size plots/prints assume every solution has data at
+	# every dpsize (arrays are subtracted elementwise). Some historical runs are
+	# incomplete -- e.g. dp10/dp15 from the dep_sweep run lack 'sparse' in
+	# stats_best_latencies. Drop such dpsizes so arrays stay aligned, and report
+	# the gap rather than crashing.
+	_complete = [dp for dp in dpsizes
+		if all(sol in metrics_by_dpsize[dp].get('stats_best_latencies', {})
+			   for sol in solutions)]
+	_dropped = [dp for dp in dpsizes if dp not in _complete]
+	if _dropped:
+		print('[plots] WARNING: dropping dpsizes with incomplete solution data '
+			  '(missing >=1 solution in stats_best_latencies): {}'.format(_dropped))
+	dpsizes = _complete
+
 	xlab = kwargs.get('xlab', "Deployment Size (Num Sites)")
 	evaluate_over = kwargs.get('evaluate_over', 'deployment_size')
 
