@@ -208,7 +208,7 @@ def _ylim_clip(values, lo_quantile=0.0, hi_quantile=0.99, pad=0.05):
     return (max(0, lo - pad * span), hi + pad * span)
 
 
-def plot_combined_dashboard(per_iter_by_log, out_path):
+def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
     """Single combined figure with:
       - Top-left:   stacked bar phase breakdown (median per-iter) by dpsize
       - Top-right:  total iter-time distribution by dpsize (box, outliers off)
@@ -310,14 +310,14 @@ def plot_combined_dashboard(per_iter_by_log, out_path):
 
     fig.suptitle('SCULPTOR phase-timing dashboard '
                  '(points = per-iter; lines = 5-iter rolling median; '
-                 'y-axes clipped to p99)',
+                 'y-axes clipped to p99)' + title_suffix,
                  fontsize=11)
     fig.savefig(out_path)
     plt.close(fig)
     return True
 
 
-def plot_phases_over_iter_condensed(per_iter_by_log, out_path):
+def plot_phases_over_iter_condensed(per_iter_by_log, out_path, title_suffix=''):
     """Single-panel-per-phase compact: shows grad/measure/stop/total on a
     single axis with all dpsizes overlaid. Same data as the dashboard's
     bottom four panels but tighter -- one figure, 4 stacked subplots."""
@@ -361,7 +361,7 @@ def plot_phases_over_iter_condensed(per_iter_by_log, out_path):
     axes[-1].set_xlabel('training iter')
     fig.suptitle('SCULPTOR phase time over training iters '
                  '(points = raw per-iter; lines = 5-iter rolling median; '
-                 'y-axes clipped to p99)',
+                 'y-axes clipped to p99)' + title_suffix,
                  fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.97])
     fig.savefig(out_path)

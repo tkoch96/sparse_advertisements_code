@@ -351,6 +351,32 @@ def _driver_per_iter_all_dpsizes(db):
     return per_iter
 
 
+def _driver_per_iter_normalized(db):
+    """Same as _driver_per_iter_all_dpsizes but each phase time is divided by
+    the active worker count for that dpsize -> the 'per-worker' view. Skips a
+    dpsize if its worker count is unknown (can't normalize honestly)."""
+    pairs = db.execute("""
+        SELECT dpsize, run_tag FROM iter_timing it
+        WHERE COALESCE(iter_start_ts,0) = (
+            SELECT MAX(COALESCE(iter_start_ts,0)) FROM iter_timing i2
+            WHERE i2.dpsize = it.dpsize)
+        GROUP BY dpsize""").fetchall()
+    per_iter = []
+    for dp, tag in pairs:
+        nrow = db.execute("SELECT n_workers FROM worker_count "
+                          "WHERE run_tag=? AND dpsize=?", [tag, dp]).fetchone()
+        if not nrow or not nrow[0]:
+            continue
+        n = float(nrow[0])
+        for r in db.execute(
+                "SELECT iter,grad_s,measure_s,stop_s,total_s FROM iter_timing "
+                "WHERE dpsize=? AND run_tag=? ORDER BY iter", [dp, tag]):
+            per_iter.append({'dpsize': dp, 'iter': r[0], 'grad_s': r[1] / n,
+                             'measure_s': r[2] / n, 'stop_s': r[3] / n,
+                             'total_s': r[4] / n})
+    return per_iter
+
+
 def _active_tag(db):
     """Active run = the one with the most recent iter timestamp in the DB.
     Robust to scp rewriting local file mtimes (which broke mtime-based
@@ -397,15 +423,27 @@ def regenerate_plots(db, active_tag):
     view; the DB retains all runs for cross-run comparison."""
     os.makedirs(PLOT_DIR, exist_ok=True)
     made = []
-    # Driver dashboard: ALL dpsizes (latest run per size) -> cross-size view.
+    # PER-WORKER driver dashboard FIRST (phase ÷ N_active): the clean view that
+    # isn't skewed by how many workers a given dpsize/run happened to use.
+    per_iter_pw = _driver_per_iter_normalized(db)
+    if per_iter_pw:
+        bypw = {'per-worker': per_iter_pw}
+        sfx = '   — PER WORKER (driver phase ÷ N_active)'
+        p = os.path.join(PLOT_DIR, 'driver_dashboard_per_worker.png')
+        if ppt.plot_combined_dashboard(bypw, p, title_suffix=sfx):
+            made.append('driver_dashboard_per_worker.png')
+        p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter_per_worker.png')
+        if ppt.plot_phases_over_iter_condensed(bypw, p2, title_suffix=sfx):
+            made.append('driver_phases_over_iter_per_worker.png')
+    # Raw (wall-clock) driver dashboard: ALL dpsizes (latest run per size).
     per_iter = _driver_per_iter_all_dpsizes(db)
     if per_iter:
         by_log = {'all-runs': per_iter}
         p = os.path.join(PLOT_DIR, 'driver_dashboard.png')
-        if ppt.plot_combined_dashboard(by_log, p):
+        if ppt.plot_combined_dashboard(by_log, p, title_suffix='   — raw wall-clock'):
             made.append('driver_dashboard.png')
         p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter.png')
-        if ppt.plot_phases_over_iter_condensed(by_log, p2):
+        if ppt.plot_phases_over_iter_condensed(by_log, p2, title_suffix='   — raw wall-clock'):
             made.append('driver_phases_over_iter.png')
     # Worker plot: active run only (per-run "did my change help" view).
     if active_tag:
