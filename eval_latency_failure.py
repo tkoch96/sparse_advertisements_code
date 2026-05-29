@@ -726,6 +726,12 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		threshold_stats = {i:{} for i in SIM_INDS_TO_PLOT}
 
 		for ri in SIM_INDS_TO_PLOT:
+			# Skip random_iters where this solution produced no data (e.g. a
+			# strategy that failed for that iter). Averaging over the iters it
+			# DID succeed on is correct; the original KeyError here bubbled up to
+			# the caller's try/except and silently dropped the whole solution.
+			if solution not in metrics[k][ri] or not metrics[k][ri][solution]:
+				continue
 			these_metrics = metrics[k][ri][solution]
 			ugs={}
 
@@ -796,11 +802,18 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 	for solution in soln_types:
 		print(solution)
+		# Random_iters where this solution actually has results. A strategy that
+		# failed for some iters (empty data, e.g. the popp_to_users hot-start
+		# crash) is now aggregated over the iters it succeeded on instead of
+		# being dropped from the stats entirely.
+		valid_iters = [ri for ri in SIM_INDS_TO_PLOT
+			if solution in metrics['latencies'][ri]
+			and len(metrics['latencies'][ri][solution]) > 0]
 		try:
 			#### Changes in latency
 			diffs = []
 			wts = []
-			for random_iter in SIM_INDS_TO_PLOT:
+			for random_iter in valid_iters:
 				this_diffs = []
 				this_wts = []
 				for i in range(len(metrics['best_latencies'][random_iter])):
@@ -814,7 +827,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					xi = np.argmin(np.abs(this_x-lat_threshold))
 					metrics['stats_latency_thresholds_normal'][solution][random_iter][lat_threshold] = this_cdf_x[xi]
 			for lat_threshold in interesting_latency_suboptimalities:
-				avg_suboptimality = np.mean(list([metrics['stats_latency_thresholds_normal'][solution][random_iter][lat_threshold] for random_iter in SIM_INDS_TO_PLOT]))
+				avg_suboptimality = np.mean(list([metrics['stats_latency_thresholds_normal'][solution][random_iter][lat_threshold] for random_iter in valid_iters]))
 				print("({}) {} pct of traffic within {} ms of optimal for normal LP".format(solution, 100*round(1-avg_suboptimality,4), lat_threshold))
 			x,cdf_x = get_cdf_xy(list(zip(diffs,wts)), weighted=True)
 			ax[LATENCY_I].plot(x,cdf_x,label=solution)
@@ -852,7 +865,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 
 			#### PCT of Volume within a Certainty Latency Threshold
-			for random_iter in SIM_INDS_TO_PLOT:
+			for random_iter in valid_iters:
 				m = metrics['pct_volume_within_latency'][random_iter][solution]
 				ax[PCT_VOL_WITHIN_LATENCY_I].plot(m['latencies'], m['volume_fractions'], label="{} -- Sim {}".format(solution, random_iter))
 			
@@ -968,7 +981,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			#### Ability to grow with volume
 			latency_increases_by_X = {}
 			m = metrics['volume_multipliers']
-			for ri in SIM_INDS_TO_PLOT:
+			for ri in valid_iters:
 				for X_val,avg_lat in m[ri][solution].items():
 					try:
 						# try:
