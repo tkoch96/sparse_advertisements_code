@@ -288,9 +288,9 @@ def plot_worker_timing(db, out_path, run_tag=None):
         xs = [p[0] for p in pts]
         ys = [p[1] for p in pts]
         ax.plot(xs, ys, '-o', ms=2.5, lw=1.3, color=cmap(i % 10), label=key)
-    ax.set_xlabel('worker-0 batch sequence (≈ gradient probe / iter)')
-    ax.set_ylabel('per-worker time in batch (ms)')
-    ax.set_title('Worker-0 per-computation time over time  [run={}]'.format(run_tag or 'all'))
+    ax.set_xlabel('worker-0 batch # (one LP batch per gradient/max-info probe, ≈ per training iter)')
+    ax.set_ylabel('worker-0 time spent in that computation, per batch (ms)')
+    ax.set_title('Worker-0 per-computation LP time over the run  [run={}]'.format(run_tag or 'all'))
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=2, loc='upper right')
     # Right axis: cluster-total = per-worker × N_active. The worker summary is
@@ -300,7 +300,7 @@ def plot_worker_timing(db, out_path, run_tag=None):
     n_active = (n_active[0] if n_active else None) or 1
     secax = ax.secondary_yaxis(
         'right', functions=(lambda y: y * n_active, lambda y: y / n_active))
-    secax.set_ylabel('cluster total (× N_active={}) ms'.format(n_active))
+    secax.set_ylabel('cluster total = worker-0 × N_active({}) (ms)'.format(n_active))
 
     # Stacked-share view: what fraction of each batch goes to each key.
     blocks = sorted({s for v in by_key.values() for s, _ in v})
@@ -311,8 +311,8 @@ def plot_worker_timing(db, out_path, run_tag=None):
         ax2.bar(range(len(blocks)), ys, bottom=bottoms, color=cmap(i % 10),
                 width=1.0, label=key)
         bottoms += ys
-    ax2.set_xlabel('worker-0 batch sequence')
-    ax2.set_ylabel('time in batch (ms, stacked)')
+    ax2.set_xlabel('worker-0 batch # (≈ per training iter)')
+    ax2.set_ylabel('worker-0 time per batch (ms), stacked by computation')
     ax2.set_title('Worker-0 batch composition (stacked)')
     ax2.legend(fontsize=7, ncol=2, loc='upper right')
     fig.tight_layout()
@@ -351,10 +351,13 @@ def _driver_per_iter_all_dpsizes(db):
     return per_iter
 
 
-def _driver_per_iter_normalized(db):
-    """Same as _driver_per_iter_all_dpsizes but each phase time is divided by
-    the active worker count for that dpsize -> the 'per-worker' view. Skips a
-    dpsize if its worker count is unknown (can't normalize honestly)."""
+def _driver_per_iter_total_worker(db):
+    """Same as _driver_per_iter_all_dpsizes but each phase time is MULTIPLIED by
+    the active worker count -> total worker-time (aggregate worker-seconds the
+    whole cluster spent in that phase). This is the worker-count-invariant
+    measure: adding workers shortens wall-clock but leaves the total work ~flat,
+    so it's the honest cross-dpsize / cross-run quantity. Skips a dpsize whose
+    worker count is unknown."""
     pairs = db.execute("""
         SELECT dpsize, run_tag FROM iter_timing it
         WHERE COALESCE(iter_start_ts,0) = (
@@ -371,9 +374,9 @@ def _driver_per_iter_normalized(db):
         for r in db.execute(
                 "SELECT iter,grad_s,measure_s,stop_s,total_s FROM iter_timing "
                 "WHERE dpsize=? AND run_tag=? ORDER BY iter", [dp, tag]):
-            per_iter.append({'dpsize': dp, 'iter': r[0], 'grad_s': r[1] / n,
-                             'measure_s': r[2] / n, 'stop_s': r[3] / n,
-                             'total_s': r[4] / n})
+            per_iter.append({'dpsize': dp, 'iter': r[0], 'grad_s': r[1] * n,
+                             'measure_s': r[2] * n, 'stop_s': r[3] * n,
+                             'total_s': r[4] * n})
     return per_iter
 
 
@@ -406,8 +409,8 @@ def plot_workers_active(db, out_path, run_tag):
         pts = [(r[1], r[2]) for r in rows if r[0] == dp]
         ax.step([p[0] for p in pts], [p[1] for p in pts], where='post',
                 color=cmap(i % 10), lw=1.8, label='dpsize={}'.format(dp))
-    ax.set_xlabel('training iter')
-    ax.set_ylabel('active workers (N)')
+    ax.set_xlabel('training iteration')
+    ax.set_ylabel('active Ray workers (N)')
     ax.set_ylim(bottom=0)
     ax.set_title('Active worker count over time  [run={}]'.format(run_tag))
     ax.grid(True, alpha=0.3)
@@ -423,27 +426,31 @@ def regenerate_plots(db, active_tag):
     view; the DB retains all runs for cross-run comparison."""
     os.makedirs(PLOT_DIR, exist_ok=True)
     made = []
-    # PER-WORKER driver dashboard FIRST (phase ÷ N_active): the clean view that
-    # isn't skewed by how many workers a given dpsize/run happened to use.
-    per_iter_pw = _driver_per_iter_normalized(db)
-    if per_iter_pw:
-        bypw = {'per-worker': per_iter_pw}
-        sfx = '   — PER WORKER (driver phase ÷ N_active)'
-        p = os.path.join(PLOT_DIR, 'driver_dashboard_per_worker.png')
-        if ppt.plot_combined_dashboard(bypw, p, title_suffix=sfx):
-            made.append('driver_dashboard_per_worker.png')
-        p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter_per_worker.png')
-        if ppt.plot_phases_over_iter_condensed(bypw, p2, title_suffix=sfx):
-            made.append('driver_phases_over_iter_per_worker.png')
+    # TOTAL WORKER-TIME driver dashboard FIRST (phase × N_active): aggregate
+    # worker-seconds, the worker-count-invariant view for fair cross-dpsize
+    # comparison (a run with more workers has shorter wall-clock but ~same
+    # total work).
+    per_iter_tw = _driver_per_iter_total_worker(db)
+    if per_iter_tw:
+        bytw = {'total-worker-time': per_iter_tw}
+        sfx = '   — TOTAL WORKER-TIME (driver phase × N_active)'
+        vlab = 'total worker-time per iter (s) [= wall-clock × N_active]'
+        p = os.path.join(PLOT_DIR, 'driver_dashboard_total_worker.png')
+        if ppt.plot_combined_dashboard(bytw, p, title_suffix=sfx, value_label=vlab):
+            made.append('driver_dashboard_total_worker.png')
+        p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter_total_worker.png')
+        if ppt.plot_phases_over_iter_condensed(bytw, p2, title_suffix=sfx, value_label=vlab):
+            made.append('driver_phases_over_iter_total_worker.png')
     # Raw (wall-clock) driver dashboard: ALL dpsizes (latest run per size).
     per_iter = _driver_per_iter_all_dpsizes(db)
     if per_iter:
         by_log = {'all-runs': per_iter}
+        vlab = 'wall-clock per iter (s)'
         p = os.path.join(PLOT_DIR, 'driver_dashboard.png')
-        if ppt.plot_combined_dashboard(by_log, p, title_suffix='   — raw wall-clock'):
+        if ppt.plot_combined_dashboard(by_log, p, title_suffix='   — raw wall-clock', value_label=vlab):
             made.append('driver_dashboard.png')
         p2 = os.path.join(PLOT_DIR, 'driver_phases_over_iter.png')
-        if ppt.plot_phases_over_iter_condensed(by_log, p2, title_suffix='   — raw wall-clock'):
+        if ppt.plot_phases_over_iter_condensed(by_log, p2, title_suffix='   — raw wall-clock', value_label=vlab):
             made.append('driver_phases_over_iter.png')
     # Worker plot: active run only (per-run "did my change help" view).
     if active_tag:

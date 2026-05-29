@@ -208,7 +208,8 @@ def _ylim_clip(values, lo_quantile=0.0, hi_quantile=0.99, pad=0.05):
     return (max(0, lo - pad * span), hi + pad * span)
 
 
-def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
+def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix='',
+                            value_label='wall-clock per iter (s)'):
     """Single combined figure with:
       - Top-left:   stacked bar phase breakdown (median per-iter) by dpsize
       - Top-right:  total iter-time distribution by dpsize (box, outliers off)
@@ -252,8 +253,8 @@ def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
            label='stop (incl. max_information)', color='#2ca02c')
     ax.set_xticks(xs)
     ax.set_xticklabels(['{}'.format(d) for d in dpsizes])
-    ax.set_xlabel('deployment size')
-    ax.set_ylabel('median per-iter wall time (s)')
+    ax.set_xlabel('deployment size (popps)')
+    ax.set_ylabel('median ' + value_label)
     ax.set_title('phase breakdown by dpsize (median)')
     ax.set_ylim(0, max(totals) * 1.18 if totals else 1)
     ax.legend(loc='upper left', fontsize=8)
@@ -270,8 +271,8 @@ def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
     for patch, d in zip(bp['boxes'], dpsizes):
         patch.set_facecolor(color[d])
         patch.set_alpha(0.55)
-    ax.set_xlabel('deployment size')
-    ax.set_ylabel('total per-iter wall time (s)')
+    ax.set_xlabel('deployment size (popps)')
+    ax.set_ylabel('total-iter ' + value_label)
     ax.set_title('total iter-time distribution (outliers clipped)')
     all_totals = [v for d in dpsizes for v in by_dp[d]['total']]
     ax.set_ylim(_ylim_clip(all_totals, hi_quantile=0.99))
@@ -301,8 +302,8 @@ def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
             xs_sm, ys_sm = _rolling_median(its_s, vals_s, window=5)
             ax.plot(xs_sm, ys_sm, color=color[d], linewidth=1.6,
                     label='dpsize={}  (n={})'.format(d, len(vals_s)))
-        ax.set_xlabel('training iter')
-        ax.set_ylabel('seconds')
+        ax.set_xlabel('training iteration')
+        ax.set_ylabel(value_label)
         ax.set_title(title)
         ax.set_ylim(_ylim_clip(all_vals, hi_quantile=0.99))
         ax.grid(True, alpha=0.3)
@@ -317,7 +318,8 @@ def plot_combined_dashboard(per_iter_by_log, out_path, title_suffix=''):
     return True
 
 
-def plot_phases_over_iter_condensed(per_iter_by_log, out_path, title_suffix=''):
+def plot_phases_over_iter_condensed(per_iter_by_log, out_path, title_suffix='',
+                                    value_label='wall-clock per iter (s)'):
     """Single-panel-per-phase compact: shows grad/measure/stop/total on a
     single axis with all dpsizes overlaid. Same data as the dashboard's
     bottom four panels but tighter -- one figure, 4 stacked subplots."""
@@ -354,7 +356,7 @@ def plot_phases_over_iter_condensed(per_iter_by_log, out_path, title_suffix=''):
             xs_sm, ys_sm = _rolling_median(its_s, vals_s, window=5)
             ax.plot(xs_sm, ys_sm, color=color[d], linewidth=1.8,
                     label='dpsize={}'.format(d))
-        ax.set_ylabel(title + '\n(s)', fontsize=9)
+        ax.set_ylabel(title + '\n' + value_label, fontsize=9)
         ax.set_ylim(_ylim_clip(all_vals, hi_quantile=0.99))
         ax.grid(True, alpha=0.3)
         ax.legend(fontsize=7, ncol=len(dpsizes), loc='upper right')
