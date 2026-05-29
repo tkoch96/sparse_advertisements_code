@@ -74,6 +74,10 @@ _SUMMARY_KEY = re.compile(
 _MEM = re.compile(r'\[mem\] tag=\S+.*?\bt=(?P<t>[\d.]+)(?:.*?\biter=(?P<iter>\d+))?')
 _DPSIZE = re.compile(r'\[sweep\] === dpsize=(\d+)')
 _TAG = re.compile(r'^\s*tag:\s*(\S+)')
+# Worker-count signals: the start_workers override (per dpsize) and any
+# mid-run pool rebuilds from the recovery path.
+_NW_OVERRIDE = re.compile(r'SCULPTOR_N_WORKERS override active: n_workers=(\d+)')
+_NW_REBUILT = re.compile(r'\[ray-recover\] rebuilt pool with (\d+) workers')
 
 
 def _run(cmd, timeout=120):
@@ -149,6 +153,10 @@ def init_db():
         PRIMARY KEY (run_tag, ip, pid, worker_i, block_seq, key)
     );
     CREATE INDEX IF NOT EXISTS idx_wt ON worker_timing (run_tag, worker_i, key, block_seq);
+    CREATE TABLE IF NOT EXISTS worker_count (
+        run_tag TEXT, dpsize INT, n_workers INT,
+        PRIMARY KEY (run_tag, dpsize)
+    );
     """)
     db.commit()
     return db
@@ -181,6 +189,29 @@ def ingest_driver_iters(db, path, run_tag):
         "INSERT OR REPLACE INTO iter_timing "
         "(run_tag,dpsize,iter,grad_s,measure_s,stop_s,total_s,iter_start_ts) "
         "VALUES (?,?,?,?,?,?,?,?)", rows)
+    db.commit()
+    return len(rows)
+
+
+def ingest_worker_count(db, path, run_tag):
+    """Capture the active worker count per dpsize. Today this is the
+    start_workers override (constant within a run unless the adaptive ramp /
+    autoscale / recovery-rebuild changes it). Stored per (run_tag, dpsize) so
+    cross-size and cross-run normalization knows N(iter)."""
+    cur_dp = None
+    seen = {}
+    with open(path, errors='replace') as f:
+        for raw in f:
+            line = _ANSI.sub('', raw)
+            m = _DPSIZE.search(line)
+            if m:
+                cur_dp = int(m.group(1)); continue
+            m = _NW_OVERRIDE.search(line) or _NW_REBUILT.search(line)
+            if m and cur_dp is not None:
+                seen[cur_dp] = int(m.group(1))   # last wins (latest count for dp)
+    rows = [(run_tag, dp, n) for dp, n in seen.items()]
+    db.executemany("INSERT OR REPLACE INTO worker_count (run_tag,dpsize,n_workers) "
+                   "VALUES (?,?,?)", rows)
     db.commit()
     return len(rows)
 
@@ -258,10 +289,18 @@ def plot_worker_timing(db, out_path, run_tag=None):
         ys = [p[1] for p in pts]
         ax.plot(xs, ys, '-o', ms=2.5, lw=1.3, color=cmap(i % 10), label=key)
     ax.set_xlabel('worker-0 batch sequence (≈ gradient probe / iter)')
-    ax.set_ylabel('time in batch (ms)')
+    ax.set_ylabel('per-worker time in batch (ms)')
     ax.set_title('Worker-0 per-computation time over time  [run={}]'.format(run_tag or 'all'))
     ax.grid(True, alpha=0.3)
     ax.legend(fontsize=7, ncol=2, loc='upper right')
+    # Right axis: cluster-total = per-worker × N_active. The worker summary is
+    # one worker, so ×N is the whole-cluster compute burned per category.
+    n_active = db.execute(
+        "SELECT MAX(n_workers) FROM worker_count WHERE run_tag=?", [run_tag]).fetchone()
+    n_active = (n_active[0] if n_active else None) or 1
+    secax = ax.secondary_yaxis(
+        'right', functions=(lambda y: y * n_active, lambda y: y / n_active))
+    secax.set_ylabel('cluster total (× N_active={}) ms'.format(n_active))
 
     # Stacked-share view: what fraction of each batch goes to each key.
     blocks = sorted({s for v in by_key.values() for s, _ in v})
@@ -325,6 +364,34 @@ def _active_tag(db):
     return row[0] if row else None
 
 
+def plot_workers_active(db, out_path, run_tag):
+    """Active worker count over the run's iters. For each dpsize the count is
+    the start_workers/recovery value (constant within a dpsize today); this
+    becomes a real time series once the adaptive ramp / autoscale moves N."""
+    rows = db.execute(
+        "SELECT it.dpsize, it.iter, wc.n_workers FROM iter_timing it "
+        "JOIN worker_count wc ON wc.run_tag=it.run_tag AND wc.dpsize=it.dpsize "
+        "WHERE it.run_tag=? ORDER BY it.dpsize, it.iter", [run_tag]).fetchall()
+    if not rows:
+        return False
+    fig, ax = plt.subplots(figsize=(12, 3.2))
+    cmap = plt.cm.tab10
+    for i, dp in enumerate(sorted({r[0] for r in rows})):
+        pts = [(r[1], r[2]) for r in rows if r[0] == dp]
+        ax.step([p[0] for p in pts], [p[1] for p in pts], where='post',
+                color=cmap(i % 10), lw=1.8, label='dpsize={}'.format(dp))
+    ax.set_xlabel('training iter')
+    ax.set_ylabel('active workers (N)')
+    ax.set_ylim(bottom=0)
+    ax.set_title('Active worker count over time  [run={}]'.format(run_tag))
+    ax.grid(True, alpha=0.3)
+    ax.legend(fontsize=8, loc='lower right')
+    fig.tight_layout()
+    fig.savefig(out_path, dpi=110)
+    plt.close(fig)
+    return True
+
+
 def regenerate_plots(db, active_tag):
     """Plots focus on the ACTIVE run (sourced from the DB) for a clean live
     view; the DB retains all runs for cross-run comparison."""
@@ -345,6 +412,9 @@ def regenerate_plots(db, active_tag):
         p = os.path.join(PLOT_DIR, 'worker0_timing.png')
         if plot_worker_timing(db, p, run_tag=active_tag):
             made.append('worker0_timing.png')
+        pw = os.path.join(PLOT_DIR, 'workers_active.png')
+        if plot_workers_active(db, pw, active_tag):
+            made.append('workers_active.png')
     return made
 
 
@@ -417,6 +487,7 @@ def main():
         tag = _run_tag_for_log(path)
         ingest_driver_iters(db, path, tag)
         ingest_worker_timing(db, path, tag)
+        ingest_worker_count(db, path, tag)
     active_tag = _active_tag(db)
     made = regenerate_plots(db, active_tag)
     write_html(made, build_status(db, sweep_logs))

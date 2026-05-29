@@ -68,7 +68,14 @@ refreshing dashboard. Set up session 10 (2026-05-28).
     the `Worker N timing summary` blocks the actor prints each gradient batch
     (`solve_generic_lp_persistent`, `sim_rti`, `total_rti_calc`, …). Each block
     is a per-batch snapshot, so this is the "did my change move sub-step X"
-    view. Only worker 0 emits (Ray dedups the rest).
+    view. Only worker 0 emits (Ray dedups the rest), so it is the PER-WORKER
+    time; the right axis shows cluster-total (× N_active). For a true
+    sum-over-all-workers ÷ N (to expose shard imbalance) the workers would need
+    to write per-worker timing files like the mem logs already do.
+  - **Active worker count over time** (`workers_active.png`) + a `worker_count`
+    table. Constant within a run today (no adaptive ramp), but N varies across
+    runs/sizes (e.g. dep_sweep used 5 workers at dp3/5, 32 at dp10-32; ext200
+    used 48) — so normalizing timing by N matters for cross-size comparison.
 - **DB keeps ALL runs** (keyed by run tag) for cross-run comparison. The
   driver dashboard shows **all dpsizes** (latest run per size = the cross-size
   scaling view); the worker plot shows the active run only.
