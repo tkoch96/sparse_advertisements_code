@@ -184,7 +184,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 				lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-				using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes,
+				using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes,
 				save_run_dir=save_run_dirs[random_iter], generic_objective='avg_latency')
 
 			metrics['settings'][random_iter] = sas.get_init_kwa()
@@ -265,7 +265,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# 				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 	# 				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 	# 					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-	# 					using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+	# 					using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 	# 				if wm is None:
 	# 					wm = Worker_Manager(sas.get_init_kwa(), deployment)
 	# 					wm.start_workers()
@@ -318,7 +318,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 					if wm is None:
 						wm = Worker_Manager(sas.get_init_kwa(), deployment)
 						wm.start_workers()
@@ -365,7 +365,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 					if wm is None:
 						wm = Worker_Manager(sas.get_init_kwa(), deployment)
 						wm.start_workers()
@@ -487,7 +487,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 					if wm is None:
 						wm = Worker_Manager(sas.get_init_kwa(), deployment)
 						wm.start_workers()
@@ -545,7 +545,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 					if wm is None:
 						wm = Worker_Manager(sas.get_init_kwa(), deployment)
 						wm.start_workers()
@@ -605,7 +605,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
 						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=False, gamma=gamma, n_prefixes=n_prefixes)
+						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
 					if wm is None:
 						wm = Worker_Manager(sas.get_init_kwa(), deployment)
 						wm.start_workers()
