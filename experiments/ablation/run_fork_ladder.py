@@ -10,7 +10,7 @@ computed through the same pipeline for reference.
     python -m experiments.ablation.run_fork_ladder --seed 1 --rung full \
         --port 31800 --max-iter 200 --out-dir cache/ablation/fork_ladder
 
-Rungs: full, expl_random, expl_none, no_direction, no_memory (see
+Rungs: full, expl_random, expl_none, no_direction, no_memory, no_mc (see
 sculptor_fork.RUNGS) plus 'painter' (repo painter baseline, no fork).
 """
 import argparse
@@ -82,6 +82,18 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         explore=DEFAULT_EXPLORE, using_resilience_benefit=use_res, gamma=gamma_val,
         n_prefixes=n_prefixes, generic_objective='avg_latency',
     )
+    # 'no_mc' rung: swap the worker actor class for the deterministic
+    # pseudo-path worker BEFORE the solve-phase workers start. The seam is
+    # reverted right after solve so the pristine scoring stack below gets
+    # stock workers. sculptor_fork._abl_assert_mc verifies the injection
+    # actually took (a stock worker answers 'ERROR' to the stats RPC).
+    import ray
+    import worker_comms_ray
+    _stock_actor_cls = worker_comms_ray.ACTOR_CLS
+    if os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0':
+        from experiments.ablation.mc_off_worker import Abl_MC_Off_Worker
+        worker_comms_ray.ACTOR_CLS = ray.remote(Abl_MC_Off_Worker)
+        print('[ablation-fork] mc-off worker class injected', flush=True)
     wm = Worker_Manager(sas.get_init_kwa(), deployment)
     wm.start_workers()
     result = {'seed': seed, 'rung': rung, 'max_iter': max_iter,
@@ -138,6 +150,9 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             wm.stop_workers()
         except Exception as e:
             print('warning: stop_workers raised {}'.format(e))
+        # revert the mc-off actor-class injection so the scoring stack
+        # (wm2 below) is built from stock workers
+        worker_comms_ray.ACTOR_CLS = _stock_actor_cls
 
     # ---- scoring phase: PRISTINE eval stack ----
     # The solver's modify_ugs (pseudo-UG splitting, seed-dependent) mutates

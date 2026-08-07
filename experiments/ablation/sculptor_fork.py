@@ -25,12 +25,21 @@ Flags (read at construction):
       'random': one random adjacent flip is measured instead.
       ASSERT: path_measures does not grow during the max-info phase when
       'none'; grows by <= n_max_info_iter otherwise.
+  SCULPTOR_ABLATION_MC        '1' (default) | '0'
+      '0': monte-carlo route simulation replaced by a single deterministic
+      avg-of-options pseudo-path with huge link capacities
+      (experiments/ablation/mc_off_worker.Abl_MC_Off_Worker, injected via
+      the worker_comms_ray.ACTOR_CLS seam by run_fork_ladder).
+      ASSERT (every iteration, via the 'abl_mc_stats' worker RPC): every
+      worker is the mc-off class, MC_NUM==1, zero stock-sampler calls,
+      zero non-point-mass benefit pdfs, pseudo-path builder ran.
   SCULPTOR_ABLATION_ASSERTS   '1' (default) | '0'  -- disable checks
 
 A summary line '[ablation-assert] SUMMARY ...' prints at the end of every
 run with the number of checks performed (violations raise immediately).
 """
 import os
+import pickle
 import sys
 import time
 
@@ -52,12 +61,15 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self.abl_direction = os.environ.get('SCULPTOR_ABLATION_DIRECTION', '1') == '1'
         self.abl_explore = os.environ.get('SCULPTOR_ABLATION_EXPLORE', 'default')
         assert self.abl_explore in ('default', 'random', 'none')
+        self.abl_mc = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '1'
         self.abl_assert = os.environ.get('SCULPTOR_ABLATION_ASSERTS', '1') == '1'
         self._abl_checks = {'iter_start_binary': 0, 'grad_single': 0, 'grad_finite': 0,
-                            'step_single': 0, 'step_binary': 0, 'max_info_budget': 0}
+                            'step_single': 0, 'step_binary': 0, 'max_info_budget': 0,
+                            'mc_off_workers': 0}
         self.abl_nan_grad_iters = 0
-        print('[ablation-fork] memory={} direction={} explore={} asserts={}'.format(
-            self.abl_memory, self.abl_direction, self.abl_explore, self.abl_assert), flush=True)
+        print('[ablation-fork] memory={} direction={} explore={} mc={} asserts={}'.format(
+            self.abl_memory, self.abl_direction, self.abl_explore, self.abl_mc,
+            self.abl_assert), flush=True)
 
     # ================= feature mechanisms (method overrides) ============
     def init_advertisement(self):
@@ -199,6 +211,30 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 '[ablation-assert] memory-off: advertisement not binary after step'
             self._abl_checks['step_binary'] += 1
 
+    def _abl_assert_mc(self):
+        """MC-off binding proof, every iteration: fan the 'abl_mc_stats' RPC
+        to all workers. A stock worker answers 'ERROR' (unknown cmd), which
+        is exactly the injection-failure signal we want to catch."""
+        if not self.abl_assert or self.abl_mc:
+            return
+        stats = self.worker_manager.send_receive_workers(
+            pickle.dumps(('abl_mc_stats', None)))
+        for wi, st in stats.items():
+            assert isinstance(st, dict), \
+                ('[ablation-assert] mc-off: worker {} did not report mc stats '
+                 '(mc-off worker class not injected?): {!r}'.format(wi, st))
+            assert st['mc_num'] == 1, \
+                '[ablation-assert] mc-off: worker {} MC_NUM={}'.format(wi, st['mc_num'])
+            assert st['stock_sample_calls'] == 0, \
+                ('[ablation-assert] mc-off: worker {} reached a stock MC sampler '
+                 '{} time(s)'.format(wi, st['stock_sample_calls']))
+            assert st['point_mass_violations'] == 0, \
+                ('[ablation-assert] mc-off: worker {} returned {} non-point-mass '
+                 'benefit pdf(s)'.format(wi, st['point_mass_violations']))
+            assert st['pseudo_calls'] > 0, \
+                '[ablation-assert] mc-off: worker {} never built a pseudo-path'.format(wi)
+        self._abl_checks['mc_off_workers'] += 1
+
     def _abl_assert_max_info(self, pm_before):
         if not self.abl_assert:
             return
@@ -241,6 +277,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
 
                 grads = self._solve_compute_gradients()
                 self._abl_assert_gradient(grads)
+                self._abl_assert_mc()
 
                 ## grads
                 timers.append(time.time() - t_last)
@@ -285,10 +322,13 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
 # Ladder rungs, cumulative from full SCULPTOR downward. Each entry is the
 # env-flag dict the driver applies before constructing the solver.
 RUNGS = {
-    'full':        {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'default'},
-    'expl_random': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'random'},
-    'expl_none':   {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none'},
-    'no_direction': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none'},
-    'no_memory':   {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none'},
+    'full':        {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'default', 'SCULPTOR_ABLATION_MC': '1'},
+    'expl_random': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'random', 'SCULPTOR_ABLATION_MC': '1'},
+    'expl_none':   {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
+    'no_direction': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
+    'no_memory':   {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
+    # bottom link of the ladder (connects painter <-> no_memory): monte-carlo
+    # OFF on top of the no_memory semantics.
+    'no_mc':       {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '0'},
 }
-RUNG_ORDER = ['full', 'expl_random', 'expl_none', 'no_direction', 'no_memory']
+RUNG_ORDER = ['full', 'expl_random', 'expl_none', 'no_direction', 'no_memory', 'no_mc']

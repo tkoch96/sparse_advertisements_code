@@ -297,14 +297,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			return self.model
 		return None
 
-	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
-		"""The high-level wrapper that tries Standard first, then MLU."""
-		ts = time.time()
-		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
-		self.timing['get_paths_by_ug'] += time.time() - ts
-		
-		# Pre-calculate objective (latencies)
-		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
+	def _path_obj_coeffs(self, available_paths, obj, site_cost_alpha):
+		"""Per-path LP objective coefficients (latencies). Named sub-step of
+		solve_generic_lp_persistent so subclasses can override path pricing."""
 		obj_coeffs = []
 		for ug, poppi in available_paths:
 			if poppi == NO_PATH_INGRESS(self):
@@ -318,6 +313,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + site_cost_alpha * site_cost)
 				else:
 					raise ValueError("obj {} not supported in solve_generic_lp_persistent".format(obj))
+		return obj_coeffs
+
+	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
+		"""The high-level wrapper that tries Standard first, then MLU."""
+		ts = time.time()
+		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
+		self.timing['get_paths_by_ug'] += time.time() - ts
+
+		# Pre-calculate objective (latencies)
+		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
+		obj_coeffs = self._path_obj_coeffs(available_paths, obj, site_cost_alpha)
 
 		# 1. Try Standard Solve
 		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
@@ -692,7 +698,22 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""
 	    Combined and optimized version of get_ingress_probabilities + sim_rti_better.
 	    Directly produces the routed_through_ingress dictionary using pattern caching.
+
+	    Orchestrator over two named sub-steps so subclasses can override the
+	    sampling stage independently of the (deterministic) option/probability
+	    computation:
+	      _compute_scenario_options(a)     populates self.rti_data
+	      _sample_scenario_realizations()  MC-draws routed_through_ingress
 	    """
+		ts_total = time.time()
+		self._compute_scenario_options(a, verb=verb, **kwargs)
+		routed_through_ingress = self._sample_scenario_realizations()
+		self.timing['total_rti_calc'] += time.time() - ts_total
+		return routed_through_ingress
+
+	def _compute_scenario_options(self, a, verb=False, **kwargs):
+		"""Populate self.rti_data (per-(ug,prefix) ingress options + probabilities)
+		for advertisement `a`. Deterministic; pattern-cached."""
 		ts_total = time.time()
 
 		# --- 1. Initialize Containers ---
@@ -799,6 +820,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		self.timing['pmat_organize'] += time.time() - ts_total
 
+	def _sample_scenario_realizations(self):
+		"""Monte-carlo draw of self.MC_NUM joint route realizations from the
+		scenario options in self.rti_data (populated by
+		_compute_scenario_options). Returns routed_through_ingress:
+		{mc_index: {prefix: {ug: popp}}}."""
 		# --- 3. Vectorized Simulation (Previously sim_rti_better) ---
 		# Now self.rti_data is fully populated. We proceed with the vectorized selection.
 
@@ -861,8 +887,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				
 				# Assuming self.popps is a list/dict of actual POP objects
 				routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
-
-		self.timing['total_rti_calc'] += time.time() - ts_total
 
 		return routed_through_ingress
 

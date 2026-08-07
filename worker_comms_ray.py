@@ -83,6 +83,11 @@ _ensure_ray()
 # Import after Ray is initialised so the @ray.remote decorator binds cleanly.
 from path_distribution_computer_ray import Path_Distribution_Computer
 
+# The actor class both construction sites below instantiate. A module-level
+# seam so tooling (e.g. the ablation harness) can substitute a subclass;
+# production behavior is unchanged (ACTOR_CLS is Path_Distribution_Computer).
+ACTOR_CLS = Path_Distribution_Computer
+
 
 class _ActorSocketShim:
 	"""A tiny adapter so Ray actor handles look enough like a ZMQ REQ socket
@@ -262,7 +267,7 @@ class Worker_Manager:
 			# Construct the actor. The Ray scheduler picks a node/CPU.
 			# Each actor's __init__ (in path_distribution_computer_ray) merges
 			# the static + slice and sets up its persistent Gurobi model.
-			actor = Path_Distribution_Computer.remote(
+			actor = ACTOR_CLS.remote(
 				worker, slices[worker], init_kwa_ref, static_dep_ref)
 			# Wrap in a ZMQ-shaped shim so external code that calls
 			# socket.send(msg)/socket.recv() (e.g. sparse_advertisements_v3
@@ -486,7 +491,7 @@ class Worker_Manager:
 		for i in range(n_existing, n_total):
 			if len(slices[i]['ugs']) == 0:
 				continue
-			actor = Path_Distribution_Computer.remote(
+			actor = ACTOR_CLS.remote(
 				i, slices[i], init_kwa_ref, static_dep_ref)
 			new_sockets[i] = _ActorSocketShim(actor)
 			if stagger_sec > 0 and i + 1 < n_total:
