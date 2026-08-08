@@ -79,6 +79,33 @@ def main():
         med = f"{statistics.median(vals):>12.2f}" if vals else f"{'—':>12}"
         print(f"{rung:<14}{cells}{med}")
 
+    # ---- percentage view: painter = 0%, one_per_peering (OPP) = 100% ----
+    # pct = 100 * (1 - combined(rung)/combined(painter)), per seed (same
+    # convention as plot_normalized). Blowups go hugely negative on purpose.
+    pain = rows.get("painter", {})
+    if pain:
+        print(f"\n%% of painter->OPP gap closed (combined, gamma={args.gamma}; "
+              f"painter=0%, OPP=100%):")
+        print(hdr); print("-" * len(hdr))
+        for rung in rungs:
+            if rung == "painter":
+                continue
+            vals = []
+            cells = ""
+            for s in seeds:
+                d = rows[rung].get(s)
+                p = pain.get(s)
+                if d is None or p is None or combined(p, args.gamma) <= 0:
+                    cells += f"{'—':>12}"
+                else:
+                    pct = 100.0 * (1.0 - combined(d, args.gamma) / combined(p, args.gamma))
+                    vals.append(pct)
+                    cells += f"{pct:>12.1f}"
+            med = f"{statistics.median(vals):>12.1f}" if vals else f"{'—':>12}"
+            print(f"{rung:<14}{cells}{med}")
+    else:
+        print("\n(no painter runs in this dir -> percentage view skipped)")
+
 
 if __name__ == "__main__":
     main()
