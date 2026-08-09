@@ -90,6 +90,15 @@ def main():
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
+    # IMPORTANT: import eval_latency_failure BEFORE any module that imports
+    # sparse_advertisements_v3. sparse_advertisements_v3:93 imports from
+    # eval_latency_failure while Sparse_Advertisement_Eval is defined much
+    # later (line ~640); importing sparse first hands eval_latency_failure a
+    # partial module during its star-import and its namespace permanently
+    # misses the class (NameError in every later eval phase). Production
+    # drivers (evaluate_over_deployment_sizes) import this module first too.
+    from eval_latency_failure import evaluate_all_metrics
+
     # ---- register rung names in the repo's default metric templates -------
     import wrapper_eval
     for k, per_iter in wrapper_eval.default_metrics.items():
@@ -172,7 +181,6 @@ def main():
     print('[ladder-eval] checkpoint pickle written: {}'.format(args.metrics_fn))
 
     # ---- hand off to the repo pipeline ------------------------------------
-    from eval_latency_failure import evaluate_all_metrics
     m = evaluate_all_metrics(
         args.dpsize, args.port, nsim=len(seeds), soln_types=soln_types,
         use_performance_metrics_fn=args.metrics_fn)
