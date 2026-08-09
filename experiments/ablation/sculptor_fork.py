@@ -17,9 +17,14 @@ Flags (read at construction):
   SCULPTOR_ABLATION_DIRECTION '1' (default) | '0'
       '0': single-coordinate descent -- gradient masked to its largest
       |component| and the realized step (momentum included) projected
-      onto that coordinate.
+      onto that coordinate. Additionally the samplers' cross-iteration
+      remeasure state (last_lb_calls_results,
+      last_rb_calls_results_{popp,pop}) is cleared after every gradient
+      call: re-probing previously-large gradient coordinates is
+      directional information and must not inform direction-off rungs
+      (the wide explore pool is untouched -- painter-fair).
       ASSERT: gradient has <=1 nonzero component; realized step changes
-      <=1 coordinate.
+      <=1 coordinate; remeasure state empty at every sampling pass.
   SCULPTOR_ABLATION_EXPLORE   'default' | 'random' | 'none'
       'none': solve_max_information returns None (no extra measurement).
       'random': one random adjacent flip is measured instead.
@@ -110,8 +115,35 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             a = threshold_a(a)
         return a
 
+    # Cross-iteration remeasure state: the gradient samplers re-probe
+    # coordinates whose PREVIOUS-iteration gradients were large
+    # (last_lb_calls_results / last_rb_calls_results_{popp,pop}). That is
+    # directional information carried across iterations, so direction-off
+    # rungs must not see it: we assert the containers are empty before each
+    # sampling pass and clear them after (Tom, 2026-08-09). The wide
+    # explore pool is untouched -- painter-style multi-index exploration
+    # with a best-coordinate pick stays a fair one-flip baseline.
+    _ABL_REMEASURE_STATE = ('last_lb_calls_results',
+                            'last_rb_calls_results_popp',
+                            'last_rb_calls_results_pop')
+
+    def _abl_clear_remeasure_state(self):
+        for attr in self._ABL_REMEASURE_STATE:
+            if hasattr(self, attr):
+                delattr(self, attr)
+
     def gradients(self, a, add_metrics=True):
+        if not self.abl_direction:
+            if self.abl_assert:
+                for attr in self._ABL_REMEASURE_STATE:
+                    assert not getattr(self, attr, None), \
+                        ('[ablation-assert] direction-off: {} nonempty at gradient '
+                         'time (cross-iteration remeasure state leaked)'.format(attr))
+                self._abl_checks['remeasure_cleared'] = \
+                    self._abl_checks.get('remeasure_cleared', 0) + 1
         g = super().gradients(a, add_metrics=add_metrics)
+        if not self.abl_direction:
+            self._abl_clear_remeasure_state()
         bad = ~np.isfinite(g)
         if bad.any():
             # NaN guard (repo bug: failure-scenario LPs with zero routable
