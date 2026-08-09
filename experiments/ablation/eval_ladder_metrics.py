@@ -89,6 +89,13 @@ def main():
     print('[ladder-eval] seeds={} solutions={}'.format(seeds, soln_types))
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
+    # Isolation (same as rescore_fork): NEVER attach to a running Ray cluster.
+    # worker_comms_ray tries address='auto' first, which on a busy sweep host
+    # attaches to the sweep's Ray -- and dies with it when that rung ends.
+    # Must be set before the first repo import below (_ensure_ray runs at
+    # worker_comms_ray import time).
+    os.environ['RAY_ADDRESS'] = 'local'
+    os.environ.setdefault('RAY_TMPDIR', '/tmp/ray_ladder_eval_{}'.format(os.getpid()))
 
     # IMPORTANT: import eval_latency_failure BEFORE any module that imports
     # sparse_advertisements_v3. sparse_advertisements_v3:93 imports from
