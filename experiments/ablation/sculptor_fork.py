@@ -47,10 +47,13 @@ Flags (read at construction):
       rung's max-info mechanism; falls back to measuring the current
       advertisement) and do NOT step. Otherwise STEP and measure NOTHING
       (stock SCULPTOR measured the deployed advertisement after every
-      step; under gating N is the TOTAL measurement budget for solve()). U = g^2-weighted mean sign-error probability
-      Phi(-|g_i|/sigma_i) over ALL probed gradient coordinates (full
-      support size; LB term only -- RB coords without sigma excluded). 'fixed'
-      reproduces stock semantics exactly.
+      step; under gating N is the TOTAL measurement budget for solve()).
+      U = g^2-weighted mean sign-error probability Phi(-|raw_i|/sigma_i)
+      over ALL probed coordinates, LB and RB terms COMPOSED per the
+      objective's own weights (independent probes: weighted raw-delta
+      sums, squared-weight variance sums; raw deltas vs standard-error
+      sigmas -- never the heaviside-scaled gradient vs raw sigma).
+      'fixed' reproduces stock semantics exactly.
       ASSERT (every iteration): TOTAL measurements during solve() -- as
       path_measures growth, so every measurement path counts -- never
       exceed PROBE_N; probe iterations never exceed PROBE_N.
