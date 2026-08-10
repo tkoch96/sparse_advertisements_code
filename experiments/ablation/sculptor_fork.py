@@ -46,9 +46,9 @@ Flags (read at construction):
       budget is not exhausted, spend the iteration on a MEASUREMENT (the
       rung's max-info mechanism; falls back to measuring the current
       advertisement) and do NOT step. Otherwise STEP and do not run the
-      max-info phase. U = |g|-weighted mean sign-error probability
-      Phi(-|g_i|/sigma_i) over the top-10 nonzero gradient coordinates
-      (LB term only; RB coords without sigma are excluded). 'fixed'
+      max-info phase. U = g^2-weighted mean sign-error probability
+      Phi(-|g_i|/sigma_i) over ALL probed gradient coordinates (full
+      support size; LB term only -- RB coords without sigma excluded). 'fixed'
       reproduces stock semantics exactly.
       ASSERT: measurements spent under gating NEVER exceed PROBE_N.
   SCULPTOR_ABLATION_PROBE_C   float, default 0.2 (gated mode threshold)
@@ -162,25 +162,29 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             self._abl_grad_sigma = sig
         return super()._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
 
-    def _abl_probe_uncertainty(self, g, top_k=10):
-        """U = |g|-weighted mean of P(sign error) = Phi(-|g_i|/sigma_i) over
-        the top-k nonzero gradient coordinates with known sigma (LB probes
-        only). Also returns the aggregate noise-to-signal ratio for logging."""
+    def _abl_probe_uncertainty(self, g):
+        """U = g^2-weighted mean of P(sign error) = Phi(-|g_i|/sigma_i) over
+        ALL probed coordinates with nonzero gradient (the full support size —
+        cost is trivial). g^2 weighting = expected fraction of step ENERGY
+        pushed the wrong way: sign-error damage on a coordinate scales with
+        displacement x gradient, so the near-zero-gradient explore tail
+        (whose sign is genuinely 50/50 but harmless) self-discounts
+        quadratically instead of needing an arbitrary top-k cutoff.
+        Also returns the aggregate noise-to-signal ratio for logging."""
         from math import erfc, sqrt
         entries = []
         for ind, s in self._abl_grad_sigma.items():
             gv = float(np.asarray(g)[ind])
             if gv != 0.0:
                 entries.append((abs(gv), s))
-        entries.sort(reverse=True)
-        entries = entries[:top_k]
         if not entries:
             return 0.0, 0.0, 0
         wsum, num, g2, s2 = 0.0, 0.0, 0.0, 0.0
         for gmag, s in entries:
             p_err = 0.5 * erfc(gmag / (s * sqrt(2.0))) if s > 0 else 0.0
-            num += gmag * p_err
-            wsum += gmag
+            w = gmag * gmag
+            num += w * p_err
+            wsum += w
             g2 += gmag * gmag
             s2 += s * s
         return num / wsum, (s2 / g2 if g2 > 0 else float('inf')), len(entries)
