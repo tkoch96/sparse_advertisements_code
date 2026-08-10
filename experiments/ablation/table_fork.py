@@ -79,6 +79,39 @@ def main():
         med = f"{statistics.median(vals):>12.2f}" if vals else f"{'—':>12}"
         print(f"{rung:<14}{cells}{med}")
 
+    # ---- painter-anchored view: benefit over painter per seed (ms) ------
+    # benefit_i = painter_i - rung_i on the SAME seed (positive = better
+    # than painter; OPP row shows the max attainable). Quantiles give the
+    # distribution across seeds.
+    if pain:
+        print(f"\nbenefit over painter, per-seed paired (combined, gamma={args.gamma}; "
+              f"positive = better; ms):")
+        qhdr = (f"{'rung':<14}{'median':>10}{'mean':>10}{'p10':>10}{'p25':>10}"
+                f"{'p75':>10}{'p90':>10}{'min':>10}{'max':>10}{'n':>4}")
+        print(qhdr); print("-" * len(qhdr))
+        import numpy as _np
+        for rung in rungs:
+            if rung == "painter":
+                continue
+            vals = []
+            for s in seeds:
+                d = rows[rung].get(s); p = pain.get(s)
+                if d is not None and p is not None:
+                    vals.append(combined(p, args.gamma) - combined(d, args.gamma))
+            if not vals:
+                print(f"{rung:<14}{'—':>10}"); continue
+            v = _np.asarray(vals)
+            print(f"{rung:<14}{_np.median(v):>10.2f}{v.mean():>10.2f}"
+                  f"{_np.quantile(v,.1):>10.2f}{_np.quantile(v,.25):>10.2f}"
+                  f"{_np.quantile(v,.75):>10.2f}{_np.quantile(v,.9):>10.2f}"
+                  f"{v.min():>10.2f}{v.max():>10.2f}{len(v):>4}")
+        # OPP = the maximum attainable benefit (painter's own combined)
+        pv = _np.asarray([combined(p, args.gamma) for p in pain.values()])
+        print(f"{'OPP (max)':<14}{_np.median(pv):>10.2f}{pv.mean():>10.2f}"
+              f"{_np.quantile(pv,.1):>10.2f}{_np.quantile(pv,.25):>10.2f}"
+              f"{_np.quantile(pv,.75):>10.2f}{_np.quantile(pv,.9):>10.2f}"
+              f"{pv.min():>10.2f}{pv.max():>10.2f}{len(pv):>4}")
+
     # ---- percentage view: painter = 0%, one_per_peering (OPP) = 100% ----
     # pct = 100 * (1 - combined(rung)/combined(painter)), per seed (same
     # convention as plot_normalized). Blowups go hugely negative on purpose.
