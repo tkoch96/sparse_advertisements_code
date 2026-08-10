@@ -45,12 +45,15 @@ Flags (read at construction):
       LB pdfs the workers already return). If U > PROBE_C and the probe
       budget is not exhausted, spend the iteration on a MEASUREMENT (the
       rung's max-info mechanism; falls back to measuring the current
-      advertisement) and do NOT step. Otherwise STEP and do not run the
-      max-info phase. U = g^2-weighted mean sign-error probability
+      advertisement) and do NOT step. Otherwise STEP and measure NOTHING
+      (stock SCULPTOR measured the deployed advertisement after every
+      step; under gating N is the TOTAL measurement budget for solve()). U = g^2-weighted mean sign-error probability
       Phi(-|g_i|/sigma_i) over ALL probed gradient coordinates (full
       support size; LB term only -- RB coords without sigma excluded). 'fixed'
       reproduces stock semantics exactly.
-      ASSERT: measurements spent under gating NEVER exceed PROBE_N.
+      ASSERT (every iteration): TOTAL measurements during solve() -- as
+      path_measures growth, so every measurement path counts -- never
+      exceed PROBE_N; probe iterations never exceed PROBE_N.
   SCULPTOR_ABLATION_PROBE_C   float, default 0.2 (gated mode threshold)
   SCULPTOR_ABLATION_PROBE_N   int, default 5 (gated-mode probe budget)
   SCULPTOR_ABLATION_ASSERTS   '1' (default) | '0'  -- disable checks
@@ -211,11 +214,21 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         if int(getattr(self, 'path_measures', 0)) == pm_before:
             self._solve_post_step_measure()  # fallback: measure current adv
         self.abl_probes_spent += 1
+
+    def _abl_assert_measure_budget(self):
+        """TOTAL measurements during solve() never exceed the budget N --
+        asserted on path_measures growth so any measurement path counts."""
+        total = int(getattr(self, 'path_measures', 0)) - \
+            int(getattr(self, '_abl_pm_solve_start', 0))
         if self.abl_assert:
+            assert total <= self.abl_probe_n, \
+                ('[ablation-assert] measurement budget exceeded: {} measured > N={} '
+                 '(probe iterations: {})'.format(total, self.abl_probe_n,
+                                                 self.abl_probes_spent))
             assert self.abl_probes_spent <= self.abl_probe_n, \
-                ('[ablation-assert] probe budget exceeded: {} > {}'.format(
+                ('[ablation-assert] probe iterations exceed budget: {} > {}'.format(
                     self.abl_probes_spent, self.abl_probe_n))
-            self._abl_checks['probe_budget'] = self._abl_checks.get('probe_budget', 0) + 1
+            self._abl_checks['measure_budget'] = self._abl_checks.get('measure_budget', 0) + 1
 
     # Cross-iteration remeasure state: the gradient samplers re-probe
     # coordinates whose PREVIOUS-iteration gradients were large
@@ -386,8 +399,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         print('[ablation-assert] SUMMARY (violations raise immediately, so all listed '
               'checks HELD): {}'.format(self._abl_checks), flush=True)
         if self.abl_probe_mode == 'gated':
-            print('[probe-gate] FINAL: spent {}/{} probes (c={})'.format(
-                self.abl_probes_spent, self.abl_probe_n, self.abl_probe_c), flush=True)
+            total = int(getattr(self, 'path_measures', 0)) - \
+                int(getattr(self, '_abl_pm_solve_start', 0))
+            print('[probe-gate] FINAL: {} total measurements (budget N={}), '
+                  '{} probe iterations, c={}'.format(
+                      total, self.abl_probe_n, self.abl_probes_spent,
+                      self.abl_probe_c), flush=True)
 
     # ================= solve(): replica of the repo orchestrator ========
     # Verbatim copy of Sparse_Advertisement_Solver.solve() with
@@ -395,6 +412,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
     def solve(self, **kwargs):
         if not self._solve_setup(**kwargs):
             return
+        self._abl_pm_solve_start = int(getattr(self, 'path_measures', 0))
         self._solve_t_start = time.time()
         self.t_per_iter = 0
 
@@ -421,21 +439,22 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 t_last = time.time()
 
                 if self.abl_probe_mode == 'gated':
-                    # measure-XOR-step: high decision uncertainty (and budget
-                    # remaining) spends the iteration on a measurement; else
-                    # step, with NO max-info measurement.
+                    # measure-XOR-step under a TOTAL measurement budget: N
+                    # bounds every measurement in the run. Stock SCULPTOR
+                    # measured the deployed advertisement after every step;
+                    # gated mode does NOT -- step iterations measure nothing,
+                    # and only probe iterations may measure. The budget
+                    # assertion is on total path_measures growth, so ANY
+                    # measurement path that slips through gets caught.
                     if self._abl_probe_decision(grads):
                         self._abl_do_probe_iteration()
-                        timers.append(time.time() - t_last)
-                        t_last = time.time()
-                        _log_mem('iter_post_measure', iter=self.iter)
                     else:
                         self._solve_apply_step(grads)
                         self._abl_assert_step()
-                        self._solve_post_step_measure()
-                        timers.append(time.time() - t_last)
-                        t_last = time.time()
-                        _log_mem('iter_post_measure', iter=self.iter)
+                    self._abl_assert_measure_budget()
+                    timers.append(time.time() - t_last)
+                    t_last = time.time()
+                    _log_mem('iter_post_measure', iter=self.iter)
                 else:
                     self._solve_apply_step(grads)
                     self._abl_assert_step()
