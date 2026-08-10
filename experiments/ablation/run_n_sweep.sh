@@ -71,6 +71,12 @@ for fn in glob.glob("$OUT_ROOT/N*/seed_*_*.json"):
     if r.get("solve_error") or (r.get("n_iters") or 0) < $MAX_ITER + 1:
         print("[audit] BAD:", fn, r.get("n_iters"), str(r.get("solve_error"))[:40])
         bad += 1
+    # CODE-VERSION GUARD: this sweep is a gated-probing experiment; a run
+    # that does not record probe_mode=='gated' means stale code executed
+    # (this exact failure produced 386 fixed-mode replicas on 2026-08-10)
+    if r.get("probe_mode") != "gated":
+        print("[audit] BAD (stale code, probe_mode={}):".format(r.get("probe_mode")), fn)
+        bad += 1
 print("[audit]", bad, "bad runs")
 sys.exit(1 if bad else 0)
 EOF
