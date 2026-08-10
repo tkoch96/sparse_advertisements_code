@@ -142,6 +142,8 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             result['n_iters'] = int(getattr(solver, 'iter', -1))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
+            result['probe_mode'] = getattr(solver, 'abl_probe_mode', 'fixed')
+            result['probes_spent'] = int(getattr(solver, 'abl_probes_spent', 0))
 
         result['adv'] = np.asarray(adv).tolist()
         result['n_on'] = int(np.asarray(adv).sum())

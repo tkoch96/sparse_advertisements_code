@@ -1254,6 +1254,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				a[ind] = tmpsave
 
 		all_lb_rets = self.flush_latency_benefit_queue()
+		return self._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
+
+	def _assemble_lb_gradients(self, calls, all_lb_rets, a, L_grad):
+		"""Turn the flushed (benefit, pdf) pairs into the LB gradient. Named
+		sub-step of gradients_latency_benefit so subclasses can intercept the
+		per-call return values (each entry of all_lb_rets is (mean, (x, pdf)))."""
 		for i, call_ind in enumerate(calls):
 			ind, before_then_after = call_ind
 
@@ -1264,10 +1270,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
 			this_grad = self.heaviside_gradient(before, after, a[ind])
-			
+
 			self.last_lb_calls_results[ind] = this_grad
 			L_grad[ind] = this_grad
-		
+
 
 		L_grad = L_grad.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
