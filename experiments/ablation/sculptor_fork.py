@@ -176,23 +176,63 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             from constants import ADVERTISEMENT_THRESHOLD as _T  # noqa: F401
             MC_NUM = 5  # path_distribution_computer default (no_mc: var=0 anyway)
             stats = {}
-            for i, (ind, _) in enumerate(calls):
+            for i, (ind, before_then_after) in enumerate(calls):
                 var = 0.0
                 means = []
                 for j in (2 * i, 2 * i + 1):
                     mean_j, (x, p) = all_lb_rets[j]
                     means.append(float(mean_j))
-                    x = np.asarray(x, dtype=float).flatten()
-                    p = np.asarray(p, dtype=float).flatten()
-                    psum = p.sum()
-                    if psum <= 0:
-                        continue
-                    m = float((x * p).sum() / psum)
-                    var += max(0.0, float((x * x * p).sum() / psum) - m * m)
-                delta = abs(means[1] - means[0]) if len(means) == 2 else 0.0
+                    var += self._abl_pdf_var(x, p)
+                if len(means) == 2:
+                    # SIGNED raw delta = after - before (matches this_grad's sign)
+                    delta = (means[1] - means[0]) if before_then_after == 'ba' \
+                        else (means[0] - means[1])
+                else:
+                    delta = 0.0
                 stats[ind] = (delta, (var / MC_NUM) ** 0.5)
             self._abl_grad_sigma = stats
         return super()._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
+
+    @staticmethod
+    def _abl_pdf_var(x, p):
+        x = np.asarray(x, dtype=float).flatten()
+        p = np.asarray(p, dtype=float).flatten()
+        psum = p.sum()
+        if psum <= 0:
+            return 0.0
+        m = float((x * p).sum() / psum)
+        return max(0.0, float((x * x * p).sum() / psum) - m * m)
+
+    def _abl_capture_rb(self, store_attr, calls_advs, all_lb_rets):
+        """Accumulate (signed raw delta, variance) per coordinate for RB
+        probes. Each call is a (failed_off, failed_on) ret pair; the
+        assembled gradient uses heaviside(before=failed_on, after=failed_off)
+        so signed raw = failed_off - failed_on."""
+        MC_NUM = 5
+        store = {}
+        ind = 0
+        for coord in calls_advs:
+            off_mean, (ox, op) = all_lb_rets[ind]
+            on_mean, (nx, np_) = all_lb_rets[ind + 1]
+            raw = float(off_mean) - float(on_mean)
+            var = (self._abl_pdf_var(ox, op) + self._abl_pdf_var(nx, np_)) / MC_NUM
+            s = store.setdefault(coord, [0.0, 0.0])
+            s[0] += raw
+            s[1] += var
+            ind += 2
+        setattr(self, store_attr, store)
+
+    def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+        if self.abl_probe_mode == 'gated':
+            coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
+            self._abl_capture_rb('_abl_rb_stats_popp', coords, all_lb_rets)
+        return super()._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
+
+    def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+        if self.abl_probe_mode == 'gated':
+            coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
+            self._abl_capture_rb('_abl_rb_stats_pop', coords, all_lb_rets)
+        return super()._assemble_rb_pop_gradients(calls, all_lb_rets, advertisement, grad_rb)
 
     def _abl_probe_uncertainty(self, g):
         """U = g^2-weighted mean of P(sign error) = Phi(-|g_i|/sigma_i) over
@@ -204,18 +244,36 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         quadratically instead of needing an arbitrary top-k cutoff.
         Also returns the aggregate noise-to-signal ratio for logging."""
         from math import erfc, sqrt
-        entries = []
+        # LB + RB composition (heuristic per Tom): probes are independent, so
+        # raw deltas add with the objective's term weights and variances add
+        # with the squared weights; sign-error is one Gaussian tail on the sum.
+        gamma = float(self.get_gamma())
+        w_L, w_R = (1.0, gamma) if gamma <= 1 else (1.0 / gamma, 1.0)
+        alpha = float(os.environ.get('SCULPTOR_ALPHA_POP', '0'))
+        rb_popp = getattr(self, '_abl_rb_stats_popp', {})
+        rb_pop = getattr(self, '_abl_rb_stats_pop', {})
+        combined = {}
         for ind, (delta, s) in self._abl_grad_sigma.items():
+            combined[ind] = [w_L * delta, (w_L * s) ** 2]
+        for src, w in ((rb_popp, w_R), (rb_pop, w_R * alpha)):
+            if w == 0.0:
+                continue
+            for ind, (raw, var) in src.items():
+                c = combined.setdefault(ind, [0.0, 0.0])
+                c[0] += w * raw
+                c[1] += (w ** 2) * var
+        entries = []
+        for ind, (raw, var) in combined.items():
             gv = float(np.asarray(g)[ind])
             if gv != 0.0:
-                entries.append((abs(gv), delta, s))
+                entries.append((abs(gv), abs(raw), var ** 0.5))
         if not entries:
             return 0.0, 0.0, 0
         wsum, num, d2, s2 = 0.0, 0.0, 0.0, 0.0
         ratios = []
         for gmag, delta, s in entries:
-            # sign-error on the RAW delta (same units as sigma); the scaled
-            # gradient g is only the relevance weight
+            # sign-error on the composed RAW delta (same units as sigma); the
+            # scaled gradient g is only the relevance weight
             p_err = 0.5 * erfc(delta / (s * sqrt(2.0))) if s > 0 else 0.0
             w = gmag * gmag
             num += w * p_err

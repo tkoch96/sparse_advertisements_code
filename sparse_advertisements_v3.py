@@ -1461,26 +1461,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			calls.append((popp_helper, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
-		self.last_rb_calls_results_popp = {}
-		ind = 0
-
-		for call_popp, killed_popp, rand_outer_prefix, this_killed_popp_ugs in calls:
-			poppi = self.popp_to_ind[call_popp]
-			
-			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
-			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
-
-
-			this_grad = self.heaviside_gradient(
-				failed_on, failed_off, 
-				advertisement[poppi,rand_outer_prefix])
-
-			grad_rb[poppi,rand_outer_prefix] += this_grad
-
-			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
-			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter, poppi, rand_outer_prefix, this_grad))
-
-			ind += 2
+		grad_rb = self._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
 
 		### Track which calls are being made
 		for poppi,poppj,pref,_ in calls:
@@ -1496,6 +1477,32 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
+		return grad_rb
+
+	def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+		"""Turn the flushed (benefit, pdf) pairs into the popp-failure
+		resilience gradient. Named sub-step of gradients_resilience_benefit_popp
+		so subclasses can intercept the per-call return values."""
+		self.last_rb_calls_results_popp = {}
+		ind = 0
+
+		for call_popp, killed_popp, rand_outer_prefix, this_killed_popp_ugs in calls:
+			poppi = self.popp_to_ind[call_popp]
+
+			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
+			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
+
+
+			this_grad = self.heaviside_gradient(
+				failed_on, failed_off,
+				advertisement[poppi,rand_outer_prefix])
+
+			grad_rb[poppi,rand_outer_prefix] += this_grad
+
+			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
+			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter, poppi, rand_outer_prefix, this_grad))
+
+			ind += 2
 		return grad_rb
 
 	def gradients_resilience_benefit_pop(self, advertisement):
@@ -1599,17 +1606,27 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			calls.append((popp, rand_kill_pop, rand_outer_prefix))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
+		grad_rb = self._assemble_rb_pop_gradients(calls, all_lb_rets, advertisement, grad_rb)
+
+		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
+
+		return grad_rb
+
+	def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+		"""Turn the flushed (benefit, pdf) pairs into the pop-failure
+		resilience gradient. Named sub-step of gradients_resilience_benefit_pop
+		so subclasses can intercept the per-call return values."""
 		self.last_rb_calls_results_pop = {}
 		ind = 0
 		for call_popp, killed_pop, rand_outer_prefix in calls:
 			poppi = self.popp_to_ind[call_popp]
-			
+
 			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
 			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
 
 
 			this_grad = self.heaviside_gradient(
-				failed_on, failed_off, 
+				failed_on, failed_off,
 				advertisement[poppi,rand_outer_prefix])
 
 			grad_rb[poppi,rand_outer_prefix] += this_grad
@@ -1618,9 +1635,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.all_rb_calls_results_pops[self.pop_to_ind[killed_pop]].append((self.iter, poppi, rand_outer_prefix, this_grad))
 
 			ind += 2
-
-		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
-
 		return grad_rb
 
 	def gradients_resilience_benefit(self, advertisement):
