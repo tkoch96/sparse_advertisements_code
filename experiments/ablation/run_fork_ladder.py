@@ -34,6 +34,10 @@ def avg_lat(sas, adv):
 
 
 def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
+    # One (seed, rung) cell: build seeded deployment -> real worker stack ->
+    # fork solver under the rung's flags (+ optional gated probing via
+    # SCULPTOR_ABLATION_PROBE_*) -> in-run scoring on a PRISTINE eval stack
+    # (still untrusted; rescore_fork is authoritative) -> semantic run-dir.
     out_fn = os.path.join(out_dir, 'seed_{}_{}.json'.format(seed, rung))
     if os.path.exists(out_fn):
         print('[seed {} {}] exists, skipping'.format(seed, rung), flush=True)
@@ -238,6 +242,8 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
 
 
 def main():
+    # CLI wrapper; every knob beyond (seed, rung, iters, size) arrives via
+    # SCULPTOR_* env so sweep scripts stay thin.
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('--seed', type=int, required=True)
     p.add_argument('--rung', required=True)

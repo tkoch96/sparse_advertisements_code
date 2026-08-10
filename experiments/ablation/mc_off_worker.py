@@ -86,6 +86,7 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
         return super().sim_rti()
 
     def sim_rti_better(self):
+        # (same guard as sim_rti: stock MC samplers must be unreachable)
         self._abl_mc['stock_sample_calls'] += 1
         return super().sim_rti_better()
 
@@ -129,4 +130,7 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
         return x, pdfx
 
     def _cmd_abl_mc_stats(self, data):
+        # RPC for the driver's per-iteration binding assertion: a STOCK
+        # worker answers 'ERROR' to this command, which is the injection-
+        # failure signal _abl_assert_mc catches.
         return dict(self._abl_mc, mc_num=self.MC_NUM)

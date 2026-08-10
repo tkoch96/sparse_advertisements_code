@@ -83,6 +83,7 @@ def main():
     # benefit_i = painter_i - rung_i on the SAME seed (positive = better
     # than painter; OPP row shows the max attainable). Quantiles give the
     # distribution across seeds.
+    pain = rows.get("painter", {})
     if pain:
         print(f"\nbenefit over painter, per-seed paired (combined, gamma={args.gamma}; "
               f"positive = better; ms):")

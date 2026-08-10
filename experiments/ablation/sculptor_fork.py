@@ -91,6 +91,8 @@ from helpers import threshold_a  # noqa: E402
 
 class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
     def __init__(self, *args, **kwargs):
+        # Read every ablation flag once at construction (all runtime
+        # behavior branches on these); see module docstring for semantics.
         super().__init__(*args, **kwargs)
         self.abl_memory = os.environ.get('SCULPTOR_ABLATION_MEMORY', '1') == '1'
         self.abl_direction = os.environ.get('SCULPTOR_ABLATION_DIRECTION', '1') == '1'
@@ -195,6 +197,9 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
 
     @staticmethod
     def _abl_pdf_var(x, p):
+        """Variance of a worker-returned benefit histogram (the (x, pdf)
+        pair SCULPTOR's latency_benefit computes and stock code discards) --
+        the raw material for probe-gate sigmas."""
         x = np.asarray(x, dtype=float).flatten()
         p = np.asarray(p, dtype=float).flatten()
         psum = p.sum()
@@ -223,12 +228,16 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         setattr(self, store_attr, store)
 
     def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+        # Seam override: capture popp-failure RB probe distributions for the
+        # gate's uncertainty measure, then delegate to the stock assembly.
         if self.abl_probe_mode == 'gated':
             coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
             self._abl_capture_rb('_abl_rb_stats_popp', coords, all_lb_rets)
         return super()._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
 
     def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+        # Same as above for whole-PoP failures (weighted by SCULPTOR_ALPHA_POP
+        # in the composed uncertainty, mirroring the objective).
         if self.abl_probe_mode == 'gated':
             coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
             self._abl_capture_rb('_abl_rb_stats_pop', coords, all_lb_rets)
@@ -360,11 +369,17 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                             'last_rb_calls_results_pop')
 
     def _abl_clear_remeasure_state(self):
+        """Forget which coordinates had large gradients last iteration --
+        the direction-off rungs' guarantee that no cross-iteration
+        directional information reaches the samplers."""
         for attr in self._ABL_REMEASURE_STATE:
             if hasattr(self, attr):
                 delattr(self, attr)
 
     def gradients(self, a, add_metrics=True):
+        # Wraps SCULPTOR's combined LB+RB gradient: NaN-guards it, and for
+        # direction-off rungs masks it to one coordinate and proves the
+        # remeasure state carried nothing in (see module docstring).
         if not self.abl_direction:
             if self.abl_assert:
                 for attr in self._ABL_REMEASURE_STATE:
@@ -428,6 +443,9 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         return super()._rescale_gradient(net_grad, a)
 
     def solve_max_information(self, current_advertisement):
+        """The EXPLORATION rung knob: SCULPTOR's entropic max-information
+        measurement proposal (default), a random adjacent flip ('random'),
+        or nothing ('none')."""
         if self.abl_explore == 'none':
             return None
         if self.abl_explore == 'random':
@@ -451,6 +469,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             self._abl_checks['iter_start_binary'] += 1
 
     def _abl_assert_gradient(self, g):
+        # direction-off binding proof: <=1 nonzero component, always finite.
         if not self.abl_assert:
             return
         assert np.all(np.isfinite(g)), '[ablation-assert] non-finite gradient escaped the guard'
@@ -461,6 +480,9 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             self._abl_checks['grad_single'] += 1
 
     def _abl_assert_step(self):
+        # memory/direction binding proof on the REALIZED step (momentum
+        # included): binary adv for memory-off, <=1 changed coordinate for
+        # direction-off.
         if not self.abl_assert:
             return
         cur = np.asarray(self.optimization_advertisement)
@@ -500,6 +522,8 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self._abl_checks['mc_off_workers'] += 1
 
     def _abl_assert_max_info(self, pm_before):
+        # exploration binding proof: measurement growth during the max-info
+        # phase matches the rung's budget (0 for explore=none).
         if not self.abl_assert:
             return
         grew = int(getattr(self, 'path_measures', 0)) - pm_before
@@ -513,6 +537,9 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self._abl_checks['max_info_budget'] += 1
 
     def _abl_assert_summary(self):
+        # End-of-run receipt: counts of every per-iteration check that held
+        # (violations raise at the offending iteration, so a printed count
+        # IS the proof the flag bound throughout).
         print('[ablation-assert] SUMMARY (violations raise immediately, so all listed '
               'checks HELD): {}'.format(self._abl_checks), flush=True)
         if self.abl_probe_mode == 'gated':
