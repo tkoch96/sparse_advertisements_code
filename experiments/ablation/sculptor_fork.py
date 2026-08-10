@@ -149,11 +149,22 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         # arms of a flip probe are independent MC draws, so
         # var(delta) = var(before) + var(after).
         if self.abl_probe_mode == 'gated':
-            sig = {}
+            # For each probed coordinate capture (|raw delta|, sigma of the
+            # raw delta). heaviside_gradient scales the delta by a sigmoid
+            # slope, so sign-error must be computed on RAW delta vs RAW
+            # sigma (same units); the gradient g is used only as the
+            # relevance weight. The delta is a difference of two MEANS over
+            # MC_NUM draws, so its estimation noise is the standard error:
+            # (var_b + var_a) / MC_NUM.
+            from constants import ADVERTISEMENT_THRESHOLD as _T  # noqa: F401
+            MC_NUM = 5  # path_distribution_computer default (no_mc: var=0 anyway)
+            stats = {}
             for i, (ind, _) in enumerate(calls):
                 var = 0.0
+                means = []
                 for j in (2 * i, 2 * i + 1):
-                    _, (x, p) = all_lb_rets[j]
+                    mean_j, (x, p) = all_lb_rets[j]
+                    means.append(float(mean_j))
                     x = np.asarray(x, dtype=float).flatten()
                     p = np.asarray(p, dtype=float).flatten()
                     psum = p.sum()
@@ -161,8 +172,9 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                         continue
                     m = float((x * p).sum() / psum)
                     var += max(0.0, float((x * x * p).sum() / psum) - m * m)
-                sig[ind] = var ** 0.5
-            self._abl_grad_sigma = sig
+                delta = abs(means[1] - means[0]) if len(means) == 2 else 0.0
+                stats[ind] = (delta, (var / MC_NUM) ** 0.5)
+            self._abl_grad_sigma = stats
         return super()._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
 
     def _abl_probe_uncertainty(self, g):
@@ -176,21 +188,27 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         Also returns the aggregate noise-to-signal ratio for logging."""
         from math import erfc, sqrt
         entries = []
-        for ind, s in self._abl_grad_sigma.items():
+        for ind, (delta, s) in self._abl_grad_sigma.items():
             gv = float(np.asarray(g)[ind])
             if gv != 0.0:
-                entries.append((abs(gv), s))
+                entries.append((abs(gv), delta, s))
         if not entries:
             return 0.0, 0.0, 0
-        wsum, num, g2, s2 = 0.0, 0.0, 0.0, 0.0
-        for gmag, s in entries:
-            p_err = 0.5 * erfc(gmag / (s * sqrt(2.0))) if s > 0 else 0.0
+        wsum, num, d2, s2 = 0.0, 0.0, 0.0, 0.0
+        ratios = []
+        for gmag, delta, s in entries:
+            # sign-error on the RAW delta (same units as sigma); the scaled
+            # gradient g is only the relevance weight
+            p_err = 0.5 * erfc(delta / (s * sqrt(2.0))) if s > 0 else 0.0
             w = gmag * gmag
             num += w * p_err
             wsum += w
-            g2 += gmag * gmag
+            d2 += delta * delta
             s2 += s * s
-        return num / wsum, (s2 / g2 if g2 > 0 else float('inf')), len(entries)
+            ratios.append(delta / s if s > 0 else float('inf'))
+        med_snr = float(np.median(ratios)) if ratios else float('inf')
+        self._abl_probe_med_snr = med_snr
+        return num / wsum, (s2 / d2 if d2 > 0 else float('inf')), len(entries)
 
     def _abl_probe_decision(self, grads):
         """gated mode: True -> spend this iteration on a measurement."""
@@ -199,8 +217,10 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         want = U > self.abl_probe_c
         can = self.abl_probes_spent < self.abl_probe_n
         decision = want and can
-        print('[probe-gate] iter={} U={:.4f} nsr={:.3f} k={} c={} spent={}/{} -> {}'.format(
-            self.iter, U, nsr, k, self.abl_probe_c, self.abl_probes_spent,
+        print('[probe-gate] iter={} U={:.4f} nsr={:.3f} med_snr={:.2f} k={} c={} '
+              'spent={}/{} -> {}'.format(
+            self.iter, U, nsr, getattr(self, '_abl_probe_med_snr', float('nan')),
+            k, self.abl_probe_c, self.abl_probes_spent,
             self.abl_probe_n, 'PROBE' if decision else
             ('step (budget exhausted, U high)' if want else 'step')), flush=True)
         return decision
