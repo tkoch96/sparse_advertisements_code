@@ -54,8 +54,20 @@ Flags (read at construction):
       ASSERT (every iteration): TOTAL measurements during solve() -- as
       path_measures growth, so every measurement path counts -- never
       exceed PROBE_N; probe iterations never exceed PROBE_N.
-  SCULPTOR_ABLATION_PROBE_C   float, default 0.2 (gated mode threshold)
+  SCULPTOR_ABLATION_PROBE_C   float, default 1.0: INITIAL threshold (auto-c
+      anneals down from it; with AUTO_C=0 it is the static threshold)
   SCULPTOR_ABLATION_PROBE_N   int, default 5 (gated-mode probe budget)
+  SCULPTOR_ABLATION_PROBE_AUTO_C '1' (default) | '0'
+      Auto-learn c (Tom's scheme, 2026-08-10): budget N should spread over
+      ~the first PROBE_FRAC of an assumed PROBE_TCONV-iteration
+      convergence horizon, i.e. probe on a fraction N/(FRAC*TCONV) of
+      iterations -> c targets the (1 - N/(FRAC*TCONV)) quantile
+      (~95-98th pct) of ALL U values observed so far. c starts at
+      PROBE_C (high) and anneals toward the quantile estimate with a
+      ~5-iteration time constant; every time a probe FIRES, c doubles
+      (multiplier persists). c components logged each iteration.
+  SCULPTOR_ABLATION_PROBE_TCONV int, default 300 (assumed convergence horizon)
+  SCULPTOR_ABLATION_PROBE_FRAC  float, default 0.75 (fraction of horizon)
   SCULPTOR_ABLATION_ASSERTS   '1' (default) | '0'  -- disable checks
 
 A summary line '[ablation-assert] SUMMARY ...' prints at the end of every
@@ -87,11 +99,16 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self.abl_mc = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '1'
         self.abl_probe_mode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
         assert self.abl_probe_mode in ('fixed', 'gated')
-        self.abl_probe_c = float(os.environ.get('SCULPTOR_ABLATION_PROBE_C', '0.2'))
+        self.abl_probe_c = float(os.environ.get('SCULPTOR_ABLATION_PROBE_C', '1.0'))
         self.abl_probe_n = int(os.environ.get('SCULPTOR_ABLATION_PROBE_N', '5'))
+        self.abl_probe_auto_c = os.environ.get('SCULPTOR_ABLATION_PROBE_AUTO_C', '1') == '1'
+        self.abl_probe_tconv = int(os.environ.get('SCULPTOR_ABLATION_PROBE_TCONV', '300'))
+        self.abl_probe_frac = float(os.environ.get('SCULPTOR_ABLATION_PROBE_FRAC', '0.75'))
         self.abl_probes_spent = 0
         self._abl_grad_sigma = {}
         self._abl_probe_U = None
+        self._abl_U_history = []
+        self._abl_c_mult = 1.0
         self.abl_assert = os.environ.get('SCULPTOR_ABLATION_ASSERTS', '1') == '1'
         self._abl_checks = {'iter_start_binary': 0, 'grad_single': 0, 'grad_finite': 0,
                             'step_single': 0, 'step_binary': 0, 'max_info_budget': 0,
@@ -210,19 +227,41 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self._abl_probe_med_snr = med_snr
         return num / wsum, (s2 / d2 if d2 > 0 else float('inf')), len(entries)
 
+    def _abl_probe_current_c(self):
+        """Auto-learned threshold (Tom's scheme): anneal from the initial
+        (high) c toward the target quantile of the U history, x2 for every
+        probe already fired. Static c when AUTO_C=0."""
+        if not self.abl_probe_auto_c:
+            return self.abl_probe_c, float('nan'), float('nan')
+        # probe on ~N/(FRAC*TCONV) of iterations -> target quantile of U
+        rate = self.abl_probe_n / max(1.0, self.abl_probe_frac * self.abl_probe_tconv)
+        q_target = min(0.999, max(0.5, 1.0 - rate))
+        if len(self._abl_U_history) >= 3:
+            q_hat = float(np.quantile(np.asarray(self._abl_U_history), q_target))
+        else:
+            q_hat = self.abl_probe_c  # warmup: no estimate yet
+        anneal = float(np.exp(-self.iter / 5.0))  # fast anneal, ~5-iter tau
+        c = (q_hat + (self.abl_probe_c - q_hat) * anneal) * self._abl_c_mult
+        return c, q_hat, anneal
+
     def _abl_probe_decision(self, grads):
         """gated mode: True -> spend this iteration on a measurement."""
         U, nsr, k = self._abl_probe_uncertainty(grads)
         self._abl_probe_U = U
-        want = U > self.abl_probe_c
+        self._abl_U_history.append(U)
+        c, q_hat, anneal = self._abl_probe_current_c()
+        want = U > c
         can = self.abl_probes_spent < self.abl_probe_n
         decision = want and can
-        print('[probe-gate] iter={} U={:.4f} nsr={:.3f} med_snr={:.2f} k={} c={} '
+        print('[probe-gate] iter={} U={:.4f} nsr={:.3f} med_snr={:.2f} k={} '
+              'c={:.4f} (q_hat={:.4f} anneal={:.2f} mult={:g}) '
               'spent={}/{} -> {}'.format(
             self.iter, U, nsr, getattr(self, '_abl_probe_med_snr', float('nan')),
-            k, self.abl_probe_c, self.abl_probes_spent,
-            self.abl_probe_n, 'PROBE' if decision else
+            k, c, q_hat, anneal, self._abl_c_mult,
+            self.abl_probes_spent, self.abl_probe_n, 'PROBE' if decision else
             ('step (budget exhausted, U high)' if want else 'step')), flush=True)
+        if decision:
+            self._abl_c_mult *= 2.0  # back-off: every fired probe doubles c
         return decision
 
     def _abl_do_probe_iteration(self):
