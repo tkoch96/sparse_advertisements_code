@@ -310,7 +310,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         # toward 1 with a ~MULT_TAU-iteration time constant, so c stays
         # auto-learning after probes fire (a permanent multiplier locked
         # spending at ~2 probes regardless of budget -- 2026-08-10 N-sweep).
-        tau = float(os.environ.get('SCULPTOR_ABLATION_PROBE_MULT_TAU', '10'))
+        # refractory scales with the INTENDED inter-probe spacing so large
+        # budgets can physically be spent (fixed tau=10 capped spending at
+        # ~iters/10 regardless of N -- scaling smoke 2026-08-11)
+        tau_default = max(2.0, 0.5 * self.abl_probe_frac * self.abl_probe_tconv
+                          / max(1, self.abl_probe_n))
+        tau = float(os.environ.get('SCULPTOR_ABLATION_PROBE_MULT_TAU', str(tau_default)))
         self._abl_c_mult = 1.0 + (self._abl_c_mult - 1.0) * float(np.exp(-1.0 / tau))
         # probe on ~N/(FRAC*TCONV) of iterations -> target quantile of U
         rate = self.abl_probe_n / max(1.0, self.abl_probe_frac * self.abl_probe_tconv)

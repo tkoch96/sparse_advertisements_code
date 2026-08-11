@@ -51,6 +51,7 @@ def main():
     ap.add_argument('--init-src', required=True)
     ap.add_argument('--ws-root', required=True)
     ap.add_argument('--n-values', default='1,2,5,10,20')
+    ap.add_argument('--rungs', default=','.join(RUNGS_HEAVY_FIRST))
     ap.add_argument('--seeds', default='1-20')
     ap.add_argument('--max-iter', type=int, default=200)
     ap.add_argument('--slots', type=int, default=28)
@@ -79,8 +80,9 @@ def main():
                 shutil.copy(p, dst)
 
     # ---- build the queue (skip completed cells)
+    rungs = [r for r in RUNGS_HEAVY_FIRST if r in args.rungs.split(',')]
     cells = []
-    for rung in RUNGS_HEAVY_FIRST:          # heavy-first across the whole queue
+    for rung in rungs:                      # heavy-first across the whole queue
         for N in n_values:
             for s in seeds:
                 out_fn = os.path.join(args.out_root, 'N{}'.format(N),
