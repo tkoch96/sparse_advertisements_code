@@ -132,7 +132,10 @@ rescore. SIZING: slots×workers = Gurobi sessions ≤ ~28; memory ≈
 
 ## Next steps (in order)
 
-1. Collect `nsweep_mini` verdict (watcher task bhnson35h). If the
+1. Collect `nsweep_mini` verdict — NOTE: the previous session's watchers
+   are ALL STOPPED (handed off clean); arm your own. Check
+   `logs/nsweep_mini_chain.log` on the head for ALL DONE / AUDIT FAILED,
+   then table no_memory vs full at N=1 vs N=50. If the
    extremes trend is interesting → full N grid via run_n_sweep_queue
    (20 slots, all 7 rungs, N grid per Tom, ~4–6h); else redesign with
    Tom (he floated 'scheduled' probing as an alternative arm).
