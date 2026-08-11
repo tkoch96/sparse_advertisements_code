@@ -75,7 +75,11 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     gamma_val = float(os.environ.get('SCULPTOR_ABLATION_GAMMA', EVAL_GAMMA)) if use_res else 0
 
     t0 = time.time()
-    _runs_root = os.path.join(_REPO_ROOT, 'runs')
+    # GC scope = CWD-relative runs/ (matching where the solver actually
+    # checkpoints, constants.RUN_DIR='runs'). Using _REPO_ROOT here made
+    # cleanup reach across workspaces and delete OTHER processes' live
+    # checkpoint dirs (the 105-run massacre + a smoke casualty).
+    _runs_root = os.path.abspath('runs')
     _runs_before = set(os.listdir(_runs_root)) if os.path.isdir(_runs_root) else set()
     deployment = get_random_deployment(dpsize)
     deployment['port'] = port
@@ -210,7 +214,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     if os.environ.get('SCULPTOR_ABLATION_KEEP_RUNS', '0') != '1':
         import shutil
         keep = int(os.environ.get('SCULPTOR_ABLATION_RUNS_KEEP', '20'))
-        runs_root = os.path.join(_REPO_ROOT, 'runs')
+        runs_root = os.path.abspath('runs')
         try:
             dirs = sorted((d for d in os.listdir(runs_root)
                            if os.path.isdir(os.path.join(runs_root, d))),
