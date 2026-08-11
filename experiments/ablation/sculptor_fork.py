@@ -67,8 +67,11 @@ Flags (read at construction):
       iterations -> c targets the (1 - N/(FRAC*TCONV)) quantile
       (~95-98th pct) of ALL U values observed so far. c starts at
       PROBE_C (high) and anneals toward the quantile estimate with a
-      ~5-iteration time constant; every time a probe FIRES, c doubles
-      (multiplier persists). c components logged each iteration.
+      ~5-iteration time constant; every time a probe FIRES, c doubles,
+      and the multiplier DECAYS back toward 1 with a ~PROBE_MULT_TAU-
+      iteration time constant (refractory burst-suppression, NOT a
+      permanent ratchet). c components logged each iteration.
+  SCULPTOR_ABLATION_PROBE_MULT_TAU float, default 10 (refractory decay)
   SCULPTOR_ABLATION_PROBE_TCONV int, default 300 (assumed convergence horizon)
   SCULPTOR_ABLATION_PROBE_FRAC  float, default 0.75 (fraction of horizon)
   SCULPTOR_ABLATION_ASSERTS   '1' (default) | '0'  -- disable checks
@@ -303,6 +306,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         probe already fired. Static c when AUTO_C=0."""
         if not self.abl_probe_auto_c:
             return self.abl_probe_c, float('nan'), float('nan')
+        # REFRACTORY, not ratchet: the post-probe doubling relaxes back
+        # toward 1 with a ~MULT_TAU-iteration time constant, so c stays
+        # auto-learning after probes fire (a permanent multiplier locked
+        # spending at ~2 probes regardless of budget -- 2026-08-10 N-sweep).
+        tau = float(os.environ.get('SCULPTOR_ABLATION_PROBE_MULT_TAU', '10'))
+        self._abl_c_mult = 1.0 + (self._abl_c_mult - 1.0) * float(np.exp(-1.0 / tau))
         # probe on ~N/(FRAC*TCONV) of iterations -> target quantile of U
         rate = self.abl_probe_n / max(1.0, self.abl_probe_frac * self.abl_probe_tconv)
         q_target = min(0.999, max(0.5, 1.0 - rate))
