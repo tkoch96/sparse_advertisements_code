@@ -1,26 +1,85 @@
-# Ablation study handoff (2026-08-11) — IN PROGRESS
+# Ablation study handoff (2026-08-12) — POLICY-LADDER ERA
+
+## ⚠ Current design & status (2026-08-12 evening; supersedes everything below)
+
+The study pivoted to Tom's **EM-with-measurements** framing: solver rungs
+× measurement-spending policies under a FIXED budget N with
+**exit-on-budget** (training stops when the Nth measurement is spent).
+Full semantics in `experiments/ablation/README.md`; findings log in
+`experiments/model_error/DIMENSIONS.md`. Old expl_* rungs RETIRED.
+
+Ladder (georand, 100 iters, LB_CACHE=0, MC_NUM=1, γ=0.1):
+L1 no_mc+fixed → L2 no_mc+scheduled → L3 no_direction+sched →
+L4 no_memory+sched → L5 no_memory+smart → L6 full+smart.
+
+Sparse verdict (N∈{5,20}, all audits clean, dataset
+`cache/ablation/policy_ladder/`): **L6 full+smart N=20 = 5/5 healthy,
+median +16, exits ~iter 62** — the only fully reliable MC arm; L3 dead
+under any policy; partial measurement destabilizes no_mc (L2). Smart-gate
+criteria attribution works ((b) stale+plateau dominates at N=20, (c)
+prediction-mismatch at N=5). Dense N∈{1,2,10,50} fill + budgeted-fixed
+L1B arm (auto-queued) were IN FLIGHT at handoff-write time; painter
+references come from `mesh_georand{,_v2}` (no new runs needed).
+Artifacts (every run's convergence figure + gzipped log):
+`cache/ablation/policy_ladder_artifacts/`.
+
+Everything below this section is the 2026-08-11 record (mesh era) —
+still-valid data inventory + gotchas, but pre-pivot design.
+
+# ——— 2026-08-11 record — IN PROGRESS (historical) ———
 
 Read this + `experiments/ablation/README.md` (mechanics/agent notes) first.
 Supersedes the 2026-08-08 handoff. Worktree branch
 `claude/elated-blackburn-13c10e` holds the authoritative code (main repo +
 VM are synced copies — ALWAYS md5-verify after deploying anywhere).
 
-## ⚠ Live state right now
+## ⚠ Live state right now (updated 2026-08-11 ~18:45Z)
 
-- **VM head i-0428c395787bc3ca0 (c7g.16xlarge, 100.54.8.15) is RUNNING
-  and has NO auto-teardown** — the finalize watchers were disarmed. Tom
-  wants the big instance kept while dev continues; STOPPING IT WHEN WORK
-  PAUSES IS A MANUAL RESPONSIBILITY. Update
+- **VM head i-0428c395787bc3ca0 (c7g.16xlarge, 100.54.8.15) is RUNNING,
+  IDLE, and has NO auto-teardown** — all queued work finished and was
+  pulled to the Mac; STOP DECISION PENDING WITH TOM. Update
   `~/.sculptor_cluster_alert/active_cluster.json` on lifecycle events.
-- **In flight**: the "minimal extremes" test — no_memory vs full ×
-  N∈{1,50} × seeds 1–5 × 200 iters, gated mode, via the queue driver
-  (`logs/nsweep_mini_chain.log` on head; out
-  `cache/ablation/nsweep_mini`). Question it answers: does full SCULPTOR
-  beat no_memory under scarce measurement (N=1) and does the gap vanish
-  at N=50? Its verdict decides whether the full N-grid is worth running.
+- Nothing in flight. The 2026-08-11 program (below) is COMPLETE:
+  mini extremes (stock), model-uncertainty probes, full N-sweep (killed
+  by Tom at 437/700 after the pivot — partial UNRESCORED data in
+  `cache/ablation/nsweep_full_PARTIAL_UNRESCORED`), and the harder-world
+  extremes waves (`nsweep_v2_{georand,maxhard,georand_nocache}`).
+- The model-uncertainty workstream lives in `experiments/model_error/`
+  (READ ITS `DIMENSIONS.md` — the variable-space card + all measured
+  results). New env knobs in deployment_setup
+  (`SCULPTOR_LAT_MODEL/GEO_NOISE/PREF_MODEL/LAT_SPREAD/ROUTE_VIOLATION`)
+  and path_distribution_computer (`SCULPTOR_MC_NUM`, `SCULPTOR_LB_CACHE`).
 - Tom's standing rules: **test code before using it** (smoke first, every
   time); only validated experiments may occupy the machine; hourly status
   reports during long runs; no multi-seed sweeps without his go.
+
+## 2026-08-11 headline results (details in model_error/DIMENSIONS.md)
+
+1. **The stock 'small' world made information worthless** — 3 latency
+   tiers + providers-everywhere = model ≈ measurement (mini extremes:
+   no_memory ≥ full everywhere). Structural, knob-resistant.
+2. **In realistic worlds the result inverts categorically** (georand =
+   geodesic×1.3±30-50ms + random prefs; maxhard adds noise×2, vol
+   spread, zero cap slack): no_memory's final advs STRAND ~2/3 OF
+   TRAFFIC IN STEADY STATE in 20/20 runs; full survives ~half its runs
+   with real solutions (georand N1 median: 30.4ms steady, 5% congested
+   under median popp failure) and converts probes into wins (paired
+   3/5→5/5 as N 1→50 georand; 18× median at maxhard N50). Machinery
+   gates information value; hardness gates machinery value.
+3. **lb-cache discovery**: benefit(A)+pdf memoized per thresholded adv,
+   cleared ONLY on measurement → under gated probing beliefs freeze;
+   this was ~all of the model's overconfidence (calibration 0.40→0.99
+   stock with SCULPTOR_LB_CACHE=0). BUT cache-off does NOT improve
+   outcomes (georand wave 3: full blowups 2→4/5) — frozen beliefs act
+   as a gradient stabilizer. Honesty ≠ performance; supports the
+   objective-worsening trigger over belief-side fixes.
+4. **Hard objectives reveal what avg_lat hides** (20-seed re-rank):
+   MLU separates memory/direction rungs (0.238 vs 0.305/0.327);
+   popp-failure congestion: painter 18%, ALL ladder rungs 0.000 (and
+   degenerate at stock caps). New registerable objectives
+   ('frac_beyond_optimal', 'lat_plus_max_util',
+   'popp_failure_congestion') in experiments/model_error/objectives.py
+   (+17 unit tests), generic-LP contract, register() wires them in.
 
 ## The experiment program (Tom's design)
 
@@ -77,6 +136,23 @@ Two threads:
   beliefs). Proposed: objective-worsening trigger (probe/flag when
   believed objective degrades k iters running). Multiple blowups would
   have been caught by it.
+
+## nsweep_mini verdict (2026-08-11, run clean: 20/20, audit 0 bad, rescored)
+
+Hypothesis NOT supported at the extremes. Combined(g4) medians (lower
+better), 5 seeds/cell: N=1 — full +8.93 (1 blowup/5), no_memory +5.05
+(0 blowups); N=50 — full +5.68 (1 blowup/5), no_memory +3.77 (0
+blowups); fixed-mode anchor (seeds 1–5 of 20x200_v3) — full +5.40,
+no_memory +5.17. full does NOT beat no_memory at N=1, and no_memory is
+nominally better at both N (n=5, medians within seed-noise range —
+treat direction, not magnitude, as the signal). full blew up 2/10 cells
+under gating (vs 1/20 fixed-mode) — consistent with U-gate blindness to
+confident divergence (the known gap). Sleeper finding VALIDATED on the
+fixed gate: 1 measurement ≈ fixed-mode median quality (fixed spends
+~125/run). Gate spend differs by rung: no_memory spent all 50/50, full
+spent 14–27/50. Per the decision rule this is the "redesign with Tom"
+branch — full N grid NOT launched. Data: `cache/ablation/nsweep_mini`
+(head + Mac).
 
 ## Dataset inventory (cache/ablation/)
 

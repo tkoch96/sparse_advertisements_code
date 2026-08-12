@@ -79,6 +79,7 @@ Flags (read at construction):
 A summary line '[ablation-assert] SUMMARY ...' prints at the end of every
 run with the number of checks performed (violations raise immediately).
 """
+import collections
 import os
 import pickle
 import sys
@@ -106,7 +107,39 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         assert self.abl_explore in ('default', 'random', 'none')
         self.abl_mc = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '1'
         self.abl_probe_mode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
-        assert self.abl_probe_mode in ('fixed', 'gated')
+        # fixed: stock semantics (measure every new advertisement).
+        # gated: original U>c gate (2026-08-10).
+        # scheduled: unconditional probe every ~TCONV/N iterations.
+        # smart: gated + (b) stale+plateau + (c) prediction-mismatch +
+        #        (d) surprise-adaptive threshold (Tom, 2026-08-12).
+        assert self.abl_probe_mode in ('fixed', 'gated', 'scheduled', 'smart')
+        # exit-on-budget (default ON for budgeted modes): once the Nth
+        # measurement is spent, training STOPS -- an agent with no way to
+        # update beliefs walks into nonsense land (georand mesh, 2026-08-12).
+        self.abl_exit_on_budget = os.environ.get(
+            'SCULPTOR_ABLATION_EXIT_ON_BUDGET', '1') == '1'
+        self.abl_exit_reason = None
+        # smart-gate tunables
+        self.abl_smart_stale_frac = float(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_STALE_FRAC', '0.5'))   # gap = frac*TCONV/N
+        self.abl_smart_plateau_w = int(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_PLATEAU_W', '5'))
+        self.abl_smart_plateau_eps = float(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_PLATEAU_EPS', '0.01'))  # rel. to belief range
+        self.abl_smart_sign_w = int(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_SIGN_W', '5'))
+        self.abl_smart_sign_rate = float(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_SIGN_RATE', '0.5'))
+        self.abl_smart_surprise_rel = float(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_SURPRISE_REL', '0.2'))
+        self.abl_smart_surprise_factor = float(os.environ.get(
+            'SCULPTOR_ABLATION_SMART_SURPRISE_FACTOR', '0.5'))
+        self._abl_belief_hist = collections.deque(maxlen=64)
+        self._abl_predreal = collections.deque(maxlen=self.abl_smart_sign_w)
+        self._abl_pending_pred = None
+        self._abl_last_probe_iter = 0
+        self._abl_preprobe_belief = None
+        self._abl_probe_reasons = collections.Counter()
         self.abl_probe_c = float(os.environ.get('SCULPTOR_ABLATION_PROBE_C', '1.0'))
         self.abl_probe_n = int(os.environ.get('SCULPTOR_ABLATION_PROBE_N', '5'))
         self.abl_probe_auto_c = os.environ.get('SCULPTOR_ABLATION_PROBE_AUTO_C', '1') == '1'
@@ -173,7 +206,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         # workers already return (and stock code throws away): the two
         # arms of a flip probe are independent MC draws, so
         # var(delta) = var(before) + var(after).
-        if self.abl_probe_mode == 'gated':
+        if self.abl_probe_mode in ('gated', 'smart'):
             # For each probed coordinate capture (|raw delta|, sigma of the
             # raw delta). heaviside_gradient scales the delta by a sigmoid
             # slope, so sign-error must be computed on RAW delta vs RAW
@@ -182,7 +215,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             # MC_NUM draws, so its estimation noise is the standard error:
             # (var_b + var_a) / MC_NUM.
             from constants import ADVERTISEMENT_THRESHOLD as _T  # noqa: F401
-            MC_NUM = 5  # path_distribution_computer default (no_mc: var=0 anyway)
+            MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', '5'))  # match worker config (no_mc: var=0 anyway)
             stats = {}
             for i, (ind, before_then_after) in enumerate(calls):
                 var = 0.0
@@ -219,7 +252,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         probes. Each call is a (failed_off, failed_on) ret pair; the
         assembled gradient uses heaviside(before=failed_on, after=failed_off)
         so signed raw = failed_off - failed_on."""
-        MC_NUM = 5
+        MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
         store = {}
         ind = 0
         for coord in calls_advs:
@@ -236,7 +269,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
     def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
         # Seam override: capture popp-failure RB probe distributions for the
         # gate's uncertainty measure, then delegate to the stock assembly.
-        if self.abl_probe_mode == 'gated':
+        if self.abl_probe_mode in ('gated', 'smart'):
             coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
             self._abl_capture_rb('_abl_rb_stats_popp', coords, all_lb_rets)
         return super()._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
@@ -244,7 +277,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
     def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
         # Same as above for whole-PoP failures (weighted by SCULPTOR_ALPHA_POP
         # in the composed uncertainty, mirroring the objective).
-        if self.abl_probe_mode == 'gated':
+        if self.abl_probe_mode in ('gated', 'smart'):
             coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
             self._abl_capture_rb('_abl_rb_stats_pop', coords, all_lb_rets)
         return super()._assemble_rb_pop_gradients(calls, all_lb_rets, advertisement, grad_rb)
@@ -357,6 +390,112 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         if int(getattr(self, 'path_measures', 0)) == pm_before:
             self._solve_post_step_measure()  # fallback: measure current adv
         self.abl_probes_spent += 1
+        self._abl_last_probe_iter = self.iter
+
+    # ============ scheduled + smart probing (2026-08-12) =================
+
+    def _abl_scheduled_decision(self):
+        """scheduled mode: unconditional probe every ~TCONV/N iterations --
+        no self-assessment, spends exactly N over the horizon."""
+        period = max(1, int(round(self.abl_probe_tconv
+                                  / max(1, self.abl_probe_n))))
+        due = (self.iter - self._abl_last_probe_iter) >= period
+        can = self.abl_probes_spent < self.abl_probe_n
+        decision = due and can
+        print('[probe-gate] iter={} mode=scheduled period={} since_last={} '
+              'spent={}/{} -> {}'.format(
+                  self.iter, period, self.iter - self._abl_last_probe_iter,
+                  self.abl_probes_spent, self.abl_probe_n,
+                  'PROBE' if decision else 'step'), flush=True)
+        return decision
+
+    def _abl_track_belief(self):
+        """Per-iteration belief bookkeeping shared by the smart gate:
+        appends the solver's believed (pseudo) objective, resolves the
+        pending predicted-vs-realized pair from the last step, and applies
+        the (d) surprise adjustment after a probe."""
+        b = getattr(self, 'current_pseudo_objective', None)
+        if b is None or not np.isfinite(b):
+            return
+        prev = self._abl_belief_hist[-1] if self._abl_belief_hist else None
+        self._abl_belief_hist.append(float(b))
+        if prev is None:
+            return
+        realized = float(b) - prev
+        # (c) bookkeeping: pair the last STEP's predicted delta with what
+        # the belief actually did (pairs spanning probe iterations are
+        # dropped -- measurement corrections are not model mispredictions)
+        if self._abl_pending_pred is not None:
+            self._abl_predreal.append((self._abl_pending_pred, realized))
+            self._abl_pending_pred = None
+        # (d) surprise: how much did the last probe's measurement move the
+        # belief, relative to the belief's own range? big surprise -> the
+        # model was wrong -> LOWER the bar for the next probe.
+        if self._abl_preprobe_belief is not None:
+            scale = max(max(self._abl_belief_hist) - min(self._abl_belief_hist),
+                        1e-9)
+            surprise = abs(float(b) - self._abl_preprobe_belief) / scale
+            if surprise > self.abl_smart_surprise_rel:
+                self._abl_c_mult *= self.abl_smart_surprise_factor
+                print('[probe-gate] surprise={:.3f} > {} -> c_mult *= {} '
+                      '(now {:g})'.format(
+                          surprise, self.abl_smart_surprise_rel,
+                          self.abl_smart_surprise_factor, self._abl_c_mult),
+                      flush=True)
+            else:
+                self._abl_c_mult *= 2.0  # unsurprising probe: back off
+            self._abl_preprobe_belief = None
+
+    def _abl_smart_decision(self, grads):
+        """smart mode: probe when ANY of
+          (a) U > c                       (model admits uncertainty)
+          (b) stale >= TCONV/(2N) AND believed objective plateaued
+              (quiet + ungrounded -> verify before trusting convergence)
+          (c) sign-disagreement rate of predicted-vs-realized believed
+              deltas above threshold  (local model can't predict itself)
+        Budget-capped; every probe logs which criteria fired."""
+        U, nsr, k = self._abl_probe_uncertainty(grads)
+        self._abl_probe_U = U
+        self._abl_U_history.append(U)
+        c, q_hat, anneal = self._abl_probe_current_c()
+        fire_a = U > c
+
+        stale_gap = max(2, int(round(self.abl_smart_stale_frac
+                                     * self.abl_probe_tconv
+                                     / max(1, self.abl_probe_n))))
+        stale = (self.iter - self._abl_last_probe_iter) >= stale_gap
+        hist = list(self._abl_belief_hist)
+        plateau = False
+        if len(hist) >= self.abl_smart_plateau_w + 1:
+            deltas = np.abs(np.diff(hist[-(self.abl_smart_plateau_w + 1):]))
+            scale = max(max(hist) - min(hist), 1e-9)
+            plateau = float(np.mean(deltas)) < self.abl_smart_plateau_eps * scale
+        fire_b = stale and plateau
+
+        fire_c = False
+        if len(self._abl_predreal) >= self.abl_smart_sign_w:
+            dis = [1.0 if (abs(r) > 1e-12 and np.sign(p) != np.sign(r)) else 0.0
+                   for p, r in self._abl_predreal]
+            fire_c = float(np.mean(dis)) >= self.abl_smart_sign_rate
+
+        reasons = ''.join(tag for tag, f in
+                          (('a', fire_a), ('b', fire_b), ('c', fire_c)) if f)
+        can = self.abl_probes_spent < self.abl_probe_n
+        decision = bool(reasons) and can
+        print('[probe-gate] iter={} mode=smart U={:.4f} c={:.4f} '
+              'stale={}/{} plateau={} signrate_n={} reasons={} '
+              'spent={}/{} -> {}'.format(
+                  self.iter, U, c, self.iter - self._abl_last_probe_iter,
+                  stale_gap, plateau, len(self._abl_predreal),
+                  reasons or '-', self.abl_probes_spent, self.abl_probe_n,
+                  'PROBE' if decision else 'step'), flush=True)
+        if decision:
+            self._abl_probe_reasons[reasons] += 1
+            self._abl_preprobe_belief = (self._abl_belief_hist[-1]
+                                         if self._abl_belief_hist else None)
+            if fire_c:
+                self._abl_predreal.clear()  # fresh window post-grounding
+        return decision
 
     def _abl_assert_measure_budget(self):
         """TOTAL measurements during solve() never exceed the budget N --
@@ -599,20 +738,38 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 timers.append(time.time() - t_last)
                 t_last = time.time()
 
-                if self.abl_probe_mode == 'gated':
+                if self.abl_probe_mode in ('gated', 'scheduled', 'smart'):
                     # measure-XOR-step under a TOTAL measurement budget: N
-                    # bounds every measurement in the run. Stock SCULPTOR
-                    # measured the deployed advertisement after every step;
-                    # gated mode does NOT -- step iterations measure nothing,
-                    # and only probe iterations may measure. The budget
-                    # assertion is on total path_measures growth, so ANY
-                    # measurement path that slips through gets caught.
-                    if self._abl_probe_decision(grads):
+                    # bounds every measurement in the run. Step iterations
+                    # measure nothing; only probe iterations may measure.
+                    # The budget assertion is on total path_measures growth,
+                    # so ANY measurement path that slips through gets caught.
+                    if self.abl_probe_mode == 'smart':
+                        self._abl_track_belief()
+                        probe = self._abl_smart_decision(grads)
+                    elif self.abl_probe_mode == 'scheduled':
+                        probe = self._abl_scheduled_decision()
+                    else:
+                        probe = self._abl_probe_decision(grads)
+                    if probe:
                         self._abl_do_probe_iteration()
                     else:
+                        a_before = np.array(self.optimization_advertisement,
+                                            dtype=float)
                         self._solve_apply_step(grads)
                         self._abl_assert_step()
+                        if self.abl_probe_mode == 'smart':
+                            # (c) raw material: first-order predicted change
+                            # in the believed objective from this step
+                            da = (np.asarray(self.optimization_advertisement,
+                                             dtype=float) - a_before)
+                            self._abl_pending_pred = float(
+                                np.dot(np.asarray(grads).flatten(),
+                                       da.flatten()))
                     self._abl_assert_measure_budget()
+                    if (self.abl_exit_on_budget
+                            and self.abl_probes_spent >= self.abl_probe_n):
+                        self.abl_exit_reason = 'budget_exhausted'
                     timers.append(time.time() - t_last)
                     t_last = time.time()
                     _log_mem('iter_post_measure', iter=self.iter)
@@ -631,6 +788,22 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                     self._solve_max_info_phase()
                     self._abl_assert_max_info(_abl_pm_before)
 
+                    # Budgeted-fixed (Tom, 2026-08-12): fixed spending
+                    # policy (measure every new advertisement) under the
+                    # same fixed budget N as every other arm — exit once
+                    # N total measurements are spent (may overshoot by 1:
+                    # post-step + max-info can both measure in one iter).
+                    # Opt-in via SCULPTOR_ABLATION_FIXED_BUDGET so stock
+                    # fixed-mode invocations keep their semantics.
+                    if (self.abl_exit_on_budget
+                            and os.environ.get(
+                                'SCULPTOR_ABLATION_FIXED_BUDGET', '0') == '1'):
+                        _spent = (int(getattr(self, 'path_measures', 0))
+                                  - int(getattr(self, '_abl_pm_solve_start', 0)))
+                        self.abl_probes_spent = _spent
+                        if _spent >= self.abl_probe_n:
+                            self.abl_exit_reason = 'budget_exhausted'
+
                 ## info
                 timers.append(time.time() - t_last)
                 t_last = time.time()
@@ -645,6 +818,19 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 t_last = time.time()
 
                 self._solve_iter_end(timers)
+
+                if self.abl_exit_reason == 'budget_exhausted':
+                    # Tom's exit-training criterion (2026-08-12): with no
+                    # measurements left there is no way to update beliefs;
+                    # further steps are pure model-drift (the georand
+                    # collapse mechanism). Stop at the last grounded point.
+                    print('[ablation-fork] EXIT: measurement budget '
+                          'exhausted at iter {} ({}/{} probes; reasons: {})'
+                          .format(self.iter, self.abl_probes_spent,
+                                  self.abl_probe_n,
+                                  dict(self._abl_probe_reasons) or 'n/a'),
+                          flush=True)
+                    break
 
         finally:
             self._broadcast_training_mode(False)

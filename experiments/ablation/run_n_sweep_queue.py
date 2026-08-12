@@ -154,10 +154,15 @@ def main():
         r = json.load(open(fn))
         if r['rung'] == 'painter':
             continue
-        if r.get('solve_error') or (r.get('n_iters') or 0) < args.max_iter + 1:
+        # budget-exhausted exits (Tom's exit-training criterion) legally end
+        # before max_iter -- accept them iff the budget really was spent
+        early_ok = (r.get('exit_reason') == 'budget_exhausted'
+                    and r.get('probes_spent', 0) >= 1)
+        if r.get('solve_error') or (
+                (r.get('n_iters') or 0) < args.max_iter + 1 and not early_ok):
             print('[audit] BAD:', fn, r.get('n_iters'), str(r.get('solve_error'))[:40])
             bad += 1
-        if args.probe_mode == 'gated' and r.get('probe_mode') != 'gated':
+        if args.probe_mode != 'fixed' and r.get('probe_mode') != args.probe_mode:
             print('[audit] BAD (stale code, probe_mode={}):'.format(r.get('probe_mode')), fn)
             bad += 1
     print('[audit] {} bad runs'.format(bad), flush=True)

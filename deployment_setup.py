@@ -48,10 +48,22 @@ def get_random_ingress_priorities(deployment):
 	provider_ases = list(set(peer for pop,peer in provider_popps))
 
 
+	# SCULPTOR_PREF_MODEL=random: ingress preferences are a fully random
+	# permutation per UG -- no anycast anchor, no AS grouping, no distance
+	# ranking. Maximum unpredictability of the winning ingress. Default
+	# 'structured' keeps the original model below.
+	_pref_model = os.environ.get('SCULPTOR_PREF_MODEL', 'structured')
+
 	ingress_priorities = {}
 	dist_cache = {}
 	for ug in tqdm.tqdm(ug_perfs,desc="Assigning ingress priorities randomly."):
 		ingress_priorities[ug] = {}
+		if _pref_model == 'random':
+			these_popps = list(ug_perfs[ug])
+			order = np.random.permutation(len(these_popps))
+			for i, popp in enumerate(these_popps):
+				ingress_priorities[ug][popp] = int(order[i])
+			continue
 		## approximate the anycast interface by getting the one with closest latency
 		popps = list(ug_perfs[ug])
 
@@ -109,9 +121,19 @@ def get_random_ingress_priorities(deployment):
 					priority_counter += 1
 
 			## randomly flip some priorities
+			# SCULPTOR_ROUTE_VIOLATION: probability a popp's priority is
+			# swapped with a random other (default .05, the original value).
+			# Raising it decouples priorities from the distance-ranked model,
+			# making the winning ingress harder to predict from structure.
+			# The threshold test consumes the same RNG draws regardless of p;
+			# triggered swaps consume extra draws, so priorities/capacities
+			# downstream of the first extra swap differ from p=.05 runs even
+			# at the same seed (fine for cross-knob comparisons, which are
+			# distributional, not seed-paired).
 			if len(priorities) > 1:
+				_viol_p = float(os.environ.get('SCULPTOR_ROUTE_VIOLATION', '.05'))
 				for pi in list(priorities):
-					if np.random.random() < .05:
+					if np.random.random() < _viol_p:
 						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
@@ -1558,8 +1580,16 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 	sizes = problem_params[problem_size]
 
 	### Probably update this to be a slightly more interesting model later
-	random_latency = lambda : np.random.uniform(1,10) #lambda : np.random.uniform(MIN_LATENCY, MAX_LATENCY)
-	random_transit_provider_latency = lambda : np.random.uniform(3,10) #lambda : np.random.uniform(MIN_LATENCY*1.3, MAX_LATENCY)
+	# SCULPTOR_LAT_SPREAD: multiplier m on the within-tier latency noise
+	# (peer U(1,10), provider U(3,10) stretched about their lower edge).
+	# m=1 (default) reproduces the original draws exactly; m>1 makes routes
+	# into the same PoP genuinely different so the model's marginalization
+	# over unknown priorities carries real variance. Same RNG consumption
+	# per call as the original, so a fixed SCULPTOR_DEPLOYMENT_SEED keeps
+	# the same topology across m values.
+	_lat_spread = float(os.environ.get('SCULPTOR_LAT_SPREAD', '1'))
+	random_latency = lambda : 1 + (np.random.uniform(1,10) - 1) * _lat_spread
+	random_transit_provider_latency = lambda : 3 + (np.random.uniform(3,10) - 3) * _lat_spread
 
 	# testing ideas for learning over time
 	pops = [str(el) for el in np.arange(0,sizes['n_pop'])]
@@ -1594,19 +1624,39 @@ def get_random_deployment_by_size(problem_size, **kwargs):
 		for peer in some_peers:
 			popps.append((str(pop),str(peer)))
 	provider_popps = [popp for popp in popps if int(popp[1]) < n_providers]
+	# SCULPTOR_LAT_MODEL=geo: realistic latencies instead of the 3-tier toy
+	# model. lat = geodesic_ms * 1.3 + U(-s, s) with s ~ U(30,50) (10% of
+	# draws s ~ U(50,100)), floored at the geodesic (speed-of-light floor);
+	# geodesic_ms = km/100 (~1ms RTT per 100km of fiber). Noise dominates
+	# structure, which is the point: the winning route is no longer
+	# predictable from geography. Default 'tiered' is the original model.
+	_lat_model = os.environ.get('SCULPTOR_LAT_MODEL', 'tiered')
+	# SCULPTOR_GEO_NOISE: multiplier on the geo model's noise spread
+	# (default 1 = the +/-30-50ms, 10% up to 100ms spec).
+	_geo_noise = float(os.environ.get('SCULPTOR_GEO_NOISE', '1'))
+	def geo_lat(pop, metro, provider_extra=0):
+		geo_ms = geopy.distance.geodesic(pop_to_loc[pop], metro_loc[metro]).km / 100.0
+		s = np.random.uniform(50, 100) if np.random.random() < 0.1 else np.random.uniform(30, 50)
+		return max(geo_ms, geo_ms * 1.3 + np.random.uniform(-1, 1) * s * _geo_noise + provider_extra)
 	for ug in ug_to_vol:
 		some_poppsi = np.random.choice(np.arange(len(popps)), size=np.random.randint(3,sizes['max_popp_per_ug']), replace=False)
 		some_popps = [popps[i] for i in some_poppsi]
 		sorted_dists = sorted(pops, key = lambda pop : geopy.distance.geodesic(pop_to_loc[pop], metro_loc[ug[0]]).km )
 		for popp in some_popps:
-			base_lat = [i for i,pop in enumerate(sorted_dists) if pop == popp[0]][0] * 10
-			ug_perfs[ug][popp] = base_lat + random_latency()
+			if _lat_model == 'geo':
+				ug_perfs[ug][popp] = geo_lat(popp[0], ug[0])
+			else:
+				base_lat = [i for i,pop in enumerate(sorted_dists) if pop == popp[0]][0] * 10
+				ug_perfs[ug][popp] = base_lat + random_latency()
 		for popp in provider_popps:
 			# All UGs have routes through deployment providers
 			# Assume for now that relationships don't depend on the PoP
 			# also assume these performances are probably worse
-			base_lat = [i for i,pop in enumerate(sorted_dists) if pop == popp[0]][0] * 10
-			ug_perfs[ug][popp] = base_lat + random_transit_provider_latency()
+			if _lat_model == 'geo':
+				ug_perfs[ug][popp] = geo_lat(popp[0], ug[0], provider_extra=2)
+			else:
+				base_lat = [i for i,pop in enumerate(sorted_dists) if pop == popp[0]][0] * 10
+				ug_perfs[ug][popp] = base_lat + random_transit_provider_latency()
 	ugs = list(ug_to_vol)
 	ug_anycast_perfs = {ug:np.random.choice(list(ug_perfs[ug].values())) for ug in ugs}
 		

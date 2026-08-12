@@ -1,103 +1,150 @@
-# Ablation ladder: PAINTER → SCULPTOR (agent notes)
+# Ablation study: PAINTER → SCULPTOR, and measurement policies (agent notes)
 
-Feature-by-feature ablation of SCULPTOR's methodological leaps over PAINTER,
-run as env-flag overrides on a fork of the REAL production solver. Companion
-doc: `ablation_study/HANDOFF.md` (older; this file supersedes it on
-mechanics). Everything here obeys Tom's non-negotiables:
+Feature-by-feature ablation of SCULPTOR's methodological leaps, run as
+env-flag overrides on a fork of the REAL production solver, now extended
+with a **measurement-policy axis** (how/when the solver spends real
+measurements). Companion docs: `ablation_study/HANDOFF.md` (live status)
+and `experiments/model_error/DIMENSIONS.md` (the variable-space card +
+dated findings log — read it first for what has been measured).
 
-1. **No side-implementations.** Rungs = flags on
+Tom's non-negotiables:
+
+1. **No side-implementations.** Everything = flags on
    `sculptor_fork.Ablation_Sparse_Advertisement_Solver`. Production files
-   may only be changed by *visual* refactors (verbatim code motion creating
-   override seams). Current seams: `solve()` orchestrator sub-steps,
-   `_rescale_gradient`, `_assemble_lb_gradients`,
-   `_assemble_rb_{popp,pop}_gradients`,
-   `get_ingress_probabilities_and_sim` split
-   (`_compute_scenario_options` / `_sample_scenario_realizations`),
-   `_path_obj_coeffs`, `worker_comms_ray.ACTOR_CLS`.
+   change only by *visual* refactors (verbatim code motion creating
+   override seams). Seams: `solve()` sub-steps, `_rescale_gradient`,
+   `_assemble_lb_gradients`, `_assemble_rb_{popp,pop}_gradients`,
+   `get_ingress_probabilities_and_sim` split, `_path_obj_coeffs`,
+   `worker_comms_ray.ACTOR_CLS`.
 2. **Assertions prove every flag binds, every iteration** —
    `[ablation-assert] SUMMARY` prints per run; violations raise.
 3. **Never trust in-process scoring.** All reported numbers come from
-   `rescore_fork.py` (fresh process per seed, RAY_ADDRESS=local, driver-side
-   LPs). In-process eval contamination is CONFIRMED (2026-08-09: a +21k
-   blowup adv scored +0.99 in a multi-seed shared-worker process); the
-   repo's own `evaluate_all_metrics` sequential scoring shares this hazard.
-4. **Canonical per-seed inits**: first run writes `init_dep<seed>.npy` to
-   the out-dir; every other run asserts byte-equality. Copy init files
-   between out-dirs to enforce cross-study deployment identity (the
-   N-sweep does this against the fixed-mode study).
+   `rescore_fork.py` (fresh process per seed, RAY_ADDRESS=local,
+   driver-side LPs). In-process eval contamination is CONFIRMED.
+4. **Canonical per-seed inits**: first run writes `init_dep<seed>.npy`;
+   every other run asserts byte-equality (SCULPTOR_ABLATION_INIT_FILE).
+5. **Max cores, all the time**: multi-arm studies run every arm
+   concurrently with a global slot allocation (~24 one-worker runners on
+   the 64-core/123GB head; 28 OOM'd once). Never sequential small waves.
+6. **Smoke first, every time**: 2-iter full-shape dry run of any chain
+   into a throwaway out-root before committing compute.
 
-## Rungs (cumulative; RUNGS in sculptor_fork.py)
+## Solver rungs (env flags, cumulative; RUNGS in sculptor_fork.py)
 
 painter → **no_mc** (deterministic avg-of-options pseudo-path, huge caps;
-`Abl_MC_Off_Worker` injected via ACTOR_CLS; SCULPTOR_ABLATION_MC=0)
-→ no_memory (binary adv, one-flip) → no_direction (+continuous memory)
-→ expl_none (+full-vector steps) → expl_random → full (= SCULPTOR).
-Direction-off rungs also clear the samplers' cross-iteration remeasure
-state every gradient call (no directional carryover; wide explore pool
-untouched — painter-fair).
+`Abl_MC_Off_Worker` via ACTOR_CLS; SCULPTOR_ABLATION_MC=0) → no_memory
+(binary adv, one-flip) → no_direction (+continuous memory; clears
+cross-iteration remeasure state) → full (= SCULPTOR). The old expl_none /
+expl_random rungs are RETIRED (2026-08-12): traditional exploration is
+off the table under budgeted probing; probe-target selection is part of
+'full'.
 
-## Gated probing (measurement-budget experiments)
+## Measurement policies (SCULPTOR_ABLATION_PROBE_MODE)
 
-`SCULPTOR_ABLATION_PROBE_MODE=gated`: measure-XOR-step under a TOTAL
-measurement budget `PROBE_N` (assert: path_measures growth ≤ N, every
-iteration). U = g²-weighted sign-error probability over ALL probed
-coordinates, LB+RB composed (independent probes: weighted raw sums,
-squared-weight variance sums), raw deltas vs standard-error sigmas (never
-compare heaviside-scaled g to raw sigma). Auto-c: anneal from PROBE_C
-toward the (1 − N/(FRAC·TCONV)) quantile of U history; every fired probe
-doubles c. Debug: `[probe-gate]` line per iteration.
+- `fixed` — stock semantics: measure every new advertisement (N=∞).
+- `gated` — original U>c gate (kept for reproducing 2026-08-10..11 data).
+- `scheduled` — unconditional probe every ~TCONV/N iterations.
+- `smart` — probe when ANY of (Tom's EM-with-measurements design,
+  2026-08-12; all criteria believed-side only, ~free):
+  (a) U > c (annealed as in gated);
+  (b) no measurement in ≥ STALE_FRAC·TCONV/N iters AND the believed
+      objective plateaued (rolling |Δ| below PLATEAU_EPS × belief range);
+  (c) sign-disagreement rate of predicted-vs-realized believed deltas
+      (first-order g·Δa vs realized) ≥ SIGN_RATE over SIGN_W steps;
+  plus (d) surprise-adaptive threshold: a probe that moves the belief by
+  > SURPRISE_REL × range halves the c-multiplier, otherwise it doubles.
+  Every probe logs `[probe-gate] ... reasons=a|b|c`; per-run counts land
+  in the result JSON (`probe_reasons`).
+- **Exit-on-budget** (SCULPTOR_ABLATION_EXIT_ON_BUDGET, default ON for
+  budgeted modes): training STOPS when the Nth measurement is spent — an
+  agent that can no longer update beliefs walks into nonsense land (the
+  georand collapse mechanism). Result JSON records
+  `exit_reason='budget_exhausted'`; the queue audit accepts these.
 
-## Gamma / penalty facts (small, seed-1 bisection 2026-08-10)
+The current ladder (Tom's progression, 2026-08-12): L1 no_mc+fixed →
+L2 no_mc+scheduled → L3 no_direction+sched → L4 no_memory+sched →
+L5 no_memory+smart → L6 full+smart. Verdict at N∈{5,20} (georand,
+100 iters, LB_CACHE=0, MC_NUM=1, γ=0.1): **L6 full+smart N=20 is 5/5
+healthy (median +16, exits ~iter 62)** — the only fully reliable MC
+configuration; L3 is dead under any policy; partial measurement
+destabilizes no_mc (L2) relative to both none and every-iteration.
 
-gamma 0.1/0.2 stable; 0.3/1.0 collapse (RB:LB gradient-scale pathology —
-NOT fixable by penalty alone); penalty 1000 at gamma 1 "stabilizes" but is
-failure-blind under canonical scoring. `SCULPTOR_NO_ROUTE_LATENCY`
-env-gates the sentinel for TRAINING only — rescoring keeps canonical 30000.
-Studies run gamma=0.1.
+## Estimator-config knobs (interact with everything; see DIMENSIONS.md)
 
-## Scripts
+`SCULPTOR_MC_NUM` (worker MC draws, default 5; the fork's gate sigmas
+follow it — fixed 2026-08-12, earlier gated runs under-probed at MC=1) ·
+`SCULPTOR_LB_CACHE` (0 = fresh MC per belief call; the memoized default
+freezes beliefs between measurements — calibration poison, but also a
+gradient stabilizer; cache-off did NOT improve outcomes) · world knobs
+(`SCULPTOR_LAT_MODEL=geo`, `SCULPTOR_PREF_MODEL=random`,
+`SCULPTOR_GEO_NOISE`, `SCULPTOR_VOL_SPREAD`, `SCULPTOR_SCALE_FACTOR`)
+live in deployment_setup.py.
 
-- `run_fork_ladder.py` — one (seed, rung) run + in-run (untrusted) scoring.
-- `run_fork_ladder_sweep.sh` — sequential sweep (single machine).
-- `run_n_sweep.sh` — parallel-lane N-budget sweep. Lanes MUST use isolated
-  workspaces (cwd-relative runs/): concurrent run_fork_ladder invocations
-  in one cwd delete each other's checkpoint dirs (105/140 runs lost once).
-  Includes audit gate: accept n_iters ≥ MAX_ITER+1 (off-by-2 is sometimes
-  off-by-1 on clean runs) and require solve_error absent — never trust
-  lane exit codes ("0 failures" can hide swallowed solve errors).
-- `rescore_fork.py` — THE trusted scorer. `--all` or `--seed`;
-  `SCULPTOR_RESCORE_STORE_SCENARIOS=1` persists per-failure-scenario
-  latencies for scenario CDFs.
-- `table_fork.py` — tables: per-seed + median combined (gamma display
-  choice), steady-only, painter-anchored per-seed-paired benefit with
-  quantiles, %-of-painter→OPP-gap.
-- `cdf_fork.py` — across-seed (and per-scenario) CDFs, abs + % views.
-- `plot_n_sweep.py` — ladder-vs-N tables/figure + no_memory−full gap curve
-  with fixed-mode anchor.
-- `eval_ladder_metrics.py` — score ladder advs through the repo's FULL
-  `evaluate_all_metrics` (all stats_* metrics). Per-seed subprocess
-  isolation + canary vs rescore (do not weaken; see rule 3).
-- `mc_off_worker.py`, `test_mc_off_unit.py` — no_mc worker + no-Gurobi units.
+## Scripts (current, post-cleanup 2026-08-12)
+
+Run:
+- `run_fork_ladder.py` — one (seed, rung) run; semantic run dirs encode
+  rung/seed/N/policy for artifact harvesting.
+- `run_n_sweep_queue.py` — THE harness: global cell queue, mandatory
+  pre-seeded inits, audit gate (accepts budget-exhausted exits;
+  probe_mode stale-code guard), built-in per-seed rescore. Multi-arm
+  chains live on the head as chain_*.sh (see HANDOFF); pattern: one
+  queue invocation per arm, all arms backgrounded concurrently, per-arm
+  out-roots (JSON names don't encode policy!), harvest
+  convergence_over_iterations.pdf + gzipped logs per arm, delete run
+  dirs to keep disk flat.
+
+Score/analyze (trusted, driver-side LP):
+- `rescore_fork.py` — THE trusted scorer (combined = steady + 4×failure
+  excess vs one-per-peering; 30 000 ms no-route sentinel).
+- `policy_table.py` — the policy-ladder table (combined, healthy counts,
+  exit iters, probe reasons, + LP sidecars when present).
+- `experiments/model_error/{rerank_ladder,steady_metrics,plot_mesh}.py` —
+  interpretable metrics (failure congestion, steady congestion, clean
+  routed latency) and the three-panel over-N figures.
+- `table_fork.py`, `cdf_fork.py` (+`plot_normalized.py`) — fixed-mode-era
+  tables/CDFs; still valid for the 2026-08-08..11 datasets.
+- `eval_ladder_metrics.py` — repo-metrics path (per-seed subprocess
+  isolation + rescore canary; do not weaken).
+- `mc_off_worker.py`, `test_mc_off_unit.py` — no_mc worker + units.
+
+Deleted 2026-08-12 (superseded; in git history): the standalone
+scipy-arms stack (arms*, belief*, common, estimators, painter_fast,
+run_ablation*, run_sparse_ref, plot_ablation, plot_fork_ladder),
+run_n_sweep.sh, run_fork_ladder_sweep.sh, plot_n_sweep.py, vm_runbook.sh.
 
 ## Datasets (cache/ablation/)
 
-- `fork_5x200/` — small 5×200, pre-remeasure-clearing semantics.
-- `fork_small_20x200_v3/` — small 20×200 FIXED mode, clean-v3 semantics
-  (remeasure clearing + no_mc). Canonical init source. = N=∞ anchor.
-- `nsweep/N{1,2,5,10,20}/` — gated N-budget sweep, same 20 deployments.
-- `fork_a10_v2/` — actual-10, seeds 1–4 complete (sweep killed at 25/30),
-  OLD semantics (predates remeasure clearing).
-- `ladder_{small,a10}_eval_stats.pkl` — repo-metrics (evaluate_all_metrics)
-  stats via eval_ladder_metrics.
+- `policy_ladder/<arm>/N*/` — CURRENT: the policy-ladder study
+  (+ `policy_ladder_artifacts/` = every run's convergence figure + log).
+- `mesh_georand{,_v2}/` — the gated dense mesh + full replicate
+  (+ `mesh_georand_v2_artifacts/`).
+- `nsweep_v2_{georand,maxhard,georand_nocache}/` — the harder-world
+  extremes waves; `nsweep_v2_inits_georand/` = canonical georand inits.
+- `nsweep_mini/` — stock-world extremes (the original inversion result).
+- `fork_small_20x200_v3/`, `fixedmode_replica1/`, `fork_5x200/`,
+  `ladder_*_eval_stats.pkl` — fixed-mode era (still trusted).
+- Retired/quarantined: `nsweep/` (ratchet bug), head-side
+  `nsweep_STALE_fixedmode_replicas`, `nsweep_v2_UNVALIDATED_GATE`,
+  `nsweep_full_PARTIAL_UNRESCORED` (sweep killed at 437/700).
 
-## Operational gotchas
+## Operational gotchas (each cost real time)
 
-- Remote pkill: patterns match the ssh session's own command line — always
-  bracket (`run_fork_ladde[r]`) and never mention the unbracketed name
-  elsewhere in the same command.
-- Deployment builds are host-dependent for actual-N (measurement caches):
-  score actual-N ONLY on the training host. small/decent are synthetic and
-  cross-host identical (hash-verify when in doubt).
-- `worker_comms_ray._ensure_ray` attaches to any running cluster
-  ('auto') — always set RAY_ADDRESS=local + unique RAY_TMPDIR for
-  side-jobs or they die with the neighbor's Ray.
+1. Deploy = scp + md5-verify both sides + banner check.
+2. **pkill self-match**: bracket patterns (`run_fork_ladde[r]`), never
+   write the unbracketed name anywhere in the same remote command — and
+   NEVER combine pkill with a heredoc containing the target names (kill
+   and stage in separate ssh sessions; bitten twice on 2026-08-12).
+3. Workspaces: never run run_fork_ladder with cwd=repo; per-arm ws-roots
+   + distinct port ranges for concurrent queues.
+4. RAY_ADDRESS=local + unique RAY_TMPDIR for every side-job.
+5. Audit JSONs, never exit codes; accept n_iters < max only with
+   exit_reason='budget_exhausted'.
+6. Same-seed single trials are noise; MC-arm outcomes are ~Bernoulli
+   survival draws — compare rates/paired counts across replicates, never
+   single runs (the v1-mesh 'dose-response' that vanished in v2).
+7. Detached remote jobs: setsid nohup + redirect; local launcher ssh
+   channels linger and later die with 255 — harmless, ignore.
+8. Head disk is 49GB: harvest+delete run dirs per arm,
+   SCULPTOR_ABLATION_RUNS_KEEP small when not harvesting, watch df in
+   every heartbeat (disk-full = silent rc=1 + truncated logs).

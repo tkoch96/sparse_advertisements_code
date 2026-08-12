@@ -152,6 +152,9 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
             result['probe_mode'] = getattr(solver, 'abl_probe_mode', 'fixed')
             result['probes_spent'] = int(getattr(solver, 'abl_probes_spent', 0))
+            result['exit_reason'] = getattr(solver, 'abl_exit_reason', None)
+            result['probe_reasons'] = dict(getattr(
+                solver, '_abl_probe_reasons', {}) or {})
 
         result['adv'] = np.asarray(adv).tolist()
         result['n_on'] = int(np.asarray(adv).sum())
@@ -199,10 +202,20 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     #   SCULPTOR_ABLATION_KEEP_RUNS=1: never delete anything
     _srd = getattr(locals().get('solver', None), 'save_run_dir', None)
     # rename the run dir semantically: runs/ablation-<dpsize>-<rung>-dep<seed>
+    # (suffixed -N<budget> under gated probing so grids over N never
+    # collide on the same dir name within a workspace -- needed for
+    # per-run figure/log harvesting)
     if _srd and os.path.isdir(_srd):
         import shutil
+        _nsuf = ''
+        _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
+        if _pmode in ('gated', 'scheduled', 'smart'):
+            _nsuf = '-N{}-{}'.format(
+                os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'), _pmode)
+        elif _pmode == 'fixed':
+            _nsuf = '-fixed'
         _dst = os.path.join(os.path.dirname(_srd),
-                            'ablation-{}-{}-dep{}'.format(dpsize, rung, seed))
+                            'ablation-{}-{}-dep{}{}'.format(dpsize, rung, seed, _nsuf))
         try:
             if os.path.isdir(_dst):
                 shutil.rmtree(_dst, ignore_errors=True)  # rerun of same cell

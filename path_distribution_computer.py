@@ -141,7 +141,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		'solve_generic_lp_persistent', 'solve_generic_lp_not_persistent']}
 		self.rti_data = {}
 
-		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
+		# SCULPTOR_MC_NUM: monte carlo simulations to determine distributions
+		# (default 5, the original hardcoded value; 1 = single-draw noisy
+		# estimator, for model-uncertainty experiments)
+		self.MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
 
 		if kwargs.get('debug', False):
 			self.n_prefixes = None
@@ -951,7 +954,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if which_ugs is not None:
 			subset_ugs = True
 
-		if not verb and not subset_ugs:
+		# SCULPTOR_LB_CACHE=0: never RETURN memoized latency-benefit results;
+		# re-run the MC fresh on every call (the store below still happens,
+		# harmlessly). Rationale: the cache freezes benefit(A) AND its pdf at
+		# the first evaluation's random draws, invalidated only by a real
+		# measurement (clear_new_measurement_caches). With measurements every
+		# step (stock/fixed mode) that's harmless; under gated/starved probing
+		# nothing clears it, so beliefs -- including the uncertainty the probe
+		# gate consumes -- become stale frozen snapshots.
+		_use_lb_cache = os.environ.get('SCULPTOR_LB_CACHE', '1') != '0'
+		if not verb and not subset_ugs and _use_lb_cache:
 			## don't rely on caching if we want to log / print statistics
 			try:
 				cache_rep = get_a_cache_rep(a_effective)
