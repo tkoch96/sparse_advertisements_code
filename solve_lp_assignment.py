@@ -140,7 +140,11 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	## minimizes average latency for low latency traffic and (sorta) amount of congested low latency traffic
 
 
-	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency')
+	# no_persistent: this function consumes avg_latency_ret['raw_solution'],
+	# a path-aligned array only the NON-persistent LP returns; the worker's
+	# persistent ret has a different shape (MLinExpr+dict TypeError,
+	# 2026-08-14 -- first time this objective ran inside a Ray worker).
+	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency', no_persistent=True)
 	if not avg_latency_ret['solved']:
 		print("Didn't even solve low latency allocation ... ")
 		# was exit(0): process death with rc=0 (the silent-death pattern);
@@ -855,7 +859,8 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 	## faster on the MC inner loop (same adv, varying routing realization).
 	## Falls through to scipy if (a) sas isn't a worker, (b) the persistent
 	## solve returns unsolved, or (c) it raises.
-	if obj in _PERSISTENT_GUROBI_OBJECTIVES and _can_use_persistent_gurobi(sas):
+	if (obj in _PERSISTENT_GUROBI_OBJECTIVES and _can_use_persistent_gurobi(sas)
+		and not kwargs.get('no_persistent')):
 		try:
 			ret = sas.solve_generic_lp_persistent(
 				routed_through_ingress, obj, **kwargs)
