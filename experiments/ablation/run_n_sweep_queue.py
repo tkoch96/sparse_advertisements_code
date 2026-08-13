@@ -154,10 +154,13 @@ def main():
         r = json.load(open(fn))
         if r['rung'] == 'painter':
             continue
-        # budget-exhausted exits (Tom's exit-training criterion) legally end
-        # before max_iter -- accept them iff the budget really was spent
-        early_ok = (r.get('exit_reason') == 'budget_exhausted'
-                    and r.get('probes_spent', 0) >= 1)
+        # Legitimate early exits end before max_iter: budget-exhausted
+        # (Tom's exit-training criterion; require the budget was spent)
+        # and remeasure-triggered (explore re-selected a measured adv --
+        # beliefs resolved, training stopped gracefully; Tom 2026-08-13).
+        early_ok = ((r.get('exit_reason') == 'budget_exhausted'
+                     and r.get('probes_spent', 0) >= 1)
+                    or r.get('exit_reason') == 'remeasure_triggered')
         if r.get('solve_error') or (
                 (r.get('n_iters') or 0) < args.max_iter + 1 and not early_ok):
             print('[audit] BAD:', fn, r.get('n_iters'), str(r.get('solve_error'))[:40])
