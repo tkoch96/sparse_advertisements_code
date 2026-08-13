@@ -381,32 +381,64 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		congested_vol, total_vol = 0.0, 0.0
 
 		ts = time.time()
+		# First pass: link loads (congestion is a property of the LINK total,
+		# not of any single path's volume -- the old per-path check missed
+		# links inundated by many small allocations).
 		for (ug, poppi), vol_amt in raw_x.items():
-			ugi = self.whole_deployment_ug_to_ind[ug]
 			vols_by_poppi[poppi] += vol_amt
 			total_vol += vol_amt
-			
-			# Check congestion against STATIC caps
-			if vol_amt > self.static_caps[poppi] + 1e-6 and poppi != len(self.static_caps)-1:
+		_no_path_pi = NO_PATH_INGRESS(self)
+		inundated = {pi for pi, v in vols_by_poppi.items()
+					 if pi != _no_path_pi and v > self.static_caps[pi] + 1e-6}
+
+		# Congestion-aware belief (Tom, 2026-08-13). In MLU-fallback solves
+		# (standard solve infeasible -> elastic caps), volume on inundated
+		# links used to be priced at its REAL path latency in BOTH the
+		# returned scalar and lats_by_ug -- so the belief/gradient machinery
+		# never felt congestion, and the optimizer learned to strand traffic
+		# (georand collapses; see solve_lp_assignment.py's matching fix).
+		# Congested volume is now priced exactly like no-route volume: the
+		# NO_ROUTE_LATENCY sentinel, which training already scales down via
+		# SCULPTOR_NO_ROUTE_LATENCY (documented choice: 1000ms for training,
+		# canonical 30000 for eval). In standard (feasible) solves nothing
+		# is inundated and this is a no-op by construction.
+		# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores legacy pricing.
+		_cong_aware = os.environ.get(
+			'SCULPTOR_CONGESTION_AWARE_OBJ', '1') != '0'
+
+		for (ug, poppi), vol_amt in raw_x.items():
+			ugi = self.whole_deployment_ug_to_ind[ug]
+
+			if poppi in inundated:
 				congested_vol += vol_amt
-			
+
 			if ugi not in paths_by_ug_res:
 				paths_by_ug_res[ugi] = []
 			paths_by_ug_res[ugi].append((poppi, vol_amt / self.whole_deployment_ug_to_vol[ug]))
 
 			# Calculate latency for this specific <user, path> allocation
-			if poppi == NO_PATH_INGRESS(self):
+			if poppi == _no_path_pi:
+				path_lat = NO_ROUTE_LATENCY
+			elif _cong_aware and poppi in inundated:
 				path_lat = NO_ROUTE_LATENCY
 			else:
 				path_lat = self.whole_deployment_ug_perfs[ug][self.popps[poppi]]
-			
+
 			# Weighted average latency contribution
 			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
 
 		obj_norm = np.sum(self.whole_deployment_ug_vols)
+		if _cong_aware:
+			# scalar consistent with the (repriced) per-UG latencies, so the
+			# belief the gradients consume prices congestion like no-route
+			_objective = -1 * float(np.sum(
+				lats_by_ug_arr * self.whole_deployment_ug_vols)) / obj_norm
+		else:
+			_objective = -1 * model_res.objVal / obj_norm
 		self.timing['organizing_results'] += time.time()-ts
 		return {
-			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
+			"objective": _objective, # Framing 'benefit' as positive
+			"legacy_objective": -1 * model_res.objVal / obj_norm,
 			"raw_solution": raw_x,
 			"paths_by_ug": paths_by_ug_res,
 			"lats_by_ug": lats_by_ug_arr,

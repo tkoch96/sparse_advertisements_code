@@ -1,6 +1,100 @@
-# Ablation study handoff (2026-08-12) — POLICY-LADDER ERA
+# Ablation study handoff (2026-08-13) — OBJECTIVE-BUG-FIX ERA
 
-## ⚠ Current design & status (2026-08-12 evening; supersedes everything below)
+## For the incoming agent: where we are and why
+
+**The high-level goal is unchanged**: Tom's EM-with-measurements program —
+quantify, on the real solver, how much each SCULPTOR feature (solver
+rungs) and each measurement-spending policy (fixed / scheduled / smart,
+under a fixed budget N with exit-on-budget) buys, across worlds of
+varying hardness (stock synthetic → georand → actual-10), producing
+paper-grade ablation figures. We are still on that path. The current
+phase is **methodology refinement and bug-weeding**: the headline
+experiments exist and run cleanly end-to-end; what changed is our
+understanding of what some of their numbers meant.
+
+### The big discovery (2026-08-13): the training objective was
+### congestion-blind, at TWO layers
+
+When capacity is exceeded, the LP falls back to an MLU formulation whose
+returned scalar priced over-capacity volume at its REAL (small) latency —
+while evaluation charges it NO_ROUTE_LATENCY. Shedding users IMPROVED
+the number the solver optimizes. Verified concretely: georand full+smart
+N=50 seed 1 stranded 74% of volume while its objective read −19.61
+("better" than the 20.98 ms one-per-peering reference) and evaluation
+read 22,387 ms. **Every georand "collapse" in the ladder/mesh datasets
+is this mis-specified objective being optimized successfully, not solver
+divergence.** Stock-small and actual-10 results are unaffected (nothing
+congests there).
+
+Two fixes, both env-gated `SCULPTOR_CONGESTION_AWARE_OBJ` (default ON;
+=0 reproduces pre-fix behavior), pricing congested volume exactly like
+no-route volume (Tom's design: reuse the NO_ROUTE_LATENCY sentinel,
+which training already scales down via `SCULPTOR_NO_ROUTE_LATENCY` —
+documented choice 1000 ms for training, canonical 30000 for eval):
+1. `solve_lp_assignment.py` MLU fallbacks (driver scalar; commit
+   9b2a3d8, pushed). **A/B showed this alone does NOT change behavior**
+   — it fixes metrics/stop-tracking, but gradients come from the worker
+   belief path. All three A/B-v1 arms still collapsed; the fixed arms'
+   GT curves now show the collapse honestly (a cliff at iter ~70) while
+   the believed objective declines smoothly through it.
+2. `path_distribution_computer.solve_generic_lp_persistent` post-solve
+   block (worker beliefs/gradients + corrected link-level congestion
+   accounting; deployed to head+worktree, md5 9941f6ad..., **NOT YET
+   COMMITTED** — commit it).
+
+### ⚠ IMMEDIATE open item: A/B v2 (fixab2) — and a probable crash
+
+`chain_fixab2.sh` on the head reruns georand seed 1, full+smart, N=50,
+100 iters, same init, three arms: `legacy` (fix off), `fixed30k` (fix,
+sentinel 30000), `fixed1k` (fix, training sentinel 1000). Out:
+`cache/ablation/fixab2/<arm>/N50`, logs `logs/fixab2_*.log`, ws
+`/home/ubuntu/fixab2_ws_*`. At handoff time: **fixed1k DIED mid-run**
+(~iter 12: no result JSON, run dir never renamed, no traceback found in
+the driver-side log yet — suspect a bug in fix #2 under some condition;
+check worker mem logs in
+`fixab2_ws_fixed1k/runs/1786622631-small-sparse/` and whether
+SCULPTOR_NO_ROUTE_LATENCY=1000 interacts badly with the worker patch or
+lbx scaling). legacy/fixed30k were still running. FIRST TASKS: (a) find
+why fixed1k died, (b) finish the A/B, (c) if the fix works — the
+believed objective should SPIKE at congestion instead of sailing through
+— then the georand policy-ladder MC-arm results all need re-running
+under the fixed objective (they are the paper's core figure).
+
+### Everything else in flight / recently landed
+
+- Policy ladder + dense N (georand, 310 runs + artifacts incl. every
+  convergence figure): `cache/ablation/policy_ladder/`,
+  `policy_ladder_artifacts/`. Findings (pre-fix lens!): L6 full+smart
+  peaked 5/5 healthy at N=20; N=50 failures are now explained by the
+  objective bug + exit-on-budget never firing (gate spends ≤~40 of 50).
+  L1B (budgeted-fixed no_mc) is DEGENERATE (N iterations ≈ init) — drop
+  from figures. L3 no_direction dead everywhere. Painter: verified it
+  uses only 4 measurements (budget-fair already); budget cap available
+  (`SCULPTOR_ABLATION_PAINTER_BUDGET`), measurement count now recorded.
+- actual-10 (seed 1, N=5, γ=2, phases 1+2 done, rescored on head):
+  ALL five arms within 0.3 ms of one-per-peering (45.8 ms world) — real
+  deployment is forgiving; no collapses. `cache/ablation/a10_policy/`.
+  Next: more seeds / N per Tom's priority order (budget-conscious).
+- Analysis/plots: `experiments/ablation/policy_table.py`,
+  `experiments/model_error/{plot_policy,plot_mesh,rerank_ladder,
+  steady_metrics}.py` (mean/median switchable via env). Figures in
+  `figures/`. `experiments/model_error/DIMENSIONS.md` = findings log.
+- Notifier: `~/.sculptor_cluster_alert/heartbeat.py` rewritten to text
+  Tom EXPERIMENT PROGRESS (via budgeter emailer SMS) every 3h; liveness
+  cron unchanged.
+- VM: c7g.16xlarge head (100.54.8.15) up; disk ~10G free (tight — clean
+  before big runs); manual stop policy unchanged; ~$100-115 spent over
+  the program so far.
+
+Tom's standing rules (all still in force): smoke-first (2-iter dry runs
+of full chain shape); max cores always (concurrent arms, ~24 runners);
+trusted rescoring only; md5-verified deploys; NEVER edit imported
+modules while runs are in flight (violated once — got away with it);
+pkill+heredoc never in the same ssh; audit JSONs not exit codes.
+
+## ——— 2026-08-12 record (policy-ladder era) ———
+
+## ⚠ Current design & status (2026-08-12 evening; superseded above)
 
 The study pivoted to Tom's **EM-with-measurements** framing: solver rungs
 × measurement-spending policies under a FIXED budget N with
