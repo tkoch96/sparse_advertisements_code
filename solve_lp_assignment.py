@@ -143,7 +143,9 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency')
 	if not avg_latency_ret['solved']:
 		print("Didn't even solve low latency allocation ... ")
-		exit(0)
+		# was exit(0): process death with rc=0 (the silent-death pattern);
+		# return unsolved so callers can handle it (2026-08-14)
+		return {'solved': False, 'objective': None}
 
 
 	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
@@ -230,8 +232,8 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 
 	if model.status != 2: ## 2 is optimal
 		print("Didnt solve")
-		exit(0)
-		return {'solved': False}
+		# was exit(0) followed by an unreachable return (2026-08-14)
+		return {'solved': False, 'objective': None}
 	low_latency_path_distribution = x
 	bulk_path_distribution = b.X
 	# print("Solved!")
@@ -1500,3 +1502,19 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 		"fraction_congested_volume": fraction_congested_volume,
 		# "routed_through_ingress": routed_through_ingress,
 	}
+
+# Optional extension objectives (experiments/model_error/objectives.py):
+# SCULPTOR_XOBJS=1 registers them into generic_lp_functions at import
+# time -- in EVERY process importing this module (driver AND Ray
+# workers), which the runtime register() alone cannot guarantee. Module
+# tail so the circular import (objectives.py imports from here)
+# resolves against a fully-initialized namespace.
+if _os.environ.get('SCULPTOR_XOBJS', '0') == '1':
+	try:
+		from experiments.model_error import objectives as _xobjs
+		_xobjs.register()
+		print('[xobjs] extension objectives registered: {}'.format(
+			sorted(_xobjs.REGISTERED_OBJECTIVES)))
+	except Exception as _xe:
+		print('[xobjs] registration FAILED: {}'.format(_xe))
+

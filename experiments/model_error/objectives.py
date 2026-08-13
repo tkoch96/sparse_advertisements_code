@@ -87,19 +87,43 @@ def _frac_beyond(lats, best_lats, x, vols):
     return float(np.average(gaps > x, weights=np.asarray(vols, dtype=float)))
 
 
-def _max_util_from_ret(ret, caps, n_popps):
-    """Max over real links of assigned volume / capacity. vols_by_poppi may
-    carry a final pseudo-entry for the no-route ingress; only the first
-    n_popps entries are real links."""
-    vols_by_poppi = ret['vols_by_poppi']
+def _max_util_from_ret(ret, caps, n_popps, sas=None):
+    """Max over real links of assigned volume / capacity.
+
+    Loads are rebuilt from paths_by_ug (vol_pct x ug volume) when
+    possible: the ret['vols_by_poppi'] convention is inconsistent across
+    LP layers -- driver LPs return it already divided by capacity
+    (utilization, solve_lp_assignment.py ~:278/:1157) while the
+    persistent worker LP returns raw volumes, so consuming it directly
+    double-divides on the driver (verified 2026-08-14). paths_by_ug's
+    vol_pct is a fraction of the UG's own volume in every layer, so it
+    is convention-proof. Falls back to vols_by_poppi (assumed raw
+    volumes) when paths_by_ug or sas is unavailable."""
     caps = np.asarray(caps, dtype=float).flatten()[:n_popps]
-    if isinstance(vols_by_poppi, dict):
+    pbu = ret.get('paths_by_ug')
+    if pbu and sas is not None:
+        vols = _ug_vols_for(sas, len(np.asarray(
+            ret['lats_by_ug']).flatten()))
         loads = np.zeros(n_popps)
-        for poppi, v in vols_by_poppi.items():
-            if int(poppi) < n_popps:
-                loads[int(poppi)] = float(np.sum(v))
+        for ug, pathvols in pbu.items():
+            ui = int(ug) if isinstance(ug, (int, np.integer)) else None
+            if ui is None or ui >= len(vols):
+                continue
+            for pv in pathvols:
+                poppi, vol_pct = (pv if isinstance(pv, (list, tuple))
+                                  else (pv, 1.0))
+                if int(poppi) < n_popps:
+                    loads[int(poppi)] += float(vol_pct) * float(vols[ui])
     else:
-        loads = np.asarray(vols_by_poppi, dtype=float).flatten()[:n_popps]
+        vols_by_poppi = ret['vols_by_poppi']
+        if isinstance(vols_by_poppi, dict):
+            loads = np.zeros(n_popps)
+            for poppi, v in vols_by_poppi.items():
+                if int(poppi) < n_popps:
+                    loads[int(poppi)] = float(np.sum(v))
+        else:
+            loads = np.asarray(
+                vols_by_poppi, dtype=float).flatten()[:n_popps]
     with np.errstate(divide='ignore', invalid='ignore'):
         utils = np.where(caps > 0, loads / caps, 0.0)
     return float(np.max(utils)) if len(utils) else 0.0
@@ -132,11 +156,18 @@ def solve_lp_frac_beyond_optimal(sas, routed_through_ingress, obj, **kwargs):
     best = kwargs.get('best_lats')
     if best is None:
         best = _perf_floor_best_lats(sas, len(lats))
+    # SCULPTOR_FRAC_BEYOND_REL=0.10: threshold is 10% OF each UG's
+    # optimal (Tom's "% of users within 10% of optimal", 2026-08-14)
+    # instead of absolute-ms frac_beyond_x. Env so workers agree with
+    # the driver without lp_kwargs plumbing.
+    rel = os.environ.get('SCULPTOR_FRAC_BEYOND_REL')
+    if rel is not None:
+        x = float(rel) * np.asarray(best, dtype=float)
     out = dict(steady)
     # generic-LP convention: 'objective' is a BENEFIT (higher better;
     # avg_latency returns ~-avg_lat). Negate our minimize-quantity.
     out['steady_avg_lat'] = -float(steady['objective'])
-    out['frac_beyond_x'] = x
+    out['frac_beyond_x'] = float(rel) if rel is not None else x
     out['frac_beyond'] = _frac_beyond(lats, best, x, _ug_vols_for(sas, len(lats)))
     out['objective'] = -out['frac_beyond']
     return out
@@ -157,7 +188,7 @@ def solve_lp_lat_plus_max_util(sas, routed_through_ingress, obj, **kwargs):
     if alpha is None:
         alpha = float(np.average(_perf_floor_best_lats(sas, len(lats)),
                                  weights=vols))
-    mlu = _max_util_from_ret(steady, sas.link_capacities_arr, sas.n_popps)
+    mlu = _max_util_from_ret(steady, sas.link_capacities_arr, sas.n_popps, sas=sas)
     out = dict(steady)
     # benefit convention: steady['objective'] ~= -avg_lat (higher better),
     # so subtract the utilization penalty from it.
@@ -211,10 +242,49 @@ def solve_lp_popp_failure_congestion(sas, routed_through_ingress, obj,
     return out
 
 
+def solve_lp_frozen_failure(sas, routed_through_ingress, obj, **kwargs):
+    """(d) objective = steady avg latency + gamma_f * mean-over-failure
+    BGP-fallback latency with FROZEN prefix assignments (Tom 2026-08-14):
+    on failure users stay on their pinned prefix and fail over per BGP
+    ingress priority -- no LP re-assignment. Reuses the existing eval
+    mechanism (static_failure_eval.assess_static_failure_resilience;
+    prices no-route and over-capacity popps at NO_ROUTE_LATENCY).
+    Standard-contract fields come from the steady avg_latency LP; only
+    'objective' is overridden. Tunables via env (worker-safe):
+    SCULPTOR_FROZEN_GAMMA (default 1.0), SCULPTOR_FROZEN_WHICH
+    (popps|pops, default popps)."""
+    from solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from experiments.static_failure_eval import (
+        assess_static_failure_resilience)
+    steady = solve_generic_lp_with_failure_catch(
+        sas, routed_through_ingress, 'avg_latency', **_inner_kwargs(kwargs))
+    if not steady.get('solved'):
+        return steady
+    adv = kwargs.get('adv')
+    if adv is None:
+        return steady  # no advertisement context: fall back to steady
+    gamma_f = float(os.environ.get('SCULPTOR_FROZEN_GAMMA', '1.0'))
+    which = os.environ.get('SCULPTOR_FROZEN_WHICH', 'popps')
+    res = assess_static_failure_resilience(
+        sas, np.asarray(adv, dtype=float), which=which)
+    out = dict(steady)
+    out['steady_avg_lat'] = -float(steady['objective'])
+    out['frozen_avg_lat_failure'] = float(res['avg_lat_failure'])
+    out['frozen_frac_no_route_failure'] = float(
+        res['frac_no_route_failure'])
+    out['frozen_gamma'] = gamma_f
+    # benefit convention (higher better): steady LP benefit minus the
+    # frozen-failure latency penalty, scaled like the RB term.
+    out['objective'] = (float(steady['objective'])
+                        - gamma_f * float(res['avg_lat_failure']))
+    return out
+
+
 REGISTERED_OBJECTIVES = {
     'frac_beyond_optimal': solve_lp_frac_beyond_optimal,
     'lat_plus_max_util': solve_lp_lat_plus_max_util,
     'popp_failure_congestion': solve_lp_popp_failure_congestion,
+    'frozen_failure_latency': solve_lp_frozen_failure,
 }
 
 
@@ -265,7 +335,7 @@ def frac_users_beyond(sas, adv, xs=(10, 50, 100), best_lats=None, ret=None):
 
 
 def max_link_utilization(sas, ret):
-    return _max_util_from_ret(ret, sas.link_capacities_arr, sas.n_popps)
+    return _max_util_from_ret(ret, sas.link_capacities_arr, sas.n_popps, sas=sas)
 
 
 def latency_plus_max_util(sas, adv, alpha=None, best_lats=None):

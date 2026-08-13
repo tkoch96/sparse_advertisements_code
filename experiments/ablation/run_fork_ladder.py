@@ -88,7 +88,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     sas = Sparse_Advertisement_Eval(
         deployment, verbose=True, lambduh=0.00001, with_capacity=capacity,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=use_res, gamma=gamma_val,
-        n_prefixes=n_prefixes, generic_objective='avg_latency',
+        n_prefixes=n_prefixes, generic_objective=os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency'),
     )
     # 'no_mc' rung: swap the worker actor class for the deterministic
     # pseudo-path worker BEFORE the solve-phase workers start. The seam is
@@ -202,7 +202,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     sas2 = Sparse_Advertisement_Eval(
         deployment2, verbose=False, lambduh=0.00001, with_capacity=capacity,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=False, gamma=0,
-        n_prefixes=n_prefixes, generic_objective='avg_latency',
+        n_prefixes=n_prefixes, generic_objective=os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency'),
     )  # scoring stack stays latency-only: the reported metric is unchanged
     wm2 = Worker_Manager(sas2.get_init_kwa(), deployment2)
     wm2.start_workers()
