@@ -86,6 +86,22 @@ under the fixed objective (they are the paper's core figure).
   before big runs); manual stop policy unchanged; ~$100-115 spent over
   the program so far.
 
+### Watchers: all session-bound monitors RELINQUISHED
+
+This session's watchers/waiters (Monitor tasks + until-loop ssh waiters
+for the mesh, policy ladder, dense pass, a10 phases, and fixab2) were
+session-bound and have been explicitly stopped — **nothing is watching
+the head from the old session**. What DOES survive: (1) the head-side
+chains themselves run under setsid and finish unattended (fixab2 will
+print `FIXAB COMPLETE` to `logs/fixab2_driver.log` and rescore on its
+own); (2) the SYSTEM-level cron notifiers on the Mac — liveness_check
+(10 min) and the progress-SMS heartbeat (3 h) — keep texting Tom
+regardless of any agent session. Incoming agent: re-arm your own
+watcher for whatever you run (pattern: scratchpad watch script + a
+persistent Monitor, heartbeats 15-20 min with disk in every beat), and
+check `logs/fixab2_driver.log` first thing — the A/B likely finished
+unattended.
+
 Tom's standing rules (all still in force): smoke-first (2-iter dry runs
 of full chain shape); max cores always (concurrent arms, ~24 runners);
 trusted rescoring only; md5-verified deploys; NEVER edit imported
