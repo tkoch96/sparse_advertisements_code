@@ -92,15 +92,21 @@ clean plotws (scratchpad), figure=plot_policy (mean + median) emailed
 to Tom (report #1) 16:45Z. Data: cache/ablation/policy_ladder_fixed
 (+_artifacts) on head AND Mac.
 
-### ⚠ IN FLIGHT: minimal actual-10 (Tom's spec, 2026-08-13)
+### ✅ COMPLETE (2026-08-13 20:42Z): minimal actual-10 — VM STOPPED
 
-`~/chain_a10min.sh` on head (md5 ba87c49a...): L2+L6 at N∈{1,20} +
-painter ref, seed 1, γ=2, 150 iters, smoke-first, rescore ON HEAD.
-Driver log logs/a10min_driver.log → "A10MIN COMPLETE"; out
-cache/ablation/a10_policy/{L2_nomc_sched,L6_full_smart}/N{1,20} +
-painter/N5. Progress reports EMAILED to tomkoch123@gmail.com via
-scratchpad send_report.py (reuses budgeter emailer creds; Tom's
-standing request 2026-08-13: email reports with figures/numbers/tables).
+L2+L6 at N∈{1,20} + painter (seed 1, γ=2, 150 iters, smoke passed,
+all rescored on head, data pulled to Mac cache/ablation/a10_policy).
+Steady diff vs opp (ms): L2 +0.103/+0.037/+0.106 at N1/5/20;
+L6 +0.713/+0.304/+0.295; painter +0.889 (WORST — every ladder arm
+beats painter on the real deployment); prior N5: L3 +0.099 L4 +0.069
+L5 +0.270. No remeasure-stops on actual-10 (all budget-exhausted).
+Reports #1 (ladder) + #2 (a10) + #3 (teardown) EMAILED to
+tomkoch123@gmail.com via scratchpad send_report.py (budgeter emailer
+creds; Tom's standing request: email progress reports w/ figures+
+tables). **HEAD i-0428c395787bc3ca0 STOPPED 20:58Z** per standing
+teardown policy; EBS retained (a10 run dirs + measurement caches
+preserved for host-dependent rescoring). Restart:
+`aws ec2 start-instances --instance-ids i-0428c395787bc3ca0`.
 
 ### (superseded) original rerun plan
 
