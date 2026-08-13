@@ -387,6 +387,11 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         advertisement so the iteration still buys real information."""
         pm_before = int(getattr(self, 'path_measures', 0))
         self._solve_max_info_phase()
+        if getattr(self, '_explore_remeasure_stop', None) is not None:
+            # Explore re-selected a measured adv (remeasure-stop, Tom
+            # 2026-08-13): no probe happened, none is counted; the main
+            # loop turns the flag into a graceful end of training.
+            return
         if int(getattr(self, 'path_measures', 0)) == pm_before:
             self._solve_post_step_measure()  # fallback: measure current adv
         self.abl_probes_spent += 1
@@ -808,6 +813,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 timers.append(time.time() - t_last)
                 t_last = time.time()
 
+                if (getattr(self, '_explore_remeasure_stop', None) is not None
+                        and self.abl_exit_reason is None):
+                    # covers both the gated probe path and stock fixed-mode
+                    # max-info: remeasure means beliefs are resolved.
+                    self.abl_exit_reason = 'remeasure_triggered'
+
                 self._solve_check_stop()
 
                 _log_mem('iter_post_stop_tracker', iter=self.iter)
@@ -829,6 +840,18 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                           .format(self.iter, self.abl_probes_spent,
                                   self.abl_probe_n,
                                   dict(self._abl_probe_reasons) or 'n/a'),
+                          flush=True)
+                    break
+                elif self.abl_exit_reason == 'remeasure_triggered':
+                    info = getattr(self, '_explore_remeasure_stop', {}) or {}
+                    print('[ablation-fork] EXIT: REMEASURE TRIGGERED at iter '
+                          '{} -- explore re-selected an already-measured '
+                          'advertisement (flips={}, methodology={}); beliefs '
+                          'are resolved, further probes are circular. '
+                          'Stopping training gracefully ({}/{} probes spent).'
+                          .format(info.get('iter', self.iter),
+                                  info.get('flips'), info.get('methodology'),
+                                  self.abl_probes_spent, self.abl_probe_n),
                           flush=True)
                     break
 
