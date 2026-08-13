@@ -73,7 +73,36 @@ Caveat: fixab2 is n=1 per arm (same-seed single trials are noisy), but
 the belief-calibration evidence (19.6-believed/22,200-true → 22.70/22.70)
 is mechanism-level, not a noisy comparison.
 
-### ⚠ IN FLIGHT: FULL policy-ladder rerun under the fixed objective
+### ✅ COMPLETE (2026-08-13 16:25Z): full ladder rerun — collapses GONE
+
+155/155 runs, all audited + rescored. Steady stranding = 0.000 for
+every arm/N except L2 no_mc N5/N10 (0.13/0.17 — the real no_mc
+fragility). Clean routed lat 21.4–25.9 ms (opp 20.98); simpler arms sit
+closer to opp. pfail ~0.026–0.06 all arms (painter 0.093) except L2's
+N5/N10 spikes. Exit census: 132 budget_exhausted, 12
+remeasure_triggered (ALL L6; at N50 stopped after 2–7 probes — the
+measurement-efficiency sleeper now has a mechanism), 11 full-horizon.
+NEW SEMANTICS shipped mid-rerun (Tom's design): REMEASURE-STOP —
+explore re-selecting a measured adv = graceful training stop
+([REMEASURE-STOP] banner, exit_reason='remeasure_triggered'), replacing
+stock exit(0) which silently killed 14/30 first-pass L6 cells (audit
+now accepts the new exit_reason; commits 816a0aa + audit patch, all
+pushed). Evals: steady_metrics + rerank_ladder pumped on the Mac in a
+clean plotws (scratchpad), figure=plot_policy (mean + median) emailed
+to Tom (report #1) 16:45Z. Data: cache/ablation/policy_ladder_fixed
+(+_artifacts) on head AND Mac.
+
+### ⚠ IN FLIGHT: minimal actual-10 (Tom's spec, 2026-08-13)
+
+`~/chain_a10min.sh` on head (md5 ba87c49a...): L2+L6 at N∈{1,20} +
+painter ref, seed 1, γ=2, 150 iters, smoke-first, rescore ON HEAD.
+Driver log logs/a10min_driver.log → "A10MIN COMPLETE"; out
+cache/ablation/a10_policy/{L2_nomc_sched,L6_full_smart}/N{1,20} +
+painter/N5. Progress reports EMAILED to tomkoch123@gmail.com via
+scratchpad send_report.py (reuses budgeter emailer creds; Tom's
+standing request 2026-08-13: email reports with figures/numbers/tables).
+
+### (superseded) original rerun plan
 
 Tom (2026-08-13 ~12:35Z): "we basically need to rerun all the
 experiments" — the policy-ladder-over-N figure is the one to fix. Note
