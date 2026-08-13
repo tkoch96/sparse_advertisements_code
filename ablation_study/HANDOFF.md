@@ -39,26 +39,66 @@ documented choice 1000 ms for training, canonical 30000 for eval):
    the believed objective declines smoothly through it.
 2. `path_distribution_computer.solve_generic_lp_persistent` post-solve
    block (worker beliefs/gradients + corrected link-level congestion
-   accounting; deployed to head+worktree, md5 9941f6ad..., **NOT YET
-   COMMITTED** — commit it).
+   accounting; deployed to head+worktree, md5 9941f6ad...; COMMITTED as
+   9635e01 on claude/elated-blackburn-13c10e, pushed).
 
-### ⚠ IMMEDIATE open item: A/B v2 (fixab2) — and a probable crash
+### ✅ RESOLVED (2026-08-13 afternoon): A/B v2 (fixab2) — FIX VALIDATED
 
-`chain_fixab2.sh` on the head reruns georand seed 1, full+smart, N=50,
-100 iters, same init, three arms: `legacy` (fix off), `fixed30k` (fix,
-sentinel 30000), `fixed1k` (fix, training sentinel 1000). Out:
-`cache/ablation/fixab2/<arm>/N50`, logs `logs/fixab2_*.log`, ws
-`/home/ubuntu/fixab2_ws_*`. At handoff time: **fixed1k DIED mid-run**
-(~iter 12: no result JSON, run dir never renamed, no traceback found in
-the driver-side log yet — suspect a bug in fix #2 under some condition;
-check worker mem logs in
-`fixab2_ws_fixed1k/runs/1786622631-small-sparse/` and whether
-SCULPTOR_NO_ROUTE_LATENCY=1000 interacts badly with the worker patch or
-lbx scaling). legacy/fixed30k were still running. FIRST TASKS: (a) find
-why fixed1k died, (b) finish the A/B, (c) if the fix works — the
-believed objective should SPIKE at congestion instead of sailing through
-— then the georand policy-ladder MC-arm results all need re-running
-under the fixed objective (they are the paper's core figure).
+`chain_fixab2.sh` ran clean 12:03–12:15Z (georand seed 1, full+smart,
+N=50, 100 iters, same init; runs are fast — ~11 min — because gated
+probing only measures ~30×). Both surviving arms audit clean
+(n_iters=102, solve_error absent, probe_mode=smart). Rescored verdict
+(`cache/ablation/fixab2/`, pulled to Mac):
+- **legacy** (fix off): steady **+22,179.6**, combined(g4) +107,631.7 —
+  collapsed; believed repo_objective 19.59 (claims better than the
+  20.98 ms reference) vs true avg_lat 22,200 ms. Beliefs off by 3
+  orders of magnitude.
+- **fixed30k** (fix on, sentinel 30000 = defaults): steady **+1.717**,
+  combined −235.8 — healthy; believed 22.7022 vs true 22.7014 —
+  **beliefs match ground truth to 4 significant figures**. Probe
+  reasons shifted to (a)-dominated (20/27).
+- **fixed1k** (fix on, sentinel 1000): **dies deterministically** — NOT
+  a bug in fix #2. The 1000 ms sentinel collapses believed-LB
+  distributions to point masses (prob 1.0 at one value), every explore
+  candidate's value falls to the −1e6 sentinel, the max-information
+  step re-picks an already-measured adv, and STOCK code's re-measure
+  guard at `sparse_advertisements_v3.py:2081-2089` prints 'woops' and
+  calls **`exit(0)`** — hence rc=0, no traceback, run dir never
+  renamed. Conclusion: the documented "1000 for training" sentinel
+  choice is dead with the congestion-aware objective; **use the 30000
+  default** (empirically stable here despite the old gradient-scale
+  concern; n=1, the ladder rerun is the real test).
+
+Caveat: fixab2 is n=1 per arm (same-seed single trials are noisy), but
+the belief-calibration evidence (19.6-believed/22,200-true → 22.70/22.70)
+is mechanism-level, not a noisy comparison.
+
+### ⚠ IN FLIGHT: FULL policy-ladder rerun under the fixed objective
+
+Tom (2026-08-13 ~12:35Z): "we basically need to rerun all the
+experiments" — the policy-ladder-over-N figure is the one to fix. Note
+`mc_off_worker` conditionally delegates to the real
+`solve_generic_lp_persistent`, so even no_mc arms touch the fixed path.
+Two chains run CONCURRENT on the head (26 slots total ≤ ~28 Gurobi
+budget), both smoked (2-iter) first, both with pure defaults (fix ON,
+sentinel 30000), same inits (`nsweep_v2_inits_georand`), georand,
+100 iters, γ=0.1, out `cache/ablation/policy_ladder_fixed/` +
+`_artifacts/`:
+- `~/chain_fixladder.sh` (md5 8d690277...): L3–L6 ×
+  N∈{1,2,5,10,20,50} × seeds 1–5 = 120 runs, 19 slots; logs
+  `logs/fixladder_driver.log` / `fixladder_chain.log`; prints
+  "LADDER COMPLETE".
+- `~/chain_fixladder2.sh` (md5 f61674fb...): L1 no_mc+fixed at N=1
+  (5 runs, as chain_policy3 did) + L2 no_mc+sched over the dense grid
+  (30 runs), 7 slots; logs `logs/fixladder2_driver.log` /
+  `fixladder2_chain.log`; prints "NOMC COMPLETE".
+Target: 155 result JSONs. Compare against pre-fix
+`cache/ablation/policy_ladder/` — this re-bases the paper's core
+figure (regenerate via experiments/ablation/policy_table.py +
+experiments/model_error/plot_policy.py). actual-10: NOTHING was
+running on the VM when Tom asked to kill it (phases 1+2 completed
+earlier; 5 JSONs safe on head AND pulled to Mac
+`cache/ablation/a10_policy/`).
 
 ### Everything else in flight / recently landed
 

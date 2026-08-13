@@ -2079,6 +2079,16 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						# for i in inds:
 						# 	print("LB {} with prob {}".format(round(u[0][i],2), round(u[1][i],2)))
 						if tuple(a.flatten()) in self.measured:
+							# Explore picked an adv we already measured: beliefs have
+							# resolved and no candidate carries information (all values
+							# at the sentinel). SCULPTOR_EXPLORE_SKIP_MEASURED=0 restores
+							# the stock behavior (exit(0)), which silently killed runs.
+							if os.environ.get('SCULPTOR_EXPLORE_SKIP_MEASURED', '1') != '0':
+								print("Explore chose already-measured adv (value {}); skipping probe for methodology {}".format(
+									potential_value_measure[m][best_flips[m]], m))
+								for flip in best_flips[m]:
+									a[flip] = 1 - a[flip]
+								continue
 							print("Re-measuring {}".format(a))
 							print(potential_value_measure[m][best_flips[m]])
 							pickle.dump(a,open('remeasure_a.pkl','wb'))
