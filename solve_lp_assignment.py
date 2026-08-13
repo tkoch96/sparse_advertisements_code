@@ -32,6 +32,7 @@ Gurobi model rather than rebuilding from scratch for each call.
 Adding a new objective: see README.md "Adding new things" → "A new
 objective function".
 """
+import os as _os
 import numpy as np,  scipy, time, math
 from helpers import *
 from scipy.sparse import csr_matrix
@@ -509,8 +510,29 @@ def solve_lp_assignment_with_site_cost_with_failure_catch(sas, routed_through_in
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	# Congestion-aware objective (Tom, 2026-08-13). This MLU fallback used to
+	# report -model.objVal/obj_norm, in which over-capacity volume is priced
+	# at its REAL (small) latency -- while the lats_by_ug array the same call
+	# returns charges NO_ROUTE_LATENCY for exactly that volume. Same LP, two
+	# incompatible summaries, and the optimizer exploited the gap: shedding
+	# users IMPROVED the scalar it optimizes (georand, 2026-08-12 -- a run
+	# stranding 74% of volume reported 19.6ms against a 21ms reference while
+	# evaluation read 22,387ms). The scalar now comes from lats_by_ug_arr,
+	# which already has the intended semantics: true latency for uncongested
+	# volume, the no-route penalty (NO_ROUTE_LATENCY, env-tunable via
+	# SCULPTOR_NO_ROUTE_LATENCY for training) for congested volume -- so
+	# training and evaluation are the same number by construction.
+	# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores the legacy scalar for
+	# reproducing pre-fix datasets.
+	if _os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') != '0':
+		_objective = -1 * float(np.average(
+			lats_by_ug_arr, weights=sas.whole_deployment_ug_vols))
+	else:
+		_objective = -1 * model.objVal / obj_norm
+
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _objective,
+		"legacy_objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
@@ -1008,8 +1030,29 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	# Congestion-aware objective (Tom, 2026-08-13). This MLU fallback used to
+	# report -model.objVal/obj_norm, in which over-capacity volume is priced
+	# at its REAL (small) latency -- while the lats_by_ug array the same call
+	# returns charges NO_ROUTE_LATENCY for exactly that volume. Same LP, two
+	# incompatible summaries, and the optimizer exploited the gap: shedding
+	# users IMPROVED the scalar it optimizes (georand, 2026-08-12 -- a run
+	# stranding 74% of volume reported 19.6ms against a 21ms reference while
+	# evaluation read 22,387ms). The scalar now comes from lats_by_ug_arr,
+	# which already has the intended semantics: true latency for uncongested
+	# volume, the no-route penalty (NO_ROUTE_LATENCY, env-tunable via
+	# SCULPTOR_NO_ROUTE_LATENCY for training) for congested volume -- so
+	# training and evaluation are the same number by construction.
+	# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores the legacy scalar for
+	# reproducing pre-fix datasets.
+	if _os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') != '0':
+		_objective = -1 * float(np.average(
+			lats_by_ug_arr, weights=sas.whole_deployment_ug_vols))
+	else:
+		_objective = -1 * model.objVal / obj_norm
+
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _objective,
+		"legacy_objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
