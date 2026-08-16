@@ -1,12 +1,18 @@
 """Email a progress report with figure attachments to Tom (standing
 request). Creds reused from ~/Documents/budgeter/emailer.py.
 Usage: send_report.py <subject> <body_file> [attachment ...]"""
+import os
 import smtplib
 import sys
 from email.message import EmailMessage
 
 SENDER = "tomkoch123@gmail.com"
-APP_PASSWORD = "tmeyvzdskvpaivmj"
+# Credential comes from the environment or ~/.sculptor_email_pass (chmod
+# 600, NOT in git). A hardcoded app password leaked in commit 3e51bb5
+# (2026-08-16, GitGuardian incident); REVOKE + rotate it.
+APP_PASSWORD = os.environ.get('SCULPTOR_EMAIL_APP_PASSWORD') or (
+    open(os.path.expanduser('~/.sculptor_email_pass')).read().strip()
+    if os.path.exists(os.path.expanduser('~/.sculptor_email_pass')) else None)
 DEST = "tomkoch123@gmail.com"
 
 
