@@ -61,7 +61,7 @@ def rescore_seed(seed, in_dir, dpsize):
     dep = get_random_deployment(dpsize)
     dep['generic_objective'] = 'avg_latency'
     sas = Sparse_Advertisement_Eval(
-        dep, verbose=False, lambduh=0.00001, with_capacity=capacity,
+        dep, verbose=False, lambduh=0, with_capacity=capacity,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=False, gamma=0,
         n_prefixes=deployment_to_prefixes(dep), generic_objective='avg_latency')
     vols = np.asarray(sas.ug_vols)
@@ -78,6 +78,11 @@ def rescore_seed(seed, in_dir, dpsize):
             for pop in sas.pops:
                 yield [sas.popp_to_ind[p] for p in sas.popps if p[0] == pop]
 
+    # SCULPTOR_RESCORE_STORE_SCENARIOS=1: additionally persist the
+    # per-failure-scenario latencies (for scenario-level CDFs, cdf_fork.py).
+    # Default (unset) keeps the original aggregate-only JSON schema.
+    store_scen = os.environ.get('SCULPTOR_RESCORE_STORE_SCENARIOS', '0') == '1'
+
     def fail_abs(adv, which):
         a = np.asarray(adv, dtype=float)
         per_s = []
@@ -89,11 +94,13 @@ def rescore_seed(seed, in_dir, dpsize):
                     np.full(len(vols), 30000.0), weights=vols)))
                 continue
             per_s.append(steady(a2))
-        return float(np.mean(per_s))
+        return float(np.mean(per_s)), per_s
 
     opp_adv = np.eye(sas.n_popps)
     opp_steady = steady(opp_adv)
-    opp_fail = {w: fail_abs(opp_adv, w) for w in ('popps', 'pops')}
+    opp_fail, opp_fail_scen = {}, {}
+    for w in ('popps', 'pops'):
+        opp_fail[w], opp_fail_scen[w] = fail_abs(opp_adv, w)
 
     for fn, r in todo:
         old = r.get('diff_vs_opp')
@@ -101,10 +108,14 @@ def rescore_seed(seed, in_dir, dpsize):
         r['opp_avg_lat'] = opp_steady
         r['diff_vs_opp'] = r['avg_lat'] - opp_steady
         for which, key in (('popps', 'fail_popp'), ('pops', 'fail_pop')):
+            mean_abs, per_scen = fail_abs(r['adv'], which)
             r[key] = {
-                'avg_lat_under_failure_abs': fail_abs(r['adv'], which),
+                'avg_lat_under_failure_abs': mean_abs,
                 'opp_avg_lat_under_failure_abs': opp_fail[which],
             }
+            if store_scen:
+                r[key]['per_scenario_lats'] = per_scen
+                r[key]['opp_per_scenario_lats'] = opp_fail_scen[which]
         r.pop('opp_fail', None)
         r['rescored'] = True
         r['fail_eval'] = MARKER
