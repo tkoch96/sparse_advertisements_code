@@ -1927,6 +1927,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		err = [abs(x - y) for x, y in zip(b, g)]
 		probes = [r['iter'] for r in (getattr(self, '_abl_gate_hist', []) or [])
 		          if r.get('probe') and not r.get('skipped')]
+		# per-probe WHY annotations (Tom 2026-08-16): what was measured and
+		# why -- picked popp + on/off, P(sign error) at selection time, and
+		# the realized belief surprise the measurement delivered
+		_plog = {int(d.get('iter', -1)): d
+		         for d in (getattr(self, '_abl_probe_log', None) or [])}
 		fig, ax = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True)
 		ax[0].plot(its, g, color='#333333', lw=1.6, label='ground truth')
 		ax[0].plot(its, b, color='#2a78d6', lw=1.4, label='belief')
@@ -1934,6 +1939,34 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		for a_ in ax:
 			for p in probes:
 				a_.axvline(p, color='#2f9e6e', alpha=.45, lw=1)
+		_ymax = max(err) if err else 1.0
+		for p in probes:
+			d = _plog.get(int(p))
+			if not d:
+				continue
+			_surp = (None if d.get('belief_after') is None
+			         or d.get('belief_before') is None
+			         else d['belief_after'] - d['belief_before'])
+			txt = '{} {}\nPerr={:.2f}'.format(
+				d.get('popp', '?'), d.get('turning', ''),
+				d.get('p_err', float('nan')))
+			if _surp is not None:
+				txt += '\nsurp={:+.2f}'.format(_surp)
+			ax[1].annotate(txt, xy=(p, _ymax * 0.95), fontsize=6,
+			               rotation=90, va='top', ha='right',
+			               color='#2f9e6e', alpha=0.9)
+		if _plog:
+			_surps = [abs(d['belief_after'] - d['belief_before'])
+			          for d in _plog.values()
+			          if d.get('belief_after') is not None
+			          and d.get('belief_before') is not None]
+			ax[1].set_title(
+				'{} targeted probes; mean P(sign err) at pick = {:.2f}; '
+				'mean |belief surprise| = {:.2f}'.format(
+					len(_plog),
+					float(np.mean([d.get('p_err', 0) for d in _plog.values()])),
+					float(np.mean(_surps)) if _surps else float('nan')),
+				fontsize=8)
 		ax[0].set_ylabel('objective (cost)')
 		ax[0].legend(fontsize=8, frameon=False)
 		ax[0].set_title('model error over iterations (green = probe iterations)', fontsize=10)

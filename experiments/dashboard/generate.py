@@ -503,8 +503,14 @@ def conv_grid(url_prefix, figs_dir_abs, fname_fn, arms=ARMS,
             for s in SEEDS:
                 fn = a_pfx + fname_fn(pdir, rung, s, n, pname)
                 if os.path.exists(os.path.join(a_dir, fn)):
-                    links.append('<a href="{}/{}">s{}</a>'.format(
-                        a_url, fn, s))
+                    cell = '<a href="{}/{}">s{}</a>'.format(a_url, fn, s)
+                    # model-error companion figure (belief vs GT + probe
+                    # stats): superscript link when harvested
+                    me = 'ME_' + fn
+                    if os.path.exists(os.path.join(a_dir, me)):
+                        cell += '<a href="{}/{}" title="model error over '                                'iterations"><sup>m</sup></a>'.format(
+                                    a_url, me)
+                    links.append(cell)
                 else:
                     links.append('<span class="mut">s{}</span>'.format(s))
             out.append('<td class="c">{}</td>'.format(' '.join(links)))
