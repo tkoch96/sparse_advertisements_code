@@ -252,7 +252,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         import shutil
         _nsuf = ''
         _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
-        if _pmode in ('gated', 'scheduled', 'smart', 'adaptive'):
+        if _pmode in ('gated', 'scheduled', 'smart', 'adaptive', 'slotted'):
             _nsuf = '-N{}-{}'.format(
                 os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'), _pmode)
         elif _pmode == 'fixed':

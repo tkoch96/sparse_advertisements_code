@@ -379,12 +379,18 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				pm = getattr(_self, 'abl_probe_mode', None)
 				if pm == 'smart':
 					grounded = it >= int(getattr(_self, 'abl_probe_tconv', 0))
-				elif pm in ('gated', 'scheduled', 'adaptive'):
+				elif pm in ('gated', 'scheduled', 'adaptive', 'slotted'):
 					grounded = (getattr(_self, 'abl_probes_spent', 0)
 					            >= int(getattr(_self, 'abl_probe_n', 0)))
 				else:
 					grounded = True  # stock solver measures every iteration
-				fire = grounded and rd < _rel * init and (it - bi) >= _pat
+				# patience also counts from the LAST MEASUREMENT (2026-08-16:
+				# finishing the probe budget early must not hasten exit -- the
+				# run must stay flat for a full window AFTER its final
+				# verification, not merely after its last best)
+				_lp = getattr(_self, '_abl_last_probe_iter', None)
+				_post_ok = (_lp is None) or ((it - _lp) >= _pat)
+				fire = grounded and _post_ok and rd < _rel * init and (it - bi) >= _pat
 				if fire:
 					_self.abl_exit_reason = 'stop_v2'
 					print('[stop-v2] iter={} rd={:.4g} rd_init={:.4g} best_iter={} -> EARLY EXIT'.format(it, rd, init, bi), flush=True)
