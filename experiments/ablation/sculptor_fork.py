@@ -151,7 +151,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         # scheduled: unconditional probe every ~TCONV/N iterations.
         # smart: gated + (b) stale+plateau + (c) prediction-mismatch +
         #        (d) surprise-adaptive threshold (Tom, 2026-08-12).
-        assert self.abl_probe_mode in ('fixed', 'gated', 'scheduled', 'smart')
+        assert self.abl_probe_mode in ('fixed', 'gated', 'scheduled', 'smart', 'adaptive')
         # exit-on-budget applies to FIXED-BUDGET (L1) ONLY as of
         # 2026-08-14 late (Tom: "never exit because we ran out of
         # measurements — that's only for L1"). Gated/scheduled/smart
@@ -566,6 +566,58 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         return True
 
     # ============ scheduled + smart probing (2026-08-12) =================
+
+    def _abl_adaptive_decision(self):
+        """new-L6 WHEN (Tom 2026-08-16): surprise-adapted grounding.
+        Iteration-clocked AIMD on the probe interval K -- start at
+        K0 = TCONV/N; after each grounding, the REALIZED belief surprise
+        (the one bias-immune error signal: how much the measurement moved
+        the belief, relative to the achieved belief span) shrinks K
+        multiplicatively on big surprise / grows it on small; clamped to
+        [1, 3*K0]. No model-self-assessed uncertainty anywhere (the L7
+        autopsy: a biased model never volunteers that it needs checking;
+        ~290 of ~400 smart-gate firings were the dumb backstop). The
+        K_max clamp IS the staleness backstop. Probe target is always
+        'current' (pure grounding)."""
+        K0 = max(1.0, float(self.abl_probe_tconv) / max(1, self.abl_probe_n))
+        if not hasattr(self, '_abl_K'):
+            self._abl_K = float(K0)
+            self._abl_surprise_pending = None
+        if self._abl_surprise_pending is not None:
+            pre, probe_iter = self._abl_surprise_pending
+            b = getattr(self, 'current_pseudo_objective', None)
+            if b is not None and np.isfinite(b) and self.iter > probe_iter:
+                span = max(abs(getattr(self, '_stopv2_b0', float(b))
+                               - getattr(self, '_stopv2_best', float(b))), 1e-9)
+                surprise = abs(float(b) - pre) / span
+                theta = float(os.environ.get(
+                    'SCULPTOR_ABLATION_SURPRISE_THETA', '0.02'))
+                oldK = self._abl_K
+                if surprise > theta:
+                    self._abl_K = max(1.0, self._abl_K * 0.5)
+                else:
+                    self._abl_K = min(3.0 * K0, self._abl_K * 1.3)
+                print('[probe-gate] adaptive surprise={:.4f} theta={} '
+                      'K {:.1f}->{:.1f}'.format(surprise, theta, oldK,
+                                                self._abl_K), flush=True)
+                self._abl_surprise_pending = None
+        due = (self.iter - self._abl_last_probe_iter) >= int(round(self._abl_K))
+        can = self.abl_probes_spent < self.abl_probe_n
+        decision = due and can
+        if decision:
+            self._abl_last_attempt_iter = self.iter
+            self._abl_pending_probe_ctx = {}
+            b = getattr(self, 'current_pseudo_objective', None)
+            self._abl_surprise_pending = (
+                (float(b) if b is not None and np.isfinite(b) else 0.0),
+                int(self.iter))
+        print('[probe-gate] iter={} mode=adaptive K={:.1f} since_last={} '
+              'spent={}/{} -> {}'.format(
+                  self.iter, self._abl_K,
+                  self.iter - self._abl_last_probe_iter,
+                  self.abl_probes_spent, self.abl_probe_n,
+                  'PROBE' if decision else 'step'), flush=True)
+        return decision
 
     def _abl_scheduled_decision(self):
         """scheduled mode: unconditional probe every ~TCONV/N iterations --
@@ -1091,7 +1143,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 timers.append(time.time() - t_last)
                 t_last = time.time()
 
-                if self.abl_probe_mode in ('gated', 'scheduled', 'smart'):
+                if self.abl_probe_mode in ('gated', 'scheduled', 'smart', 'adaptive'):
                     # measure-XOR-step under a TOTAL measurement budget: N
                     # bounds every measurement in the run. Step iterations
                     # measure nothing; only probe iterations may measure.
@@ -1100,6 +1152,8 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                     if self.abl_probe_mode == 'smart':
                         self._abl_track_belief()
                         probe = self._abl_smart_decision(grads)
+                    elif self.abl_probe_mode == 'adaptive':
+                        probe = self._abl_adaptive_decision()
                     elif self.abl_probe_mode == 'scheduled':
                         probe = self._abl_scheduled_decision()
                     else:

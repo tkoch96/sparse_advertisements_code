@@ -379,7 +379,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				pm = getattr(_self, 'abl_probe_mode', None)
 				if pm == 'smart':
 					grounded = it >= int(getattr(_self, 'abl_probe_tconv', 0))
-				elif pm in ('gated', 'scheduled'):
+				elif pm in ('gated', 'scheduled', 'adaptive'):
 					grounded = (getattr(_self, 'abl_probes_spent', 0)
 					            >= int(getattr(_self, 'abl_probe_n', 0)))
 				else:
