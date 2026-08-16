@@ -70,14 +70,12 @@ EXPERIMENTS = [
                'figs_ladder3', 'cache/ablation/policy_ladder_v3_artifacts/figs', 'L4_'),
               ('sched', 'full', 'scheduled', 'L5 full+sched',
                'figs_ladder3', 'cache/ablation/policy_ladder_v3_artifacts/figs', 'L5_'),
-              ('sched', 'full', 'scheduled', "L6' decision WHAT",
-               'figs_ladder3', 'cache/ablation/policy_ladder_v3_artifacts/figs', 'L6p_'),
-              ('smart', 'full', 'smart', 'L7 +smart WHEN',
-               'figs_ladder3', 'cache/ablation/policy_ladder_v3_artifacts/figs', 'L7_'),
+              ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+               'figs_ladder3', 'cache/ablation/policy_ladder_v3_artifacts/figs', 'L6_'),
           ],
           'progress_manifest': 'tools/v3grid_manifest.json',
-          'heading': 'Policy ladder v3 — feature ladder L1-L7, '
-                     'avg_latency objective',
+          'heading': 'Policy ladder v3 — feature ladder L1-L6, '
+                     'avg_latency objective (10 deployments)',
           'figures': ['figures/policy_ladder_v3_5panel_objective.png'],
           'refresh': {
               'pull': [('cache/ablation/policy_ladder_v3/',
@@ -123,8 +121,8 @@ EXPERIMENTS = [
           'intro': 'One rung per capability: L1 fixed probing '
                    '&rarr; L2 scheduled probing &rarr; L3 belief LP '
                    '&rarr; L4 memory &rarr; L5 direction+explore '
-                   '&rarr; L6&prime; decision-targeted probing '
-                   '&rarr; L7 smart probe timing. Lower = better; '
+                   '&rarr; L6 slotted probe timing (even mean '
+                   'rate, surprise-biased within slots). Lower = better; '
                    'opp and painter are reference lines. L5+ train '
                    'up to 500 iters with convergence-based early '
                    'exit; probes are budgeted to N per run.'},
@@ -202,8 +200,8 @@ EXPERIMENTS = [
           'intro': 'One rung per capability: L1 fixed probing '
                    '&rarr; L2 scheduled probing &rarr; L3 belief LP '
                    '&rarr; L4 memory &rarr; L5 direction+explore '
-                   '&rarr; L6&prime; decision-targeted probing '
-                   '&rarr; L7 smart probe timing. Lower = better; '
+                   '&rarr; L6 slotted probe timing (even mean '
+                   'rate, surprise-biased within slots). Lower = better; '
                    'opp and painter are reference lines. L5+ train '
                    'up to 500 iters with convergence-based early '
                    'exit; probes are budgeted to N per run.'},

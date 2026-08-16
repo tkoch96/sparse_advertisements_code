@@ -36,13 +36,16 @@ NS = [1, 2, 5, 10, 20, 50]
 # grounding (target=current) through L5; L6 adds smart WHAT on the
 # fixed schedule; L7 adds conservative smart WHEN. v2-era ARMS are in
 # git history; v2 stores quarantined (cache/model_error/V2_ERA).
+# v4 era (2026-08-16 late): WHAT is dead (probes always ground at the
+# current advertisement -- DFO-mandated + measured optimism drift); L6 =
+# slotted WHEN (even mean rate, surprise-biased within slots); old
+# maxinfo-L6 / decision-L6' / smart-gate-L7 all retired.
 ARMS = [('L1_nomc_fixed', 'L1 no_mc+fixed', '#2a78d6'),
         ('L2_nomc_sched', 'L2 no_mc+sched', '#eb6834'),
         ('L3_nomem_sched', 'L3 no_mem+sched', '#1baf7a'),
         ('L4_nodir_sched', 'L4 no_dir+sched', '#eda100'),
         ('L5_full_sched', 'L5 full+sched', '#e87ba4'),
-        ('L6p_full_scheddecision', "L6' decision WHAT (status quo 2026-08-16; old maxinfo L6 retired)", '#4a3aa7'),
-        ('L7_full_smartcons', 'L7 +smart WHEN', '#c02f4e')]
+        ('L6_full_slotted', 'L6 slotted WHEN', '#4a3aa7')]
 
 
 def _key(dirpath):
