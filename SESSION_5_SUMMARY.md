@@ -220,4 +220,4 @@ Correctness fingerprint matches in every config.
 
 venv: `~/Documents/venv312/bin/python`
 AWS: configured locally
-Gurobi: WLS license at `~/gurobi.lic` (session limit 2 per Nicholas's email; we asked for more)
+Gurobi: WLS license at `~/gurobi.lic` (official baseline 2 sessions; empirically 20-48+ sustain -- see WLS policy note in experiments/ablation/README.md)

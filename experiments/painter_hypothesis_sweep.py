@@ -23,7 +23,8 @@ Output:
   - cache/experiments/painter_hypothesis_sweep/grid_summary.pkl
   - cache/experiments/painter_hypothesis_sweep/grid_summary.md  (the headline table)
 
-Local-only; uses 1-2 workers per cell so Gurobi WLS sessions stay <= 2
+Local-only; 1-2 workers per cell (sessions are NOT a constraint -- see
+WLS policy note in experiments/ablation/README.md; sized for a laptop)
 concurrent.
 """
 import argparse

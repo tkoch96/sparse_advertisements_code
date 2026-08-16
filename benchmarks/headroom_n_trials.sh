@@ -9,7 +9,8 @@
 #   ./benchmarks/headroom_n_trials.sh small 50 3 1 2 3
 #   ./benchmarks/headroom_n_trials.sh actual-10 150 3 1 2 3 4 5
 #
-# Concurrency cap matters for Gurobi WLS license: it has ~3 concurrent
+# OUTDATED note (kept for history; see WLS policy note in
+# experiments/ablation/README.md -- sessions are NOT the constraint): ~3 concurrent
 # sessions baseline and hard-cuts sustained overage at 32 min.
 
 set -o pipefail

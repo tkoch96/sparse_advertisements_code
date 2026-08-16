@@ -1,137 +1,184 @@
-# Ablation study handoff (2026-08-08) — IN PROGRESS
+# Ablation study handoff — V3 ERA (2026-08-16, WHAT/WHEN ladder)
 
-Continuing agent: read this + `experiments/ablation/sculptor_fork.py`'s
-docstring first. The study is NOT done. All code is committed + pushed
-(commits `solver: split solve()...` and `ablation: flag-gated fork...`).
+## READ THIS SECTION ONLY. History lives in old_handoffs/ — consult for
+## the why, not the what.
 
-## Goal
+Single source of live state: `~/.sculptor_cluster_alert/active_cluster.json`
+(head IP lives there; EVERYTHING must re-resolve it per-use, never cache).
 
-Quantify each of SCULPTOR's methodological leaps over PAINTER by building
-SCULPTOR up one feature at a time (Tom's framing: painter → monte-carlo →
-+memory → +direction → +exploration = SCULPTOR), on the REAL solver, with
-the pipeline objective **avg_lat_steady + gamma · avg_lat_under_single_popp_failures**
-(LP re-assignment per failure; NO_ROUTE volume charged 30000ms), reported
-vs one_per_peering (= "optimal", the 0 reference).
+### CURRENT STATE (2026-08-16 ~12:40Z)
 
-## Non-negotiable design rules (Tom-specified, hard-won)
+- Head (c8g.24xlarge, i-0428c395787bc3ca0) is UP and IDLE except the
+  completed v3 smoke. NO teardown — awaiting Tom's GO on the full grid.
+- **v3 SMOKE PASSED**: 7 arms x seed 1 x N=5 x 100 iters in
+  `cache/ablation/policy_ladder_v3/` — no errors, budgets respected,
+  L1 exits at iter N, L7's min-gap guard held. Visible on the dash
+  (policy-ladder tab, big objective-only figure).
+- **READY TO LAUNCH**: `tools/chain_v3.sh` + `tools/v3_full_manifest.json`
+  (28 specs, 840 cells: {classic g=.1, fracb, mlu, prio} x L1-L7 x
+  seeds 1-5 x N{1,2,5,10,20,50}, 100 iters, deployment-major across all
+  lanes). Deploy both to the head (~/), then:
+  `setsid nohup bash chain_v3.sh > /dev/null 2>&1 &`
+  Verdicts in logs/v3_driver.log; watcher `tools/watch_v3.sh`
+  (session Monitor, 30-min beats). Est ~12-16h on the governed pool.
+  The 7 smoke cells are reused (queue skips existing JSONs; identical
+  config).
 
-1. **No side-implementations.** Rungs are env-flag overrides on a fork
-   (`Ablation_Sparse_Advertisement_Solver`) of the production solver.
-   `sparse_advertisements_v3.py` may only be modified by *visual*
-   refactors (code motion into named sub-functions to create override
-   seams). `solve()` is now an orchestrator over 9 named sub-steps;
-   `_rescale_gradient` is extracted for the same reason.
-2. **Assertions prove the flags bind, every iteration**: binary state for
-   memory-off, ≤1-nonzero gradient AND ≤1-coordinate realized step
-   (momentum included) for direction-off, measurement budget for
-   exploration, byte-equal canonical init across rungs per seed
-   (`init_dep<seed>.npy` in the out-dir). `[ablation-assert] SUMMARY`
-   prints per run; violations raise.
-3. **Never trust in-process scoring.** Scoring after ANY solver ran in
-   the same process is contaminated (pattern-specific, sometimes 1000x;
-   see chip "Investigate in-process eval contamination"). ALL reported
-   numbers come from `rescore_fork.py`: fresh process per seed,
-   RAY_ADDRESS=local (never attach to a running cluster), NO workers,
-   driver-side `solve_lp_with_failure_catch` in a plain loop.
-4. **One flip per iteration** is SCULPTOR's step-design intent. For
-   single-coordinate rungs the stock rescale cap froze training entirely;
-   the fork guarantees the selected viable coordinate crosses threshold
-   each iteration. Memory-off also rounds init (memory-less = no
-   continuous state, ever). Memory-on keeps continuous values around the
-   same flip cadence (reversibility/probe-heat = what memory means).
-5. **gamma is size-dependent and small**: gamma=4 (wrapper_eval default)
-   saturates GRAD_CLIP and freezes training via the damp branch. Current
-   choice: **gamma=0.1** (SCULPTOR_ABLATION_GAMMA) for small; Tom
-   suggested ~0.01-0.1 scale. Resilience benefit ON for all SCULPTOR
-   rungs (uniform objective); painter/opp are objective-blind baselines.
-6. Run dirs are semantic + self-contained:
-   `runs/ablation-<dpsize>-<rung>-dep<seed>/` with solve.log, convergence
-   figure (make_plots is wired in), state pickles. Stray/numbered dirs
-   auto-deleted; newest-20 GC. Logs also under `logs/fork_*`.
+### THE V3 LADDER (Tom-ratified 2026-08-16: smart probing decomposed
+### into WHAT vs WHEN, pushed to the top of the ladder)
 
-## Rungs (cumulative; RUNGS dict in sculptor_fork.py)
+Probing is PURE GROUNDING (probe = measure the CURRENT advertisement,
+`SCULPTOR_ABLATION_PROBE_TARGET=current`) on the fixed schedule
+through L5; the smart deltas are isolated at L6/L7:
 
-painter (repo, no fork) → no_memory ("monte-carlo": binary, single-coord,
-no explore) → no_direction (+memory: continuous, single-coord) →
-expl_none (+direction: full vector) → expl_random (+random explore) →
-full (+entropic explore = SCULPTOR). The **monte-carlo OFF flag is NOT
-BUILT YET** (would connect painter↔no_memory): intercept
-path_distribution_computer sampling, replace MC path with avg-of-options
-pseudo-path, huge caps — do via visual refactor + fork override.
+| arm | dir | adds | probe mode / target |
+|---|---|---|---|
+| L1 | L1_nomc_fixed | budgeted-fixed (measure first N iters, exit) | fixed / current |
+| L2 | L2_nomc_sched | evenly-spaced measuring | sched / current |
+| L3 | L3_nomem_sched | congestion-aware belief LP | sched / current |
+| L4 | L4_nodir_sched | memory (continuous advs, 1-coord steps) | sched / current |
+| L5 | L5_full_sched | direction + solver-side explore | sched / current |
+| L6 | L6_full_schedwhat | +smart WHAT (max-info targeting) | sched / maxinfo |
+| L7 | L7_full_smartcons | +smart WHEN (gate, min-gap-guarded) | smart / maxinfo |
 
-## Results so far (all trusted rescores)
+L7 conservatism (Tom: gate "fires a bit too early"): criteria (a/b/c)
+cannot fire before `SCULPTOR_ABLATION_SMART_MINGAP_FRAC` (0.7) x the
+scheduled spacing since the last measurement; the (s) backstop is
+exempt. OLD L7 (Bernoulli-K3 gradient base) is PAUSED — do not rerun;
+its flag stack (SCULPTOR_ABLATION_GRAD_BASE/_K) remains in the fork.
 
-- **small, latency-only, 30 seeds x 200 iters** (archived in
-  `ablation_study/small_no_resilience/`, PRE-dates the one-flip fixes for
-  single-coordinate rungs — its no_memory/no_direction rungs used old
-  frozen semantics): painter 5.10 → MC 4.35 → +mem 3.04 → +dir 1.02 →
-  explore ≈1.0 (medians, steady vs opp).
-- **small, gamma=0.1, 5 seeds x 200 iters, CURRENT semantics**
-  (`cache/ablation/fork_5x200/`): medians (combined) painter +338,
-  all SCULPTOR rungs +0.9–1.3. THE STORY IS THE TAILS: painter
-  catastrophic 3/5; single-coordinate rungs (no_memory, no_direction)
-  each blew up on exactly 1 seed (+131, +23208 — genuine training
-  outcomes, not bugs); direction-bearing rungs never catastrophically
-  failed (worst +2.7; full had one mild +39). Direction = robustness.
-- Known repo bugs found (chips filed): NaN gradients under long-budget
-  training (fork guards + counts as nan_grad_iters; roots in 0/0 in
-  failure-scenario LPs); in-process eval contamination (may affect
-  compare_different_solutions historicals); advertisement collapse crash.
+### OBJECTIVES (all four lanes, final semantics)
 
-## Running right now (2026-08-08)
+- classic: avg_latency + 0.1*resilience (the only gamma>0 lane).
+- fracb: `frac_beyond_optimal` — scalar = HINGE capability metric (min
+  achievable excess-ms beyond opt+10ms; opp floor EXACT, via
+  solve_lp_assignment.solve_min_hinge_excess). Old assignment-derived
+  fraction kept as the 'frac_beyond' component. Revert:
+  SCULPTOR_FRACB_SCALAR=assign.
+- mlu: STANDALONE `max_util` v2 = -(A*minMLU + routed_lat + 3A*bad_frac),
+  A = SCULPTOR_MLU_WEIGHT_MULT(10) x optimal floor (~90% weight on MLU;
+  latency = tie-break; stranding provably unprofitable, bounded, never
+  the 30s sentinel). minMLU via THE canonical
+  `solve_lp_assignment.solve_min_mlu` (Gurobi). Dead ends (never
+  resurrect): force_mlu fallback Y (concentration artifact),
+  assignment-peak MLU (degenerate ~1.0). `lat_plus_max_util` remains
+  registered (the v2-era mlu-redo data used it).
+- prio: `joint_latency_bulk_download` (two-stage assignment-derived —
+  small opp crossings are metric-structural; capability twin is a
+  nonconvex QP; annotated on the dash panel; OPEN DECISION for Tom:
+  (a) jointly-linear redefinition (exact opp floor) vs (b) keep with
+  the documented exemption).
 
-- LOCAL: `decent` generalization, **1 seed** x 200 iters x 6 rungs,
-  gamma=0.1 (`logs/fork_decent_local_chain.sh` → sweep+rescore; results
-  to `cache/ablation/fork_decent/`). Tom wants to see if the
-  direction-robustness pattern holds at ~13x coordinate count.
-- VM (head i-0428c395787bc3ca0, c7g.16xlarge @ 100.54.8.15, 32 workers):
-  actual-10 RESTARTED with corrected code (old actual-10 data deleted —
-  implementation errors), 5 seeds x 200 x 6 rungs, gamma=0.1
-  (`run_a10_v2_chain.sh` on head → `cache/ablation/fork_a10_v2/`).
-  `logs/a10v2_finalize_local.sh` on the Mac auto-pulls, then STOPS the
-  head and downsizes it to m7g.4xlarge. ALWAYS tear down when done.
-  Update ~/.sculptor_cluster_alert/active_cluster.json on lifecycle
-  events.
+### POST-FIX SEMANTICS (both defaults, deployed everywhere 2026-08-16)
 
-## How to run things
+1. **lambduh == 0 in every file** (call sites + constructor defaults;
+   prox = identity; no L1 cost term; set_alpha branch unchanged -> .01).
+2. **SCULPTOR_SIG_CUTOFF=p5**: remeasure-significance cutoff = 5th
+   percentile of the prior iteration's |gradient| distribution (LB +
+   RB-popp sites in sparse_advertisements_v3). 'abs' restores the old
+   absolute .01. ROOT CAUSE it fixes: the absolute cutoff wiped
+   remeasure persistence on quantized fraction-scale objectives (the
+   fracb L6 freeze: 50/100 starved iterations -> 0/100 under p5;
+   A/B-proven, prio unaffected — continuous scalar).
+   ALSO ESTABLISHED: the min-Y fallback LP does NOT drop paths
+   (verified empirically); its NO_ROUTE sentinel marks are DESIGNED
+   congestion pricing; classic-lane v2 data was never contaminated.
 
-- Sweep: `SCULPTOR_ABLATION_GAMMA=0.1 SEEDS="..." MAX_ITER=... DPSIZE=...
-  OUT_DIR=... PORT_BASE=... RUNGS="..." ./experiments/ablation/run_fork_ladder_sweep.sh`
-  (sequential on purpose: Gurobi WLS sessions; unique ports).
-- Rescore (ALWAYS before reading numbers):
-  `python -m experiments.ablation.rescore_fork --in-dir <dir> [--dpsize d] --all`
-- Tables: combined = diff_vs_opp + gamma*(fail_popp.avg_lat_under_failure_abs
-  − fail_popp.opp_avg_lat_under_failure_abs) from the JSONs.
-- Figures: plot_fork_ladder.py (4 panels, --gamma display choice),
-  plot_normalized.py (% of painter→optimal gap closed; Tom likes this).
-- Smoke before anything big: 1 seed x 10-30 iters; verify
-  `[ablation-assert] SUMMARY` and measurement counts per rung.
+### INFRASTRUCTURE
 
-## Open items / next steps
+- **Scheduler**: `run_n_sweep_queue.py --manifest` = many cell-group
+  specs, ONE global slot pool (no static partitions), per-spec env /
+  gamma / probe-mode / dpsize / init_src / out_root / max_iter, global
+  --launch-stagger (build-thrash guard), per-spec audit+rescore, inline
+  per-cell convergence-fig harvest (spec 'artifacts_figs';
+  '<label>_<suffix>.pdf' names). Single-spec CLI mode unchanged.
+- **RAM governor** (MemGovernor in the queue; config
+  `~/queue_governor.json`, LIVE-tunable per decision): admits cells
+  toward 90% RAM with EWMA per-cell estimates + spike reserve;
+  max_active is sized by RAM/cores ONLY (Tom 2026-08-16: the "~28
+  Gurobi session budget" was a myth — official academic-WLS baseline is
+  2 sessions yet 20-48+ sustain fine empirically; oversubscription just
+  waits. See WLS policy note in experiments/ablation/README.md). Proven
+  overnight including throttle/recover cycles at 91-92%.
+- **Dashboard** (`experiments/dashboard/`, localhost:8643, refresh
+  loop `python -m experiments.dashboard.refresh --loop 180`, log
+  /private/tmp/dashboard_refresh.log): policy-ladder v3 tab (big
+  objective-only figure `policy_ladder_v3_5panel_objective.png` + 7-arm
+  conv-link grid with per-arm L<k>_ filename prefixes) + hard-objectives
+  v2 tab (replace with hardobj_v3 sections when the grid lands — clone
+  the v2 registry pattern; scorer OBJ_OF/WORLD_OF need the hardobj_v3
+  root wired). Sanity gate `sanity.py::assert_not_better_than_opp` in
+  plot_hardb3 (popfail + prio exempt, documented); score_hardb3 prunes
+  deleted files + persists objective components; per-seed opp
+  normalization EVERYWHERE (absolute axes bury good seeds — opp spans
+  30x across seeds); blank panels are data-driven-dropped.
+- **PROCESS WATCHERS — session-bound, hand over explicitly.** Three
+  layers, only one survives an agent session:
+  1. SURVIVES SESSIONS: the Mac cron notifiers
+     (`~/.sculptor_cluster_alert/liveness_check.py` every 10 min +
+     `heartbeat.py` every 3h -> SMS) and the Mac dashboard refresh loop
+     (nohup; check `pgrep -f experiments.dashboard.refresh`, restart
+     per experiments/dashboard/README.md if dead). Head-side setsid
+     chains also survive (verdicts in their driver logs).
+  2. SESSION-BOUND (dies with the agent): the Monitor wrapping
+     `tools/watch_v3.sh` on 30-min beats. A NEW AGENT MUST RE-ARM THIS
+     FIRST, before any other work:
+       Monitor(persistent) running:
+       `while true; do tools/watch_v3.sh; sleep 1800; done`
+     watch_v3.sh re-resolves the head IP from the alert JSON per beat;
+     verdict lines are COMPLETE / FAILED / SSH_ERROR / RUNNING. During
+     heavy pools also watch memfree in the beat (the governor protects,
+     but eyes on it) and disk (<6G: clean dead /tmp/ray_q_* session
+     dirs — date-pinned patterns only, never the live pool's).
+  3. Standing rules: completion is COUNT-based (JSONs vs targets) +
+     per-spec rc lines, never exit codes alone; cron heartbeats are NOT
+     reliable as the sole watchdog for dormant sessions (memory);
+     update the alert JSON on EVERY lifecycle event or the SMS crons
+     false-alarm.
+- **Email**: `python tools/send_report.py "<subject>" <body.txt>
+  [figures...]`.
+- **v3 eval stores**: tags policy_{steady,failure}_v3. v2-era ladder
+  stores quarantined in `cache/model_error/V2_ERA/` — their L1/L2 dir
+  names collide with v3's; never move them back into the live glob.
+- **Local-Mac standalone runs**: use the queue's ws recipe (PYTHONPATH,
+  short RAY_TMPDIR, figures/logs dirs, cache/data symlinks) — see
+  memory local-fork-ws-recipe.
 
-1. Collect + table the local `decent` run and the VM actual-10 v2 run
-   (medians + per-seed, combined at gamma=0.1 — Tom asks "table" often;
-   keep them coming unprompted at milestones).
-2. Build the **monte-carlo OFF** rung (see above) to complete the ladder
-   bottom link.
-3. Tails story needs more seeds at small (5 → 30) if Tom wants
-   significance on blowup rates; ~12-16h local.
-4. gamma sensitivity (0.01 vs 0.1 vs 1) is uncharacterized beyond smokes.
-5. Directory reorganization prompt exists (Tom has it) — repo-wide
-  experiments/ restructure + DEFAULTS_AUDIT; don't start it while runs
-  are live.
-6. Failure-term presentation: optionally split into %-volume-congested +
-   routed-latency (paper style) alongside the combined scalar.
+### DATASET TRUST TABLE
 
-## Gotchas that will bite you
+- `policy_ladder_v3/` + (pending) `hardobj_v3/`: THE current era
+  (post-fix semantics, 100 iters, WHAT/WHEN ladder).
+- v2 era (valid under pre-fix semantics + old ladder; superseded for
+  the ladder question, keep for reference): `policy_ladder_v2/`,
+  `hardB3v2/{fracb,prio}` (L1-L6 complete + clean), `hardB3v2/mlu`
+  (lat_plus redo, complete), `policy_ladder_v2_L7K3/` +
+  `hardB3v2_L7K3/` (old-L7 grid, killed at 107/120).
+- Quarantined: `PUREMLU_STRANDING_ERA_mlu` (head), `PRESKIP_ERA_v2/*`,
+  `WRONGWORLD_STOCK_EVAL/*`, `cache/model_error/V2_ERA/`.
+- PAUSED ideas: old L7 Bernoulli-K3 (Tom: waste of compute; flags
+  remain in the fork); zipf knob (needs reformulation: per-UG-PRIVATE
+  zipf prefs x tight caps — current global-popularity form makes the
+  problem EASIER; SCULPTOR_ZIPF plumbing works, z=0 bit-identical);
+  a10/actual-10 grid (canceled pre-launch; recipe in git history).
 
-- Don't edit imported-by-live-runs files mid-sweep; don't delete
-  `runs/17*` while a sweep is mid-run (active dirs are numbered until
-  renamed at run end). Don't run local Gurobi-heavy things concurrently
-  with the VM's 32 sessions.
-- `iters` in results is max_iter+2 (known off-by-2). opp_fail ≈ opp
-  steady always (structurally failure-proof). Fresh-process rescoring has
-  a ~0.2ms LP-degeneracy noise floor. Same-seed reruns differ (probe RNG
-  isn't pinned by SCULPTOR_DEPLOYMENT_SEED) — never compare single runs.
-- The Mac disk and the head disk both filled once (runs/ checkpoints).
-  GC exists now, but watch `df` on long sweeps.
+### NEXT STEPS
+
+1. Tom's GO -> deploy tools/{chain_v3.sh,v3_full_manifest.json} to
+   ~/ on the head, launch (command above). Deployment-major: seed-1's
+   full 4-objective block lands first — report per-deployment early.
+2. When hardobj_v3 cells land: add dash registry sections for the
+   three hard objectives (v2 tab pattern) + scorer root mapping.
+3. On V3 COMPLETE: audit (classic 210 + hard 630), email Tom
+   tables+figures, then ASK about teardown (never auto-stop while Tom
+   is iterating).
+4. Open decisions parked with Tom: prio metric redefinition
+   (linear-joint vs exemption); zipf reformulation.
+
+---
+
+Historical era notes are archived in old_handoffs/:
+- HANDOFF_2026-08-15_16_fix_stack_and_v2_eras.md — the v2 era, old-L7
+  Bernoulli-K3, MLU bug forensics, freeze root-cause, fix stack,
+  balancer/governor build-out.
+- HANDOFF_2026-08-14_stability_and_fix_eras.md — stability stack,
+  objective-bug fixes, policy-ladder eras.

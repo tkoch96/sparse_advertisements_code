@@ -231,7 +231,7 @@ checklist:
 
 - IAM user with `AmazonEC2FullAccess` + `IAMFullAccess`
 - `aws configure` locally
-- `~/gurobi.lic` (WLS academic; 3 concurrent sessions baseline)
+- `~/gurobi.lic` (WLS academic; official baseline 2 concurrent sessions -- but see the WLS policy note in experiments/ablation/README.md: empirically 20-48+ sessions sustain fine; size pools to RAM, not sessions)
 - `pip install "ray[default]" boto3` in the local venv
 - `ray up ray-cluster.yaml -y`
 
