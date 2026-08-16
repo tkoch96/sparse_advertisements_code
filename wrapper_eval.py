@@ -28,7 +28,7 @@ capacity = True
 N_TO_SIM = 1
 #### NOTE -- need to make sure lambduh decreases with the problem size
 #### or else the latency gains won't be significant enough to get a signal through
-lambduh = .00001
+lambduh = 0
 global_soln_types = ['sparse', 'anyopt', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
 
 def _run_tag_suffix():

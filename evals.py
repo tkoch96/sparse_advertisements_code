@@ -41,7 +41,7 @@ def do_eval_compare_peer_value(args):
 		ret  = None
 		while ret is None:
 			gen_random_graph_('compare_pv_test_graph_{}'.format(worker_n),n_transit=2,n_user=5+np.random.randint(5))
-			lambduh = .001
+			lambduh = 0
 			sae = Sparse_Advertisement_Eval(graph_fn='compare_pv_test_graph_{}.csv'.format(worker_n), 
 				graph_md_fn='compare_pv_test_graph_{}_md.json'.format(worker_n),lambduh=lambduh,verbose=False,
 				init={'type':'using_objective'})
@@ -159,7 +159,7 @@ def do_eval_compare_explores():
 		save_fig("compare_explores_nadv_obj_scatter_{}.pdf".format(lambduh))
 
 def do_eval_compare_initializations():
-	lambduh = .1
+	lambduh = 0
 	inits = [{'type': 'uniform'}, {'type': 'ones'}, {'type': 'zeros'}, {'type':'random_binary'},
 		{'type': 'normal', 'var': .01}, {'type': 'normal', 'var': .001}, {'type': 'using_objective'}]
 	hr_labs = ["Uniform","All On","All Off","Random","N(.5,.01)","N(.5,.001)",'Custom']
@@ -235,7 +235,7 @@ def do_eval_compare_initializations():
 	save_fig("compare_initializations_delta_objective.pdf")
 
 def do_eval_compare_strategies():
-	lambduh = .1
+	lambduh = 0
 	metrics = {}
 	metrics_fn = os.path.join(CACHE_DIR, 'compare_strategies.pkl')
 	if os.path.exists(metrics_fn):
@@ -303,7 +303,7 @@ def do_eval_scale():
 	metrics_fn = os.path.join(CACHE_DIR, 'scale_eval.pkl')
 	if os.path.exists(metrics_fn):
 		metrics = pickle.load(open(metrics_fn,'rb'))
-	lambduh = .1
+	lambduh = 0
 	# for n_user in [5,10,15,20,25,30,35,40]:
 	# 	print("NU: {}".format(n_user))
 	# 	for _i in range(N_SIM):
@@ -573,7 +573,7 @@ def do_eval_whatifs():
 	metrics = {}
 	N_TO_SIM = 1
 
-	lambduh = .1
+	lambduh = 0
 	
 	wm = None
 	

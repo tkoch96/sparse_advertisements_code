@@ -32,6 +32,7 @@ Gurobi model rather than rebuilding from scratch for each call.
 Adding a new objective: see README.md "Adding new things" → "A new
 objective function".
 """
+import os as _os
 import numpy as np,  scipy, time, math
 from helpers import *
 from scipy.sparse import csr_matrix
@@ -135,14 +136,63 @@ def get_obj_fn(model, minimizer_weight, opt_var, obj, n_paths, sas, using_mlu=Fa
 		raise ValueError("Objective {} not implemented in solve_lp_assignment".format(obj))
 	return model, opt_var, obj_fn, obj_norm
 
+def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
+		legacy_objective):
+	"""Congestion-aware SOFT BOUNDED scalar (Tom 2026-08-14; see
+	path_distribution_computer): -(avg routed latency + SOFT_CONG_PENALTY *
+	frac(congested+noroute)). ONE helper for every objective return site --
+	the 08-13 fix patched two MLU fallbacks inline and MISSED the primary
+	min-latency path (74%-congested adv scored ~4ms, below the opp floor).
+
+	BAD volume is derived FROM lats_by_ug_arr, not from the caller's
+	congestion accounting: the sentinel marks BOTH congested and NO-ROUTE
+	volume, and fraction_congested_volume misses the no-route class --
+	stranded volume then leaks sentinel-scale into the "routed" average
+	(opp-under-failure scored ~300 on scenarios stranding 0.1% of volume;
+	caught by the dash refs 2026-08-14 late). Per-UG bad weight =
+	clip((lat-200)/(NO_ROUTE-200), 0, 1): exact 1 for pure-sentinel UGs,
+	~0 for real latencies, proportional for blended-average UGs.
+	fraction_congested_volume is kept in the signature for reference only.
+	SCULPTOR_CONGESTION_AWARE_OBJ=0 restores legacy."""
+	if _os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') == '0':
+		return legacy_objective
+	_soft_P = float(_os.environ.get('SCULPTOR_SOFT_CONG_PENALTY', '50'))
+	vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float)
+	lats = np.asarray(lats_by_ug_arr, dtype=float).flatten()
+	_tv = float(np.sum(vols))
+	_S = float(np.sum(lats * vols))
+	_bad_w = np.clip((lats - 200.0) / max(NO_ROUTE_LATENCY - 200.0, 1.0),
+					 0.0, 1.0)
+	_B = float(np.sum(_bad_w * vols))
+	_R = max(0.0, _S - NO_ROUTE_LATENCY * _B)
+	_routed_v = max(_tv - _B, 1e-9)
+	return -1 * (_R / _routed_v + _soft_P * _B / _tv)
+
+
+def _is_avg_latency_obj(obj):
+	# True when the LP is solving plain avg_latency -- the ONLY case where
+	# the soft-bounded latency scalar may REPLACE the model objective.
+	# Hard objectives (frac_beyond, MLU, priority, ...) keep their own
+	# model.objVal: overriding them with a latency scalar destroys their
+	# semantics (caught on the hardB3v2 smoke, 2026-08-14 late).
+	name = getattr(obj, 'obj', obj)
+	return name == 'avg_latency'
+
+
 def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs):
 	## minimizes average latency for low latency traffic and (sorta) amount of congested low latency traffic
 
 
-	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency')
+	# no_persistent: this function consumes avg_latency_ret['raw_solution'],
+	# a path-aligned array only the NON-persistent LP returns; the worker's
+	# persistent ret has a different shape (MLinExpr+dict TypeError,
+	# 2026-08-14 -- first time this objective ran inside a Ray worker).
+	avg_latency_ret = solve_generic_lp_with_failure_catch(sas, routed_through_ingress, 'avg_latency', no_persistent=True)
 	if not avg_latency_ret['solved']:
 		print("Didn't even solve low latency allocation ... ")
-		exit(0)
+		# was exit(0): process death with rc=0 (the silent-death pattern);
+		# return unsolved so callers can handle it (2026-08-14)
+		return {'solved': False, 'objective': None}
 
 
 	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
@@ -229,8 +279,8 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 
 	if model.status != 2: ## 2 is optimal
 		print("Didnt solve")
-		exit(0)
-		return {'solved': False}
+		# was exit(0) followed by an unreachable return (2026-08-14)
+		return {'solved': False, 'objective': None}
 	low_latency_path_distribution = x
 	bulk_path_distribution = b.X
 	# print("Solved!")
@@ -335,7 +385,12 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	# 	fraction_congested_volume_with_bulk))
 
 
-	if ALPHA_BULK > 1:
+	if (_os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') != '0'
+			and _is_avg_latency_obj(obj)):
+		objective_val = _soft_bounded_objective(
+			sas, lats_by_ug_arr, fraction_congested_volume,
+			-1 * (np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + ALPHA_BULK * congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols)))
+	elif ALPHA_BULK > 1:
 		objective_val = -1 * (1.0 / ALPHA_BULK * np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols))
 	else:
 		objective_val = -1 * (np.dot(available_latencies,x) / np.sum(sas.whole_deployment_ug_vols) + ALPHA_BULK * congested_volume_with_bulk / np.sum(sas.whole_deployment_ug_vols))
@@ -509,8 +564,29 @@ def solve_lp_assignment_with_site_cost_with_failure_catch(sas, routed_through_in
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	# Congestion-aware objective (Tom, 2026-08-13). This MLU fallback used to
+	# report -model.objVal/obj_norm, in which over-capacity volume is priced
+	# at its REAL (small) latency -- while the lats_by_ug array the same call
+	# returns charges NO_ROUTE_LATENCY for exactly that volume. Same LP, two
+	# incompatible summaries, and the optimizer exploited the gap: shedding
+	# users IMPROVED the scalar it optimizes (georand, 2026-08-12 -- a run
+	# stranding 74% of volume reported 19.6ms against a 21ms reference while
+	# evaluation read 22,387ms). The scalar now comes from lats_by_ug_arr,
+	# which already has the intended semantics: true latency for uncongested
+	# volume, the no-route penalty (NO_ROUTE_LATENCY, env-tunable via
+	# SCULPTOR_NO_ROUTE_LATENCY for training) for congested volume -- so
+	# training and evaluation are the same number by construction.
+	# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores the legacy scalar for
+	# reproducing pre-fix datasets.
+	# soft-bounded scalar via the ONE helper (bad volume derived from
+	# lats: congested AND no-route; see _soft_bounded_objective)
+	_objective = _soft_bounded_objective(
+		sas, lats_by_ug_arr, fraction_congested_volume,
+		-1 * model.objVal / obj_norm)
+
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _objective,
+		"legacy_objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
@@ -811,6 +887,129 @@ generic_lp_functions = {
 _PERSISTENT_GUROBI_OBJECTIVES = ('avg_latency', 'per_site_cost')
 
 
+def solve_min_mlu(sas, routed_through_ingress):
+	"""THE canonical 'MLU of an advertisement' (Tom 2026-08-15: one
+	implementation so bugs get fixed in one place): best-achievable peak
+	link utilization given the advertisement's ingress options. Gurobi
+	LP: min Y s.t. every routable UG's volume splits across its
+	per-prefix winner popps and every link load <= Y*cap. Monotone in
+	the option sets, so one-per-peering is a hard floor (<= 1/scale by
+	the anycast-provisioning argument: caps = anycast_load*scale makes
+	the anycast split feasible under opp). Deliberately NOT built on
+	get_paths_by_ug -- the min-Y fallback's path construction drops most
+	paths (open bug 2026-08-15); this reads routed_through_ingress
+	({prefix: {ug: popp}}) directly. UGs with no ingress under any
+	prefix are excluded here; callers charge them separately (bounded
+	stranding penalty, never the 30s sentinel).
+	Returns (mlu, routable_vol_frac); mlu is None if nothing routes.
+	Consumers: experiments/model_error/objectives.py lat_plus_max_util."""
+	from scipy.sparse import lil_matrix
+	cand = {}
+	for _pref, ug_to_popp in routed_through_ingress.items():
+		for ug, popp in ug_to_popp.items():
+			cand.setdefault(ug, set()).add(sas.popp_to_ind[popp])
+	vols_arr = np.asarray(sas.whole_deployment_ug_vols, dtype=float).flatten()
+	vols = {u: float(v) for u, v in zip(sas.whole_deployment_ugs, vols_arr)}
+	ugs = [u for u in sas.whole_deployment_ugs if cand.get(u)]
+	total_v = float(vols_arr.sum())
+	if not ugs or total_v <= 0:
+		return None, 0.0
+	routable_v = float(sum(vols[u] for u in ugs))
+	caps = np.asarray(sas.link_capacities_arr, dtype=float).flatten()[:sas.n_popps]
+	idx = [(u, p) for u in ugs for p in sorted(cand[u])]
+	nx = len(idx)
+	A_eq = lil_matrix((len(ugs), nx + 1))
+	b_eq = np.array([vols[u] for u in ugs])
+	urow = {u: r for r, u in enumerate(ugs)}
+	A_ub = lil_matrix((sas.n_popps, nx + 1))
+	for j, (u, p) in enumerate(idx):
+		A_eq[urow[u], j] = 1.0
+		A_ub[p, j] = 1.0
+	for i in range(sas.n_popps):
+		A_ub[i, nx] = -max(float(caps[i]), 1e-9)
+	model = gp.Model()
+	model.Params.LogToConsole = 0
+	model.Params.TimeLimit = 15.0
+	model.Params.Threads = N_WORKERS_GENERIC
+	z = model.addMVar(nx + 1, lb=0)
+	model.addConstr(A_eq.tocsr() @ z == b_eq)
+	model.addConstr(A_ub.tocsr() @ z <= np.zeros(sas.n_popps))
+	model.setObjective(z[nx].sum(), gp.GRB.MINIMIZE)
+	model.optimize()
+	if model.status != gp.GRB.OPTIMAL:
+		raise RuntimeError('solve_min_mlu: gurobi status {}'.format(model.status))
+	return float(z.X[nx]), routable_v / total_v
+
+
+def solve_min_hinge_excess(sas, routed_through_ingress, best_lats_by_ug,
+		x_ms=10.0, over_penalty=1000.0):
+	"""Capability twin of solve_min_mlu for the fracb lane (2026-08-16,
+	Tom's invariant: NOTHING may display better than one-per-peering).
+	The old fracb eval reported frac-beyond of the LATENCY-optimal split,
+	an assignment-derived metric a constrained arm can legitimately beat
+	opp on (opp's richer options let the latency LP push more marginal
+	users past the threshold). This LP optimizes the metric itself:
+	min sum(vol * max(0, path_lat - (best_u + x_ms))) -- per-path hinge
+	costs are CONSTANTS, so it is a plain LP -- with soft capacity
+	(elastic overflow at a bounded over_penalty per unit volume, never
+	the 30s sentinel). Monotone in the option set => opp is an exact
+	floor. Returns (excess_per_unit_vol, lats_by_ug_proxy, frac_beyond)
+	where frac_beyond is the fraction of volume routed on beyond-
+	threshold paths in the optimal split (display component)."""
+	from scipy.sparse import lil_matrix
+	cand = {}
+	for _pref, ug_to_popp in routed_through_ingress.items():
+		for ug, popp in ug_to_popp.items():
+			cand.setdefault(ug, set()).add(sas.popp_to_ind[popp])
+	vols_arr = np.asarray(sas.whole_deployment_ug_vols, dtype=float).flatten()
+	ug_list = list(sas.whole_deployment_ugs)
+	vols = {u: float(v) for u, v in zip(ug_list, vols_arr)}
+	best = {u: float(b) for u, b in zip(
+		ug_list, np.asarray(best_lats_by_ug, dtype=float).flatten())}
+	ugs = [u for u in ug_list if cand.get(u)]
+	total_v = float(vols_arr.sum())
+	if not ugs or total_v <= 0:
+		return None, None, None
+	caps = np.asarray(sas.link_capacities_arr, dtype=float).flatten()[:sas.n_popps]
+	idx, cost = [], []
+	for u in ugs:
+		for p in sorted(cand[u]):
+			idx.append((u, p))
+			lat = float(sas.whole_deployment_ug_perfs[u][sas.popps[p]])
+			cost.append(max(0.0, lat - (best[u] + float(x_ms))))
+	nx = len(idx)
+	# vars: x paths, then per-popp overflow o
+	nv = nx + sas.n_popps
+	A_eq = lil_matrix((len(ugs), nv))
+	b_eq = np.array([vols[u] for u in ugs])
+	urow = {u: r for r, u in enumerate(ugs)}
+	A_ub = lil_matrix((sas.n_popps, nv))
+	for j, (u, p) in enumerate(idx):
+		A_eq[urow[u], j] = 1.0
+		A_ub[p, j] = 1.0
+	for i in range(sas.n_popps):
+		A_ub[i, nx + i] = -1.0
+	b_ub = np.maximum(caps, 1e-9)
+	c = np.concatenate([np.asarray(cost), np.full(sas.n_popps,
+												  float(over_penalty))])
+	model = gp.Model()
+	model.Params.LogToConsole = 0
+	model.Params.TimeLimit = 15.0
+	model.Params.Threads = N_WORKERS_GENERIC
+	z = model.addMVar(nv, lb=0)
+	model.addConstr(A_eq.tocsr() @ z == b_eq)
+	model.addConstr(A_ub.tocsr() @ z <= b_ub)
+	model.setObjective(c @ z, gp.GRB.MINIMIZE)
+	model.optimize()
+	if model.status != gp.GRB.OPTIMAL:
+		raise RuntimeError('solve_min_hinge_excess: gurobi status {}'.format(
+			model.status))
+	x = z.X[:nx]
+	excess = float(np.dot(np.asarray(cost), x)) / total_v
+	beyond_v = float(np.sum([x[j] for j, cst in enumerate(cost) if cst > 0]))
+	return excess, None, beyond_v / total_v
+
+
 def _can_use_persistent_gurobi(sas):
 	"""True iff `sas` is a worker with an initialized persistent Gurobi model.
 
@@ -831,7 +1030,12 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 	## faster on the MC inner loop (same adv, varying routing realization).
 	## Falls through to scipy if (a) sas isn't a worker, (b) the persistent
 	## solve returns unsolved, or (c) it raises.
-	if obj in _PERSISTENT_GUROBI_OBJECTIVES and _can_use_persistent_gurobi(sas):
+	# force_mlu=True (2026-08-15, pure-MLU objective): skip the primary
+	# formulations and go straight to the MLU-MINIMIZING fallback LP --
+	# callers that want the best achievable peak utilization (not the
+	# utilization of a latency-optimal split, which pins at ~1.0).
+	if (obj in _PERSISTENT_GUROBI_OBJECTIVES and _can_use_persistent_gurobi(sas)
+		and not kwargs.get('no_persistent') and not kwargs.get('force_mlu')):
 		try:
 			ret = sas.solve_generic_lp_persistent(
 				routed_through_ingress, obj, **kwargs)
@@ -844,17 +1048,19 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 			print("Persistent Gurobi solve raised ({}); "
 				  "falling back to scipy".format(e))
 
-	try:
-		return generic_lp_functions[obj](sas, routed_through_ingress, obj, **kwargs)
-	except KeyError:
-		pass
+	if not kwargs.get('force_mlu'):
+		try:
+			return generic_lp_functions[obj](sas, routed_through_ingress, obj, **kwargs)
+		except KeyError:
+			pass
 
 	verb = False
-	ret = solve_generic_lp(sas, routed_through_ingress, obj, **kwargs)
-	if ret['solved']:
-		if kwargs.get('smallverb') or verb:
-			print("Solved Generic LP without MLU")
-		return ret
+	if not kwargs.get('force_mlu'):
+		ret = solve_generic_lp(sas, routed_through_ingress, obj, **kwargs)
+		if ret['solved']:
+			if kwargs.get('smallverb') or verb:
+				print("Solved Generic LP without MLU")
+			return ret
 	elif kwargs.get('smallverb') or verb:
 		print("Failed to solve non-MLU problem")
 
@@ -1008,8 +1214,29 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 
 	fraction_congested_volume = congested_volume / all_volume
 
+	# Congestion-aware objective (Tom, 2026-08-13). This MLU fallback used to
+	# report -model.objVal/obj_norm, in which over-capacity volume is priced
+	# at its REAL (small) latency -- while the lats_by_ug array the same call
+	# returns charges NO_ROUTE_LATENCY for exactly that volume. Same LP, two
+	# incompatible summaries, and the optimizer exploited the gap: shedding
+	# users IMPROVED the scalar it optimizes (georand, 2026-08-12 -- a run
+	# stranding 74% of volume reported 19.6ms against a 21ms reference while
+	# evaluation read 22,387ms). The scalar now comes from lats_by_ug_arr,
+	# which already has the intended semantics: true latency for uncongested
+	# volume, the no-route penalty (NO_ROUTE_LATENCY, env-tunable via
+	# SCULPTOR_NO_ROUTE_LATENCY for training) for congested volume -- so
+	# training and evaluation are the same number by construction.
+	# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores the legacy scalar for
+	# reproducing pre-fix datasets.
+	# soft-bounded scalar via the ONE helper (bad volume derived from
+	# lats: congested AND no-route; see _soft_bounded_objective)
+	_objective = _soft_bounded_objective(
+		sas, lats_by_ug_arr, fraction_congested_volume,
+		-1 * model.objVal / obj_norm)
+
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _objective,
+		"legacy_objective": -1 * model.objVal / obj_norm,
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
@@ -1132,7 +1359,10 @@ def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	fraction_congested_volume = congested_volume / all_volume
 
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": (_soft_bounded_objective(
+			sas, lats_by_ug_arr, fraction_congested_volume,
+			-1 * model.objVal / obj_norm)
+			if _is_avg_latency_obj(obj) else -1 * model.objVal / obj_norm),
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
@@ -1302,7 +1532,7 @@ def solve_lp_with_failure_catch(sas, adv, **kwargs):
 	obj_norm = np.sum(np.sqrt(sas.whole_deployment_ug_vols))
 
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume, -1 * model.objVal / obj_norm),
 		"raw_solution": x.X,
 		"paths_by_ug": paths_by_ug,
 		"available_paths": available_paths,
@@ -1446,7 +1676,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 	obj_norm = np.sum(sas.whole_deployment_ug_vols)
 
 	return {
-		"objective": -1 * model.objVal / obj_norm,
+		"objective": _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume, -1 * model.objVal / obj_norm),
 		"raw_solution": x.X,
 		"available_latencies": available_latencies,
 		"available_paths": available_paths,
@@ -1457,3 +1687,19 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 		"fraction_congested_volume": fraction_congested_volume,
 		# "routed_through_ingress": routed_through_ingress,
 	}
+
+# Optional extension objectives (experiments/model_error/objectives.py):
+# SCULPTOR_XOBJS=1 registers them into generic_lp_functions at import
+# time -- in EVERY process importing this module (driver AND Ray
+# workers), which the runtime register() alone cannot guarantee. Module
+# tail so the circular import (objectives.py imports from here)
+# resolves against a fully-initialized namespace.
+if _os.environ.get('SCULPTOR_XOBJS', '0') == '1':
+	try:
+		from experiments.model_error import objectives as _xobjs
+		_xobjs.register()
+		print('[xobjs] extension objectives registered: {}'.format(
+			sorted(_xobjs.REGISTERED_OBJECTIVES)))
+	except Exception as _xe:
+		print('[xobjs] registration FAILED: {}'.format(_xe))
+

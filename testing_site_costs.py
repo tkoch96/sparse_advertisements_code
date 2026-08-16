@@ -228,7 +228,7 @@ def testing_site_cost(dpsize, port, cost_setting, **kwargs):
 	"""
 
 	np.random.seed(31411)
-	lambduh = .00001 ## unused more or less
+	lambduh = 0 ## unused more or less
 	gamma = 0#2.0
 
 	n_random_sim = 1

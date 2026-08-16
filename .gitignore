@@ -142,3 +142,7 @@ recovered_actual32/*.pkl
 benchmarks/out/
 data/
 runs/
+dashboard_site/
+hardb3_dash/
+__pycache__/
+*.pyc

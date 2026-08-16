@@ -192,7 +192,7 @@ def test_sas_solve_converges_end_to_end():
 	# the same path real runs do.
 	sas = Sparse_Advertisement_Solver(
 		deployment,
-		lambduh=1.0, gamma=0, verbose=False,
+		lambduh=0, gamma=0, verbose=False,
 		n_prefixes=n_prefixes_safe, with_capacity=False,
 	)
 

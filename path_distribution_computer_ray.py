@@ -260,6 +260,13 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		self.set_training_mode(data)
 		return "ACK"
 
+	def _cmd_set_mc_num(self, data):
+		# Explore-time MC override (Tom, 2026-08-14): the driver bumps
+		# MC_NUM while evaluating explore candidates (entropy needs a real
+		# distribution; training may run MC_NUM=1) and restores it after.
+		self.MC_NUM = int(data)
+		return "ACK"
+
 	def _cmd_reset_cache(self, _data=None):
 		self.clear_caches()
 		return "ACK"

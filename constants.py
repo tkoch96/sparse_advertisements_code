@@ -42,6 +42,7 @@ N_PREFIXES = 10
 
 ADVERTISEMENT_THRESHOLD = .5
 import numpy as np
+import os as _os
 def threshold_a(a):
 	return (a > ADVERTISEMENT_THRESHOLD).astype(np.float32)
 
@@ -71,7 +72,14 @@ N_POPS_ACTUAL_DEPLOYMENT = 10
 
 MIN_LATENCY = 1
 MAX_LATENCY = 300
-NO_ROUTE_LATENCY = 100*MAX_LATENCY
+# SCULPTOR_NO_ROUTE_LATENCY overrides the no-route sentinel (default
+# 100*MAX_LATENCY = 30000ms). The hard 30000ms charge gives failure-scenario
+# LPs a ~1000x scale mismatch vs steady latencies, which destabilizes
+# resilience-gradient training at gamma >~ 0.3; a softer value (e.g. 1000ms
+# -- still >3x any real path) tames the gradient. Set it for TRAINING
+# processes only: trusted rescoring/eval must keep the canonical default so
+# reported numbers stay comparable.
+NO_ROUTE_LATENCY = int(float(_os.environ.get('SCULPTOR_NO_ROUTE_LATENCY', 100*MAX_LATENCY)))
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 import re

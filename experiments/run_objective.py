@@ -189,7 +189,7 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 	sas = Sparse_Advertisement_Eval(
 		deployment,
 		verbose=True,
-		lambduh=0.00001,
+		lambduh=0,
 		with_capacity=capacity,
 		explore=DEFAULT_EXPLORE,
 		using_resilience_benefit=spec.using_resilience_benefit,

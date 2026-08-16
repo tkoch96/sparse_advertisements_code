@@ -1,0 +1,7 @@
+{
+  "_doc": "Live-tunable RAM governor for run_n_sweep_queue (re-read on every admission decision; edit in place on the head at ~/queue_governor.json). max_active MUST stay <= 28: the Gurobi WLS session budget hard-cuts above ~28 sustained sessions regardless of RAM headroom (Tom 2026-08-15: target 90% RAM utilization; RAM is what crashes the box, cores idle by design).",
+  "max_active": 28,
+  "mem_target": 0.90,
+  "reserve_gb": 8,
+  "est_cell_gb": 6.0
+}

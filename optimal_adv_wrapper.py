@@ -39,7 +39,7 @@ from scipy.sparse import csr_matrix, lil_matrix
 
 class Optimal_Adv_Wrapper:
 	### Wrapper class for all solutions to finding optimal advertisements
-	def __init__(self, deployment, lambduh=1.0, verbose=True, gamma=0, **kwargs):
+	def __init__(self, deployment, lambduh=0, verbose=True, gamma=0, **kwargs):
 		self.solution_type = "None"
 		self.verbose = verbose
 		self.ts_loop = time.time()

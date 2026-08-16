@@ -33,7 +33,7 @@ def compare_from_trained_sparse(run_dir, **kwargs):
 	dpsize = sys.argv[1]
 	port = int(sys.argv[2])
 	deployment['port'] = port
-	lambduh = .00001 ## unused more or less
+	lambduh = 0 ## unused more or less
 	gamma = 2.0
 	wm = None
 	sas = None
@@ -687,7 +687,7 @@ def compare_speedup_heuristic():
 	np.random.seed(31410)
 	try:
 		dpsize = sys.argv[1]
-		lambduh = .00001 ## unused more or less
+		lambduh = 0 ## unused more or less
 		gamma = 2.0
 		obj = 'avg_latency'
 		using_generic_objectives = ['not_using', 'using']
@@ -829,7 +829,7 @@ def train_models_for_obj(obj):
 	try:
 		dpsize = sys.argv[1]
 		port = int(sys.argv[2])
-		lambduh = .00001 ## unused more or less
+		lambduh = 0 ## unused more or less
 		gamma = 2.0
 
 		n_random_sim = 1

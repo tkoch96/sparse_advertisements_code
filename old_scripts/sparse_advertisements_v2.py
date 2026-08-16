@@ -23,7 +23,7 @@ def gen_random_graph_(*args,**kwargs):
 	gen_random_graph(*args,**kwargs)
 
 class Sparse_Advertisement_Wrapper:
-	def __init__(self, graph_fn=TOY_GRAPH_FN, graph_md_fn=TOY_GRAPH_MD_FN, lambduh=1.0, verbose=True, 
+	def __init__(self, graph_fn=TOY_GRAPH_FN, graph_md_fn=TOY_GRAPH_MD_FN, lambduh=0, verbose=True, 
 			cont_grads=False,  advertisement_cost="l1",
 			init={'type':'using_objective'}, explore='entropy',
 			n_prefixes=2, resilience_benefit=False, gamma=0,with_capacity=False):
@@ -1704,14 +1704,14 @@ def main():
 
 
 	## Simple test
-	lambduh = .1
+	lambduh = 0
 	sas = Sparse_Advertisement_Solver(graph_fn="test_graph.csv", graph_md_fn="test_graph_md.json", 
 		lambduh=lambduh,verbose=True,with_capacity=True)
 	sas.solve_twopart()
 	sas.make_plots('twopart')
 
 	# # Comparing different solutions
-	# lambduh = .001
+	# lambduh = 0
 	# sae = Sparse_Advertisement_Eval(graph_fn="test_graph.csv", verbose=False,
 	# 	graph_md_fn="test_graph_md.json", lambduh=lambduh, cont_grads=False,advertisement_cost="sigmoid")
 	# sae.compare_different_solutions(which='twopart')

@@ -77,7 +77,7 @@ def _build_sas(size):
 
 	sas = Sparse_Advertisement_Solver(
 		deployment,
-		lambduh=1.0, gamma=0, verbose=False,
+		lambduh=0, gamma=0, verbose=False,
 		n_prefixes=n_prefixes_safe, with_capacity=False,
 	)
 	wm = Worker_Manager(sas.get_init_kwa(), deployment)

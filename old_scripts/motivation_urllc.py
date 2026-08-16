@@ -87,7 +87,7 @@ def motivation_urllc():
 	gamma = 10
 	capacity = True
 
-	lambduh = .000001
+	lambduh = 0
 
 	wm = None
 	
