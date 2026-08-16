@@ -252,6 +252,38 @@ def main():
                 if not os.path.exists(dst):
                     shutil.copy(p, dst)
 
+    def build_missing_cells():
+        """Re-scannable work list (2026-08-16, Tom: 'there should be a
+        central queue of jobs... CPUs report back when finished'). Called
+        once per PASS: a cell is work iff its JSON is absent AND no FRESH
+        .inprog marker exists (another slot/queue is computing it; stale
+        markers > SCULPTOR_CELL_TIMEOUT are ignored). This makes purges,
+        failures, and killed cells re-enter the queue on the next pass
+        instead of waiting for a whole follow-up sweep."""
+        timeout_s = float(os.environ.get('SCULPTOR_CELL_TIMEOUT', '7200'))
+        found = []
+        for s_ in all_seeds:
+            for sp_ in specs:
+                if s_ not in sp_['seeds_list']:
+                    continue
+                for rung_ in sp_['rungs_list']:
+                    for N_ in sp_['n_list']:
+                        out_fn_ = os.path.join(
+                            sp_['out_root'], 'N{}'.format(N_),
+                            'seed_{}_{}.json'.format(s_, rung_))
+                        if os.path.exists(out_fn_):
+                            continue
+                        marker = out_fn_ + '.inprog'
+                        try:
+                            if (os.path.exists(marker) and
+                                    time.time() - os.path.getmtime(marker)
+                                    < timeout_s):
+                                continue
+                        except OSError:
+                            pass
+                        found.append((sp_, N_, s_, rung_))
+        return found
+
     # ---- build the queue (skip completed cells)
     # Deployment-major ordering (Tom 2026-08-14): complete every (rung, N)
     # of seed k before starting seed k+1 -- and ACROSS specs (Tom
@@ -263,17 +295,7 @@ def main():
         for s in sp['seeds_list']:
             if s not in all_seeds:
                 all_seeds.append(s)
-    cells = []
-    for s in all_seeds:
-        for sp in specs:
-            if s not in sp['seeds_list']:
-                continue
-            for rung in sp['rungs_list']:
-                for N in sp['n_list']:
-                    out_fn = os.path.join(sp['out_root'], 'N{}'.format(N),
-                                          'seed_{}_{}.json'.format(s, rung))
-                    if not os.path.exists(out_fn):
-                        cells.append((sp, N, s, rung))
+    cells = build_missing_cells()
     q = queue.Queue()
     for c in cells:
         q.put(c)
@@ -369,8 +391,31 @@ def main():
                 if wait > 0:
                     time.sleep(wait)
                 last_launch[0] = time.time()
+            out_fn = os.path.join(sp['out_root'], 'N{}'.format(N),
+                                  'seed_{}_{}.json'.format(s, rung))
+            marker = out_fn + '.inprog'
+            try:
+                with open(marker, 'w') as mf:
+                    json.dump({'pid': os.getpid(), 'slot': slot,
+                               'ts': time.time()}, mf)
+            except OSError:
+                pass
+            timeout_s = float(os.environ.get('SCULPTOR_CELL_TIMEOUT', '7200'))
             with open(log, 'w') as lf:
-                rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf, stderr=subprocess.STDOUT)
+                try:
+                    rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf,
+                                         stderr=subprocess.STDOUT,
+                                         timeout=timeout_s)
+                except subprocess.TimeoutExpired:
+                    rc = -99
+                    print('[queue] TIMEOUT {} N={} seed={} rung={} after '
+                          '{}s -> killed, re-queued next pass'.format(
+                              sp['label'], N, s, rung, int(timeout_s)),
+                          flush=True)
+            try:
+                os.remove(marker)
+            except OSError:
+                pass
             if rc != 0:
                 with flock:
                     failures.append((sp['label'], N, s, rung, rc))
@@ -381,12 +426,24 @@ def main():
             gov.release()
             q.task_done()
 
-    threads = [threading.Thread(target=slot_worker, args=(i,), daemon=True)
-               for i in range(n_threads)]
-    for t in threads:
-        t.start()
-    for t in threads:
-        t.join()
+    max_passes = int(os.environ.get('SCULPTOR_QUEUE_PASSES', '3'))
+    for _pass in range(max_passes):
+        if _pass > 0:
+            cells = build_missing_cells()
+            if not cells:
+                break
+            print('[queue] pass {}: re-queuing {} missing cells (failures/'
+                  'timeouts/late-added work)'.format(_pass + 1, len(cells)),
+                  flush=True)
+            for c in cells:
+                q.put(c)
+        threads = [threading.Thread(target=slot_worker, args=(i,),
+                                    daemon=True)
+                   for i in range(n_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
     print('[queue] sweep done; failures: {}'.format(len(failures)), flush=True)
 
     # ---- audit gate (same rules as run_n_sweep.sh), per spec
