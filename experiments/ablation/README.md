@@ -213,3 +213,22 @@ propagated across agent handoffs. The facts:
 - Therefore session count is NOT a pool-sizing constraint. Size worker
   pools to RAM (target 90% utilization; ~/queue_governor.json is
   live-tunable) and cores.
+
+
+## LB-cache A/B (2026-08-16, Tom-ratified: CACHE ON is the standard)
+
+Full paired grid (7 arms x 6 N x 5 seeds, identical deployments/inits,
+adagrad a0=1, stop-v2) run twice: `policy_ladder_v3` (SCULPTOR_LB_CACHE=0)
+vs `policy_ladder_v3_LBCACHE` (=1). Result over 167 matched cells:
+
+- quality (diff_vs_opp), paired ON-OFF: median +0.000, mean +0.114 ms;
+  per-arm medians: L1/L2 bit-identical, L4 -0.09 (ON better), L5 +0.18,
+  L6' +0.27, L7 +0.32 -- the probe-sensitive rungs pay a tiny,
+  consistent-signed price, far below the +-0.7 single-trial noise floor.
+- wall-clock: 3.1x faster per cell (480s vs 1501s mean), and cache-off
+  additionally suffers unbounded late-run slowdowns (belief-support
+  growth; observed minutes/iter stalls).
+
+DECISION: default stays SCULPTOR_LB_CACHE=1 everywhere; =0 is reserved
+for measurement-validity studies (fresh-MC-draw semantics), not for
+production or ladder runs.

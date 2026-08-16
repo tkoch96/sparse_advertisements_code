@@ -141,7 +141,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		'solve_generic_lp_persistent', 'solve_generic_lp_not_persistent']}
 		self.rti_data = {}
 
-		self.MC_NUM = 5 ## monte carlo simulations to determine distributions
+		# SCULPTOR_MC_NUM: monte carlo simulations to determine distributions
+		# (default 5, the original hardcoded value; 1 = single-draw noisy
+		# estimator, for model-uncertainty experiments)
+		self.MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
 
 		if kwargs.get('debug', False):
 			self.n_prefixes = None
@@ -297,14 +300,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			return self.model
 		return None
 
-	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
-		"""The high-level wrapper that tries Standard first, then MLU."""
-		ts = time.time()
-		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
-		self.timing['get_paths_by_ug'] += time.time() - ts
-		
-		# Pre-calculate objective (latencies)
-		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
+	def _path_obj_coeffs(self, available_paths, obj, site_cost_alpha):
+		"""Per-path LP objective coefficients (latencies). Named sub-step of
+		solve_generic_lp_persistent so subclasses can override path pricing."""
 		obj_coeffs = []
 		for ug, poppi in available_paths:
 			if poppi == NO_PATH_INGRESS(self):
@@ -318,6 +316,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]] + site_cost_alpha * site_cost)
 				else:
 					raise ValueError("obj {} not supported in solve_generic_lp_persistent".format(obj))
+		return obj_coeffs
+
+	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
+		"""The high-level wrapper that tries Standard first, then MLU."""
+		ts = time.time()
+		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
+		self.timing['get_paths_by_ug'] += time.time() - ts
+
+		# Pre-calculate objective (latencies)
+		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
+		obj_coeffs = self._path_obj_coeffs(available_paths, obj, site_cost_alpha)
 
 		# 1. Try Standard Solve
 		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
@@ -372,32 +381,81 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		congested_vol, total_vol = 0.0, 0.0
 
 		ts = time.time()
+		# First pass: link loads (congestion is a property of the LINK total,
+		# not of any single path's volume -- the old per-path check missed
+		# links inundated by many small allocations).
 		for (ug, poppi), vol_amt in raw_x.items():
-			ugi = self.whole_deployment_ug_to_ind[ug]
 			vols_by_poppi[poppi] += vol_amt
 			total_vol += vol_amt
-			
-			# Check congestion against STATIC caps
-			if vol_amt > self.static_caps[poppi] + 1e-6 and poppi != len(self.static_caps)-1:
+		_no_path_pi = NO_PATH_INGRESS(self)
+		inundated = {pi for pi, v in vols_by_poppi.items()
+					 if pi != _no_path_pi and v > self.static_caps[pi] + 1e-6}
+
+		# Congestion-aware belief (Tom, 2026-08-13). In MLU-fallback solves
+		# (standard solve infeasible -> elastic caps), volume on inundated
+		# links used to be priced at its REAL path latency in BOTH the
+		# returned scalar and lats_by_ug -- so the belief/gradient machinery
+		# never felt congestion, and the optimizer learned to strand traffic
+		# (georand collapses; see solve_lp_assignment.py's matching fix).
+		# Congested volume is now priced exactly like no-route volume: the
+		# NO_ROUTE_LATENCY sentinel, which training already scales down via
+		# SCULPTOR_NO_ROUTE_LATENCY (documented choice: 1000ms for training,
+		# canonical 30000 for eval). In standard (feasible) solves nothing
+		# is inundated and this is a no-op by construction.
+		# SCULPTOR_CONGESTION_AWARE_OBJ=0 restores legacy pricing.
+		_cong_aware = os.environ.get(
+			'SCULPTOR_CONGESTION_AWARE_OBJ', '1') != '0'
+
+		_soft_routed_wsum = 0.0
+		_soft_routed_vol = 0.0
+		_soft_bad_vol = 0.0
+		for (ug, poppi), vol_amt in raw_x.items():
+			ugi = self.whole_deployment_ug_to_ind[ug]
+
+			if poppi in inundated:
 				congested_vol += vol_amt
-			
+
 			if ugi not in paths_by_ug_res:
 				paths_by_ug_res[ugi] = []
 			paths_by_ug_res[ugi].append((poppi, vol_amt / self.whole_deployment_ug_to_vol[ug]))
 
 			# Calculate latency for this specific <user, path> allocation
-			if poppi == NO_PATH_INGRESS(self):
+			if poppi == _no_path_pi:
 				path_lat = NO_ROUTE_LATENCY
+				_soft_bad_vol += vol_amt
+			elif _cong_aware and poppi in inundated:
+				path_lat = NO_ROUTE_LATENCY
+				_soft_bad_vol += vol_amt
 			else:
 				path_lat = self.whole_deployment_ug_perfs[ug][self.popps[poppi]]
-			
+				_soft_routed_wsum += path_lat * vol_amt
+				_soft_routed_vol += vol_amt
+
 			# Weighted average latency contribution
 			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
 
 		obj_norm = np.sum(self.whole_deployment_ug_vols)
+		if _cong_aware:
+			# SOFT BOUNDED objective (Tom, 2026-08-14): congested/no-route
+			# volume contributes a BOUNDED penalty (SCULPTOR_SOFT_CONG_PENALTY
+			# ms-equivalent per unit bad-fraction, default 50) instead of
+			# sentinel-scale latency inside the average. Sentinel pricing made
+			# a single adjacent flip move the believed objective by 5-10
+			# units -> oversized gradients -> rescale pathologies/instability
+			# (dep3 freeze, both ladder eras). lats_by_ug keeps the sentinel
+			# marking so eval-side identification is unchanged.
+			_soft_P = float(os.environ.get('SCULPTOR_SOFT_CONG_PENALTY', '50'))
+			_total_v = _soft_routed_vol + _soft_bad_vol
+			_avg_routed = (_soft_routed_wsum / _soft_routed_vol
+						   if _soft_routed_vol > 0 else 0.0)
+			_frac_bad = _soft_bad_vol / _total_v if _total_v > 0 else 1.0
+			_objective = -1 * (_avg_routed + _soft_P * _frac_bad)
+		else:
+			_objective = -1 * model_res.objVal / obj_norm
 		self.timing['organizing_results'] += time.time()-ts
 		return {
-			"objective": -1 * model_res.objVal / obj_norm, # Framing 'benefit' as positive
+			"objective": _objective, # Framing 'benefit' as positive
+			"legacy_objective": -1 * model_res.objVal / obj_norm,
 			"raw_solution": raw_x,
 			"paths_by_ug": paths_by_ug_res,
 			"lats_by_ug": lats_by_ug_arr,
@@ -692,7 +750,22 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""
 	    Combined and optimized version of get_ingress_probabilities + sim_rti_better.
 	    Directly produces the routed_through_ingress dictionary using pattern caching.
+
+	    Orchestrator over two named sub-steps so subclasses can override the
+	    sampling stage independently of the (deterministic) option/probability
+	    computation:
+	      _compute_scenario_options(a)     populates self.rti_data
+	      _sample_scenario_realizations()  MC-draws routed_through_ingress
 	    """
+		ts_total = time.time()
+		self._compute_scenario_options(a, verb=verb, **kwargs)
+		routed_through_ingress = self._sample_scenario_realizations()
+		self.timing['total_rti_calc'] += time.time() - ts_total
+		return routed_through_ingress
+
+	def _compute_scenario_options(self, a, verb=False, **kwargs):
+		"""Populate self.rti_data (per-(ug,prefix) ingress options + probabilities)
+		for advertisement `a`. Deterministic; pattern-cached."""
 		ts_total = time.time()
 
 		# --- 1. Initialize Containers ---
@@ -799,6 +872,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		self.timing['pmat_organize'] += time.time() - ts_total
 
+	def _sample_scenario_realizations(self):
+		"""Monte-carlo draw of self.MC_NUM joint route realizations from the
+		scenario options in self.rti_data (populated by
+		_compute_scenario_options). Returns routed_through_ingress:
+		{mc_index: {prefix: {ug: popp}}}."""
 		# --- 3. Vectorized Simulation (Previously sim_rti_better) ---
 		# Now self.rti_data is fully populated. We proceed with the vectorized selection.
 
@@ -861,8 +939,6 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				
 				# Assuming self.popps is a list/dict of actual POP objects
 				routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
-
-		self.timing['total_rti_calc'] += time.time() - ts_total
 
 		return routed_through_ingress
 
@@ -927,7 +1003,22 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if which_ugs is not None:
 			subset_ugs = True
 
-		if not verb and not subset_ugs:
+		# DEFAULT ON -- Tom-ratified 2026-08-16 after a full paired A/B
+		# (210-cell ladder grid x cache on/off, identical deployments/seeds,
+		# 167 matched cells): quality delta ON-OFF median +0.000 / mean
+		# +0.114 ms vs opp (worst arm median +0.32), wall-clock 3.1x FASTER
+		# and immune to the late-run belief-support cost blowup that stalls
+		# cache-off cells. Caching does not meaningfully hurt performance.
+		# SCULPTOR_LB_CACHE=0: never RETURN memoized latency-benefit results;
+		# re-run the MC fresh on every call (the store below still happens,
+		# harmlessly). Rationale: the cache freezes benefit(A) AND its pdf at
+		# the first evaluation's random draws, invalidated only by a real
+		# measurement (clear_new_measurement_caches). With measurements every
+		# step (stock/fixed mode) that's harmless; under gated/starved probing
+		# nothing clears it, so beliefs -- including the uncertainty the probe
+		# gate consumes -- become stale frozen snapshots.
+		_use_lb_cache = os.environ.get('SCULPTOR_LB_CACHE', '1') != '0'
+		if not verb and not subset_ugs and _use_lb_cache:
 			## don't rely on caching if we want to log / print statistics
 			try:
 				cache_rep = get_a_cache_rep(a_effective)
