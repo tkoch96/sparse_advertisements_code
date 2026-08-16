@@ -33,7 +33,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 SITE = os.path.join(REPO, 'dashboard_site')
 NS = [1, 2, 5, 10, 20, 50]
-SEEDS = [1, 2, 3, 4, 5]
+SEEDS = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]
 ARMS = [('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed'),
         ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched'),
         ('sched', 'no_direction', 'scheduled', 'L3 no_dir+sched'),
@@ -93,7 +93,7 @@ EXPERIMENTS = [
                             '--dirs',
                             'AUTO:cache/ablation/policy_ladder_v3',
                             '--tag', 'policy_steady_v3',
-                            '--seeds', '1-5']},
+                            '--seeds', '1-10']},
                   {'in': ['cache/ablation/policy_ladder_v3/*/N*/'
                           'seed_*_*.json'],
                    'out': ['cache/model_error/failure/'
@@ -105,7 +105,7 @@ EXPERIMENTS = [
                             '--dirs',
                             'AUTO:cache/ablation/policy_ladder_v3',
                             '--tag', 'policy_failure_v3',
-                            '--seeds', '1-5', '--jobs', '4']},
+                            '--seeds', '1-10', '--jobs', '4']},
                   {'in': ['cache/model_error/steady/'
                           'policy_steady_v3.json'],
                    'out': ['figures/policy_ladder_v3_5panel.png',
@@ -205,6 +205,152 @@ EXPERIMENTS = [
                    'opp and painter are reference lines. L5+ train '
                    'up to 500 iters with convergence-based early '
                    'exit; probes are budgeted to N per run.'},
+     ]},
+    {'id': 'hardobj_v4', 'title': 'Hard objectives v4',
+     'sections': [
+         {'id': 'overview', 'title': 'overview', 'kind': 'static',
+          'progress_manifest': 'tools/v3grid_manifest.json',
+          'intro': ('<p>v4 era: fracb / mlu / prio x L1-L6 x N x seeds '
+                    '1-10, LB cache ON, adagrad, L6 = slotted WHEN. '
+                    'Own-objective panels below; per-objective tabs carry '
+                    'the convergence links.</p>'),
+          'figures': ['figures/hardobj_v4_3panel.png'],
+          'refresh': {
+              'pull': [('cache/ablation/hardobj_v3/',
+                        'cache/ablation/hardobj_v3/'),
+                       ('cache/ablation/hardobj_v3_artifacts/figs/',
+                        'cache/ablation/hardobj_v3_artifacts/figs/')],
+              'steps': [
+                  {'in': ['cache/ablation/hardobj_v3/*/*/N*/seed_*_*.json'],
+                   'out': ['figures/hardobj_v4_3panel.png'],
+                   'always': True,
+                   'argv': ['{py}', '-m',
+                            'experiments.dashboard.plot_hardobj_v4']},
+              ]}},
+         {'id': 'fracb', 'title': 'frac_beyond_optimal', 'kind': 'ladder_links',
+          'figs_dir': 'cache/ablation/hardobj_v3_artifacts/figs',
+          'figs_url': 'figs_hardv4',
+          'fixed_all_n': True,
+          'arms': [
+              ('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L1_'),
+              ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L2_'),
+              ('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L3_'),
+              ('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L4_'),
+              ('sched', 'full', 'scheduled', 'L5 full+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L5_'),
+              ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L6_'),
+          ],
+          'heading': 'Hard objective: frac_beyond_optimal — L1-L6, 10 deployments',
+          'figures': ['figures/hardobj_v4_fracb.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+         {'id': 'mlu', 'title': 'max_util v2', 'kind': 'ladder_links',
+          'figs_dir': 'cache/ablation/hardobj_v3_artifacts/figs',
+          'figs_url': 'figs_hardv4',
+          'fixed_all_n': True,
+          'arms': [
+              ('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L1_'),
+              ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L2_'),
+              ('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L3_'),
+              ('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L4_'),
+              ('sched', 'full', 'scheduled', 'L5 full+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L5_'),
+              ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L6_'),
+          ],
+          'heading': 'Hard objective: max_util v2 — L1-L6, 10 deployments',
+          'figures': ['figures/hardobj_v4_mlu.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+         {'id': 'prio', 'title': 'joint priority', 'kind': 'ladder_links',
+          'figs_dir': 'cache/ablation/hardobj_v3_artifacts/figs',
+          'figs_url': 'figs_hardv4',
+          'fixed_all_n': True,
+          'arms': [
+              ('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L1_'),
+              ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L2_'),
+              ('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L3_'),
+              ('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L4_'),
+              ('sched', 'full', 'scheduled', 'L5 full+sched',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L5_'),
+              ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+               'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L6_'),
+          ],
+          'heading': 'Hard objective: joint priority — L1-L6, 10 deployments',
+          'figures': ['figures/hardobj_v4_prio.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+     ]},
+    {'id': 'ladder_a10', 'title': 'Ladder: actual-10',
+     'sections': [
+         {'id': 'a10', 'title': 'L1-L6 @ actual-10', 'kind': 'ladder_links',
+          'figs_dir': 'cache/ablation/policy_ladder_a10_artifacts/figs',
+          'figs_url': 'figs_a10',
+          'fixed_all_n': True,
+          'progress_manifest': 'tools/a10_manifest.json',
+          'progress_live': False,
+          'arms': [
+              ('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L1_'),
+              ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L2_'),
+              ('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L3_'),
+              ('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L4_'),
+              ('sched', 'full', 'scheduled', 'L5 full+sched',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L5_'),
+              ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+               'figs_a10', 'cache/ablation/policy_ladder_a10_artifacts/figs', 'L6_'),
+          ],
+          'heading': 'Policy ladder @ actual-10 — 1 deployment, N=10, '
+                     'all cores',
+          'figures': ['figures/policy_ladder_a10_5panel_objective.png'],
+          'intro': 'Follow-up: real-deployment scale (actual-10).',
+          'refresh': {
+              'pull': [('cache/ablation/policy_ladder_a10/',
+                        'cache/ablation/policy_ladder_a10/'),
+                       ('cache/ablation/policy_ladder_a10_artifacts/figs/',
+                        'cache/ablation/policy_ladder_a10_artifacts/figs/')],
+              'steps': [
+                  {'in': ['cache/ablation/policy_ladder_a10/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['cache/model_error/steady/a10_steady_v4.json'],
+                   'world': 'georand',
+                   'argv': ['{py}', '-m',
+                            'experiments.model_error.steady_metrics',
+                            '--dirs', 'AUTO:cache/ablation/policy_ladder_a10',
+                            '--tag', 'a10_steady_v4', '--seeds', '1',
+                            '--dpsize', 'actual-10']},
+                  {'in': ['cache/ablation/policy_ladder_a10/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['cache/model_error/failure/a10_failure_v4.json'],
+                   'every': 4,
+                   'world': 'georand',
+                   'argv': ['{py}', '-m',
+                            'experiments.model_error.failure_metrics',
+                            '--dirs', 'AUTO:cache/ablation/policy_ladder_a10',
+                            '--tag', 'a10_failure_v4', '--seeds', '1',
+                            '--dpsize', 'actual-10', '--jobs', '2']},
+                  {'in': ['cache/model_error/steady/a10_steady_v4.json'],
+                   'out': ['figures/policy_ladder_a10_5panel_objective.png'],
+                   'always': True,
+                   'env': {'POLICY_PLOT_STAT': 'mean',
+                           'POLICY_PLOT_TAG_PREFIX': 'a10',
+                           'POLICY_PLOT_OUT': 'policy_ladder_a10_5panel'},
+                   'argv': ['{py}', '-m',
+                            'experiments.model_error.plot_policy5']},
+              ]}},
      ]},
     {'id': 'hardobj_v2', 'title': 'Ablation: hard objectives',
      'sections': [
@@ -702,6 +848,14 @@ def main():
                          ('figs_ladder3', os.path.join(
                              REPO,
                              'cache/ablation/policy_ladder_v3_artifacts'
+                             '/figs')),
+                         ('figs_hardv4', os.path.join(
+                             REPO,
+                             'cache/ablation/hardobj_v3_artifacts'
+                             '/figs')),
+                         ('figs_a10', os.path.join(
+                             REPO,
+                             'cache/ablation/policy_ladder_a10_artifacts'
                              '/figs')),
                          ('figs_ladder3lbc', os.path.join(
                              REPO,
