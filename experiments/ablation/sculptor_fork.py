@@ -592,6 +592,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 surprise = abs(float(b) - pre) / span
                 theta = float(os.environ.get(
                     'SCULPTOR_ABLATION_SURPRISE_THETA', '0.02'))
+                self._abl_last_surprise = float(surprise)
                 oldK = self._abl_K
                 if surprise > theta:
                     self._abl_K = max(1.0, self._abl_K * 0.5)
@@ -1159,6 +1160,10 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                     else:
                         probe = self._abl_probe_decision(grads)
                     _gate_rec = {'iter': int(self.iter),
+                                 'K': (float(self._abl_K)
+                                       if hasattr(self, '_abl_K') else None),
+                                 'surprise': getattr(
+                                     self, '_abl_last_surprise', None),
                                  'U': getattr(self, '_abl_probe_U', None),
                                  'c': getattr(self, '_abl_probe_c_now', None),
                                  'U_sig': getattr(self, '_abl_U_sig', None),
@@ -1179,6 +1184,7 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                     if not hasattr(self, '_abl_gate_hist'):
                         self._abl_gate_hist = []
                     self._abl_gate_hist.append(_gate_rec)
+                    self._abl_last_surprise = None  # one record per resolution
                     self._last_explore_value = None
                     if probe:
                         probed = self._abl_do_probe_iteration()

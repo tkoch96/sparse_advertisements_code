@@ -1997,7 +1997,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				traceback.print_exc()
 		
 
-		n_sp = 9
+		n_sp = 10  # row 9: adaptive-WHEN metrics (K + surprise)
 		plt.rcParams["figure.figsize"] = (10,4*n_sp)
 		plt.rcParams.update({'font.size': 14})
 		f,ax = plt.subplots(n_sp,2)
@@ -2177,6 +2177,40 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			if ev or ea:
 				ax[8,1].set_yscale('symlog')
 			ax[8,1].set_ylabel('Explore value / entropy anchor')
+		except (AttributeError, IndexError, KeyError, TypeError):
+			pass
+
+		# ---- adaptive-WHEN metrics (Tom 2026-08-16): the surprise-AIMD
+		# grounding gate's state over iterations. Left: probe interval K
+		# (log2) with fired/skipped probe markers. Right: realized belief
+		# surprise per grounding vs theta (the K-adaptation input).
+		try:
+			gh = getattr(self, '_abl_gate_hist', None) or []
+			ks = [(g['iter'], g['K']) for g in gh if g.get('K') is not None]
+			if ks:
+				ax[9,0].step([k[0] for k in ks], [k[1] for k in ks],
+				             where='post', color='#4a3aa7', lw=1.4)
+				_fired = [g['iter'] for g in gh
+				          if g.get('probe') and not g.get('skipped')]
+				_skip = [g['iter'] for g in gh
+				         if g.get('probe') and g.get('skipped')]
+				for _x in _fired:
+					ax[9,0].axvline(_x, color='#2f9e6e', alpha=.5, lw=1)
+				for _x in _skip:
+					ax[9,0].axvline(_x, color='#eda100', alpha=.5, lw=1,
+					                linestyle=':')
+				ax[9,0].set_yscale('log', base=2)
+				ax[9,0].set_ylabel('probe interval K\n(green=probe, orange=skip)')
+				_sp = [(g['iter'], g['surprise']) for g in gh
+				       if g.get('surprise') is not None]
+				if _sp:
+					ax[9,1].scatter([p[0] for p in _sp], [p[1] for p in _sp],
+					                s=18, color='#c02f4e')
+					_theta = float(os.environ.get(
+						'SCULPTOR_ABLATION_SURPRISE_THETA', '0.02'))
+					ax[9,1].axhline(_theta, color='#888', lw=1, linestyle='--')
+					ax[9,1].set_yscale('symlog', linthresh=0.01)
+					ax[9,1].set_ylabel('grounding surprise\n(dashed = theta)')
 		except (AttributeError, IndexError, KeyError, TypeError):
 			pass
 
