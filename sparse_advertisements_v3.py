@@ -353,6 +353,43 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			self.stopping_condition = lambda el : el[0] > self.max_n_iter or (
 				el[0] >= self._min_n_iter
 				and el[3] < self.rolling_adv_eps and el[1] < self.epsilon and np.abs(el[2]) < self.epsilon)
+		# SCULPTOR_STOP_RULE (default v2; merged from the ablation fork
+		# 2026-08-16). The legacy rule above is dead code at georand scale:
+		# absolute epsilon=.005 vs ~150-scale objectives leaves rolling_delta
+		# 10-150x above threshold forever, and the adv-delta clause never
+		# drops below .01 under churn. v2 fires when ALL of: grounded (a
+		# recent real measurement backs the belief), rolling_delta < REL x
+		# its own initial value (scale-free), and the believed best is
+		# unimproved for PATIENCE iters. Replay+live validated (regret
+		# <= 0.11ms; 500-cap smoke exited at 167 with full budget spent).
+		# SCULPTOR_STOP_RULE=stock restores the legacy lambda.
+		if _os.environ.get('SCULPTOR_STOP_RULE', 'v2') == 'v2':
+			_rel = float(_os.environ.get('SCULPTOR_STOP_V2_REL', '0.03'))
+			_pat = int(_os.environ.get('SCULPTOR_STOP_V2_PATIENCE', '20'))
+			def _stop_v2(el, _self=self, _rel=_rel, _pat=_pat):
+				it, rd = el[0], el[1]
+				if it > _self.max_n_iter:
+					return True
+				if it < _self._min_n_iter:
+					return False
+				init = getattr(_self, '_rolling_delta_init', None)
+				bi = getattr(_self, '_stopv2_best_iter', None)
+				if not init or bi is None:
+					return False
+				pm = getattr(_self, 'abl_probe_mode', None)
+				if pm == 'smart':
+					grounded = it >= int(getattr(_self, 'abl_probe_tconv', 0))
+				elif pm in ('gated', 'scheduled'):
+					grounded = (getattr(_self, 'abl_probes_spent', 0)
+					            >= int(getattr(_self, 'abl_probe_n', 0)))
+				else:
+					grounded = True  # stock solver measures every iteration
+				fire = grounded and rd < _rel * init and (it - bi) >= _pat
+				if fire:
+					_self.abl_exit_reason = 'stop_v2'
+					print('[stop-v2] iter={} rd={:.4g} rd_init={:.4g} best_iter={} -> EARLY EXIT'.format(it, rd, init, bi), flush=True)
+				return fire
+			self.stopping_condition = _stop_v2
 		## Whether to incorporate capacity into the objective function
 		self.with_capacity = kwargs.get('with_capacity', False)
 		### We might vary these functions depending on settings from time to time
@@ -1181,12 +1218,26 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		calls = []
 		n_significant = 0
 		try:
-			best_from_last_time = sorted(self.last_lb_calls_results.items(), key = lambda el : 
+			best_from_last_time = sorted(self.last_lb_calls_results.items(), key = lambda el :
 				-1 * np.abs(el[1]))
+			# SCULPTOR_SIG_CUTOFF (Tom 2026-08-16): the remeasure-significance
+			# cutoff was ABSOLUTE (.01) -- calibrated for ~20ms latency-scale
+			# objectives, it silently discarded ALL remeasure signal on
+			# fraction-scale objectives (fracb range ~0.25: 134/200 iters had
+			# zero significant remeasures; caught on fracb_smart_full-dep2-N50).
+			# 'p5' (default): cutoff = 5th percentile of the previous
+			# iteration's |gradient| distribution -- only the bottom 5% of
+			# signals are dropped, at any objective scale. 'abs' restores .01.
+			if _os.environ.get('SCULPTOR_SIG_CUTOFF', 'p5') == 'p5':
+				_prev_mags = np.abs(np.array([v for _, v in best_from_last_time]))
+				_sig_cut = (max(1e-12, float(np.percentile(_prev_mags, 5)))
+							if len(_prev_mags) else 1e-12)
+			else:
+				_sig_cut = .01
 			for ind,val in best_from_last_time:
-				if (ind,'ba') in calls or (ind,'ab') in calls: 
+				if (ind,'ba') in calls or (ind,'ab') in calls:
 					continue
-				if np.abs(val) < self.lambduh or np.abs(val) < .01:
+				if np.abs(val) < self.lambduh or np.abs(val) < _sig_cut:
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - a[ind]) > \
@@ -1254,6 +1305,35 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				a[ind] = tmpsave
 
 		all_lb_rets = self.flush_latency_benefit_queue()
+		return self._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
+
+	def _assemble_lb_gradients(self, calls, all_lb_rets, a, L_grad):
+		"""Turn the flushed (benefit, pdf) pairs into the LB gradient. Named
+		sub-step of gradients_latency_benefit so subclasses can intercept the
+		per-call return values (each entry of all_lb_rets is (mean, (x, pdf)))."""
+		# Per-coordinate (raw flip-delta, sigma) capture (merged from the
+		# ablation fork 2026-08-16): the workers already return full benefit
+		# pdfs; stock code discarded them. heaviside_gradient scales the
+		# delta by a sigmoid slope, so sign-error math must use RAW delta vs
+		# RAW sigma (same units). delta is a difference of two means over
+		# MC_NUM draws -> estimation noise = (var_b + var_a) / MC_NUM.
+		try:
+			_mc = int(os.environ.get(
+				'SCULPTOR_MC_NUM_EXPLORE' if getattr(self, '_abl_sigma_refresh_iter', False)
+				else 'SCULPTOR_MC_NUM', '5'))
+			_stats = {}
+			for _i, (_ind, _bta) in enumerate(calls):
+				_var, _means = 0.0, []
+				for _j in (2 * _i, 2 * _i + 1):
+					_mean_j, (_x, _p) = all_lb_rets[_j]
+					_means.append(float(_mean_j))
+					_var += self._abl_pdf_var(_x, _p)
+				_delta = (_means[1] - _means[0]) if _bta == 'ba' else (_means[0] - _means[1])
+				_var_se = self._abl_var_smooth(('lb', _ind), _var / max(_mc, 1))
+				_stats[_ind] = (_delta, _var_se ** 0.5)
+			self._abl_grad_sigma = _stats
+		except Exception as _e:
+			print('lb sigma capture failed (non-fatal): {}'.format(_e))
 		for i, call_ind in enumerate(calls):
 			ind, before_then_after = call_ind
 
@@ -1264,10 +1344,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				after,_ = all_lb_rets[2*i]
 				before, _ = all_lb_rets[2*i+1]
 			this_grad = self.heaviside_gradient(before, after, a[ind])
-			
+
 			self.last_lb_calls_results[ind] = this_grad
 			L_grad[ind] = this_grad
-		
+
 
 		L_grad = L_grad.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
@@ -1280,6 +1360,53 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self.n_latency_benefit_calls[popp,pref] = 1
 
 		return L_grad
+
+	def _abl_var_smooth(self, key, var_se):
+		"""EWMA-smoothed sigma^2 (merged from the ablation fork): refresh
+		iterations update the EWMA with the fresh (real-MC) estimate; other
+		iterations floor the (often zero at MC=1) instantaneous estimate."""
+		if not hasattr(self, '_abl_var_ewma'):
+			self._abl_var_ewma = {}
+		ew = self._abl_var_ewma
+		if getattr(self, '_abl_sigma_refresh_iter', False):
+			ew[key] = var_se if key not in ew else 0.5 * ew[key] + 0.5 * var_se
+			return ew[key]
+		return max(var_se, ew.get(key, 0.0))
+
+	@staticmethod
+	def _abl_pdf_var(x, p):
+		"""Variance of a worker-returned benefit histogram (the (x, pdf)
+		pair latency_benefit computes)."""
+		x = np.asarray(x, dtype=float).flatten()
+		p = np.asarray(p, dtype=float).flatten()
+		if x.size == 0 or p.sum() <= 0:
+			return 0.0
+		p = p / p.sum()
+		m = float((x * p).sum())
+		return float(((x - m) ** 2 * p).sum())
+
+	def _abl_capture_rb(self, store_attr, calls_advs, all_lb_rets):
+		"""(signed raw delta, variance) per coordinate for RB probes (merged
+		from the ablation fork). Each call is a (failed_off, failed_on) ret
+		pair; assembly uses heaviside(before=failed_on, after=failed_off) so
+		signed raw = failed_off - failed_on."""
+		MC_NUM = int(os.environ.get(
+			'SCULPTOR_MC_NUM_EXPLORE' if getattr(self, '_abl_sigma_refresh_iter', False)
+			else 'SCULPTOR_MC_NUM', '5'))
+		store = {}
+		ind = 0
+		for coord in calls_advs:
+			off_mean, (ox, op) = all_lb_rets[ind]
+			on_mean, (nx, np_) = all_lb_rets[ind + 1]
+			raw = float(off_mean) - float(on_mean)
+			var = self._abl_var_smooth(
+				(store_attr, coord),
+				(self._abl_pdf_var(ox, op) + self._abl_pdf_var(nx, np_)) / max(MC_NUM, 1))
+			sl = store.setdefault(coord, [0.0, 0.0])
+			sl[0] += raw
+			sl[1] += var
+			ind += 2
+		setattr(self, store_attr, store)
 
 	def gradients(self, a, add_metrics=True):
 		# gradient is the proximal gradient of the L1 norm
@@ -1314,13 +1441,93 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		net_grad = self._rescale_gradient(net_grad, a)
 
-		return -1 * net_grad
+		# ---- merged from the ablation fork (2026-08-16) ----
+		# NaN guard (repo bug: failure-scenario LPs with zero routable
+		# volume propagate NaN and collapse the advertisement)
+		_bad = ~np.isfinite(net_grad)
+		if _bad.any():
+			self.abl_nan_grad_iters = 1 + getattr(self, 'abl_nan_grad_iters', 0)
+			print('WARNING: {} non-finite gradient entries zeroed (occurrence {})'.format(int(_bad.sum()), self.abl_nan_grad_iters), flush=True)
+			net_grad = np.nan_to_num(net_grad, nan=0.0, posinf=0.0, neginf=0.0)
+		_g_ret = -1 * net_grad
+		self._abl_last_grads = _g_ret
+		# belief trace + stop-v2 best tracking (SCULPTOR_STOP_V2_IMP
+		# debounces churn-level noise)
+		_b = getattr(self, 'current_pseudo_objective', None)
+		if _b is not None and np.isfinite(_b):
+			self.metrics.setdefault('abl_belief_objective', []).append(
+				(int(getattr(self, 'iter', -1)), float(_b)))
+			if not hasattr(self, '_stopv2_b0'):
+				self._stopv2_b0 = float(_b)
+				self._stopv2_best = float(_b)
+				self._stopv2_best_iter = int(getattr(self, 'iter', 0))
+			else:
+				_imp = float(os.environ.get('SCULPTOR_STOP_V2_IMP', '0.02'))
+				_span = max(self._stopv2_b0 - self._stopv2_best, 1e-9)
+				if float(_b) < self._stopv2_best - _imp * _span:
+					self._stopv2_best = float(_b)
+					self._stopv2_best_iter = int(getattr(self, 'iter', 0))
+		# probe-diagnostic resolution (decision-targeted probing): fill the
+		# AFTER state once the measurement has been folded into beliefs
+		_diag = getattr(self, '_abl_pending_probe_diag', None)
+		if _diag is not None:
+			self._abl_pending_probe_diag = None
+			_ind = _diag.get('coord')
+			_after = getattr(self, '_abl_grad_sigma', {}).get(_ind)
+			_diag['sigma_after'] = float(_after[1]) if _after else None
+			_diag['delta_after'] = float(_after[0]) if _after else None
+			try:
+				_diag['U_after'] = (float(self._abl_probe_uncertainty(_g_ret)[0])
+				                    if hasattr(self, '_abl_probe_uncertainty') else None)
+			except Exception:
+				_diag['U_after'] = None
+			_diag['belief_after'] = (float(_b) if _b is not None and np.isfinite(_b) else None)
+			if not hasattr(self, '_abl_probe_log'):
+				self._abl_probe_log = []
+			self._abl_probe_log.append(_diag)
+		return _g_ret
 
 	def _rescale_gradient(self, net_grad, a):
 		"""Scale the combined gradient toward ~one advertisement flip per
 		step: amplify small gradients up to the nearest threshold crossing
 		(capped at DESIRED_MAX_VAL), damp very large ones. Extracted from
 		gradients() verbatim so variants can override the step policy."""
+		# SCULPTOR_GRAD_SCALE (merged from the ablation fork 2026-08-16,
+		# Tom-ratified): step-size policy. DEFAULT = 'adagrad' (AdaGrad-Norm,
+		# alpha0 via SCULPTOR_ALPHA0/SCULPTOR_ABLATION_ALPHA0, default 1) --
+		# 5-seed validated vs the legacy auto-scaler (+10.1 vs +13.7
+		# composite vs opp), horizon-free, no per-size retuning. 'fixed' =
+		# vanilla alpha*grad; 'dog' = DoG (parameter-free, Ivgi et al. 2023);
+		# 'auto' = the legacy amplify/damp policy (kept for reproduction).
+		_mode = os.environ.get('SCULPTOR_GRAD_SCALE',
+			os.environ.get('SCULPTOR_ABLATION_GRAD_SCALE', 'adagrad'))
+		if _mode == 'fixed':
+			return net_grad
+		if _mode == 'adagrad':
+			g2 = float(np.sum(np.asarray(net_grad) ** 2))
+			self._adagrad_G = getattr(self, '_adagrad_G', 0.0) + g2
+			if not hasattr(self, '_adagrad_alpha0'):
+				_a0 = os.environ.get('SCULPTOR_ALPHA0',
+					os.environ.get('SCULPTOR_ABLATION_ALPHA0', '1'))
+				if _a0 == 'auto':
+					_gninf = float(np.max(np.abs(net_grad)))
+					self._adagrad_alpha0 = ADVERTISEMENT_THRESHOLD * (g2 ** 0.5) / max(_gninf, 1e-12)
+					print('[adagrad] alpha0=auto -> {:.4g}'.format(self._adagrad_alpha0), flush=True)
+				else:
+					self._adagrad_alpha0 = float(_a0)
+			alpha_t = self._adagrad_alpha0 / np.sqrt(1e-12 + self._adagrad_G)
+			return net_grad * (alpha_t / self.alpha)
+		if _mode == 'dog':
+			aa = np.asarray(a, dtype=float)
+			if not hasattr(self, '_dog_a0'):
+				self._dog_a0 = np.copy(aa)
+				self._dog_rbar = float(os.environ.get('SCULPTOR_ABLATION_DOG_EPS', '0.05'))
+			self._dog_rbar = max(self._dog_rbar, float(np.linalg.norm(aa - self._dog_a0)))
+			g2 = float(np.sum(np.asarray(net_grad) ** 2))
+			self._dog_G = getattr(self, '_dog_G', 0.0) + g2
+			alpha_t = self._dog_rbar / np.sqrt(1e-12 + self._dog_G)
+			return net_grad * (alpha_t / self.alpha)
+		# ---- legacy 'auto' amplify/damp policy ----
 		DESIRED_MAX_VAL = 5.0
 		max_val = np.max(np.abs(net_grad.flatten()))
 		if max_val < DESIRED_MAX_VAL and max_val > 0:
@@ -1341,8 +1548,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			net_grad = net_grad * mult
 			print("Modified gradient by a factor of {} to ensure approximately one flip".format(mult))
 		else:
+			# Damp to the SAME bound the amplify branch targets (2026-08-14):
+			# the historical 0.1 cap made steps ~50x smaller than the
+			# one-flip design target, permanently freezing deployments whose
+			# raw flip-gradients exceed DESIRED_MAX_VAL (dep3: frozen at init
+			# in BOTH ladder eras and under soft congestion pricing -- its
+			# ~7-unit gradients are REAL routed-latency impacts of
+			# high-volume coordinates, not pricing artifacts).
 			print("WARNING -- gradient is very large, max val is {}".format(max_val))
-			net_grad = net_grad * .1 / max_val
+			net_grad = net_grad * DESIRED_MAX_VAL / max_val
 
 		return net_grad
 
@@ -1373,13 +1587,21 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		N_REMEASURE = total_n_grad_calc - N_EXPLORE
 		gamma = self.get_gamma()
 		try:
-			best_from_last_time = sorted(self.last_rb_calls_results_popp.items(), key = lambda el : 
+			best_from_last_time = sorted(self.last_rb_calls_results_popp.items(), key = lambda el :
 				-1 * np.abs(el[1]))
+			# same objective-scale-relative significance cutoff as the LB
+			# remeasure filter (SCULPTOR_SIG_CUTOFF, Tom 2026-08-16)
+			if _os.environ.get('SCULPTOR_SIG_CUTOFF', 'p5') == 'p5':
+				_prev_mags = np.abs(np.array([v for _, v in best_from_last_time]))
+				_sig_cut = (max(1e-12, float(np.percentile(_prev_mags, 5)))
+							if len(_prev_mags) else 1e-12)
+			else:
+				_sig_cut = .01
 			n_significant = 0
 			for (popp,rand_kill_popp,rand_outer_prefix),val in best_from_last_time:
-				if (popp,rand_kill_popp,rand_outer_prefix) in calls: 
+				if (popp,rand_kill_popp,rand_outer_prefix) in calls:
 					continue
-				if gamma * np.abs(val) < self.lambduh or np.abs(val) < .01:
+				if gamma * np.abs(val) < self.lambduh or np.abs(val) < _sig_cut:
 					# if it's not important enough to warrant the cost, don't bother
 					continue
 				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp], rand_outer_prefix]) > \
@@ -1455,26 +1677,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			calls.append((popp_helper, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
-		self.last_rb_calls_results_popp = {}
-		ind = 0
-
-		for call_popp, killed_popp, rand_outer_prefix, this_killed_popp_ugs in calls:
-			poppi = self.popp_to_ind[call_popp]
-			
-			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
-			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
-
-
-			this_grad = self.heaviside_gradient(
-				failed_on, failed_off, 
-				advertisement[poppi,rand_outer_prefix])
-
-			grad_rb[poppi,rand_outer_prefix] += this_grad
-
-			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
-			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter, poppi, rand_outer_prefix, this_grad))
-
-			ind += 2
+		grad_rb = self._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
 
 		### Track which calls are being made
 		for poppi,poppj,pref,_ in calls:
@@ -1490,6 +1693,38 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
 
+		return grad_rb
+
+	def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+		# RB sigma capture (merged from the ablation fork 2026-08-16)
+		try:
+			_coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
+			self._abl_capture_rb('_abl_rb_stats_popp', _coords, all_lb_rets)
+		except Exception as _e:
+			print('rb sigma capture failed (non-fatal): {}'.format(_e))
+		"""Turn the flushed (benefit, pdf) pairs into the popp-failure
+		resilience gradient. Named sub-step of gradients_resilience_benefit_popp
+		so subclasses can intercept the per-call return values."""
+		self.last_rb_calls_results_popp = {}
+		ind = 0
+
+		for call_popp, killed_popp, rand_outer_prefix, this_killed_popp_ugs in calls:
+			poppi = self.popp_to_ind[call_popp]
+
+			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
+			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
+
+
+			this_grad = self.heaviside_gradient(
+				failed_on, failed_off,
+				advertisement[poppi,rand_outer_prefix])
+
+			grad_rb[poppi,rand_outer_prefix] += this_grad
+
+			self.last_rb_calls_results_popp[call_popp,killed_popp,rand_outer_prefix] = this_grad
+			self.all_rb_calls_results_popps[self.popp_to_ind[killed_popp]].append((self.iter, poppi, rand_outer_prefix, this_grad))
+
+			ind += 2
 		return grad_rb
 
 	def gradients_resilience_benefit_pop(self, advertisement):
@@ -1593,17 +1828,33 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			calls.append((popp, rand_kill_pop, rand_outer_prefix))
 
 		all_lb_rets = self.flush_latency_benefit_queue()
+		grad_rb = self._assemble_rb_pop_gradients(calls, all_lb_rets, advertisement, grad_rb)
+
+		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
+
+		return grad_rb
+
+	def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
+		# RB sigma capture (merged from the ablation fork 2026-08-16)
+		try:
+			_coords = [(self.popp_to_ind[c[0]], c[2]) for c in calls]
+			self._abl_capture_rb('_abl_rb_stats_pop', _coords, all_lb_rets)
+		except Exception as _e:
+			print('rb sigma capture failed (non-fatal): {}'.format(_e))
+		"""Turn the flushed (benefit, pdf) pairs into the pop-failure
+		resilience gradient. Named sub-step of gradients_resilience_benefit_pop
+		so subclasses can intercept the per-call return values."""
 		self.last_rb_calls_results_pop = {}
 		ind = 0
 		for call_popp, killed_pop, rand_outer_prefix in calls:
 			poppi = self.popp_to_ind[call_popp]
-			
+
 			failed_off,_ = all_lb_rets[ind] ## popp failed, random popp,prefix under consideration off
 			failed_on,_ = all_lb_rets[ind+1] ## popp failed, random popp,prefix under consideration on
 
 
 			this_grad = self.heaviside_gradient(
-				failed_on, failed_off, 
+				failed_on, failed_off,
 				advertisement[poppi,rand_outer_prefix])
 
 			grad_rb[poppi,rand_outer_prefix] += this_grad
@@ -1612,9 +1863,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.all_rb_calls_results_pops[self.pop_to_ind[killed_pop]].append((self.iter, poppi, rand_outer_prefix, this_grad))
 
 			ind += 2
-
-		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
-
 		return grad_rb
 
 	def gradients_resilience_benefit(self, advertisement):
@@ -1656,7 +1904,52 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		a = np.clip(a,0,1.0)
 		return a
 
+	def _plot_model_error(self):
+		"""Companion figure per run (merged from the ablation fork
+		2026-08-16): believed vs ground-truth objective per iteration + the
+		absolute gap -- the model-drift diagnostic for grounding-cadence
+		questions. Writes model_error_over_iterations.pdf into the run dir."""
+		bel = self.metrics.get('abl_belief_objective') or []
+		gt = self.metrics.get('actual_nonconvex_objective') or []
+		rd = getattr(self, 'save_run_dir', None)
+		if not bel or not gt or not rd or not os.path.isdir(rd):
+			return
+		import matplotlib
+		matplotlib.use('Agg')
+		import matplotlib.pyplot as plt
+		bel_by_iter = dict(bel)
+		n = min(len(gt), (max(bel_by_iter) + 1) if bel_by_iter else 0)
+		its = [i for i in range(n) if i in bel_by_iter]
+		if not its:
+			return
+		g = [float(gt[i]) for i in its]
+		b = [bel_by_iter[i] for i in its]
+		err = [abs(x - y) for x, y in zip(b, g)]
+		probes = [r['iter'] for r in (getattr(self, '_abl_gate_hist', []) or [])
+		          if r.get('probe') and not r.get('skipped')]
+		fig, ax = plt.subplots(2, 1, figsize=(9, 6.5), sharex=True)
+		ax[0].plot(its, g, color='#333333', lw=1.6, label='ground truth')
+		ax[0].plot(its, b, color='#2a78d6', lw=1.4, label='belief')
+		ax[1].plot(its, err, color='#c02f4e', lw=1.5)
+		for a_ in ax:
+			for p in probes:
+				a_.axvline(p, color='#2f9e6e', alpha=.45, lw=1)
+		ax[0].set_ylabel('objective (cost)')
+		ax[0].legend(fontsize=8, frameon=False)
+		ax[0].set_title('model error over iterations (green = probe iterations)', fontsize=10)
+		ax[1].set_ylabel('|belief - ground truth|')
+		ax[1].set_xlabel('iteration')
+		for a_ in ax:
+			a_.grid(alpha=.25)
+		fig.tight_layout()
+		fig.savefig(os.path.join(rd, 'model_error_over_iterations.pdf'))
+		plt.close(fig)
+
 	def make_plots(self, *args, **kwargs):
+		try:
+			self._plot_model_error()
+		except Exception as _e:
+			print('model-error plot failed (non-fatal): {}'.format(_e), flush=True)
 
 		## Takes a while (plots from logs). These plot helpers fail when the
 		## per-iter log file is sparse (e.g. MAX_ITER=10 / small / fresh cache):
@@ -1797,6 +2090,63 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		except:
 			pass
 
+		# Probe-gate / exploration panels (2026-08-14, Tom): rendered only
+		# when the ablation fork recorded gate history; stock runs unaffected.
+		try:
+			gh = self._abl_gate_hist
+			its = [g['iter'] for g in gh]
+			us = [g.get('U') for g in gh]
+			cs = [g.get('c') for g in gh]
+			if any(u is not None for u in us):
+				ax[6,1].plot([i for i,u in zip(its,us) if u is not None],
+							 [u for u in us if u is not None], label='U')
+			if any(c is not None for c in cs):
+				ax[6,1].plot([i for i,c in zip(its,cs) if c is not None],
+							 [c for c in cs if c is not None], '--', label='c')
+			# U components (2026-08-14: U = U_sigma + w*entropy ratio)
+			for key, style in (('U_sig', ':'), ('U_ent', '-.')):
+				vs = [(g['iter'], g.get(key)) for g in gh
+					  if g.get(key) is not None]
+				if vs:
+					ax[6,1].plot([v[0] for v in vs], [v[1] for v in vs],
+								 style, lw=.9, label=key)
+			for g in gh:
+				if g.get('probe'):
+					ax[6,1].axvline(g['iter'], color='g', alpha=.25, lw=1)
+			ax[6,1].set_yscale('log')
+			ax[6,1].set_ylabel('Gate: U vs c (green=probe)')
+			ax[6,1].legend(fontsize=5)
+			ax[7,1].step(its, [g['spent'] for g in gh], where='post')
+			ax[7,1].set_ylabel('Probes spent')
+			ax[8,0].plot(its, [g['uf'] for g in gh], label='unc factor')
+			ms = [(g['iter'], g.get('med_sigma')) for g in gh
+				  if g.get('med_sigma') is not None]
+			if ms:
+				ax[8,0].plot([m[0] for m in ms], [m[1] for m in ms], ':',
+							 label='med sigma')
+				for g in gh:
+					if g.get('refresh'):
+						ax[8,0].axvline(g['iter'], color='b', alpha=.1, lw=.8)
+				ax[8,0].legend(fontsize=5)
+			ax[8,0].set_yscale('log')
+			ax[8,0].set_ylabel('Unc factor / med sigma (blue=MC refresh)')
+			ev = [(g['iter'], g['explore_val']) for g in gh
+				  if g.get('explore_val') is not None]
+			if ev:
+				ax[8,1].scatter([e[0] for e in ev], [e[1] for e in ev], s=10,
+								label='chosen')
+			ea = [(g['iter'], g.get('ent_anchor')) for g in gh
+				  if g.get('ent_anchor') is not None]
+			if ea:
+				ax[8,1].plot([e[0] for e in ea], [e[1] for e in ea], '--',
+							 lw=.9, label='ent anchor')
+				ax[8,1].legend(fontsize=5)
+			if ev or ea:
+				ax[8,1].set_yscale('symlog')
+			ax[8,1].set_ylabel('Explore value / entropy anchor')
+		except (AttributeError, IndexError, KeyError, TypeError):
+			pass
+
 		save_fig(os.path.join(self.save_run_dir, 'convergence_over_iterations.pdf'), abs_path=True)
 
 	def print_adv(self, a):
@@ -1814,6 +2164,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.alpha = .001
 		elif self.lambduh <= .01:
 			self.alpha = .01
+		# base-alpha env override (merged from the ablation fork 2026-08-16;
+		# under 'adagrad'/'dog' policies alpha folds out and this is inert)
+		_a = os.environ.get('SCULPTOR_ALPHA', os.environ.get('SCULPTOR_ABLATION_ALPHA'))
+		if _a:
+			self.alpha = float(_a)
+			print('base alpha override: {}'.format(self.alpha), flush=True)
 
 	def get_gamma(self):
 		### Idea is to increase gamma to our desired value as we become more confident about adjacent strategies
@@ -1826,7 +2182,88 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		return self.gamma / divider
 
+	def _broadcast_mc_num(self, n):
+		# Mirror of _broadcast_training_mode: fan a new MC_NUM out to the
+		# persistent workers (handled by _cmd_set_mc_num on the actor).
+		wm = getattr(self, 'worker_manager', None)
+		if wm is None:
+			return
+		try:
+			wm.send_receive_workers(pickle.dumps(('set_mc_num', int(n))))
+		except Exception as e:
+			print('[mc-explore] set_mc_num broadcast failed: {}'.format(e), flush=True)
+
+	def _decision_probe_target(self):
+		"""Decision-aware measurement targeting (merged from the ablation
+		fork 2026-08-16, Tom-ratified L6\' status quo): among the one-flip
+		adjacency, propose the coordinate with the largest EXPECTED REGRET
+		of deciding unprobed: score = Phi(-|delta|/sigma) * |g| --
+		P(sign error on the raw flip-delta) x magnitude of the step the
+		solver would take on it. Max-entropy targeting optimizes the MAP;
+		this optimizes the next DECISION. Returns an adjacent advertisement
+		to measure, or None (callers fall back to the entropy proposal)."""
+		from math import erfc, sqrt
+		g = getattr(self, '_abl_last_grads', None)
+		sig = getattr(self, '_abl_grad_sigma', None)
+		if g is None or not sig:
+			return None
+		g = np.asarray(g)
+		cur = threshold_a(np.asarray(self.optimization_advertisement, dtype=float))
+		scored = []
+		for ind, (delta, sg) in sig.items():
+			gv = float(g[ind])
+			if gv == 0.0:
+				continue
+			p_err = 0.5 * erfc(abs(delta) / (sg * sqrt(2.0))) if sg > 0 else 0.0
+			if p_err <= 0.0:
+				continue
+			scored.append((p_err * abs(gv), p_err, delta, sg, ind))
+		for score, p_err, delta, sg, ind in sorted(scored, reverse=True):
+			aa = np.copy(cur)
+			aa[ind] = 1.0 - aa[ind]
+			if aa.sum() == 0:
+				continue
+			if tuple(aa.flatten()) in getattr(self, 'measured', {}):
+				continue
+			print('[probe-decision] iter={} coord={} score={:.4g} p_err={:.3f} delta={:.4g} sigma={:.4g} ({} scored)'.format(
+				getattr(self, 'iter', -1), ind, score, p_err, delta, sg, len(scored)), flush=True)
+			self._abl_decision_choice = {
+				'coord': ind, 'score': float(score), 'p_err': float(p_err),
+				'delta_before': float(delta), 'sigma_before': float(sg),
+				'grad': float(g[ind]), 'n_scored': len(scored),
+				'popp': str(self.popps[ind[0]]),
+				'turning': 'on' if cur[ind] <= ADVERTISEMENT_THRESHOLD else 'off',
+				'rank_gap': (float(score - max(t[0] for t in scored)) if scored else 0.0)}
+			return aa
+		return None
+
 	def solve_max_information(self, current_advertisement):
+		"""Wrapper (Tom, 2026-08-14): entropy-based explore needs a real
+		belief DISTRIBUTION, but training may run SCULPTOR_MC_NUM=1 (e.g.
+		the ablation ladder), which collapses every candidate pdf to a
+		single draw -- info value degenerates and explore either picks
+		nothing (probe falls back to re-measuring the current adv) or
+		re-picks measured advs. Evaluate explore candidates under
+		SCULPTOR_MC_NUM_EXPLORE draws (default 5), restoring the training
+		MC_NUM afterwards."""
+		# SCULPTOR_MAXINFO_TARGET (default 'decision', merged 2026-08-16):
+		# expected-regret targeting first; the entropy proposal remains the
+		# fallback when nothing scores ('entropy' restores stock behavior).
+		if os.environ.get('SCULPTOR_MAXINFO_TARGET', 'decision') == 'decision':
+			_cand = self._decision_probe_target()
+			if _cand is not None:
+				return _cand
+		explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
+		base_mc = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
+		if explore_mc == base_mc:
+			return self._solve_max_information_body(current_advertisement)
+		self._broadcast_mc_num(explore_mc)
+		try:
+			return self._solve_max_information_body(current_advertisement)
+		finally:
+			self._broadcast_mc_num(base_mc)
+
+	def _solve_max_information_body(self, current_advertisement):
 		"""Search through neighbors of a, calculate maximum uncertainty."""
 		uncertainties = {}
 		_info_t0 = time.time()
@@ -2050,6 +2487,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			for m in ranked_explore_methodologies:
 				if best_flips[m] is not None:
 					print("Best explore value was {} for {}".format(potential_value_measure[m][best_flips[m]],m))
+					self._last_explore_value = potential_value_measure[m][best_flips[m]]
 					if potential_value_measure[m][best_flips[m]] > self.min_explore_value[m]:
 						for flip in best_flips[m]:
 							a[flip] = 1 - a[flip]
@@ -2059,6 +2497,37 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						# for i in inds:
 						# 	print("LB {} with prob {}".format(round(u[0][i],2), round(u[1][i],2)))
 						if tuple(a.flatten()) in self.measured:
+							# Explore re-selected an ALREADY-MEASURED advertisement.
+							# Default (Tom, 2026-08-14): SKIP the measurement and let
+							# training continue -- a re-pick means explore had nothing
+							# NEW worth measuring (with MC_NUM=1 its pdfs were
+							# degenerate anyway), NOT that training converged.
+							# SCULPTOR_REMEASURE_STOP=1 restores the 08-13 graceful
+							# training stop; =0 restores stock (hard exit(0)).
+							_rm_mode = os.environ.get('SCULPTOR_REMEASURE_STOP', 'skip')
+							if _rm_mode == 'skip':
+								self._explore_remeasure_skips = 1 + getattr(
+									self, '_explore_remeasure_skips', 0)
+								print('[REMEASURE-SKIP] iter={} explore re-picked a '
+									'measured adv (value={:.4g}); skipping measurement, '
+									'training continues ({} skips so far)'.format(
+									self.iter, potential_value_measure[m][best_flips[m]],
+									self._explore_remeasure_skips), flush=True)
+								return None
+							if _rm_mode != '0':
+								if getattr(self, '_explore_remeasure_stop', None) is None:
+									print('=' * 72, flush=True)
+									print('[REMEASURE-STOP] Explore selected an ALREADY-MEASURED advertisement', flush=True)
+									print('[REMEASURE-STOP] iter={} methodology={} flips(coords)={} value={}'.format(
+										self.iter, m, list(best_flips[m]),
+										potential_value_measure[m][best_flips[m]]), flush=True)
+									print('[REMEASURE-STOP] Beliefs are resolved; STOPPING TRAINING gracefully.', flush=True)
+									print('=' * 72, flush=True)
+									self._explore_remeasure_stop = {
+										'iter': int(self.iter), 'methodology': m,
+										'flips': [list(np.atleast_1d(f)) for f in best_flips[m]],
+									}
+								return None
 							print("Re-measuring {}".format(a))
 							print(potential_value_measure[m][best_flips[m]])
 							pickle.dump(a,open('remeasure_a.pkl','wb'))
@@ -2069,8 +2538,16 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							exit(0)
 						# print("Best flips was: {}".format(best_flips[m]))
 
+						# Running anchor (2026-08-14): set-once anchoring caused a
+						# scale race -- if the first explore fired before beliefs
+						# contained congestion-priced (NO_ROUTE-scale) mass, the tiny
+						# anchor made later sentinel-scale ranges blow uncertainty_factor
+						# up by ~4 orders of magnitude (dep3 forensics: 7.5 -> 16386),
+						# which collapsed effective gamma and blinded the probe gate.
 						try:
-							self.typical_high_uncertainty
+							self.typical_high_uncertainty = (
+								0.75 * self.typical_high_uncertainty
+								+ 0.25 * get_range(u) / 2)
 						except AttributeError:
 							self.typical_high_uncertainty = get_range(u) / 2
 							print("Typical High Uncertainty is {}".format(self.typical_high_uncertainty))
@@ -2551,11 +3028,27 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			_wm.process_pending_resize()
 
 	def _solve_compute_gradients(self):
-		"""Gradient phase: one gradient_fn evaluation for this iteration."""
-		# calculate gradients
+		"""Gradient phase: one gradient_fn evaluation for this iteration.
+		Periodic sigma refresh (merged from the ablation fork 2026-08-16):
+		every SCULPTOR_SIGMA_REFRESH iters (default 10) evaluate this
+		iteration's gradient flips under MC_NUM_EXPLORE draws so the
+		captured sigmas come from a real distribution (at MC_NUM=1 the
+		instantaneous estimates are point masses)."""
 		if self.verbose:
 			print("calcing grads")
-		grads = self.gradient_fn(self.optimization_advertisement)
+		_refresh_every = int(os.environ.get('SCULPTOR_SIGMA_REFRESH',
+			os.environ.get('SCULPTOR_ABLATION_SIGMA_REFRESH', '10')))
+		self._abl_sigma_refresh_iter = (self.iter % max(1, _refresh_every) == 0)
+		_explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
+		_base_mc = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
+		if self._abl_sigma_refresh_iter and _explore_mc != _base_mc:
+			self._broadcast_mc_num(_explore_mc)
+			try:
+				grads = self.gradient_fn(self.optimization_advertisement)
+			finally:
+				self._broadcast_mc_num(_base_mc)
+		else:
+			grads = self.gradient_fn(self.optimization_advertisement)
 		_log_mem('iter_post_grad', iter=self.iter)
 		return grads
 
@@ -2694,7 +3187,7 @@ def main():
 		## useful for fixing the deployment between testing various settings
 		# deployment = pickle.load(open('runs/1710776224-small-sparse/state-0.pkl','rb'))['deployment']
 
-		lambduh = .0001
+		lambduh = 0
 		gamma = 2.0
 		n_prefixes = deployment_to_prefixes(deployment)
 		sas = Sparse_Advertisement_Solver(deployment, verbose=True,

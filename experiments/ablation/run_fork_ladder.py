@@ -10,7 +10,7 @@ computed through the same pipeline for reference.
     python -m experiments.ablation.run_fork_ladder --seed 1 --rung full \
         --port 31800 --max-iter 200 --out-dir cache/ablation/fork_ladder
 
-Rungs: full, expl_random, expl_none, no_direction, no_memory (see
+Rungs: full, expl_random, expl_none, no_direction, no_memory, no_mc (see
 sculptor_fork.RUNGS) plus 'painter' (repo painter baseline, no fork).
 """
 import argparse
@@ -34,6 +34,10 @@ def avg_lat(sas, adv):
 
 
 def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
+    # One (seed, rung) cell: build seeded deployment -> real worker stack ->
+    # fork solver under the rung's flags (+ optional gated probing via
+    # SCULPTOR_ABLATION_PROBE_*) -> in-run scoring on a PRISTINE eval stack
+    # (still untrusted; rescore_fork is authoritative) -> semantic run-dir.
     out_fn = os.path.join(out_dir, 'seed_{}_{}.json'.format(seed, rung))
     if os.path.exists(out_fn):
         print('[seed {} {}] exists, skipping'.format(seed, rung), flush=True)
@@ -45,7 +49,10 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         for k, v in RUNGS[rung].items():
             os.environ[k] = v
     os.environ['SCULPTOR_MAX_ITER'] = str(max_iter)
-    os.environ['SCULPTOR_MIN_ITER'] = str(max_iter)   # fair budget: no early stop
+    # fair budget: no early stop -- UNLESS the cell opts into one via
+    # SCULPTOR_ABLATION_MIN_ITER (the stop-v2 flow, Tom 2026-08-16)
+    os.environ['SCULPTOR_MIN_ITER'] = os.environ.get(
+        'SCULPTOR_ABLATION_MIN_ITER', str(max_iter))
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
     # canonical per-seed init: first rung writes it, all others assert equality
     os.makedirs(out_dir, exist_ok=True)
@@ -55,7 +62,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
     from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity, gamma as EVAL_GAMMA
+    from wrapper_eval import capacity
     from deployment_setup import get_random_deployment
     from sparse_advertisements_v3 import Sparse_Advertisement_Eval
     from worker_comms import Worker_Manager
@@ -64,24 +71,47 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # resilience config follows the pipeline default (SCULPTOR_USE_RESILIENCE,
     # now default-on with wrapper_eval's gamma=4); set =0 for pure latency
     use_res = os.environ.get('SCULPTOR_USE_RESILIENCE', '1') == '1'
-    # SCULPTOR_ABLATION_GAMMA overrides wrapper_eval's gamma (=4). At small,
+    # resilience requires gamma>0 (constructor asserts); gamma=0 runs
+    # (hard objectives, hardB3v2) train resilience-free by definition
+    _g = float(os.environ.get('SCULPTOR_ABLATION_GAMMA', '0.1') or 0)
+    if _g <= 0:
+        use_res = False
+    # SCULPTOR_ABLATION_GAMMA overrides the default 0.1 (Tom 2026-08-15:
+    # standalone default is ALWAYS 0.1, never wrapper_eval's 4 -- at small,
     # gamma=4 puts every iteration in the 'gradient very large' damp branch
-    # (RB grads saturate the clip) and training freezes; ~0.01 keeps the
-    # resilience term active without destroying the one-flip step dynamics.
-    gamma_val = float(os.environ.get('SCULPTOR_ABLATION_GAMMA', EVAL_GAMMA)) if use_res else 0
+    # (RB grads saturate the clip) and training freezes under threshold
+    # semantics; ~0.1 keeps the resilience term active without destroying
+    # the one-flip step dynamics).
+    gamma_val = float(os.environ.get('SCULPTOR_ABLATION_GAMMA', '0.1')) if use_res else 0
 
     t0 = time.time()
-    _runs_root = os.path.join(_REPO_ROOT, 'runs')
+    # GC scope = CWD-relative runs/ (matching where the solver actually
+    # checkpoints, constants.RUN_DIR='runs'). Using _REPO_ROOT here made
+    # cleanup reach across workspaces and delete OTHER processes' live
+    # checkpoint dirs (the 105-run massacre + a smoke casualty).
+    _runs_root = os.path.abspath('runs')
     _runs_before = set(os.listdir(_runs_root)) if os.path.isdir(_runs_root) else set()
     deployment = get_random_deployment(dpsize)
     deployment['port'] = port
     n_prefixes = deployment_to_prefixes(deployment)
 
     sas = Sparse_Advertisement_Eval(
-        deployment, verbose=True, lambduh=0.00001, with_capacity=capacity,
+        deployment, verbose=True, lambduh=0, with_capacity=capacity,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=use_res, gamma=gamma_val,
-        n_prefixes=n_prefixes, generic_objective='avg_latency',
+        n_prefixes=n_prefixes, generic_objective=os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency'),
     )
+    # 'no_mc' rung: swap the worker actor class for the deterministic
+    # pseudo-path worker BEFORE the solve-phase workers start. The seam is
+    # reverted right after solve so the pristine scoring stack below gets
+    # stock workers. sculptor_fork._abl_assert_mc verifies the injection
+    # actually took (a stock worker answers 'ERROR' to the stats RPC).
+    import ray
+    import worker_comms_ray
+    _stock_actor_cls = worker_comms_ray.ACTOR_CLS
+    if os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0':
+        from experiments.ablation.mc_off_worker import Abl_MC_Off_Worker
+        worker_comms_ray.ACTOR_CLS = ray.remote(Abl_MC_Off_Worker)
+        print('[ablation-fork] mc-off worker class injected', flush=True)
     wm = Worker_Manager(sas.get_init_kwa(), deployment)
     wm.start_workers()
     result = {'seed': seed, 'rung': rung, 'max_iter': max_iter,
@@ -98,10 +128,35 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         result['opp_objective'] = float(sas.solutions['one_per_peering']['objective'])
 
         if rung == 'painter':
-            sas.solve_painter()
+            # Painter is measurement-UNBOUNDED by construction: painter_v5
+            # measures every iteration (measure_ingresses + stop_tracker's
+            # measured_objective) and stops on convergence/max_n_iter, with
+            # nothing counting those measurements. For budget-fair
+            # comparison against the N-capped rungs, SCULPTOR_ABLATION_
+            # PAINTER_BUDGET=N caps painter's loop at N iterations (Tom,
+            # 2026-08-12). path_measures is recorded either way.
+            _pb = os.environ.get('SCULPTOR_ABLATION_PAINTER_BUDGET')
+            if _pb:
+                from painter import Painter_Adv_Solver as _PAS
+                _orig_init = _PAS.__init__
+
+                def _budget_init(self, *a, **kw):
+                    _orig_init(self, *a, **kw)
+                    self.max_n_iter = int(_pb)
+                _PAS.__init__ = _budget_init
+                try:
+                    sas.solve_painter()
+                finally:
+                    _PAS.__init__ = _orig_init
+            else:
+                sas.solve_painter()
             adv = sas.solutions['painter']['advertisement']
             result['repo_objective'] = float(sas.solutions['painter']['objective'])
             result['n_iters'] = None
+            result['painter_budget'] = int(_pb) if _pb else None
+            result['n_advs_measured'] = int(
+                sas.solutions['painter'].get('n_advs') or -1)
+            result['painter_iters'] = int(getattr(sas.painter, 'iter', -1))
         else:
             solver = Ablation_Sparse_Advertisement_Solver(
                 sas.output_deployment(), **sas.get_init_kwa())
@@ -130,6 +185,19 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             result['n_iters'] = int(getattr(solver, 'iter', -1))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
+            result['probe_mode'] = getattr(solver, 'abl_probe_mode', 'fixed')
+            result['probes_spent'] = int(getattr(solver, 'abl_probes_spent', 0))
+            result['exit_reason'] = getattr(solver, 'abl_exit_reason', None)
+            result['probe_reasons'] = dict(getattr(
+                solver, '_abl_probe_reasons', {}) or {})
+            result['probe_skips'] = int(getattr(
+                solver, '_abl_probe_skips', 0))
+            result['remeasure_skips'] = int(getattr(
+                solver, '_explore_remeasure_skips', 0))
+            result['gate_hist'] = getattr(solver, '_abl_gate_hist', None)
+            # decision-WHAT probe diagnostics (Tom 2026-08-16): per-probe
+            # chosen coord/popp, score, p_err, sigma/U/belief before-after
+            result['probe_log'] = getattr(solver, '_abl_probe_log', None)
 
         result['adv'] = np.asarray(adv).tolist()
         result['n_on'] = int(np.asarray(adv).sum())
@@ -138,6 +206,9 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             wm.stop_workers()
         except Exception as e:
             print('warning: stop_workers raised {}'.format(e))
+        # revert the mc-off actor-class injection so the scoring stack
+        # (wm2 below) is built from stock workers
+        worker_comms_ray.ACTOR_CLS = _stock_actor_cls
 
     # ---- scoring phase: PRISTINE eval stack ----
     # The solver's modify_ugs (pseudo-UG splitting, seed-dependent) mutates
@@ -147,9 +218,9 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     deployment2 = get_random_deployment(dpsize)
     deployment2['port'] = port + 400
     sas2 = Sparse_Advertisement_Eval(
-        deployment2, verbose=False, lambduh=0.00001, with_capacity=capacity,
+        deployment2, verbose=False, lambduh=0, with_capacity=capacity,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=False, gamma=0,
-        n_prefixes=n_prefixes, generic_objective='avg_latency',
+        n_prefixes=n_prefixes, generic_objective=os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency'),
     )  # scoring stack stays latency-only: the reported metric is unchanged
     wm2 = Worker_Manager(sas2.get_init_kwa(), deployment2)
     wm2.start_workers()
@@ -174,10 +245,28 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     #   SCULPTOR_ABLATION_KEEP_RUNS=1: never delete anything
     _srd = getattr(locals().get('solver', None), 'save_run_dir', None)
     # rename the run dir semantically: runs/ablation-<dpsize>-<rung>-dep<seed>
+    # (suffixed -N<budget> under gated probing so grids over N never
+    # collide on the same dir name within a workspace -- needed for
+    # per-run figure/log harvesting)
     if _srd and os.path.isdir(_srd):
         import shutil
+        _nsuf = ''
+        _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
+        if _pmode in ('gated', 'scheduled', 'smart'):
+            _nsuf = '-N{}-{}'.format(
+                os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'), _pmode)
+        elif _pmode == 'fixed':
+            # budgeted-fixed (L1 v2) is a real N-grid arm: carry N in the
+            # dir/fig name or every N's convergence figure collides on
+            # <rung>-dep<seed>-fixed.pdf (caught 2026-08-14: dash grid
+            # could only link one cell)
+            _nsuf = ('-N{}-fixed'.format(
+                os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'))
+                if os.environ.get('SCULPTOR_ABLATION_FIXED_BUDGET',
+                                  '0') == '1'
+                else '-fixed')
         _dst = os.path.join(os.path.dirname(_srd),
-                            'ablation-{}-{}-dep{}'.format(dpsize, rung, seed))
+                            'ablation-{}-{}-dep{}{}'.format(dpsize, rung, seed, _nsuf))
         try:
             if os.path.isdir(_dst):
                 shutil.rmtree(_dst, ignore_errors=True)  # rerun of same cell
@@ -189,7 +278,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     if os.environ.get('SCULPTOR_ABLATION_KEEP_RUNS', '0') != '1':
         import shutil
         keep = int(os.environ.get('SCULPTOR_ABLATION_RUNS_KEEP', '20'))
-        runs_root = os.path.join(_REPO_ROOT, 'runs')
+        runs_root = os.path.abspath('runs')
         try:
             dirs = sorted((d for d in os.listdir(runs_root)
                            if os.path.isdir(os.path.join(runs_root, d))),
@@ -221,6 +310,8 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
 
 
 def main():
+    # CLI wrapper; every knob beyond (seed, rung, iters, size) arrives via
+    # SCULPTOR_* env so sweep scripts stay thin.
     p = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     p.add_argument('--seed', type=int, required=True)
     p.add_argument('--rung', required=True)
