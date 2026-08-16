@@ -1,0 +1,139 @@
+[
+ {
+  "label": "L1",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L1_nomc_fixed",
+  "probe_mode": "fixed",
+  "rungs": "no_mc",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L2",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L2_nomc_sched",
+  "probe_mode": "scheduled",
+  "rungs": "no_mc",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L3",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L3_nomem_sched",
+  "probe_mode": "scheduled",
+  "rungs": "no_memory",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L4",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L4_nodir_sched",
+  "probe_mode": "scheduled",
+  "rungs": "no_direction",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L5",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L5_full_sched",
+  "probe_mode": "scheduled",
+  "rungs": "full",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 500,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L6p",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L6p_full_scheddecision",
+  "probe_mode": "scheduled",
+  "rungs": "full",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 500,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "decision",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ },
+ {
+  "label": "L7",
+  "out_root": "cache/ablation/policy_ladder_v3_LBCACHE/L7_full_smartcons",
+  "probe_mode": "smart",
+  "rungs": "full",
+  "seeds": "1-5",
+  "n_values": "1,2,5,10,20,50",
+  "gamma": "0.1",
+  "max_iter": 500,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_SMART_MINGAP_FRAC": "0.7",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "maxinfo",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100"
+  },
+  "artifacts_figs": "cache/ablation/policy_ladder_v3_LBCACHE_artifacts/figs"
+ }
+]
