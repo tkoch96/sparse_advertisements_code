@@ -379,7 +379,12 @@ def main():
             env.update(sp['env'])
             log = os.path.join(ws, 'logs', '{}_N{}_s{}_{}.log'.format(
                 sp['label'], N, s, rung))
-            cmd = [args.py, '-u', '-m', 'experiments.ablation.run_fork_ladder',
+            # 'runner' spec field (Tom 2026-08-17, EODS/fleet): any module
+            # speaking run_fork_ladder's CLI + result-JSON convention can
+            # be queued — EODS cells, future fleet workloads. Default
+            # unchanged.
+            cmd = [args.py, '-u', '-m',
+                   sp.get('runner', 'experiments.ablation.run_fork_ladder'),
                    '--seed', str(s), '--rung', rung,
                    '--port', str(args.port0 + 20 * slot),
                    '--max-iter', str(sp['max_iter']), '--dpsize', sp['dpsize'],

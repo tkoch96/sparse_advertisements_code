@@ -33,7 +33,12 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# soln_types = ['sparse', 'painter', 'anycast', 'one_per_pop', 'one_per_peering']
 	# soln_types = ['anycast', 'one_per_peering']
 	# soln_types = ['one_per_pop', 'painter', 'anycast','sparse']
-	soln_types = ['painter']
+	# SCULPTOR_SOLN_TYPES: comma list overriding the hand-edited default
+	# (Tom 2026-08-17, EODS modernization: strategy set becomes a knob,
+	# not a source edit). kwargs wins over env wins over the default.
+	soln_types = kwargs.get('soln_types') or [
+		s for s in os.environ.get('SCULPTOR_SOLN_TYPES', 'painter').split(',')
+		if s]
 	# soln_types = ['sparse', 'anycast', 'painter', 'one_per_pop', 'one_per_peering']
 	# soln_types = ['one_per_pop','sparse', 'anycast', 'painter', 'one_per_peering']
 	# soln_types = ['sparse', 'one_per_pop', 'anycast']
