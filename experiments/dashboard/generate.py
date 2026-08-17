@@ -712,6 +712,23 @@ EXPERIMENTS.extend([
      ]},
 ])
 
+EXPERIMENTS.append({
+    'id': 'profiler', 'title': 'Profiler',
+    'sections': [
+        {'id': 'smokes', 'title': 'scoping smokes', 'kind': 'static',
+         'heading': 'Scoping smokes — single-core timing/RAM/cost ladder '
+                    '(a10, EODS 5-32, obj32) on a dedicated fleet VM',
+         'figures': ['figures/profiler_status.png'],
+         'refresh': {'steps': [
+             {'in': ['figures/profiler_status.png'], 'always': True,
+              'out': ['figures/profiler_status.png'],
+              'argv': ['{py}', '-m',
+                       'experiments.eods.profiler_status']}]},
+         'intro': 'Left: completed picks with startup / s-per-iter / RAM '
+                  'peaks / $-per-cell. Right: live cell RAM + iteration '
+                  'trace. Feeds the SCALE-500 scaling report.'},
+    ]})
+
 # Retired unified-grid campaigns (Tom 2026-08-17: never orphan a view
 # again — every superseded campaign gets an archived section here).
 EXPERIMENTS.append({
