@@ -84,12 +84,18 @@ def run_pick(sp, seed, args):
                 'SCULPTOR_ABLATION_GAMMA': sp.get('gamma', '0'),
                 'SCULPTOR_ABLATION_PROBE_MODE': sp.get('probe_mode', 'fixed'),
                 'SCULPTOR_ABLATION_PROBE_N': n})
+    if args.max_iter:
+        # scoping mode (Tom 2026-08-17): a few iterations per deployment
+        # — we are scraping timing/RAM, not training. Override both the
+        # CLI budget and the min-iter floor some specs pin via env.
+        env['SCULPTOR_MAX_ITER'] = str(args.max_iter)
+        env['SCULPTOR_ABLATION_MIN_ITER'] = str(args.max_iter)
     runner = sp.get('runner', 'experiments.ablation.run_fork_ladder')
     rung = sp['rungs'].split(',')[0]
     cmd = [sys.executable, '-u', '-m', runner, '--seed', str(seed),
            '--rung', rung, '--port', str(args.port), '--max-iter',
-           str(sp.get('max_iter', 200)), '--dpsize', sp['dpsize'],
-           '--out-dir', out_dir]
+           str(args.max_iter or sp.get('max_iter', 200)),
+           '--dpsize', sp['dpsize'], '--out-dir', out_dir]
     log_fn = os.path.join(ws, 'logs', 'profile_{}_s{}.log'.format(
         sp['label'], seed))
     print('[profile] START {} seed {} (workers={})'.format(
@@ -122,6 +128,8 @@ def main():
     ap.add_argument('--ws-root', default=os.path.expanduser('~/prof_ws'))
     ap.add_argument('--out', default='cache/eods/profiles')
     ap.add_argument('--cell-timeout', type=float, default=4 * 3600)
+    ap.add_argument('--max-iter', type=int, default=None,
+                    help='override every pick to N training iters')
     args = ap.parse_args()
 
     specs = {}
