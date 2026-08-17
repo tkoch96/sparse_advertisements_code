@@ -60,7 +60,7 @@ import os, re
 label_root = {sp["label"]: sp["out_root"] for sp in specs}
 inflight_it = 0
 now = time.time()
-for lf in glob.glob("/home/ubuntu/hx_ws/S*/logs/*.log"):
+for lf in glob.glob("/home/ubuntu/*_ws/S*/logs/*.log"):
     try:
         # a landed cell's log stays mtime-fresh for a while after its
         # iterations moved into done_it — with short cells that double
