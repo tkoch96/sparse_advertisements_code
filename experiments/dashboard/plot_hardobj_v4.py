@@ -52,6 +52,31 @@ def load(obj):
     return out
 
 
+def painter_ref(obj):
+    """Mean (painter - opp) in COST orientation from the archived painter
+    evals (old stores are benefit-oriented, so cost-diff = opp - obj).
+    mlu's scalar changed between eras (lat_plus -> max_util v2), so its
+    archived painter is NOT comparable and we return None."""
+    if obj == 'mlu':
+        return None
+    diffs = []
+    for store in ('cache/model_error/hardB3v2_scores.json',
+                  'cache/model_error/hardB3_scores.json'):
+        p = os.path.join(REPO, store)
+        if not os.path.exists(p):
+            continue
+        try:
+            d = json.load(open(p))
+        except (OSError, ValueError):
+            continue
+        for k, v in d.items():
+            if str(k).startswith('painter:%s:' % obj):
+                diffs.append(v['opp_val'] - v['obj_val'])
+        if diffs:
+            break
+    return float(np.mean(diffs)) if diffs else None
+
+
 def panel(ax, obj, title):
     data = load(obj)
     drawn = False
@@ -66,6 +91,14 @@ def panel(ax, obj, title):
             ax.plot(xs, ys, 'o-', color=color, label=label, lw=1.5, ms=4)
             drawn = True
     ax.axhline(0, color='k', lw=1, linestyle='--')
+    # reference window (Tom 2026-08-17): y spans opp -10% .. painter +10%
+    # of the painter-opp gap, so both anchors frame the plot
+    pref = painter_ref(obj)
+    if pref is not None and pref > 0:
+        ax.axhline(pref, color='#888', lw=1.2, linestyle=':')
+        ax.text(0.99, pref, ' painter', va='bottom', ha='right',
+                transform=ax.get_yaxis_transform(), fontsize=8, color='#888')
+        ax.set_ylim(-0.1 * pref, 1.1 * pref)
     ax.set_xscale('log')
     ax.set_xticks(NS)
     ax.set_xticklabels([str(n) for n in NS])
