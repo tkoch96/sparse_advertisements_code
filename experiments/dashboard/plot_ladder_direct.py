@@ -63,14 +63,49 @@ def render(root, out, title):
     return True
 
 
+def _store_has_data(tag_prefix):
+    import glob as g
+    for fn in g.glob(os.path.join(REPO, 'cache/model_error/steady',
+                                  tag_prefix + '_steady*.json')):
+        try:
+            if json.load(open(fn)):
+                return True
+        except (OSError, ValueError):
+            pass
+    return False
+
+
 def main():
-    render('cache/ablation/policy_ladder_v3',
-           'figures/policy_ladder_v3_5panel_objective.png',
-           'Policy ladder v3 (10 deployments) — IN-RUN steady scores '
-           '(fresh-eval composite pending Gurobi license renewal)')
-    render('cache/ablation/policy_ladder_a10',
-           'figures/policy_ladder_a10_5panel_objective.png',
-           'actual-10 ladder — IN-RUN steady scores (partial: license-paused)')
+    # Delegate to the fresh-eval renderer when its stores hold data;
+    # otherwise render the license-independent direct figures. Prevents
+    # plot_policy5 from painting empty axes over real data (the blank-dash
+    # incident, 2026-08-17).
+    import subprocess, sys
+    if _store_has_data('policy'):
+        env = dict(os.environ, POLICY_PLOT_STAT='mean',
+                   POLICY_PLOT_OUT='policy_ladder_v3_5panel',
+                   PYTHONPATH=REPO, MPLBACKEND='Agg')
+        subprocess.run([sys.executable, '-m',
+                        'experiments.model_error.plot_policy5'],
+                       env=env, cwd=REPO)
+    else:
+        render('cache/ablation/policy_ladder_v3',
+               'figures/policy_ladder_v3_5panel_objective.png',
+               'Policy ladder v3 (10 deployments) — IN-RUN steady scores '
+               '(fresh-eval composite pending Gurobi license renewal)')
+    if _store_has_data('a10'):
+        env = dict(os.environ, POLICY_PLOT_STAT='mean',
+                   POLICY_PLOT_TAG_PREFIX='a10',
+                   POLICY_PLOT_OUT='policy_ladder_a10_5panel',
+                   PYTHONPATH=REPO, MPLBACKEND='Agg')
+        subprocess.run([sys.executable, '-m',
+                        'experiments.model_error.plot_policy5'],
+                       env=env, cwd=REPO)
+    else:
+        render('cache/ablation/policy_ladder_a10',
+               'figures/policy_ladder_a10_5panel_objective.png',
+               'actual-10 ladder — IN-RUN steady scores (partial: '
+               'license-paused)')
 
 
 if __name__ == '__main__':
