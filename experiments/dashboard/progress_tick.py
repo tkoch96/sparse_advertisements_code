@@ -52,6 +52,31 @@ for sp in specs:
             else:
                 est += (min(n, mi) if sp["label"] == "L1"
                         else (100 if mi <= 100 else 150))
+# In-flight iterations (Tom 2026-08-17, iteration-rate ticker): each
+# RUNNING cell's log carries '[mem] tag=iter_start ... iter=N' lines;
+# the last one is the cell's current iteration. Only recently-written
+# logs count (dead logs from finished cells are excluded by mtime).
+import os
+inflight_it = 0
+now = time.time()
+for lf in glob.glob("/home/ubuntu/hx_ws/S*/logs/*.log"):
+    try:
+        if now - os.path.getmtime(lf) > 600:
+            continue
+        last = None
+        with open(lf, "rb") as f:
+            f.seek(0, 2)
+            f.seek(max(0, f.tell() - 65536))
+            for ln in f.read().decode("utf-8", "replace").splitlines():
+                i = ln.rfind(" iter=")
+                if i != -1:
+                    v = ln[i + 6:].split()[0]
+                    if v.isdigit():
+                        last = int(v)
+        if last:
+            inflight_it += last
+    except Exception:
+        pass
 mem = {}
 for line in open("/proc/meminfo"):
     p = line.split()
@@ -76,6 +101,7 @@ print(json.dumps({"done_it": done_it, "est_total": est,
                   "ram_pct": round(100 * ram_used_gb / ram_total_gb, 1),
                   "cpu_pct": round(min(100.0, 100 * load1 / cores), 1),
                   "load1": load1, "cores": cores, "cells_running": cells,
+                  "inflight_it": inflight_it,
                   "ts": time.strftime("%H:%M:%SZ", time.gmtime())}))
 '''
 
@@ -97,9 +123,55 @@ def tick():
         data = json.loads(line)
     except Exception as e:
         return 'tick failed: {}'.format(e)
+    _add_rate_and_eta(data)
     with open(os.path.join(REPO, 'dashboard_site', 'progress.json'), 'w') as f:
         json.dump(data, f)
     return 'ok {done_it}/{est_total}'.format(**data)
+
+
+RATE_STATE = os.path.expanduser('~/sculptor_dashboard/tick_rate_state.json')
+
+
+def _add_rate_and_eta(data):
+    """Iteration rate + full-grid ETA (Tom 2026-08-17). Progress metric =
+    landed iterations + in-flight iterations (running cells' current
+    iter, from their logs), sampled every tick into a rolling ~30-min
+    window. Rate over the window -> fleet it/s, per-cell s/iter, and
+    remaining/rate -> ETA. Queue restarts make the metric dip (in-flight
+    resets); negative or ~zero rates just blank the ETA for a few ticks
+    until the window recovers."""
+    now = time.time()
+    prog = float(data['done_it'] + data.get('inflight_it', 0))
+    try:
+        hist = json.load(open(RATE_STATE))
+    except Exception:
+        hist = []
+    hist.append([now, prog])
+    hist = [h for h in hist if now - h[0] <= 1800][-90:]
+    try:
+        json.dump(hist, open(RATE_STATE, 'w'))
+    except OSError:
+        pass
+    # rate vs the oldest sample at least 5 min back (noise floor)
+    base = None
+    for h in hist:
+        if now - h[0] >= 300:
+            base = h
+    if base is None or prog <= base[1]:
+        data['it_per_s'] = None
+        data['eta_s'] = None
+        data['eta_str'] = None
+        data['sec_per_iter_cell'] = None
+        return
+    rate = (prog - base[1]) / (now - base[0])
+    remaining = max(0.0, float(data['est_total']) - prog)
+    eta_s = remaining / rate
+    cells = max(1, int(data.get('cells_running') or 0))
+    data['it_per_s'] = round(rate, 2)
+    data['sec_per_iter_cell'] = round(cells / rate, 2)
+    data['eta_s'] = int(eta_s)
+    h, m = int(eta_s // 3600), int((eta_s % 3600) // 60)
+    data['eta_str'] = '{}h{:02d}m'.format(h, m) if h else '{}m'.format(m)
 
 
 def main():
