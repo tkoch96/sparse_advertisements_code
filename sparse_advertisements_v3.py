@@ -35,7 +35,7 @@ Hot loops to know about:
 See README.md "Architecture overview" for the bigger picture.
 """
 import matplotlib.pyplot as plt, copy, time, numpy as np, itertools, pickle, warnings, tqdm, glob
-import gurobipy as gp
+import gpshim as gp  # gurobipy-subset facade; SCULPTOR_LP_BACKEND=gurobi(default)|highs
 from subprocess import call, check_output
 import concurrent.futures
 import multiprocessing as _mp

@@ -33,7 +33,7 @@ from optimal_adv_wrapper import Optimal_Adv_Wrapper
 
 from solve_lp_assignment import solve_generic_lp_with_failure_catch, get_paths_by_ug, NO_PATH_INGRESS
 
-import gurobipy as gp
+import gpshim as gp  # gurobipy-subset facade; SCULPTOR_LP_BACKEND=gurobi(default)|highs
 from scipy.sparse import csr_matrix
 
 gp.setParam("OutputFlag", 0)

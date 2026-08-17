@@ -27,33 +27,11 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-FORK_ALIASES = [
-    ('solve_lp_assignment', 'experiments.solver_fork.solve_lp_assignment'),
-    ('path_distribution_computer',
-     'experiments.solver_fork.path_distribution_computer'),
-    ('path_distribution_computer_ray',
-     'experiments.solver_fork.path_distribution_computer_ray'),
-    ('worker_comms_ray', 'experiments.solver_fork.worker_comms_ray'),
-    ('worker_comms', 'experiments.solver_fork.worker_comms'),
-]
-
-
 def install_aliases():
-    """Route every bare mainline module name to its fork copy. MUST run
-    before any mainline import (sparse_advertisements_v3, wrapper_eval,
-    run_fork_ladder...) so their imports bind the gpshim-backed fork."""
-    import importlib
-    for bare, forkname in FORK_ALIASES:
-        existing = sys.modules.get(bare)
-        fork = importlib.import_module(forkname)
-        if existing is not None and existing is not fork:
-            raise RuntimeError(
-                'solver_fork contamination: mainline {} imported before '
-                'aliasing ({!r})'.format(
-                    bare, getattr(existing, '__file__', '?')))
-        sys.modules[bare] = fork
-    # sanity: the shim backend must match what the cell was told to use
-    from experiments.solver_fork import gpshim
+    """No-op since the 2026-08-17 mainline merge: core modules import
+    gpshim directly, so backend selection is purely the
+    SCULPTOR_LP_BACKEND env var. Kept for callers' backward compat."""
+    import gpshim
     want = os.environ.get('SCULPTOR_LP_BACKEND', 'gurobi')
     assert gpshim.BACKEND == want, (gpshim.BACKEND, want)
 
@@ -73,7 +51,7 @@ def one_cell(args):
     os.environ['SCULPTOR_LP_BACKEND'] = args.backend
     install_aliases()
     from experiments.ablation.run_fork_ladder import run_one
-    from experiments.solver_fork import gpshim
+    import gpshim
     print('[solver-fork] cell start backend={} seed={} (gpshim={})'.format(
         args.backend, args.seed, gpshim.BACKEND), flush=True)
     out_fn = run_one(args.seed, 'full', args.port, args.max_iter,

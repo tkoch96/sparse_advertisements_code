@@ -37,11 +37,6 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# Solver-fork seam (Tom 2026-08-17): SCULPTOR_LP_BACKEND set => score
-# through the gpshim-backed fork stack (see ablation/run_fork_ladder.py).
-if os.environ.get('SCULPTOR_LP_BACKEND'):
-    from experiments.solver_fork.run_equivalence import install_aliases
-    install_aliases()
 
 MARKER = 'FAILURE_METRICS '
 SENTINEL_CUT = 15000.0

@@ -37,13 +37,6 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-# Solver-fork seam (Tom 2026-08-17): this module is imported FRESH inside
-# ray worker processes (the actor class module), so the bare-name import
-# below must be re-routed here — the driver-side aliases don't exist in
-# this process. No-op when SCULPTOR_LP_BACKEND is unset.
-if os.environ.get('SCULPTOR_LP_BACKEND'):
-    from experiments.solver_fork.run_equivalence import install_aliases
-    install_aliases()
 
 from path_distribution_computer_ray import _LocalPathDistributionComputer  # noqa: E402
 

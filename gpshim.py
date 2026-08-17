@@ -1,8 +1,9 @@
-"""gurobipy-subset facade with pluggable LP backends (Tom 2026-08-17).
+"""gurobipy-subset facade with pluggable LP backends (Tom 2026-08-17;
+MAINLINE since the solver_fork merge the same day).
 
-The solver-fork files do `from experiments.solver_fork import gpshim as gp`
-instead of `import gurobipy as gp`. Backend selected ONCE at import via
-SCULPTOR_LP_BACKEND:
+Core LP callers (solve_lp_assignment, path_distribution_computer) do
+`import gpshim as gp` instead of `import gurobipy as gp`. Backend
+selected ONCE at import via SCULPTOR_LP_BACKEND:
 
     gurobi (default)  -- passthrough: the names below ARE gurobipy's own
                          objects; zero behavioral change vs mainline.

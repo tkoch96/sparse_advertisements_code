@@ -36,7 +36,7 @@ import os as _os
 import numpy as np,  scipy, time, math
 from helpers import *
 from scipy.sparse import csr_matrix
-import gurobipy as gp
+import gpshim as gp  # gurobipy-subset facade; SCULPTOR_LP_BACKEND=gurobi(default)|highs
 gp.setParam("OutputFlag", 0)
 
 def _apply_capacity_headroom(arr, sas=None):

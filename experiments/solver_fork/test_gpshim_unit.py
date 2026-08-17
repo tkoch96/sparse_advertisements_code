@@ -17,7 +17,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from experiments.solver_fork import gpshim as gp
+import gpshim as gp
 
 RNG = np.random.default_rng(0)
 TOL = 1e-6
