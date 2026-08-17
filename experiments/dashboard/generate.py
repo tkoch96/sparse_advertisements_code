@@ -712,6 +712,34 @@ EXPERIMENTS.extend([
      ]},
 ])
 
+# Retired unified-grid campaigns (Tom 2026-08-17: never orphan a view
+# again — every superseded campaign gets an archived section here).
+EXPERIMENTS.append({
+    'id': 'retired_grids', 'title': 'Retired grids',
+    'sections': [
+        {'id': 'georand', 'title': 'georand (unrounded)', 'kind': 'static',
+         'heading': 'Unified grid — georand, unrounded (~290/740 cells; '
+                    'killed for the obj-round falsification test)',
+         'figures': ['figures/grid_georand_4panel.png'],
+         'intro': 'FROZEN. CAVEAT: fracb panel predates the hinge-scalar '
+                  'overflow fix (2026-08-17) — its values use the broken '
+                  'scalar and can cross opp; other families valid.'},
+        {'id': 'georand_r4', 'title': 'georand r4', 'kind': 'static',
+         'heading': 'Unified grid — georand + OBJ_ROUND=4 (227/740 cells; '
+                    'purpose achieved: rounding-invariance established, '
+                    'jitter theory refuted)',
+         'figures': ['figures/grid_georand_r4_4panel.png'],
+         'intro': 'FROZEN. The falsification A/B store: ladder + probe '
+                  'delivery match the unrounded run within noise.'},
+        {'id': 'maxhard_partial', 'title': 'maxhard (partial)',
+         'kind': 'static',
+         'heading': 'Unified grid — maxhard, unrounded (46/740 cells; '
+                    'killed in favor of georand-r4, then re-run as '
+                    'maxhard-r4)',
+         'figures': ['figures/grid_maxhard_4panel.png'],
+         'intro': 'FROZEN partial.'},
+    ]})
+
 EXPERIMENTS.append({'id': 'old_dash', 'title': 'Old dashboards',
                     'sections': [sec for e in _OLD_DASH_ENTRIES
                                  for sec in e['sections']]})
