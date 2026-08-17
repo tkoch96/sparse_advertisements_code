@@ -694,7 +694,10 @@ else:
 
         @property
         def objVal(self):
-            return float(self._h.getObjectiveValue())
+            v = float(self._h.getObjectiveValue())
+            d = os.environ.get('SCULPTOR_OBJ_ROUND')
+            # objective-quantization knob (see solve_lp_assignment.obj_round)
+            return round(v, int(d)) if d is not None else v
 
         ObjVal = objVal
 

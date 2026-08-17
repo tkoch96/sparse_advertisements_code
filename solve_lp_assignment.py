@@ -136,6 +136,22 @@ def get_obj_fn(model, minimizer_weight, opt_var, obj, n_paths, sas, using_mlu=Fa
 		raise ValueError("Objective {} not implemented in solve_lp_assignment".format(obj))
 	return model, opt_var, obj_fn, obj_norm
 
+def obj_round(v):
+	"""SCULPTOR_OBJ_ROUND=<d>: quantize objective scalars to d decimals
+	(Tom 2026-08-17). Purpose: solver-jitter falsification test -- LP
+	solutions among degenerate optima differ between engines by <1e-9 in
+	objective but perturb solution-derived scalars; rounding every
+	objective the algorithm consumes bounds that channel below the
+	quantum so tie-break jitter cannot flip decisions. Unset = off."""
+	d = os.environ.get('SCULPTOR_OBJ_ROUND')
+	if d is None or v is None:
+		return v
+	try:
+		return round(float(v), int(d))
+	except (TypeError, ValueError):
+		return v
+
+
 def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 		legacy_objective):
 	"""Congestion-aware SOFT BOUNDED scalar (Tom 2026-08-14; see
@@ -155,7 +171,7 @@ def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 	fraction_congested_volume is kept in the signature for reference only.
 	SCULPTOR_CONGESTION_AWARE_OBJ=0 restores legacy."""
 	if _os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') == '0':
-		return legacy_objective
+		return obj_round(legacy_objective)
 	_soft_P = float(_os.environ.get('SCULPTOR_SOFT_CONG_PENALTY', '50'))
 	vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float)
 	lats = np.asarray(lats_by_ug_arr, dtype=float).flatten()
@@ -166,7 +182,7 @@ def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 	_B = float(np.sum(_bad_w * vols))
 	_R = max(0.0, _S - NO_ROUTE_LATENCY * _B)
 	_routed_v = max(_tv - _B, 1e-9)
-	return -1 * (_R / _routed_v + _soft_P * _B / _tv)
+	return obj_round(-1 * (_R / _routed_v + _soft_P * _B / _tv))
 
 
 def _is_avg_latency_obj(obj):

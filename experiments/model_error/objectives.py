@@ -49,6 +49,8 @@ import sys
 
 import numpy as np
 
+from solve_lp_assignment import obj_round
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 if _REPO_ROOT not in sys.path:
@@ -192,11 +194,11 @@ def solve_lp_frac_beyond_optimal(sas, routed_through_ingress, obj, **kwargs):
                 out['hinge_excess_ms'] = float(excess)
                 out['frac_beyond_capability'] = (float(fb_cap)
                                                 if fb_cap is not None else None)
-                out['objective'] = -float(excess)
+                out['objective'] = obj_round(-float(excess))
                 return out
         except Exception as e:
             print('[fracb] hinge LP failed ({}); assignment scalar'.format(e))
-    out['objective'] = -out['frac_beyond']
+    out['objective'] = obj_round(-out['frac_beyond'])
     return out
 
 
@@ -279,8 +281,8 @@ def solve_lp_lat_plus_max_util(sas, routed_through_ingress, obj, **kwargs):
     out['bad_frac'] = bad_frac
     out['max_util'] = mlu
     out['mlu_alpha'] = float(alpha)
-    out['objective'] = -1.0 * (routed_lat + P * bad_frac
-                               + float(alpha) * (mlu + smult * bad_frac))
+    out['objective'] = obj_round(-1.0 * (routed_lat + P * bad_frac
+                               + float(alpha) * (mlu + smult * bad_frac)))
     return out
 
 
@@ -343,7 +345,7 @@ def solve_lp_max_util(sas, routed_through_ingress, obj, **kwargs):
     out['steady_avg_lat'] = routed_lat
     out['bad_frac'] = bad_frac
     out['mlu_alpha'] = A
-    out['objective'] = -(A * float(mlu) + routed_lat + G * bad_frac)
+    out['objective'] = obj_round(-(A * float(mlu) + routed_lat + G * bad_frac))
     return out
 
 
@@ -386,7 +388,7 @@ def solve_lp_popp_failure_congestion(sas, routed_through_ingress, obj,
     out['popp_failure_n_scenarios'] = len(fracs)
     out['popp_failure_max_frac'] = float(np.max(fracs)) if fracs else 0.0
     out['popp_failure_mean_frac'] = float(np.mean(fracs)) if fracs else 0.0
-    out['objective'] = -out['popp_failure_mean_frac']
+    out['objective'] = obj_round(-out['popp_failure_mean_frac'])
     return out
 
 
@@ -423,7 +425,7 @@ def solve_lp_frozen_failure(sas, routed_through_ingress, obj, **kwargs):
     out['frozen_gamma'] = gamma_f
     # benefit convention (higher better): steady LP benefit minus the
     # frozen-failure latency penalty, scaled like the RB term.
-    out['objective'] = (float(steady['objective'])
+    out['objective'] = obj_round(float(steady['objective'])
                         - gamma_f * float(res['avg_lat_failure']))
     return out
 
