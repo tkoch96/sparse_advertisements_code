@@ -568,7 +568,59 @@ else:
                 self.status = 13
             if self.status == 2:
                 self._sol = np.asarray(self._h.getSolution().col_value)
+                if os.environ.get('SCULPTOR_GPSHIM_AUDIT') == '1':
+                    self._audit()
             return self.status
+
+        def _audit(self):
+            """SCULPTOR_GPSHIM_AUDIT=1: re-solve the EXACT LP HiGHS holds
+            (pulled back via getLp, so facade state bugs — stale bounds,
+            missed cost zeroing, bad chgCoeff — are inside the audited
+            object) with scipy's independent HiGHS wrapper and compare
+            objectives. Loud [gpshim-audit] line + hard raise on mismatch."""
+            from scipy import sparse as _sp
+            from scipy.optimize import linprog as _linprog
+            lp = self._h.getLp()
+            n, m = lp.num_col_, lp.num_row_
+            A = _sp.csc_matrix(
+                (np.asarray(lp.a_matrix_.value_),
+                 np.asarray(lp.a_matrix_.index_),
+                 np.asarray(lp.a_matrix_.start_)),
+                shape=(m, n)).tocsr()
+            c = np.asarray(lp.col_cost_)
+            cl = np.asarray(lp.col_lower_)
+            cu = np.asarray(lp.col_upper_)
+            rl = np.asarray(lp.row_lower_)
+            ru = np.asarray(lp.row_upper_)
+            eq = rl == ru
+            rows_ub, rhs_ub = [], []
+            if (~eq).any():
+                fin_u = ~eq & (ru < _KHINF)
+                fin_l = ~eq & (rl > -_KHINF)
+                if fin_u.any():
+                    rows_ub.append(A[fin_u])
+                    rhs_ub.append(ru[fin_u])
+                if fin_l.any():
+                    rows_ub.append(-A[fin_l])
+                    rhs_ub.append(-rl[fin_l])
+            r = _linprog(
+                c,
+                A_ub=_sp.vstack(rows_ub) if rows_ub else None,
+                b_ub=np.concatenate(rhs_ub) if rhs_ub else None,
+                A_eq=A[eq] if eq.any() else None,
+                b_eq=rl[eq] if eq.any() else None,
+                bounds=np.stack([np.where(cl <= -_KHINF, -np.inf, cl),
+                                 np.where(cu >= _KHINF, np.inf, cu)], 1),
+                method='highs')
+            mine = self._h.getObjectiveValue()
+            ref = (r.fun + lp.offset_) if r.status == 0 else None
+            tol = 1e-5 * max(1.0, abs(mine))
+            if ref is None or abs(mine - ref) > tol:
+                msg = ('[gpshim-audit] MISMATCH model={!r} facade={!r} '
+                       'scipy={!r} (scipy status {})'.format(
+                           self._name, mine, ref, r.status))
+                print(msg, flush=True)
+                raise AssertionError(msg)
 
         @property
         def objVal(self):
