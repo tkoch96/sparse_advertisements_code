@@ -1,0 +1,116 @@
+[
+ {
+  "label": "eods_a5",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-5",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-30",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-5",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ },
+ {
+  "label": "eods_a10",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-10",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-20",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-10",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ },
+ {
+  "label": "eods_a15",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-15",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-15",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-15",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ },
+ {
+  "label": "eods_a20",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-20",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-10",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-20",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ },
+ {
+  "label": "eods_a25",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-25",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-10",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-25",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ },
+ {
+  "label": "eods_a32",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/v1/actual-32",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-10",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse,painter,anycast,one_per_pop,one_per_peering",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ }
+]

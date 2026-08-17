@@ -20,8 +20,9 @@ Modes:
 import argparse
 import json
 
-DPSIZES = [3, 5, 10, 15, 20, 25, 32]
-NSIM = [15, 20, 10, 16, 15, 15, 12]
+# Tom 2026-08-17 scoping spec: {5:30, 10:20, 15:15, 20:10, 25:10, 32:10}
+DPSIZES = [5, 10, 15, 20, 25, 32]
+NSIM = [30, 20, 15, 10, 10, 10]
 PREFIX_COUNTS = list(range(30, 101, 5))
 OBJ32_FAMILIES = {
     'lat': {'gamma': '0.1', 'env': {}},
@@ -60,7 +61,8 @@ def mode_sizes(args):
         'seeds': '1-{}'.format(ns), 'n_values': '1', 'gamma': '0',
         'max_iter': 1, 'dpsize': 'actual-{}'.format(dp),
         'artifacts_figs': '{}_artifacts/figs'.format(args.store),
-        'env': {**base_env(args), 'SCULPTOR_EODS_MODE': 'sizes'},
+        'env': {**base_env(args), 'SCULPTOR_EODS_MODE': 'sizes',
+                'SCULPTOR_MAX_ITER': str(args.train_iters)},
     } for dp, ns in zip(DPSIZES, NSIM) if dp in keep]
 
 
@@ -110,6 +112,7 @@ def main():
     ap.add_argument('--dpsizes', default=None)
     ap.add_argument('--seeds', default='1-3')
     ap.add_argument('--n-values', default='10')
+    ap.add_argument('--train-iters', type=int, default=200)
     args = ap.parse_args()
 
     specs = {'sizes': mode_sizes, 'prefixes': mode_prefixes,

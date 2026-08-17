@@ -1,0 +1,182 @@
+[
+ {
+  "label": "obj32_lat_L6_full_slotted",
+  "out_root": "cache/eods/v1/obj32/lat/L6_full_slotted",
+  "rungs": "full",
+  "probe_mode": "slotted",
+  "seeds": "1-20",
+  "n_values": "10",
+  "gamma": "0.1",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_lat_painter",
+  "out_root": "cache/eods/v1/obj32/lat/painter",
+  "rungs": "painter",
+  "probe_mode": "fixed",
+  "seeds": "1",
+  "n_values": "10",
+  "gamma": "0.1",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_fracb_L6_full_slotted",
+  "out_root": "cache/eods/v1/obj32/fracb/L6_full_slotted",
+  "rungs": "full",
+  "probe_mode": "slotted",
+  "seeds": "1-20",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "frac_beyond_optimal",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_fracb_painter",
+  "out_root": "cache/eods/v1/obj32/fracb/painter",
+  "rungs": "painter",
+  "probe_mode": "fixed",
+  "seeds": "1",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "frac_beyond_optimal",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_mlu_L6_full_slotted",
+  "out_root": "cache/eods/v1/obj32/mlu/L6_full_slotted",
+  "rungs": "full",
+  "probe_mode": "slotted",
+  "seeds": "1-20",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "max_util",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_mlu_painter",
+  "out_root": "cache/eods/v1/obj32/mlu/painter",
+  "rungs": "painter",
+  "probe_mode": "fixed",
+  "seeds": "1",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "max_util",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_prio_L6_full_slotted",
+  "out_root": "cache/eods/v1/obj32/prio/L6_full_slotted",
+  "rungs": "full",
+  "probe_mode": "slotted",
+  "seeds": "1-20",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "joint_latency_bulk_download",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ },
+ {
+  "label": "obj32_prio_painter",
+  "out_root": "cache/eods/v1/obj32/prio/painter",
+  "rungs": "painter",
+  "probe_mode": "fixed",
+  "seeds": "1",
+  "n_values": "10",
+  "gamma": "0",
+  "max_iter": 500,
+  "dpsize": "actual-32",
+  "artifacts_figs": "cache/eods/v1_artifacts/figs",
+  "env": {
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_STOP_RULE": "v2",
+   "SCULPTOR_ABLATION_MIN_ITER": "40",
+   "SCULPTOR_ABLATION_PROBE_TCONV": "100",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "joint_latency_bulk_download",
+   "SCULPTOR_LP_BACKEND": "highs"
+  }
+ }
+]
