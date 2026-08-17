@@ -1005,8 +1005,32 @@ def solve_min_hinge_excess(sas, routed_through_ingress, best_lats_by_ug,
 		raise RuntimeError('solve_min_hinge_excess: gurobi status {}'.format(
 			model.status))
 	x = z.X[:nx]
-	excess = float(np.dot(np.asarray(cost), x)) / total_v
+	# FULL objective per unit volume — hinge PLUS the overflow penalty
+	# (Tom 2026-08-17): reporting only dot(cost, x) dropped the elastic-
+	# overflow term the LP actually minimizes, so an arm that crams all
+	# volume onto few overloaded links showed near-zero "excess" (hinge 0,
+	# overflow hidden) and beat opp by -1.29 on the georand dash — while
+	# opp honestly spread onto worse-but-uncongested paths. Monotonicity
+	# (opp = exact floor) holds for c@z, not for its hinge half.
+	overflow = z.X[nx:]
+	excess = (float(np.dot(np.asarray(cost), x))
+			  + float(over_penalty) * float(np.sum(overflow))) / total_v
 	beyond_v = float(np.sum([x[j] for j, cst in enumerate(cost) if cst > 0]))
+	# UNROUTED volume is charged, not excused (Tom 2026-08-17): UGs with
+	# no candidate route under the adv used to be silently dropped from
+	# the LP while total_v stayed in the denominator, so a blackholing
+	# advertisement scored BELOW one-per-peering (georand fracb arms at
+	# -1.29 vs opp; trained rungs learned to exploit the hole). Charge
+	# each unrouted UG the sentinel-latency hinge — the same formula a
+	# 30s path would pay — restoring opp as an exact floor.
+	unrouted = [u for u in ug_list if not cand.get(u)]
+	if unrouted:
+		sentinel = float(os.environ.get(
+			'SCULPTOR_HINGE_NOROUTE_MS', str(NO_ROUTE_LATENCY)))
+		excess += float(sum(
+			vols[u] * max(0.0, sentinel - (best[u] + float(x_ms)))
+			for u in unrouted)) / total_v
+		beyond_v += float(sum(vols[u] for u in unrouted))
 	return excess, None, beyond_v / total_v
 
 
