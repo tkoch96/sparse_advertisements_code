@@ -567,55 +567,46 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
 
     # ============ scheduled + smart probing (2026-08-12) =================
 
-    def _abl_slotted_decision(self):
-        """Slotted WHEN (Tom 2026-08-16: "mean measurement rate stays
-        evenly spaced; bias measurements to where they're needed WITHIN
-        their expected interval"). Probe k owns slot k*period +- w
-        (w = period/2, slots tile TCONV exactly), so the budget is always
-        fully spent and the long-run rate IS the schedule. Within a slot:
-        fire from the slot START when the last grounding surprise was hot
-        (the model demonstrably drifting), from the CENTER when quiet;
-        the slot END force-fires (schedule = backstop). Skipped probes
-        retry every iteration until the slot closes -- no budget leak."""
-        period = max(1, int(round(float(self.abl_probe_tconv)
-                                  / max(1, self.abl_probe_n))))
-        w = max(1, period // 2)
-        k = self.abl_probes_spent + 1          # next probe, 1-indexed
-        can = k <= self.abl_probe_n
-        # resolve last grounding surprise (same pending mechanism as
-        # 'adaptive'; _abl_last_surprise_val persists for the hot test,
-        # _abl_last_surprise is one-shot for the gate record)
-        if getattr(self, '_abl_surprise_pending', None) is not None:
-            pre, probe_iter = self._abl_surprise_pending
-            b = getattr(self, 'current_pseudo_objective', None)
-            if b is not None and np.isfinite(b) and self.iter > probe_iter:
-                span = max(abs(getattr(self, '_stopv2_b0', float(b))
-                               - getattr(self, '_stopv2_best', float(b))), 1e-9)
-                surprise = abs(float(b) - pre) / span
-                self._abl_last_surprise = float(surprise)
-                self._abl_last_surprise_val = float(surprise)
-                self._abl_surprise_pending = None
-                print('[probe-gate] slotted surprise={:.4f}'.format(surprise),
-                      flush=True)
-        theta = float(os.environ.get('SCULPTOR_ABLATION_SURPRISE_THETA', '0.02'))
-        hot = (getattr(self, '_abl_last_surprise_val', None) or 0.0) > theta
-        center = k * period
-        earliest, latest = center - w, center + w
-        due = self.iter >= (earliest if hot else center)
-        force = self.iter >= latest
-        decision = can and (due or force)
+    # ---- slotted/scheduled WHEN: merged into the HEAD (Tom 2026-08-17;
+    # sparse_advertisements_v3._probe_{slotted,scheduled}_decision). These
+    # delegates only sync the ablation harness's counters to the mainline
+    # names and back, so the fork keeps its budget asserts + gate records
+    # while the LOGIC lives in production code. Ablation-specific probe
+    # experiments (fixed/budgeted, gated, smart, adaptive) remain below.
+
+    def _abl_sync_probe_to_main(self):
+        self.probe_mode = self.abl_probe_mode
+        self.probe_n = self.abl_probe_n
+        self.probe_tconv = self.abl_probe_tconv
+        self.probes_spent = self.abl_probes_spent
+        self._probe_last_iter = self._abl_last_probe_iter
+        self._probe_last_attempt = getattr(
+            self, '_abl_last_attempt_iter', -10 ** 9)
+        self._probe_surprise_pending = getattr(
+            self, '_abl_surprise_pending', None)
+        self._probe_last_surprise_val = getattr(
+            self, '_abl_last_surprise_val', None)
+        self._probe_last_surprise = None
+
+    def _abl_sync_probe_from_main(self, decision):
+        self._abl_last_attempt_iter = self._probe_last_attempt
+        self._abl_surprise_pending = self._probe_surprise_pending
+        self._abl_last_surprise_val = self._probe_last_surprise_val
+        if self._probe_last_surprise is not None:
+            self._abl_last_surprise = self._probe_last_surprise
         if decision:
-            self._abl_last_attempt_iter = self.iter
             self._abl_pending_probe_ctx = {}
-            b = getattr(self, 'current_pseudo_objective', None)
-            self._abl_surprise_pending = (
-                (float(b) if b is not None and np.isfinite(b) else 0.0),
-                int(self.iter))
-        print('[probe-gate] iter={} mode=slotted k={}/{} slot=[{},{}] '
-              'hot={} spent={} -> {}'.format(
-                  self.iter, k, self.abl_probe_n, earliest, latest, hot,
-                  self.abl_probes_spent,
-                  'PROBE' if decision else 'step'), flush=True)
+
+    def _abl_slotted_decision(self):
+        self._abl_sync_probe_to_main()
+        decision = self._probe_slotted_decision()
+        self._abl_sync_probe_from_main(decision)
+        return decision
+
+    def _abl_scheduled_decision(self):
+        self._abl_sync_probe_to_main()
+        decision = self._probe_scheduled_decision()
+        self._abl_sync_probe_from_main(decision)
         return decision
 
     def _abl_adaptive_decision(self):
@@ -667,26 +658,6 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
               'spent={}/{} -> {}'.format(
                   self.iter, self._abl_K,
                   self.iter - self._abl_last_probe_iter,
-                  self.abl_probes_spent, self.abl_probe_n,
-                  'PROBE' if decision else 'step'), flush=True)
-        return decision
-
-    def _abl_scheduled_decision(self):
-        """scheduled mode: unconditional probe every ~TCONV/N iterations --
-        no self-assessment, spends exactly N over the horizon."""
-        period = max(1, int(round(self.abl_probe_tconv
-                                  / max(1, self.abl_probe_n))))
-        due = (self.iter - self._abl_last_probe_iter) >= period
-        can = self.abl_probes_spent < self.abl_probe_n
-        retry_ok = (self.iter - self._abl_last_attempt_iter
-                    >= min(3, period))
-        decision = due and can and retry_ok
-        if decision:
-            self._abl_last_attempt_iter = self.iter
-            self._abl_pending_probe_ctx = {}
-        print('[probe-gate] iter={} mode=scheduled period={} since_last={} '
-              'spent={}/{} -> {}'.format(
-                  self.iter, period, self.iter - self._abl_last_probe_iter,
                   self.abl_probes_spent, self.abl_probe_n,
                   'PROBE' if decision else 'step'), flush=True)
         return decision

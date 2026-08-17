@@ -2974,6 +2974,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			return
 		self._solve_t_start = time.time()
 		self.t_per_iter = 0
+		self._probe_framework_init()
 
 		if not self.simulated:
 			self.last_measured_advertisement = self.optimization_advertisement
@@ -3005,29 +3006,66 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				timers.append(time.time() - t_last)
 				t_last = time.time()
 
-				# Step phase: momentum update w = a - alpha*g + beta*(a - a_last),
-				# optional proximal L1, then clip to [0,1] via
-				# impose_advertisement_constraint.
-				self._solve_apply_step(grads)
+				if self.probe_mode in ('scheduled', 'slotted'):
+					# WHEN-probing (merged from the ablation fork L2/L6,
+					# Tom 2026-08-17): measure-XOR-step under a TOTAL
+					# budget of SCULPTOR_PROBE_N groundings over a
+					# SCULPTOR_PROBE_TCONV horizon. 'scheduled' fires
+					# every ~TCONV/N iterations; 'slotted' (L6, the
+					# production WHEN) gives probe k the slot
+					# k*period +- period/2 and, within it, fires early
+					# when the last grounding's realized SURPRISE was
+					# hot, center when quiet, slot-end as backstop.
+					# Probing is pure grounding at the CURRENT
+					# advertisement (WHAT targeting retired 2026-08-17:
+					# the current point is the finite-difference hub).
+					# Budget exhaustion stops MEASURING, never TRAINING.
+					probe = (self._probe_slotted_decision()
+							 if self.probe_mode == 'slotted'
+							 else self._probe_scheduled_decision())
+					if not (probe and self._probe_ground_current()):
+						# step iteration. Preserve stock's
+						# uncertainty_factor decay invariant: stock
+						# decays inside solve_max_information every
+						# iteration; under probe-XOR-step that code only
+						# runs on probe iterations (the ~16k-factor
+						# deadlock, 2026-08-14).
+						self.uncertainty_factor = max(
+							1.0, self.uncertainty_factor * (1 - .25))
+						self._solve_apply_step(grads)
 
-				# Measurement phase: if the thresholded advertisement changed,
-				# measure ground-truth ingresses (real deployments batch changes
-				# before advertising).
-				self._solve_post_step_measure()
+					## measure
+					timers.append(time.time() - t_last)
+					t_last = time.time()
+					_log_mem('iter_post_measure', iter=self.iter)
 
-				## measure
-				timers.append(time.time() - t_last)
-				t_last = time.time()
-				_log_mem('iter_post_measure', iter=self.iter)
+					## info (no separate exploration phase under WHEN)
+					timers.append(time.time() - t_last)
+					t_last = time.time()
+				else:
+					# Step phase: momentum update w = a - alpha*g + beta*(a - a_last),
+					# optional proximal L1, then clip to [0,1] via
+					# impose_advertisement_constraint.
+					self._solve_apply_step(grads)
 
-				# Exploration phase: pick and measure up to n_max_info_iter
-				# maximally-informative advertisements (entropy/bimodality of the
-				# predicted benefit distribution) to shrink model uncertainty.
-				self._solve_max_info_phase()
+					# Measurement phase: if the thresholded advertisement changed,
+					# measure ground-truth ingresses (real deployments batch changes
+					# before advertising).
+					self._solve_post_step_measure()
 
-				## info
-				timers.append(time.time() - t_last)
-				t_last = time.time()
+					## measure
+					timers.append(time.time() - t_last)
+					t_last = time.time()
+					_log_mem('iter_post_measure', iter=self.iter)
+
+					# Exploration phase: pick and measure up to n_max_info_iter
+					# maximally-informative advertisements (entropy/bimodality of the
+					# predicted benefit distribution) to shrink model uncertainty.
+					self._solve_max_info_phase()
+
+					## info
+					timers.append(time.time() - t_last)
+					t_last = time.time()
 
 				# Stopping phase: update rolling objective/advertisement deltas
 				# and evaluate the stopping condition (respects
@@ -3052,6 +3090,136 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# Finalize: persist optimization state to the run dir, restore the
 		# full UG set, final summary prints.
 		self._solve_finalize()
+
+	# ---- WHEN-probing framework (merged from the ablation fork, Tom ----
+	# 2026-08-17). L6 'slotted' = the production probe-timing method;
+	# 'scheduled' = its even-spacing backstop (L2). Env knobs (each falls
+	# back to its SCULPTOR_ABLATION_* twin so ladder cells keep working):
+	#   SCULPTOR_PROBE_MODE   post_step (stock default) | scheduled | slotted
+	#   SCULPTOR_PROBE_N      total grounding budget for the run
+	#   SCULPTOR_PROBE_TCONV  assumed convergence horizon (slot tiling)
+	#   SCULPTOR_SURPRISE_THETA  hot-surprise threshold (default 0.02)
+
+	@staticmethod
+	def _probe_env(name, default):
+		return os.environ.get('SCULPTOR_' + name,
+							  os.environ.get('SCULPTOR_ABLATION_' + name,
+											 default))
+
+	def _probe_framework_init(self):
+		self.probe_mode = self._probe_env('PROBE_MODE', 'post_step')
+		if self.probe_mode not in ('post_step', 'scheduled', 'slotted'):
+			# other modes (gated/smart/adaptive/fixed) are ablation-fork
+			# experiments, not production capabilities
+			self.probe_mode = 'post_step'
+		self.probe_n = int(self._probe_env('PROBE_N', '10'))
+		self.probe_tconv = int(self._probe_env(
+			'PROBE_TCONV', str(getattr(self, 'max_n_iter', 100) or 100)))
+		self.probes_spent = 0
+		self._probe_last_iter = -10 ** 9
+		self._probe_last_attempt = -10 ** 9
+		self._probe_surprise_pending = None
+		self._probe_last_surprise_val = None
+		self._probe_last_surprise = None
+
+	def _probe_resolve_surprise(self):
+		"""Realized belief surprise of the LAST grounding: how much the
+		measurement moved the belief, relative to the achieved belief span
+		(the one bias-immune error signal -- a biased model never
+		volunteers that it needs checking, L7 autopsy)."""
+		if self._probe_surprise_pending is None:
+			return
+		pre, probe_iter = self._probe_surprise_pending
+		b = getattr(self, 'current_pseudo_objective', None)
+		if b is None or not np.isfinite(b) or self.iter <= probe_iter:
+			return
+		span = max(abs(getattr(self, '_stopv2_b0', float(b))
+					   - getattr(self, '_stopv2_best', float(b))), 1e-9)
+		surprise = abs(float(b) - pre) / span
+		self._probe_last_surprise = float(surprise)
+		self._probe_last_surprise_val = float(surprise)
+		self._probe_surprise_pending = None
+		print('[probe-gate] {} surprise={:.4f}'.format(
+			self.probe_mode, surprise), flush=True)
+
+	def _probe_arm_surprise(self):
+		b = getattr(self, 'current_pseudo_objective', None)
+		self._probe_surprise_pending = (
+			(float(b) if b is not None and np.isfinite(b) else 0.0),
+			int(self.iter))
+
+	def _probe_slotted_decision(self):
+		"""Slotted WHEN (Tom 2026-08-16: "mean measurement rate stays
+		evenly spaced; bias measurements to where they're needed WITHIN
+		their expected interval"). Probe k owns slot k*period +- w
+		(w = period/2, slots tile TCONV exactly), so the budget is always
+		fully spent and the long-run rate IS the schedule. Within a slot:
+		fire from the slot START when the last grounding surprise was hot
+		(the model demonstrably drifting), from the CENTER when quiet;
+		the slot END force-fires (schedule = backstop). Skipped probes
+		retry every iteration until the slot closes -- no budget leak."""
+		period = max(1, int(round(float(self.probe_tconv)
+								  / max(1, self.probe_n))))
+		w = max(1, period // 2)
+		k = self.probes_spent + 1          # next probe, 1-indexed
+		can = k <= self.probe_n
+		self._probe_resolve_surprise()
+		theta = float(self._probe_env('SURPRISE_THETA', '0.02'))
+		hot = (self._probe_last_surprise_val or 0.0) > theta
+		center = k * period
+		earliest, latest = center - w, center + w
+		due = self.iter >= (earliest if hot else center)
+		force = self.iter >= latest
+		decision = can and (due or force)
+		if decision:
+			self._probe_last_attempt = self.iter
+			self._probe_arm_surprise()
+		print('[probe-gate] iter={} mode=slotted k={}/{} slot=[{},{}] '
+			  'hot={} spent={} -> {}'.format(
+				  self.iter, k, self.probe_n, earliest, latest, hot,
+				  self.probes_spent,
+				  'PROBE' if decision else 'step'), flush=True)
+		return decision
+
+	def _probe_scheduled_decision(self):
+		"""scheduled mode: unconditional probe every ~TCONV/N iterations --
+		no self-assessment, spends exactly N over the horizon."""
+		period = max(1, int(round(float(self.probe_tconv)
+								  / max(1, self.probe_n))))
+		due = (self.iter - self._probe_last_iter) >= period
+		can = self.probes_spent < self.probe_n
+		retry_ok = (self.iter - self._probe_last_attempt >= min(3, period))
+		decision = due and can and retry_ok
+		if decision:
+			self._probe_last_attempt = self.iter
+			self._probe_arm_surprise()
+		print('[probe-gate] iter={} mode=scheduled period={} since_last={} '
+			  'spent={}/{} -> {}'.format(
+				  self.iter, period, self.iter - self._probe_last_iter,
+				  self.probes_spent, self.probe_n,
+				  'PROBE' if decision else 'step'), flush=True)
+		return decision
+
+	def _probe_ground_current(self):
+		"""Grounding measurement at the CURRENT advertisement. Returns
+		True iff a measurement actually happened; when the current adv is
+		already measured the probe request is IGNORED (spend nothing,
+		stop nothing -- Tom 2026-08-14) and the caller steps instead."""
+		pm_before = int(getattr(self, 'path_measures', 0))
+		cur = tuple(threshold_a(np.asarray(
+			self.optimization_advertisement, dtype=float)).flatten())
+		if cur in getattr(self, 'measured', {}):
+			self._probe_skips = 1 + getattr(self, '_probe_skips', 0)
+			print('[probe-gate] iter={} probe SKIPPED (current already '
+				  'measured; {} skips)'.format(
+					  self.iter, self._probe_skips), flush=True)
+			return False
+		self._solve_post_step_measure()
+		if int(getattr(self, 'path_measures', 0)) == pm_before:
+			return False
+		self.probes_spent += 1
+		self._probe_last_iter = self.iter
+		return True
 
 	def _solve_setup(self, **kwargs):
 		"""Hot-start or cold-start initialization. Returns False when a hot-started run is already past max iters (solve() returns immediately)."""

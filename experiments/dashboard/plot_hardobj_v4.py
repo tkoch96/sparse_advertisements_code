@@ -33,9 +33,16 @@ ARMS = [('L1_nomc_fixed', 'L1 no_mc+fixed', '#2a78d6'),
         ('L4_nodir_sched', 'L4 no_dir+sched', '#eda100'),
         ('L5_full_sched', 'L5 full+sched', '#e87ba4'),
         ('L6_full_slotted', 'L6 slotted WHEN', '#4a3aa7')]
-OBJS = [('fracb', 'frac_beyond_optimal (hinge)'),
-        ('mlu', 'max_util v2'),
-        ('prio', 'joint latency+bulk')]
+# HARDOBJ_OBJS: comma list of key:title pairs — makes the objective set
+# env-driven so the unified grid view renders latency+resilience as an
+# equal first-class panel next to the hard objectives (Tom 2026-08-17).
+_objs_env = os.environ.get('HARDOBJ_OBJS')
+if _objs_env:
+    OBJS = [tuple(x.split(':', 1)) for x in _objs_env.split(',')]
+else:
+    OBJS = [('fracb', 'frac_beyond_optimal (hinge)'),
+            ('mlu', 'max_util v2'),
+            ('prio', 'joint latency+bulk')]
 
 
 def load(obj):
@@ -116,7 +123,9 @@ def panel(ax, obj, title):
 def main():
     os.makedirs(FIGS, exist_ok=True)
     any_drawn = False
-    fig, axes = plt.subplots(1, 3, figsize=(16, 4.6))
+    fig, axes = plt.subplots(1, len(OBJS),
+                             figsize=(5.4 * len(OBJS), 4.6))
+    axes = np.atleast_1d(axes)
     for ax, (obj, title) in zip(axes, OBJS):
         d = panel(ax, obj, title)
         any_drawn = any_drawn or d
@@ -132,7 +141,8 @@ def main():
                  '(0 = one-per-peering; lower = better)', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     if any_drawn:
-        fig.savefig(os.path.join(FIGS, '{}_3panel.png'.format(OUT_PREFIX)), dpi=150)
+        fig.savefig(os.path.join(
+            FIGS, '{}_{}panel.png'.format(OUT_PREFIX, len(OBJS))), dpi=150)
         print('wrote hardobj_v4 figures')
     else:
         print('no hardobj_v3 data yet')

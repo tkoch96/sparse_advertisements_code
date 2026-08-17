@@ -27,7 +27,7 @@ import glob, json, time
 # HiGHS-era campaign (Tom 2026-08-17): count the live highs grid; the
 # gurobi-era v3 grid is frozen at 971/1440 pending license.
 specs = json.load(open("/home/ubuntu/sparse_advertisements_code/"
-                       "tools/v4grid_manifest_highs.json"))
+                       "tools/grid_georand_manifest.json"))
 done_it = est = done_cells = total = 0
 root = "/home/ubuntu/sparse_advertisements_code/"
 for sp in specs:
@@ -50,7 +50,7 @@ for sp in specs:
             if got:
                 done_it += int(got); est += int(got); done_cells += 1
             else:
-                est += (min(n, mi) if sp["label"] == "L1"
+                est += (min(n, mi) if sp["label"].endswith("L1")
                         else (100 if mi <= 100 else 150))
 # In-flight iterations (Tom 2026-08-17, iteration-rate ticker): each
 # RUNNING cell's log carries '[mem] tag=iter_start ... iter=N' lines;
