@@ -52,6 +52,8 @@ else:
 
     _KHINF = _hp.kHighsInf
     _GLOBAL_PARAMS = {}
+    _DUAL_ENV = None
+    _DUAL_STATS = []
 
     def setParam(name, value):
         # gurobipy's global setParam; both forked modules call
@@ -571,7 +573,74 @@ else:
                 self._sol = np.asarray(self._h.getSolution().col_value)
                 if os.environ.get('SCULPTOR_GPSHIM_AUDIT') == '1':
                     self._audit()
+                if os.environ.get('SCULPTOR_GPSHIM_DUAL') == '1':
+                    self._dual_solve_gurobi()
             return self.status
+
+        def _dual_solve_gurobi(self):
+            """SCULPTOR_GPSHIM_DUAL=1 (Tom 2026-08-17): re-solve the EXACT
+            LP HiGHS just solved (pulled back via getLp) with gurobipy and
+            record |d obj| and ||d x||_2 per solve to a JSONL sidecar
+            (SCULPTOR_GPSHIM_DUAL_OUT=<dir>, one file per process).
+            Apples-to-apples per solve, workers included."""
+            import gurobipy as _g
+            global _DUAL_ENV
+            if _DUAL_ENV is None:
+                _DUAL_ENV = _g.Env(params={'OutputFlag': 0})
+            lp = self._h.getLp()
+            n, m = lp.num_col_, lp.num_row_
+            from scipy import sparse as _sp
+            A = _sp.csc_matrix(
+                (np.asarray(lp.a_matrix_.value_),
+                 np.asarray(lp.a_matrix_.index_),
+                 np.asarray(lp.a_matrix_.start_)),
+                shape=(m, n)).tocsr()
+            cl = np.where(np.asarray(lp.col_lower_) <= -_KHINF,
+                          -_g.GRB.INFINITY, np.asarray(lp.col_lower_))
+            cu = np.where(np.asarray(lp.col_upper_) >= _KHINF,
+                          _g.GRB.INFINITY, np.asarray(lp.col_upper_))
+            rl = np.asarray(lp.row_lower_)
+            ru = np.asarray(lp.row_upper_)
+            gm = _g.Model(env=_DUAL_ENV)
+            gx = gm.addMVar(n, lb=cl, ub=cu)
+            gm.setObjective(np.asarray(lp.col_cost_) @ gx,
+                            _g.GRB.MINIMIZE)
+            eq = rl == ru
+            if eq.any():
+                gm.addConstr(A[eq] @ gx == rl[eq])
+            fin_u = ~eq & (ru < _KHINF)
+            fin_l = ~eq & (rl > -_KHINF)
+            if fin_u.any():
+                gm.addConstr(A[fin_u] @ gx <= ru[fin_u])
+            if fin_l.any():
+                gm.addConstr(A[fin_l] @ gx >= rl[fin_l])
+            gm.optimize()
+            rec = {'model': self._name, 'n': int(n), 'm': int(m),
+                   'g_status': int(gm.status)}
+            if gm.status == 2:
+                obj_h = float(self._h.getObjectiveValue())
+                obj_g = float(gm.ObjVal) + float(lp.offset_)
+                dx = self._sol - np.asarray(gx.X)
+                rec.update({
+                    'obj_h': obj_h, 'obj_g': obj_g,
+                    'dobj': abs(obj_h - obj_g),
+                    'dobj_rel': abs(obj_h - obj_g) / max(1.0, abs(obj_g)),
+                    'l2': float(np.linalg.norm(dx)),
+                    'l2_rel': float(np.linalg.norm(dx)
+                                    / max(1.0, np.linalg.norm(gx.X)))})
+            gm.dispose()
+            _DUAL_STATS.append(rec)
+            out_dir = os.environ.get('SCULPTOR_GPSHIM_DUAL_OUT')
+            if out_dir:
+                try:
+                    os.makedirs(out_dir, exist_ok=True)
+                    with open(os.path.join(
+                            out_dir, 'dual_{}.jsonl'.format(os.getpid())),
+                            'a') as f:
+                        import json as _json
+                        f.write(_json.dumps(rec) + '\n')
+                except OSError:
+                    pass
 
         def _audit(self):
             """SCULPTOR_GPSHIM_AUDIT=1: re-solve the EXACT LP HiGHS holds
