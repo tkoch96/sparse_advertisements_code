@@ -147,9 +147,14 @@ def _add_rate_and_eta(data):
         hist, rate_ema = st['hist'], st.get('rate_ema')
     except Exception:
         hist, rate_ema = [], None
-    # dip-reset: a queue restart zeroes in-flight iterations; a big drop
-    # would poison the regression for the whole window — start fresh
-    if hist and prog < hist[-1][1] - 500:
+    # dip-reset: ONLY for catastrophic drops (a queue restart zeroes all
+    # in-flight iterations at once). Ordinary in-flight noise — cells
+    # finishing, logs aging out of the mtime window — dips by hundreds
+    # routinely, and a 500-threshold reset wiped the window every few
+    # minutes (permanent 'warming up', Tom 2026-08-17). The regression
+    # absorbs moderate dips; only a multi-thousand step-down means the
+    # world actually changed.
+    if hist and prog < max(h[1] for h in hist) - 3000:
         hist, rate_ema = [], None
     hist.append([now, prog])
     hist = [h for h in hist if now - h[0] <= 7200][-240:]
