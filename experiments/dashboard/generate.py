@@ -1025,6 +1025,14 @@ def main():
                              REPO,
                              'cache/ablation/policy_ladder_v2_L7K3_artifacts'
                              '/figs')),
+                         ('figs_ladderhx', os.path.join(
+                             REPO,
+                             'cache/ablation/policy_ladder_highs_artifacts'
+                             '/figs')),
+                         ('figs_hardhx', os.path.join(
+                             REPO,
+                             'cache/ablation/hardobj_highs_artifacts'
+                             '/figs')),
                          ('plots', os.path.join(REPO, 'figures'))):
         lnk = os.path.join(SITE, name)
         if not os.path.islink(lnk):
