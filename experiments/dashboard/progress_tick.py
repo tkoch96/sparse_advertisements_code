@@ -56,13 +56,25 @@ for sp in specs:
 # RUNNING cell's log carries '[mem] tag=iter_start ... iter=N' lines;
 # the last one is the cell's current iteration. Only recently-written
 # logs count (dead logs from finished cells are excluded by mtime).
-import os
+import os, re
+label_root = {sp["label"]: sp["out_root"] for sp in specs}
 inflight_it = 0
 now = time.time()
 for lf in glob.glob("/home/ubuntu/hx_ws/S*/logs/*.log"):
     try:
-        if now - os.path.getmtime(lf) > 600:
+        # a landed cell's log stays mtime-fresh for a while after its
+        # iterations moved into done_it — with short cells that double
+        # count is a thousands-deep sawtooth. Only count logs whose
+        # result JSON does NOT exist yet.
+        if now - os.path.getmtime(lf) > 120:
             continue
+        mm = re.match(r"(.+)_N(\d+)_s(\d+)_(.+)\.log$",
+                      os.path.basename(lf))
+        if mm:
+            orr = label_root.get(mm.group(1))
+            if orr and glob.glob(root + orr + "/N{}/seed_{}_*.json".format(
+                    mm.group(2), mm.group(3))):
+                continue
         last = None
         with open(lf, "rb") as f:
             f.seek(0, 2)
