@@ -24,7 +24,10 @@ SSH_KEY = os.path.expanduser('~/.ssh/ray-autoscaler_us-east-1.pem')
 
 REMOTE_PY = r'''
 import glob, json, time
-specs = json.load(open("/home/ubuntu/v3grid_manifest.json"))
+# HiGHS-era campaign (Tom 2026-08-17): count the live highs grid; the
+# gurobi-era v3 grid is frozen at 971/1440 pending license.
+specs = json.load(open("/home/ubuntu/sparse_advertisements_code/"
+                       "tools/v4grid_manifest_highs.json"))
 done_it = est = done_cells = total = 0
 root = "/home/ubuntu/sparse_advertisements_code/"
 for sp in specs:
