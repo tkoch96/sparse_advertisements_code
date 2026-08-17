@@ -855,7 +855,20 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	ignore_popps = {popp:None for popp, tps in all_popps.items() if len(set(tps)) == 1 and tps[0] == 'routeserver'}
 
 	cp_dict = {pop:None for pop in considering_pops}
-	for row in tqdm.tqdm(open(lat_fn, 'r'), desc="Parsing per-ingress VULTR measurements."):
+	# SCULPTOR_LAT_SHARDS=<dir>: load per-pop binary shards instead of
+	# re-parsing the 4.3GB CSV per pop-combination (Tom 2026-08-17,
+	# experiments/depcache). Byte-exactness gated: 0 mismatches over
+	# 793706 ugs vs the CSV loop. Falls through to the CSV when shards
+	# are absent.
+	_lat_rows_src = open(lat_fn, 'r')
+	_lat_shards = os.environ.get('SCULPTOR_LAT_SHARDS')
+	if _lat_shards:
+		from experiments.depcache import shard_loader as _shl
+		if _shl.available(_lat_shards):
+			_shl.build_ug_perfs(_lat_shards, considering_pops,
+				ignore_popps, violate_sol, parse_lat, ug_perfs=ug_perfs)
+			_lat_rows_src = ()  # CSV loop below sees no rows
+	for row in tqdm.tqdm(_lat_rows_src, desc="Parsing per-ingress VULTR measurements."):
 		fields = row.strip().split(',')
 		try:
 			cp_dict[fields[2]]
