@@ -154,6 +154,10 @@ def main():
         results.extend(json.loads(lines[-1][len(MARKER):]))
         print('[steady] seed {} ok'.format(s), flush=True)
 
+    if not results:
+        print('[{}] NO results (eval children all failed -- e.g. license); '
+              'NOT clobbering the existing store'.format(__name__), flush=True)
+        return
     out_dir = os.path.join('cache', 'model_error', 'steady')
     os.makedirs(out_dir, exist_ok=True)
     fn = os.path.join(out_dir, '{}.json'.format(args.tag))

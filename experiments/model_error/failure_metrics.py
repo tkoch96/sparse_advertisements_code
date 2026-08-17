@@ -226,6 +226,10 @@ def main():
                           parse_seeds(args.seeds)):
             results.extend(res)
 
+    if not results:
+        print('[{}] NO results (eval children all failed -- e.g. license); '
+              'NOT clobbering the existing store'.format(__name__), flush=True)
+        return
     out_dir = os.path.join('cache', 'model_error', 'failure')
     os.makedirs(out_dir, exist_ok=True)
     with open(os.path.join(out_dir, '{}.json'.format(args.tag)), 'w') as f:
