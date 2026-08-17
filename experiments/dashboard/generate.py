@@ -755,6 +755,13 @@ def _img(relpath):
 
 def render_static(exp):
     out = ['<h2>{}</h2>'.format(exp.get('heading', exp['title']))]
+    # static sections carry the live grid/RAM/CPU widget too when they
+    # declare a progress_manifest (hard-objectives overviews; Tom
+    # 2026-08-17 — previously ladder_links-only)
+    if exp.get('progress_manifest'):
+        out.append(grid_progress_html(
+            exp['progress_manifest'],
+            live=exp.get('progress_live', True)))
     for f in exp.get('figures', []):
         if os.path.exists(os.path.join(REPO, f)):
             out.append(_img(f))
@@ -881,59 +888,66 @@ def grid_progress_html(manifest_path, live=True):
             min(pct, 100))
     return (
         '<div style="margin:10px 0 18px 0">'
-        '<div style="font-size:13px;margin-bottom:4px" id="gridprog-text">'
+        '<div style="font-size:13px;margin-bottom:4px" class="gridprog-text">'
         'grid progress: <b>{:,}</b> / ~{:,} learning iterations ({:.1f}%) '
         '&mdash; {} / {} cells</div>'
         '<div style="background:#333;border-radius:6px;height:16px;'
-        'max-width:640px"><div id="gridprog-bar" style="background:#2f9e6e;'
+        'max-width:640px"><div class="gridprog-bar" style="background:#2f9e6e;'
         'height:16px;border-radius:6px;width:{:.1f}%;'
         'transition:width 0.5s"></div></div>'
         '<div style="max-width:640px;display:flex;gap:18px;margin-top:8px" '
-        'id="gridprog-sys">'
-        '<div style="flex:1"><div style="font-size:12px" id="vm-ram-text">'
+        'class="gridprog-sys">'
+        '<div style="flex:1"><div style="font-size:12px" class="vm-ram-text">'
         'VM RAM: &mdash;</div>'
         '<div style="background:#333;border-radius:5px;height:10px;'
-        'position:relative"><div id="vm-ram-bar" style="background:#2f9e6e;'
+        'position:relative"><div class="vm-ram-bar" style="background:#2f9e6e;'
         'height:10px;border-radius:5px;width:0%;transition:width 0.5s">'
         '</div><div style="position:absolute;left:90%;top:-2px;width:2px;'
         'height:14px;background:#c02f4e"></div></div></div>'
-        '<div style="flex:1"><div style="font-size:12px" id="vm-cpu-text">'
+        '<div style="flex:1"><div style="font-size:12px" class="vm-cpu-text">'
         'VM CPU: &mdash;</div>'
         '<div style="background:#333;border-radius:5px;height:10px">'
-        '<div id="vm-cpu-bar" style="background:#2a78d6;height:10px;'
+        '<div class="vm-cpu-bar" style="background:#2a78d6;height:10px;'
         'border-radius:5px;width:0%;transition:width 0.5s"></div></div>'
         '</div></div>'
         '<div style="font-size:11px;color:#888;margin-top:2px">denominator '
         'is an estimate: stop-v2 arms budgeted at 150 iters until they '
         'land; live-updated every 30s by progress_tick; red tick = 90% RAM '
-        'target (<span id="gridprog-ts">generate-time snapshot</span>)</div>'
+        'target (<span class="gridprog-ts">generate-time snapshot</span>)</div>'
+        # class-based updater: the widget renders once PER live-progress
+        # tab; getElementById only ever bound the first copy, leaving the
+        # HiGHS tabs frozen at em-dashes (Tom, 2026-08-17). One armed
+        # interval updates every copy via querySelectorAll.
         '<script>(function(){{\n'
+        'if(window._gridprogArmed){{return}}window._gridprogArmed=1;\n'
+        'function all(c,f){{document.querySelectorAll("."+c)'
+        '.forEach(f)}}\n'
         'function upd(){{fetch("progress.json?ts="+Date.now(),'
         '{{cache:"no-store"}}).then(function(r){{return r.json()}})'
         '.then(function(d){{\n'
         'var pct=100.0*d.done_it/d.est_total;\n'
-        'document.getElementById("gridprog-text").innerHTML='
+        'all("gridprog-text",function(el){{el.innerHTML='
         '"grid progress: <b>"+d.done_it.toLocaleString()+"</b> / ~"+'
         'd.est_total.toLocaleString()+" learning iterations ("+'
         'pct.toFixed(1)+"%) &mdash; "+d.done_cells+" / "+d.total_cells+'
-        '" cells";\n'
-        'document.getElementById("gridprog-bar").style.width='
-        'Math.min(pct,100)+"%";\n'
+        '" cells"}});\n'
+        'all("gridprog-bar",function(el){{el.style.width='
+        'Math.min(pct,100)+"%"}});\n'
         'if (d.ram_pct !== undefined) {{\n'
-        ' document.getElementById("vm-ram-text").innerHTML="VM RAM: "+'
-        'd.ram_used_gb+"G / "+d.ram_total_gb+"G ("+d.ram_pct+"%)";\n'
-        ' var rb=document.getElementById("vm-ram-bar");\n'
-        ' rb.style.width=Math.min(d.ram_pct,100)+"%";\n'
-        ' rb.style.background=d.ram_pct>=92?"#c02f4e":'
-        '(d.ram_pct>=86?"#eda100":"#2f9e6e");\n'
-        ' document.getElementById("vm-cpu-text").innerHTML="VM CPU: "+'
+        ' all("vm-ram-text",function(el){{el.innerHTML="VM RAM: "+'
+        'd.ram_used_gb+"G / "+d.ram_total_gb+"G ("+d.ram_pct+"%)"}});\n'
+        ' all("vm-ram-bar",function(el){{'
+        'el.style.width=Math.min(d.ram_pct,100)+"%";'
+        'el.style.background=d.ram_pct>=92?"#c02f4e":'
+        '(d.ram_pct>=86?"#eda100":"#2f9e6e")}});\n'
+        ' all("vm-cpu-text",function(el){{el.innerHTML="VM CPU: "+'
         'd.cpu_pct+"% (load "+d.load1+" / "+d.cores+" cores, "+'
-        'd.cells_running+" cells)";\n'
-        ' document.getElementById("vm-cpu-bar").style.width='
-        'Math.min(d.cpu_pct,100)+"%";\n'
+        'd.cells_running+" cells)"}});\n'
+        ' all("vm-cpu-bar",function(el){{el.style.width='
+        'Math.min(d.cpu_pct,100)+"%"}});\n'
         '}}\n'
-        'document.getElementById("gridprog-ts").textContent='
-        '"head-live as of "+d.ts;\n'
+        'all("gridprog-ts",function(el){{el.textContent='
+        '"head-live as of "+d.ts}});\n'
         '}}).catch(function(){{}})}}\n'
         'upd(); setInterval(upd, 30000);}})();</script>'
         '</div>'.format(
