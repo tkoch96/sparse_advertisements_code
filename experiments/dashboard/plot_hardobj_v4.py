@@ -120,11 +120,15 @@ def panel(ax, obj, title):
     # reference window (Tom 2026-08-17): y spans opp -10% .. painter +10%
     # of the painter-opp gap, so both anchors frame the plot
     pref = painter_ref(obj)
-    if pref is not None and pref > 0:
+    if pref is not None and np.isfinite(pref) and abs(pref) > 1e-9:
         ax.axhline(pref, color='#888', lw=1.2, linestyle=':')
         ax.text(0.99, pref, ' painter', va='bottom', ha='right',
                 transform=ax.get_yaxis_transform(), fontsize=8, color='#888')
-        ax.set_ylim(-0.1 * pref, 1.1 * pref)
+        # opp (=0) at the BOTTOM edge, painter at the TOP, +/-10% of the
+        # gap (Tom 2026-08-17); axis inverts if painter < opp
+        pad = 0.1 * abs(pref)
+        sgn = 1.0 if pref >= 0 else -1.0
+        ax.set_ylim(-sgn * pad, pref + sgn * pad)
     ax.set_xscale('log')
     ax.set_xticks(NS)
     ax.set_xticklabels([str(n) for n in NS])

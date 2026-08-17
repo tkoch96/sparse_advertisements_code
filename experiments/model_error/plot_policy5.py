@@ -238,14 +238,16 @@ def main():
         ax.grid(True, alpha=0.25)
         if (ref_opp is not None and ref_painter is not None
                 and np.isfinite(ref_opp) and np.isfinite(ref_painter)):
-            # every panel banded to opp..painter +/-10% (Tom,
-            # 2026-08-14): painter one extreme, opp the other; pad
-            # floors keep degenerate bands (e.g. 0-vs-0 congestion)
-            # readable
-            lo, hi = sorted((ref_opp, ref_painter))
-            pad = max(0.1 * (hi - lo),
-                      0.05 * max(abs(hi), abs(lo)), 1e-3)
-            ax.set_ylim(lo - pad, hi + pad)
+            # every panel banded opp..painter +/-10% with FIXED
+            # orientation (Tom 2026-08-17): opp at the BOTTOM edge,
+            # painter at the TOP, regardless of numeric order (the
+            # axis inverts itself if a metric's orientation flips);
+            # pad floors keep degenerate bands readable
+            gap = ref_painter - ref_opp
+            pad = max(0.1 * abs(gap),
+                      0.05 * max(abs(ref_opp), abs(ref_painter)), 1e-3)
+            sgn = 1.0 if gap >= 0 else -1.0
+            ax.set_ylim(ref_opp - sgn * pad, ref_painter + sgn * pad)
         else:
             ax.set_ylim(bottom=0)
     axes[0].legend(fontsize=8, frameon=False)
