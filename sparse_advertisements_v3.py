@@ -3111,7 +3111,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print("calcing grads")
 		_refresh_every = int(os.environ.get('SCULPTOR_SIGMA_REFRESH',
 			os.environ.get('SCULPTOR_ABLATION_SIGMA_REFRESH', '10')))
-		self._abl_sigma_refresh_iter = (self.iter % max(1, _refresh_every) == 0)
+		# mc-off runs (SCULPTOR_ABLATION_MC=0, the no_mc rung's deterministic
+		# pseudo-path worker) support exactly ONE realization -- broadcasting
+		# MC_NUM_EXPLORE at refresh KeyError'd every L1/L2 cell of the v4
+		# grid (469 cells, 2026-08-16 night). No refresh when MC is off.
+		_mc_off = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0'
+		self._abl_sigma_refresh_iter = ((not _mc_off)
+			and (self.iter % max(1, _refresh_every) == 0))
 		_explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
 		_base_mc = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
 		if self._abl_sigma_refresh_iter and _explore_mc != _base_mc:
