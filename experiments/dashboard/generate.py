@@ -654,11 +654,11 @@ EXPERIMENTS.extend([
      ]},
 ])
 
-# ---- UNIFIED GRID (georand world, objectives quantized to 4 decimals) — Tom 2026-08-17: one dash, all ----
+# ---- UNIFIED GRID (maxhard world, objectives quantized to 4 decimals) — Tom 2026-08-17: one dash, all ----
 # objectives as equal first-class citizens (latency+gamma*resilience
 # beside the hard objectives), 5 deployments, L1-L6, HiGHS backend,
 # training AND panels in the SAME world (georand).
-_GG_FIGS = 'cache/ablation/grid_georand_r4_artifacts/figs'
+_GG_FIGS = 'cache/ablation/grid_maxhard_r4_artifacts/figs'
 _GG_OBJS = ('lat:latency + gamma*resilience,'
             'fracb:frac_beyond_optimal (hinge),'
             'mlu:max_util v2,prio:joint latency+bulk')
@@ -666,49 +666,49 @@ _GG_OBJS = ('lat:latency + gamma*resilience,'
 
 def _gg_section(key, title, figure):
     return {'id': key, 'title': title, 'kind': 'ladder_links',
-            'figs_dir': _GG_FIGS, 'figs_url': 'figs_gridr4',
+            'figs_dir': _GG_FIGS, 'figs_url': 'figs_gridmr4',
             'fixed_all_n': True,
-            'arms': _hx_arms('figs_gridr4', _GG_FIGS, key + '_'),
-            'heading': '{} — unified grid, georand world, objectives quantized to 4 decimals, L1-L6, '
+            'arms': _hx_arms('figs_gridmr4', _GG_FIGS, key + '_'),
+            'heading': '{} — unified grid, maxhard world, objectives quantized to 4 decimals, L1-L6, '
                        '5 deployments (HiGHS)'.format(title),
             'figures': [figure],
             'intro': 'Own-objective ladder; 0 = one-per-peering.'}
 
 
 EXPERIMENTS.extend([
-    {'id': 'grid_georand_r4', 'title': 'Unified grid (georand, obj-round 4dp)',
+    {'id': 'grid_maxhard_r4', 'title': 'Unified grid (maxhard, obj-round 4dp)',
      'sections': [
          {'id': 'overview', 'title': 'overview', 'kind': 'static',
-          'progress_manifest': 'tools/grid_georand_r4_manifest.json',
+          'progress_manifest': 'tools/grid_maxhard_r4_manifest.json',
           'intro': ('<p>ONE experimentation framework, every objective a '
                     'first-class citizen: latency+gamma*resilience / '
                     'fracb / mlu / prio x L1-L6 x N x seeds 1-5, trained '
-                    'AND scored in the georand world, objectives quantized to 4 decimals, HiGHS backend, '
+                    'AND scored in the maxhard world, objectives quantized to 4 decimals, HiGHS backend, '
                     'slotted WHEN from mainline '
                     'sparse_advertisements_v3.</p>'),
-          'figures': ['figures/grid_georand_r4_4panel.png'],
+          'figures': ['figures/grid_maxhard_r4_4panel.png'],
           'refresh': {
-              'pull': [('cache/ablation/grid_georand_r4/',
-                        'cache/ablation/grid_georand_r4/'),
+              'pull': [('cache/ablation/grid_maxhard_r4/',
+                        'cache/ablation/grid_maxhard_r4/'),
                        (_GG_FIGS + '/', _GG_FIGS + '/')],
               'steps': [
-                  {'in': ['cache/ablation/grid_georand_r4/*/*/N*/'
+                  {'in': ['cache/ablation/grid_maxhard_r4/*/*/N*/'
                           'seed_*_*.json'],
-                   'out': ['figures/grid_georand_r4_4panel.png'],
+                   'out': ['figures/grid_maxhard_r4_4panel.png'],
                    'always': True,
-                   'env': {'HARDOBJ_ROOT': 'cache/ablation/grid_georand_r4',
-                           'HARDOBJ_OUT_PREFIX': 'grid_georand_r4',
+                   'env': {'HARDOBJ_ROOT': 'cache/ablation/grid_maxhard_r4',
+                           'HARDOBJ_OUT_PREFIX': 'grid_maxhard_r4',
                            'HARDOBJ_OBJS': _GG_OBJS},
                    'argv': ['{py}', '-m',
                             'experiments.dashboard.plot_hardobj_v4']},
               ]}},
          _gg_section('lat', 'latency + gamma*resilience',
-                     'figures/grid_georand_r4_lat.png'),
+                     'figures/grid_maxhard_r4_lat.png'),
          _gg_section('fracb', 'frac_beyond_optimal',
-                     'figures/grid_georand_r4_fracb.png'),
-         _gg_section('mlu', 'max_util v2', 'figures/grid_georand_r4_mlu.png'),
+                     'figures/grid_maxhard_r4_fracb.png'),
+         _gg_section('mlu', 'max_util v2', 'figures/grid_maxhard_r4_mlu.png'),
          _gg_section('prio', 'joint priority',
-                     'figures/grid_georand_r4_prio.png'),
+                     'figures/grid_maxhard_r4_prio.png'),
      ]},
 ])
 
@@ -1122,9 +1122,9 @@ def main():
                              REPO,
                              'cache/ablation/hardobj_highs_artifacts'
                              '/figs')),
-                         ('figs_gridr4', os.path.join(
+                         ('figs_gridmr4', os.path.join(
                              REPO,
-                             'cache/ablation/grid_georand_r4_artifacts'
+                             'cache/ablation/grid_maxhard_r4_artifacts'
                              '/figs')),
                          ('plots', os.path.join(REPO, 'figures'))):
         lnk = os.path.join(SITE, name)
