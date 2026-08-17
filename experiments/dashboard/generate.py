@@ -500,6 +500,141 @@ EXPERIMENTS = [
      ]},
 ]
 
+# ---- NEW SOLVER (HiGHS via solver_fork) tabs — Tom 2026-08-17 ----
+# Same grid as the v4 era, LPs through experiments/solver_fork gpshim
+# with SCULPTOR_LP_BACKEND=highs. Gurobi-era tabs stay untouched for
+# side-by-side comparison; scoring steps carry the backend env so they
+# run license-free through the fork.
+_HX_LADDER_FIGS = 'cache/ablation/policy_ladder_highs_artifacts/figs'
+_HX_HARD_FIGS = 'cache/ablation/hardobj_highs_artifacts/figs'
+
+
+def _hx_arms(figs_url, figs_dir, pfx):
+    return [
+        ('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed',
+         figs_url, figs_dir, pfx + 'L1_'),
+        ('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched',
+         figs_url, figs_dir, pfx + 'L2_'),
+        ('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched',
+         figs_url, figs_dir, pfx + 'L3_'),
+        ('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched',
+         figs_url, figs_dir, pfx + 'L4_'),
+        ('sched', 'full', 'scheduled', 'L5 full+sched',
+         figs_url, figs_dir, pfx + 'L5_'),
+        ('sched', 'full', 'slotted', 'L6 slotted WHEN',
+         figs_url, figs_dir, pfx + 'L6_'),
+    ]
+
+
+EXPERIMENTS.extend([
+    {'id': 'ladder_highs', 'title': 'Policy ladder — HiGHS',
+     'sections': [
+         {'id': 'ladder_hx', 'title': 'L1-L6 (new solver)',
+          'kind': 'ladder_links',
+          'figs_dir': _HX_LADDER_FIGS,
+          'figs_url': 'figs_ladderhx',
+          'fixed_all_n': True,
+          'progress_manifest': 'tools/v4grid_manifest_highs.json',
+          'arms': _hx_arms('figs_ladderhx', _HX_LADDER_FIGS, ''),
+          'heading': 'Policy ladder — NEW SOLVER (HiGHS via solver_fork) '
+                     '— L1-L6, avg_latency+gamma resilience, 10 deployments',
+          'figures': ['figures/policy_ladder_highs_5panel_objective.png'],
+          'refresh': {
+              'pull': [('cache/ablation/policy_ladder_highs/',
+                        'cache/ablation/policy_ladder_highs/'),
+                       (_HX_LADDER_FIGS + '/', _HX_LADDER_FIGS + '/')],
+              'steps': [
+                  {'in': ['cache/ablation/policy_ladder_highs/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['cache/model_error/steady/'
+                           'policy_highs_steady.json'],
+                   'world': 'georand',
+                   'env': {'SCULPTOR_LP_BACKEND': 'highs'},
+                   'argv': ['{py}', '-m',
+                            'experiments.model_error.steady_metrics',
+                            '--dirs',
+                            'AUTO:cache/ablation/policy_ladder_highs',
+                            '--tag', 'policy_highs_steady',
+                            '--seeds', '1-10']},
+                  {'in': ['cache/ablation/policy_ladder_highs/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['cache/model_error/failure/'
+                           'policy_highs_failure.json'],
+                   'every': 4,
+                   'world': 'georand',
+                   'env': {'SCULPTOR_LP_BACKEND': 'highs'},
+                   'argv': ['{py}', '-m',
+                            'experiments.model_error.failure_metrics',
+                            '--dirs',
+                            'AUTO:cache/ablation/policy_ladder_highs',
+                            '--tag', 'policy_highs_failure',
+                            '--seeds', '1-10', '--jobs', '4']},
+                  {'in': ['cache/ablation/policy_ladder_highs/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['figures/'
+                           'policy_ladder_highs_5panel_objective.png'],
+                   'always': True,
+                   'argv': ['{py}', '-m',
+                            'experiments.dashboard.plot_ladder_direct']},
+              ]},
+          'intro': 'Same ladder/grid as the policy-ladder tab, but every '
+                   'LP (training, probing, scoring) is solved by the '
+                   'license-free HiGHS backend through '
+                   'experiments/solver_fork (gpshim facade). The '
+                   'gurobi-era tab is unchanged for side-by-side '
+                   'comparison.'},
+     ]},
+    {'id': 'hardobj_highs', 'title': 'Hard objectives — HiGHS',
+     'sections': [
+         {'id': 'overview', 'title': 'overview', 'kind': 'static',
+          'progress_manifest': 'tools/v4grid_manifest_highs.json',
+          'intro': ('<p>NEW SOLVER (HiGHS via solver_fork): fracb / mlu / '
+                    'prio x L1-L6 x N x seeds 1-10, same grid + settings '
+                    'as Hard objectives v4; LPs via '
+                    'SCULPTOR_LP_BACKEND=highs.</p>'),
+          'figures': ['figures/hardobj_highs_3panel.png'],
+          'refresh': {
+              'pull': [('cache/ablation/hardobj_highs/',
+                        'cache/ablation/hardobj_highs/'),
+                       (_HX_HARD_FIGS + '/', _HX_HARD_FIGS + '/')],
+              'steps': [
+                  {'in': ['cache/ablation/hardobj_highs/*/*/N*/'
+                          'seed_*_*.json'],
+                   'out': ['figures/hardobj_highs_3panel.png'],
+                   'always': True,
+                   'env': {'HARDOBJ_ROOT': 'cache/ablation/hardobj_highs',
+                           'HARDOBJ_OUT_PREFIX': 'hardobj_highs'},
+                   'argv': ['{py}', '-m',
+                            'experiments.dashboard.plot_hardobj_v4']},
+              ]}},
+         {'id': 'fracb', 'title': 'frac_beyond_optimal',
+          'kind': 'ladder_links',
+          'figs_dir': _HX_HARD_FIGS, 'figs_url': 'figs_hardhx',
+          'fixed_all_n': True,
+          'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'fracb_'),
+          'heading': 'frac_beyond_optimal — NEW SOLVER (HiGHS), L1-L6, '
+                     '10 deployments',
+          'figures': ['figures/hardobj_highs_fracb.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+         {'id': 'mlu', 'title': 'max_util v2', 'kind': 'ladder_links',
+          'figs_dir': _HX_HARD_FIGS, 'figs_url': 'figs_hardhx',
+          'fixed_all_n': True,
+          'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'mlu_'),
+          'heading': 'max_util v2 — NEW SOLVER (HiGHS), L1-L6, '
+                     '10 deployments',
+          'figures': ['figures/hardobj_highs_mlu.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+         {'id': 'prio', 'title': 'joint priority', 'kind': 'ladder_links',
+          'figs_dir': _HX_HARD_FIGS, 'figs_url': 'figs_hardhx',
+          'fixed_all_n': True,
+          'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'prio_'),
+          'heading': 'joint priority — NEW SOLVER (HiGHS), L1-L6, '
+                     '10 deployments',
+          'figures': ['figures/hardobj_highs_prio.png'],
+          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+     ]},
+])
+
 EXPERIMENTS.append({'id': 'old_dash', 'title': 'Old dashboards',
                     'sections': [sec for e in _OLD_DASH_ENTRIES
                                  for sec in e['sections']]})

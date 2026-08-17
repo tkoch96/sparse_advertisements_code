@@ -20,7 +20,11 @@ import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
-ROOT = os.path.join(REPO, 'cache', 'ablation', 'hardobj_v3')
+# HARDOBJ_ROOT / HARDOBJ_OUT_PREFIX let the solver-fork (HiGHS) tabs
+# reuse this renderer against their own store (Tom 2026-08-17).
+ROOT = os.path.join(REPO, os.environ.get(
+    'HARDOBJ_ROOT', 'cache/ablation/hardobj_v3'))
+OUT_PREFIX = os.environ.get('HARDOBJ_OUT_PREFIX', 'hardobj_v4')
 FIGS = os.path.join(REPO, 'figures')
 NS = [1, 2, 5, 10, 20, 50]
 ARMS = [('L1_nomc_fixed', 'L1 no_mc+fixed', '#2a78d6'),
@@ -120,7 +124,7 @@ def main():
         if panel(a2, obj, title):
             a2.legend(fontsize=8, frameon=False)
             f2.tight_layout()
-            f2.savefig(os.path.join(FIGS, 'hardobj_v4_{}.png'.format(obj)),
+            f2.savefig(os.path.join(FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)),
                        dpi=150)
         plt.close(f2)
     axes[0].legend(fontsize=8, frameon=False)
@@ -128,7 +132,7 @@ def main():
                  '(0 = one-per-peering; lower = better)', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     if any_drawn:
-        fig.savefig(os.path.join(FIGS, 'hardobj_v4_3panel.png'), dpi=150)
+        fig.savefig(os.path.join(FIGS, '{}_3panel.png'.format(OUT_PREFIX)), dpi=150)
         print('wrote hardobj_v4 figures')
     else:
         print('no hardobj_v3 data yet')

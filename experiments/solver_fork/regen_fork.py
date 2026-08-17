@@ -18,6 +18,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(os.path.dirname(HERE))
 
 SHIM_IMPORT = 'from experiments.solver_fork import gpshim as gp'
+
+# Self-alias for the forked solve_lp_assignment: its module-bottom
+# SCULPTOR_XOBJS registration imports model_error/objectives.py, which
+# bare-imports solve_lp_assignment DURING this module's own import — the
+# alias must therefore be installed from inside the module body (the
+# partially-initialized module is already in sys.modules), not after the
+# import returns (the 2026-08-17 max_util-not-implemented smoke failure).
+SLA_SELF_ALIAS = SHIM_IMPORT + '''
+import sys as _sf_sys
+_sf_prev = _sf_sys.modules.get('solve_lp_assignment')
+if _sf_prev is not None and getattr(_sf_prev, '__file__', None) != __file__:
+    raise RuntimeError(
+        'solver_fork contamination: mainline solve_lp_assignment imported '
+        'before the fork copy ({}).'.format(
+            getattr(_sf_prev, '__file__', '?')))
+_sf_sys.modules['solve_lp_assignment'] = _sf_sys.modules[__name__]'''
 ALIAS_IMPORT = ('from experiments.solver_fork import _alias as _solver_fork_alias'
                 '  # MUST precede optimal_adv_wrapper (routes its '
                 'solve_lp_assignment star-import to the fork)')
@@ -25,7 +41,7 @@ ALIAS_IMPORT = ('from experiments.solver_fork import _alias as _solver_fork_alia
 # file -> list of (old, new) exact-string transforms, each required once
 TRANSFORMS = {
     'solve_lp_assignment.py': [
-        ('import gurobipy as gp', SHIM_IMPORT),
+        ('import gurobipy as gp', SLA_SELF_ALIAS),
     ],
     'path_distribution_computer.py': [
         ('import gurobipy as gp', SHIM_IMPORT),

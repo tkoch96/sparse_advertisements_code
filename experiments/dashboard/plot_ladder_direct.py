@@ -93,6 +93,21 @@ def main():
                'figures/policy_ladder_v3_5panel_objective.png',
                'Policy ladder v3 (10 deployments) — IN-RUN steady scores '
                '(fresh-eval composite pending Gurobi license renewal)')
+    # Solver-fork (HiGHS) ladder tab (Tom 2026-08-17): same
+    # delegate-or-direct logic against the highs stores.
+    if _store_has_data('policy_highs'):
+        env = dict(os.environ, POLICY_PLOT_STAT='mean',
+                   POLICY_PLOT_TAG_PREFIX='policy_highs',
+                   POLICY_PLOT_OUT='policy_ladder_highs_5panel',
+                   PYTHONPATH=REPO, MPLBACKEND='Agg')
+        subprocess.run([sys.executable, '-m',
+                        'experiments.model_error.plot_policy5'],
+                       env=env, cwd=REPO)
+    else:
+        render('cache/ablation/policy_ladder_highs',
+               'figures/policy_ladder_highs_5panel_objective.png',
+               'Policy ladder — NEW SOLVER (HiGHS via solver_fork) — '
+               'IN-RUN steady scores (fresh-eval composite pending)')
     if _store_has_data('a10'):
         env = dict(os.environ, POLICY_PLOT_STAT='mean',
                    POLICY_PLOT_TAG_PREFIX='a10',

@@ -25,6 +25,15 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
+# Solver-fork seam (Tom 2026-08-17): if SCULPTOR_LP_BACKEND is set, route
+# the ENTIRE stack (solve_lp_assignment, pdc, worker_comms*) through
+# experiments/solver_fork so LPs go via the gpshim backend (highs|gurobi).
+# Must run before any mainline import; run_one's in-function imports and
+# mc_off_worker's bare-name imports then all bind the fork copies.
+if os.environ.get('SCULPTOR_LP_BACKEND'):
+    from experiments.solver_fork.run_equivalence import install_aliases
+    install_aliases()
+
 
 def avg_lat(sas, adv):
     """Repo-eval volume-weighted average user latency for an advertisement."""
