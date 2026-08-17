@@ -542,5 +542,95 @@
    "SCULPTOR_PREF_MODEL": "random"
   },
   "artifacts_figs": "cache/ablation/grid_georand_artifacts/figs"
+ },
+ {
+  "label": "fracb_painter",
+  "out_root": "cache/ablation/grid_georand/fracb/painter",
+  "probe_mode": "fixed",
+  "rungs": "painter",
+  "seeds": "1-5",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "frac_beyond_optimal",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_LAT_MODEL": "geo",
+   "SCULPTOR_PREF_MODEL": "random"
+  },
+  "artifacts_figs": "cache/ablation/grid_georand_artifacts/figs"
+ },
+ {
+  "label": "lat_painter",
+  "out_root": "cache/ablation/grid_georand/lat/painter",
+  "probe_mode": "fixed",
+  "rungs": "painter",
+  "seeds": "1-5",
+  "n_values": "1",
+  "gamma": "0.1",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_LAT_MODEL": "geo",
+   "SCULPTOR_PREF_MODEL": "random"
+  },
+  "artifacts_figs": "cache/ablation/grid_georand_artifacts/figs"
+ },
+ {
+  "label": "mlu_painter",
+  "out_root": "cache/ablation/grid_georand/mlu/painter",
+  "probe_mode": "fixed",
+  "rungs": "painter",
+  "seeds": "1-5",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "max_util",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_LAT_MODEL": "geo",
+   "SCULPTOR_PREF_MODEL": "random"
+  },
+  "artifacts_figs": "cache/ablation/grid_georand_artifacts/figs"
+ },
+ {
+  "label": "prio_painter",
+  "out_root": "cache/ablation/grid_georand/prio/painter",
+  "probe_mode": "fixed",
+  "rungs": "painter",
+  "seeds": "1-5",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 100,
+  "dpsize": "small",
+  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "env": {
+   "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
+   "SCULPTOR_ABLATION_PROBE_TARGET": "current",
+   "SCULPTOR_XOBJS": "1",
+   "SCULPTOR_ABLATION_OBJECTIVE": "joint_latency_bulk_download",
+   "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
+   "SCULPTOR_ABLATION_ALPHA0": "1",
+   "SCULPTOR_LAT_MODEL": "geo",
+   "SCULPTOR_PREF_MODEL": "random"
+  },
+  "artifacts_figs": "cache/ablation/grid_georand_artifacts/figs"
  }
 ]

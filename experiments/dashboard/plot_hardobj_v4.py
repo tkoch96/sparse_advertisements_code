@@ -64,10 +64,25 @@ def load(obj):
 
 
 def painter_ref(obj):
-    """Mean (painter - opp) in COST orientation from the archived painter
-    evals (old stores are benefit-oriented, so cost-diff = opp - obj).
-    mlu's scalar changed between eras (lat_plus -> max_util v2), so its
-    archived painter is NOT comparable and we return None."""
+    """Mean (painter - opp). PRIMARY source: the grid's OWN painter rung
+    cells (ROOT/<obj>/painter/N*/seed_*_painter.json) — same world, same
+    era, same objective scalar as the arms, so every panel can band to
+    opp..painter +/-10% (Tom 2026-08-17). Fallback: archived painter
+    evals (cost-diff = opp - obj; mlu excluded there — its scalar
+    changed between eras)."""
+    diffs = []
+    for fn in glob.glob(os.path.join(
+            ROOT, obj, 'painter', 'N*', 'seed_*_painter.json')):
+        try:
+            d = json.load(open(fn))
+        except (OSError, ValueError):
+            continue
+        if d.get('repo_objective') is not None \
+                and d.get('opp_objective') is not None:
+            diffs.append(float(d['repo_objective'])
+                         - float(d['opp_objective']))
+    if diffs:
+        return float(np.mean(diffs))
     if obj == 'mlu':
         return None
     diffs = []
