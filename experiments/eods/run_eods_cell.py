@@ -1,25 +1,26 @@
-"""One EODS cell = one (dpsize, sim) unit of evaluate_over_deployment_sizes,
-speaking the queue's run_fork_ladder CLI + result-JSON convention so the
-existing queue / governor / dash / fleet machinery runs it unchanged.
+"""One EODS-family cell, speaking the queue's run_fork_ladder CLI +
+result-JSON convention so queue/governor/dash/fleet run it unchanged.
 
-Mapping (Tom 2026-08-17, EODS modernization):
-  --seed S     -> sim index (SCULPTOR_DEPLOYMENT_SEED=S; one sim per cell)
-  --rung       -> 'eods' (fixed)
-  --dpsize     -> actual-N token, e.g. 'actual-10' (cell translates to the
-                  classic 'testing_feature-actual-N' string)
-  --out-dir    -> store dir; writes seed_<S>_eods.json (queue done-marker,
-                  n_iters=1) + seed_<S>_metrics.pkl (the per-cell
-                  checkpoint pickle, evaluate_all_metrics' own format via
-                  use_performance_metrics_fn)
-  --max-iter   -> ignored (kept for CLI compat)
+Modes (SCULPTOR_EODS_MODE):
+  sizes (default) — evaluate_over_deployment_sizes unit: one (dpsize,
+      sim). dpsize token 'actual-N' -> 'testing_feature-actual-N'.
+      --seed = sim index; the cell's N-dir is always N1.
+  prefixes — evaluate_over_n_prefixes unit: one (dpsize, prefix_num).
+      The queue's swept N VALUE (delivered per-cell as
+      SCULPTOR_ABLATION_PROBE_N) IS the prefix count, so the dash
+      N-axis natively shows prefixes. Deployment comes from the classic
+      popp_failure_latency_comparison_<dpsize>.pkl (same as the
+      standalone script).
 
-Strategy set via SCULPTOR_SOLN_TYPES (comma list). Merge with
-experiments.eods.merge_eods into the classic metrics_by_dpsize cache so
-evaluate_over_deployment_sizes' paper plots run unchanged.
+Both modes call eval_latency_failure.evaluate_all_metrics (the module
+BOTH standalone sweeps use) with nsim=1 and a per-cell resumable pickle
+(use_performance_metrics_fn). Strategies via SCULPTOR_SOLN_TYPES.
+Merge with experiments.eods.merge_eods.
 """
 import argparse
 import json
 import os
+import pickle
 import sys
 import time
 
@@ -38,8 +39,9 @@ def main():
     ap.add_argument('--out-dir', required=True)
     args = ap.parse_args()
 
+    mode = os.environ.get('SCULPTOR_EODS_MODE', 'sizes')
     out_fn = os.path.join(args.out_dir,
-                          'seed_{}_eods.json'.format(args.seed))
+                          'seed_{}_{}.json'.format(args.seed, args.rung))
     if os.path.exists(out_fn):
         print('[eods] exists, skipping', out_fn)
         return
@@ -47,21 +49,38 @@ def main():
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(args.seed)
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
+    soln_types = [s for s in os.environ.get(
+        'SCULPTOR_SOLN_TYPES', 'painter').split(',') if s]
     n_sites = args.dpsize.replace('actual-', '')
-    dpsize_str = 'testing_feature-actual-{}'.format(n_sites)
     pkl_fn = os.path.join(args.out_dir,
                           'seed_{}_metrics.pkl'.format(args.seed))
+    kwargs = {'nsim': 1, 'use_performance_metrics_fn': pkl_fn,
+              'soln_types': soln_types}
+
+    if mode == 'prefixes':
+        # the queue's swept N value = prefix count for this cell
+        prefix_num = int(os.environ['SCULPTOR_ABLATION_PROBE_N'])
+        dpsize_str = 'actual-{}'.format(n_sites)
+        from constants import CACHE_DIR
+        base = pickle.load(open(os.path.join(
+            CACHE_DIR,
+            'popp_failure_latency_comparison_actual-{}.pkl'.format(
+                n_sites)), 'rb'))
+        kwargs.update({'n_prefixes': prefix_num,
+                       'prefix_deployment': base['deployment'][3]})
+        unit = 'prefixes={}'.format(prefix_num)
+    else:
+        dpsize_str = 'testing_feature-actual-{}'.format(n_sites)
+        unit = 'sim={}'.format(args.seed)
 
     t0 = time.time()
-    from actual_deployment_eval_latency_failure import evaluate_all_metrics
-    metrics = evaluate_all_metrics(
-        dpsize_str, args.port, nsim=1,
-        use_performance_metrics_fn=pkl_fn)
+    from eval_latency_failure import evaluate_all_metrics
+    metrics = evaluate_all_metrics(dpsize_str, args.port, **kwargs)
 
-    rec = {'seed': args.seed, 'rung': 'eods', 'dpsize': args.dpsize,
-           'n_iters': 1,   # progress convention: 1 sim per cell
-           'soln_types': sorted(
-               os.environ.get('SCULPTOR_SOLN_TYPES', 'painter').split(',')),
+    rec = {'seed': args.seed, 'rung': args.rung, 'dpsize': args.dpsize,
+           'mode': mode, 'unit': unit,
+           'n_iters': 1,   # progress convention: 1 unit per cell
+           'soln_types': sorted(soln_types),
            'metrics_pkl': os.path.basename(pkl_fn),
            'stats_keys': sorted(k for k in (metrics or {})
                                 if str(k).startswith('stats_')),
@@ -69,8 +88,8 @@ def main():
            'lp_backend': os.environ.get('SCULPTOR_LP_BACKEND', 'gurobi')}
     with open(out_fn, 'w') as f:
         json.dump(rec, f)
-    print('[eods] done {} sim {} in {:.0f}s -> {}'.format(
-        args.dpsize, args.seed, rec['wall_s'], out_fn), flush=True)
+    print('[eods] done {} {} in {:.0f}s -> {}'.format(
+        args.dpsize, unit, rec['wall_s'], out_fn), flush=True)
 
 
 if __name__ == '__main__':
