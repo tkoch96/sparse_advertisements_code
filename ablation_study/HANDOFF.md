@@ -1,184 +1,151 @@
-# Ablation study handoff — V3 ERA (2026-08-16, WHAT/WHEN ladder)
+# Ablation handoff — V4 ERA (2026-08-17, L1-L6 ladder, license-paused)
 
 ## READ THIS SECTION ONLY. History lives in old_handoffs/ — consult for
 ## the why, not the what.
 
 Single source of live state: `~/.sculptor_cluster_alert/active_cluster.json`
-(head IP lives there; EVERYTHING must re-resolve it per-use, never cache).
+(active:false right now — VM is STOPPED; on restart the IP CHANGES,
+update that file first, everything re-resolves it per use).
 
-### CURRENT STATE (2026-08-16 ~12:40Z)
+### THE ARC (why this ladder exists)
 
-- Head (c8g.24xlarge, i-0428c395787bc3ca0) is UP and IDLE except the
-  completed v3 smoke. NO teardown — awaiting Tom's GO on the full grid.
-- **v3 SMOKE PASSED**: 7 arms x seed 1 x N=5 x 100 iters in
-  `cache/ablation/policy_ladder_v3/` — no errors, budgets respected,
-  L1 exits at iter N, L7's min-gap guard held. Visible on the dash
-  (policy-ladder tab, big objective-only figure).
-- **READY TO LAUNCH**: `tools/chain_v3.sh` + `tools/v3_full_manifest.json`
-  (28 specs, 840 cells: {classic g=.1, fracb, mlu, prio} x L1-L7 x
-  seeds 1-5 x N{1,2,5,10,20,50}, 100 iters, deployment-major across all
-  lanes). Deploy both to the head (~/), then:
-  `setsid nohup bash chain_v3.sh > /dev/null 2>&1 &`
-  Verdicts in logs/v3_driver.log; watcher `tools/watch_v3.sh`
-  (session Monitor, 30-min beats). Est ~12-16h on the governed pool.
-  The 7 smoke cells are reused (queue skips existing JSONs; identical
-  config).
+We are isolating which of SCULPTOR's methodological features actually
+earn their complexity, by ablation ladder, while SLOWLY GROWING PROBLEM
+SIZE so conclusions survive scale:
 
-### THE V3 LADDER (Tom-ratified 2026-08-16: smart probing decomposed
-### into WHAT vs WHEN, pushed to the top of the ladder)
+    small x 1 seed (smokes)  ->  small x 10 deployments (CURRENT, 67% done)
+    ->  actual-10 x 1 deployment (STARTED, 2/6 cells)  ->  actual-32 (future)
 
-Probing is PURE GROUNDING (probe = measure the CURRENT advertisement,
-`SCULPTOR_ABLATION_PROBE_TARGET=current`) on the fixed schedule
-through L5; the smart deltas are isolated at L6/L7:
+Ladder (one capability per rung; probing is ALWAYS pure grounding —
+measure the current advertisement):
+  L1 budgeted-fixed -> L2 +scheduled spacing -> L3 +belief LP ->
+  L4 +memory -> L5 +direction/explore -> L6 +slotted WHEN
 
-| arm | dir | adds | probe mode / target |
-|---|---|---|---|
-| L1 | L1_nomc_fixed | budgeted-fixed (measure first N iters, exit) | fixed / current |
-| L2 | L2_nomc_sched | evenly-spaced measuring | sched / current |
-| L3 | L3_nomem_sched | congestion-aware belief LP | sched / current |
-| L4 | L4_nodir_sched | memory (continuous advs, 1-coord steps) | sched / current |
-| L5 | L5_full_sched | direction + solver-side explore | sched / current |
-| L6 | L6_full_schedwhat | +smart WHAT (max-info targeting) | sched / maxinfo |
-| L7 | L7_full_smartcons | +smart WHEN (gate, min-gap-guarded) | smart / maxinfo |
+### SETTLED THIS ERA (Tom-ratified, all with measured evidence in git)
 
-L7 conservatism (Tom: gate "fires a bit too early"): criteria (a/b/c)
-cannot fire before `SCULPTOR_ABLATION_SMART_MINGAP_FRAC` (0.7) x the
-scheduled spacing since the last measurement; the (s) backstop is
-exempt. OLD L7 (Bernoulli-K3 gradient base) is PAUSED — do not rerun;
-its flag stack (SCULPTOR_ABLATION_GRAD_BASE/_K) remains in the fork.
+1. **WHAT is dead forever.** Smart probe targeting (maxinfo L6, then
+   decision/expected-regret L6') never beat grounding at the current
+   advertisement. Theory: model-based DFO mandates evaluating the
+   iterate (sufficient-decrease needs f(x_k)); the current point is the
+   hub of the finite-difference star (one measurement corrects n
+   decisions' common-mode bias). Measured: mean belief-drift +0.22
+   (optimism bias grounding resets), probe sigma did NOT shrink after
+   targeted measurement (0.067->0.091). Old rungs retired to
+   cache/ablation/RETIRED_*.
+2. **L6 = slotted WHEN** (Tom's design): probe k owns slot
+   k*period ± period/2 (period=TCONV/N) — mean rate stays the even
+   schedule; the last grounding's realized SURPRISE (the one bias-immune
+   signal) fires early-in-slot when hot, center when quiet, slot-end
+   force-fires; skips retry until slot close (no budget leak).
+   PROBE_MODE=slotted. 3-seed A/B: best mean, tightest spread, exact
+   budgets. Self-assessed-uncertainty gates (old L7) are dead: ~290 of
+   ~400 firings were the dumb backstop — a biased model never
+   volunteers that it needs checking.
+3. **Step policy = AdaGrad-Norm, alpha0=1** (head DEFAULT via
+   SCULPTOR_GRAD_SCALE; fixed/dog/legacy-auto selectable). 5-seed A/B:
+   composite +10.1 vs stock's +13.7 vs opp; alpha0 has a floor-not-peak
+   effect; DoG is the parameter-free fallback. NOTE fixed alpha=0.5 was
+   the outright best at small — scale-fragile, revisit at actual-32.
+4. **stop-v2 stopping rule** (head DEFAULT): scale-relative rolling
+   delta (< 0.03 x its own initial) + best-patience 20 + GROUNDED gate
+   (budget spent / horizon elapsed) + patience-from-last-measurement.
+   The legacy rule was dead code (absolute eps vs ~150-scale objectives).
+5. **LB cache ON** (default; =0 only for measurement-validity studies).
+   Paired 167-cell A/B: quality delta median +0.000 / mean +0.11ms,
+   3.1x faster, immune to the cache-off late-run support-growth stalls.
+6. **Gurobi WLS sessions are NOT a sizing constraint** (official
+   baseline 2, empirically 20-88+ fine; oversubscription just waits).
+   Size pools by RAM (90% target, ~/queue_governor.json live-tunable)
+   and cores. Cap per-cell ray instances: SCULPTOR_RAY_NUM_CPUS=6
+   (uncapped, 31 cells held 2651 idle ray workers = ~111G).
+7. **EVERYTHING LIVES IN GIT.** The era-cut exposed that core files
+   (solve_lp_assignment objectives, model_error/, mc_off_worker) lived
+   only in scp'd working trees — two mass-failure incidents came from
+   that. Repo is complete now; never scp code, git pull instead.
 
-### OBJECTIVES (all four lanes, final semantics)
+### BLOCKED: GUROBI LICENSE (first action on resume)
 
-- classic: avg_latency + 0.1*resilience (the only gamma>0 lane).
-- fracb: `frac_beyond_optimal` — scalar = HINGE capability metric (min
-  achievable excess-ms beyond opt+10ms; opp floor EXACT, via
-  solve_lp_assignment.solve_min_hinge_excess). Old assignment-derived
-  fraction kept as the 'frac_beyond' component. Revert:
-  SCULPTOR_FRACB_SCALAR=assign.
-- mlu: STANDALONE `max_util` v2 = -(A*minMLU + routed_lat + 3A*bad_frac),
-  A = SCULPTOR_MLU_WEIGHT_MULT(10) x optimal floor (~90% weight on MLU;
-  latency = tie-break; stranding provably unprofitable, bounded, never
-  the 30s sentinel). minMLU via THE canonical
-  `solve_lp_assignment.solve_min_mlu` (Gurobi). Dead ends (never
-  resurrect): force_mlu fallback Y (concentration artifact),
-  assignment-peak MLU (degenerate ~1.0). `lat_plus_max_util` remains
-  registered (the v2-era mlu-redo data used it).
-- prio: `joint_latency_bulk_download` (two-stage assignment-derived —
-  small opp crossings are metric-structural; capability twin is a
-  nonconvex QP; annotated on the dash panel; OPEN DECISION for Tom:
-  (a) jointly-linear redefinition (exact opp floor) vs (b) keep with
-  the documented exemption).
+License 2487370 EXPIRED ~2026-08-17T00:30Z. Tom renews at
+portal.gurobi.com (needs his Columbia creds) -> new ~/gurobi.lic on
+BOTH machines. NOTHING LP-touching runs until then (train, eval,
+rescore — all of it). Do not chase "mysterious" failures before
+checking the license.
 
-### POST-FIX SEMANTICS (both defaults, deployed everywhere 2026-08-16)
+### SIMULATION STATUS + RESUME CHECKLIST (in order)
 
-1. **lambduh == 0 in every file** (call sites + constructor defaults;
-   prox = identity; no L1 cost term; set_alpha branch unchanged -> .01).
-2. **SCULPTOR_SIG_CUTOFF=p5**: remeasure-significance cutoff = 5th
-   percentile of the prior iteration's |gradient| distribution (LB +
-   RB-popp sites in sparse_advertisements_v3). 'abs' restores the old
-   absolute .01. ROOT CAUSE it fixes: the absolute cutoff wiped
-   remeasure persistence on quantized fraction-scale objectives (the
-   fracb L6 freeze: 50/100 starved iterations -> 0/100 under p5;
-   A/B-proven, prio unaffected — continuous scalar).
-   ALSO ESTABLISHED: the min-Y fallback LP does NOT drop paths
-   (verified empirically); its NO_ROUTE sentinel marks are DESIGNED
-   congestion pricing; classic-lane v2 data was never contaminated.
+State: v4 grid **971/1440 clean cells** in cache/ablation/
+{policy_ladder_v3,hardobj_v3} (all L3-L6 x 4 objectives x 10
+deployments; L1/L2 = the no_mc rung missing — they crashed twice: first
+the untracked-objectives bug, then the sigma-refresh-vs-mc-off bug
+(both FIXED, see git log ~baa3967), then the license died). actual-10:
+2/6 cells (L1/L2 same story). All data pulled to the Mac and
+count-verified; VM stopped.
 
-### INFRASTRUCTURE
+1. Tom renews license; put ~/gurobi.lic on Mac + VM.
+2. Start VM: `python -c "import boto3; boto3.client('ec2',
+   region_name='us-east-1').start_instances(InstanceIds=
+   ['i-0428c395787bc3ca0'])"` (aws CLI not installed on Mac). Update
+   alert JSON: new public IP, active:true.
+3. On head: `cd sparse_advertisements_code && git pull`, then
+   `setsid nohup bash ~/v4_repair.sh &` — it purges crash remnants,
+   reruns the 469 no_mc cells (queue: multi-pass re-scan, .inprog
+   markers, 90-min cell timeout, deployment-major), then completes the
+   actual-10 follow-up (6 cells x 16 workers). Re-arm ram_watchdog
+   (`bash ~/ram_watchdog.sh`, setsid) and a session Monitor.
+4. **FIRST ANALYSIS JOB — the scorer dispute (OPEN, blocks trusting
+   L6):** in-run cell scores say slotted-L6 is the best rung ever
+   (+0.4-0.8 vs opp); the dash fresh-process eval said the same advs
+   were bad (seed-1 steady up to 56). One scorer lies; repo doctrine
+   says only rescore_fork is authoritative (in-process contamination
+   history). Run rescore_fork over the grid (the queue's post-phase
+   does it; or per-dir), then re-run steady/failure scoring and compare
+   all three. If fresh-eval was wrong, find why (it uses the same code
+   now — suspect env/world mismatch in the eval child).
+5. Dash refresh loop then repopulates the fresh-eval composite figure
+   automatically (the ladder tab currently shows the clearly-labeled
+   IN-RUN fallback; plot_ladder_direct auto-switches back when
+   policy_steady_v3 store has data). Also run a painter eval for mlu
+   (era-comparable painter ref missing on that panel).
+6. When grid + a10 land: report per-deployment tables, then the
+   actual-32 question: prerequisites already scoped = parent_tracker
+   uint32 packing (-96% measured, experiments/profile_worker_memory.py),
+   shared ray instance (~90G at 88 cells), and a
+   measured_latency_benefits growth check.
 
-- **Scheduler**: `run_n_sweep_queue.py --manifest` = many cell-group
-  specs, ONE global slot pool (no static partitions), per-spec env /
-  gamma / probe-mode / dpsize / init_src / out_root / max_iter, global
-  --launch-stagger (build-thrash guard), per-spec audit+rescore, inline
-  per-cell convergence-fig harvest (spec 'artifacts_figs';
-  '<label>_<suffix>.pdf' names). Single-spec CLI mode unchanged.
-- **RAM governor** (MemGovernor in the queue; config
-  `~/queue_governor.json`, LIVE-tunable per decision): admits cells
-  toward 90% RAM with EWMA per-cell estimates + spike reserve;
-  max_active is sized by RAM/cores ONLY (Tom 2026-08-16: the "~28
-  Gurobi session budget" was a myth — official academic-WLS baseline is
-  2 sessions yet 20-48+ sustain fine empirically; oversubscription just
-  waits. See WLS policy note in experiments/ablation/README.md). Proven
-  overnight including throttle/recover cycles at 91-92%.
-- **Dashboard** (`experiments/dashboard/`, localhost:8643, refresh
-  loop `python -m experiments.dashboard.refresh --loop 180`, log
-  /private/tmp/dashboard_refresh.log): policy-ladder v3 tab (big
-  objective-only figure `policy_ladder_v3_5panel_objective.png` + 7-arm
-  conv-link grid with per-arm L<k>_ filename prefixes) + hard-objectives
-  v2 tab (replace with hardobj_v3 sections when the grid lands — clone
-  the v2 registry pattern; scorer OBJ_OF/WORLD_OF need the hardobj_v3
-  root wired). Sanity gate `sanity.py::assert_not_better_than_opp` in
-  plot_hardb3 (popfail + prio exempt, documented); score_hardb3 prunes
-  deleted files + persists objective components; per-seed opp
-  normalization EVERYWHERE (absolute axes bury good seeds — opp spans
-  30x across seeds); blank panels are data-driven-dropped.
-- **PROCESS WATCHERS — session-bound, hand over explicitly.** Three
-  layers, only one survives an agent session:
-  1. SURVIVES SESSIONS: the Mac cron notifiers
-     (`~/.sculptor_cluster_alert/liveness_check.py` every 10 min +
-     `heartbeat.py` every 3h -> SMS) and the Mac dashboard refresh loop
-     (nohup; check `pgrep -f experiments.dashboard.refresh`, restart
-     per experiments/dashboard/README.md if dead). Head-side setsid
-     chains also survive (verdicts in their driver logs).
-  2. SESSION-BOUND (dies with the agent): the Monitor wrapping
-     `tools/watch_v3.sh` on 30-min beats. A NEW AGENT MUST RE-ARM THIS
-     FIRST, before any other work:
-       Monitor(persistent) running:
-       `while true; do tools/watch_v3.sh; sleep 1800; done`
-     watch_v3.sh re-resolves the head IP from the alert JSON per beat;
-     verdict lines are COMPLETE / FAILED / SSH_ERROR / RUNNING. During
-     heavy pools also watch memfree in the beat (the governor protects,
-     but eyes on it) and disk (<6G: clean dead /tmp/ray_q_* session
-     dirs — date-pinned patterns only, never the live pool's).
-  3. Standing rules: completion is COUNT-based (JSONs vs targets) +
-     per-spec rc lines, never exit codes alone; cron heartbeats are NOT
-     reliable as the sole watchdog for dormant sessions (memory);
-     update the alert JSON on EVERY lifecycle event or the SMS crons
-     false-alarm.
-- **Email**: `python tools/send_report.py "<subject>" <body.txt>
-  [figures...]`.
-- **v3 eval stores**: tags policy_{steady,failure}_v3. v2-era ladder
-  stores quarantined in `cache/model_error/V2_ERA/` — their L1/L2 dir
-  names collide with v3's; never move them back into the live glob.
-- **Local-Mac standalone runs**: use the queue's ws recipe (PYTHONPATH,
-  short RAY_TMPDIR, figures/logs dirs, cache/data symlinks) — see
-  memory local-fork-ws-recipe.
+### PARKED / OPEN
 
-### DATASET TRUST TABLE
+- **zipf**: 48-cell smoke (z in {0,1.5} x L1-L6 x N{5,20} x 2 seeds,
+  L1/L2 pending rerun): z=1.5 FLATTENS the ladder (global-popularity
+  skew makes the problem easier; N-value of measurements also shrinks).
+  Idea stays parked pending reformulation (per-UG-PRIVATE zipf prefs x
+  tight caps).
+- **security**: a Gmail app password leaked in commit 3e51bb5 (public).
+  Code is clean (env/keyfile now); Tom must REVOKE the old password;
+  optional history rewrite staged (git-filter-repo installed in venv;
+  needs Tom's go for force-push). GitGuardian incident open.
+- prio metric redefinition (linear-joint vs exemption) — still with Tom.
 
-- `policy_ladder_v3/` + (pending) `hardobj_v3/`: THE current era
-  (post-fix semantics, 100 iters, WHAT/WHEN ladder).
-- v2 era (valid under pre-fix semantics + old ladder; superseded for
-  the ladder question, keep for reference): `policy_ladder_v2/`,
-  `hardB3v2/{fracb,prio}` (L1-L6 complete + clean), `hardB3v2/mlu`
-  (lat_plus redo, complete), `policy_ladder_v2_L7K3/` +
-  `hardB3v2_L7K3/` (old-L7 grid, killed at 107/120).
-- Quarantined: `PUREMLU_STRANDING_ERA_mlu` (head), `PRESKIP_ERA_v2/*`,
-  `WRONGWORLD_STOCK_EVAL/*`, `cache/model_error/V2_ERA/`.
-- PAUSED ideas: old L7 Bernoulli-K3 (Tom: waste of compute; flags
-  remain in the fork); zipf knob (needs reformulation: per-UG-PRIVATE
-  zipf prefs x tight caps — current global-popularity form makes the
-  problem EASIER; SCULPTOR_ZIPF plumbing works, z=0 bit-identical);
-  a10/actual-10 grid (canceled pre-launch; recipe in git history).
+### INFRASTRUCTURE MAP
 
-### NEXT STEPS
-
-1. Tom's GO -> deploy tools/{chain_v3.sh,v3_full_manifest.json} to
-   ~/ on the head, launch (command above). Deployment-major: seed-1's
-   full 4-objective block lands first — report per-deployment early.
-2. When hardobj_v3 cells land: add dash registry sections for the
-   three hard objectives (v2 tab pattern) + scorer root mapping.
-3. On V3 COMPLETE: audit (classic 210 + hard 630), email Tom
-   tables+figures, then ASK about teardown (never auto-stop while Tom
-   is iterating).
-4. Open decisions parked with Tom: prio metric redefinition
-   (linear-joint vs exemption); zipf reformulation.
-
----
-
-Historical era notes are archived in old_handoffs/:
-- HANDOFF_2026-08-15_16_fix_stack_and_v2_eras.md — the v2 era, old-L7
-  Bernoulli-K3, MLU bug forensics, freeze root-cause, fix stack,
-  balancer/governor build-out.
-- HANDOFF_2026-08-14_stability_and_fix_eras.md — stability stack,
-  objective-bug fixes, policy-ladder eras.
+- **Dash** localhost:8643: server = experiments/dashboard/serve.py
+  (no-store headers; NOT bare http.server), generator registry in
+  generate.py (tabs: policy ladder / hard objectives v4 / actual-10 /
+  Old dashboards). Refresh loop `python -m experiments.dashboard.refresh
+  --loop 180` (Mac, nohup; RESTART IT after editing the registry — it
+  holds the step list in memory). 30s ticker progress_tick.py writes
+  progress.json (iterations + VM RAM/CPU; head-live via ssh). Figures
+  are mtime-cache-busted. Scorers refuse to clobber stores with empty
+  results (license-outage lesson).
+- **Queue** run_n_sweep_queue: manifest mode, deployment-major, RAM
+  governor, SCULPTOR_QUEUE_PASSES re-scans, .inprog markers,
+  SCULPTOR_CELL_TIMEOUT. Manifests: tools/v3grid_manifest.json (1440),
+  tools/a10_manifest.json.
+- **Diagnostics per run**: convergence_over_iterations.pdf now carries
+  the adaptive-WHEN row (K + surprise-vs-theta); companion
+  model_error_over_iterations.pdf (belief vs GT + per-probe WHY
+  annotations); result JSONs carry probe_log/gate_hist. Dash grid cells
+  link both (superscript m).
+- **Watchers**: Mac cron notifiers exist but alert JSON active:false
+  keeps them quiet. Dash refresh loop + ticker survive on the Mac.
+  Everything session-bound (Monitors, bg watchers) is DEAD — re-arm on
+  resume.
