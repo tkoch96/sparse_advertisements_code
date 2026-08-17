@@ -143,35 +143,55 @@ def _add_rate_and_eta(data):
     now = time.time()
     prog = float(data['done_it'] + data.get('inflight_it', 0))
     try:
-        hist = json.load(open(RATE_STATE))
+        st = json.load(open(RATE_STATE))
+        hist, rate_ema = st['hist'], st.get('rate_ema')
     except Exception:
-        hist = []
+        hist, rate_ema = [], None
+    # dip-reset: a queue restart zeroes in-flight iterations; a big drop
+    # would poison the regression for the whole window — start fresh
+    if hist and prog < hist[-1][1] - 500:
+        hist, rate_ema = [], None
     hist.append([now, prog])
-    hist = [h for h in hist if now - h[0] <= 1800][-90:]
+    hist = [h for h in hist if now - h[0] <= 7200][-240:]
+    span = now - hist[0][0]
+    if len(hist) < 8 or span < 300:
+        rate = None
+    else:
+        # least-squares slope over the FULL window: every 30s sample
+        # contributes, so single lumpy ticks (a cell landing, a log
+        # rotating) barely move it — the 2-point secant it replaces
+        # swung the ETA by hours on 1s/iter of noise (Tom 2026-08-17)
+        n = float(len(hist))
+        mt = sum(h[0] for h in hist) / n
+        mp = sum(h[1] for h in hist) / n
+        den = sum((h[0] - mt) ** 2 for h in hist)
+        rate = (sum((h[0] - mt) * (h[1] - mp) for h in hist) / den
+                if den > 0 else None)
+    if rate is not None and rate > 0:
+        # light EMA across ticks on top of the windowed slope
+        rate_ema = rate if rate_ema is None else 0.85 * rate_ema + 0.15 * rate
     try:
-        json.dump(hist, open(RATE_STATE, 'w'))
+        json.dump({'hist': hist, 'rate_ema': rate_ema},
+                  open(RATE_STATE, 'w'))
     except OSError:
         pass
-    # rate vs the oldest sample at least 5 min back (noise floor)
-    base = None
-    for h in hist:
-        if now - h[0] >= 300:
-            base = h
-    if base is None or prog <= base[1]:
+    if not rate_ema or rate_ema <= 0:
         data['it_per_s'] = None
         data['eta_s'] = None
         data['eta_str'] = None
         data['sec_per_iter_cell'] = None
         return
-    rate = (prog - base[1]) / (now - base[0])
     remaining = max(0.0, float(data['est_total']) - prog)
-    eta_s = remaining / rate
+    eta_s = remaining / rate_ema
     cells = max(1, int(data.get('cells_running') or 0))
-    data['it_per_s'] = round(rate, 2)
-    data['sec_per_iter_cell'] = round(cells / rate, 2)
+    data['it_per_s'] = round(rate_ema, 2)
+    data['sec_per_iter_cell'] = round(cells / rate_ema, 2)
     data['eta_s'] = int(eta_s)
-    h, m = int(eta_s // 3600), int((eta_s % 3600) // 60)
-    data['eta_str'] = '{}h{:02d}m'.format(h, m) if h else '{}m'.format(m)
+    # 10-minute display granularity: the number should breathe, not flicker
+    q = int(round(eta_s / 600.0)) * 600
+    h, m = q // 3600, (q % 3600) // 60
+    data['eta_str'] = ('~{}h{:02d}m'.format(h, m) if h
+                       else '~{}m'.format(max(m, 10)))
 
 
 def main():
