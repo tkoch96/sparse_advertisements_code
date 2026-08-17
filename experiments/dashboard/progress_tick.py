@@ -27,7 +27,7 @@ import glob, json, time
 # HiGHS-era campaign (Tom 2026-08-17): count the live highs grid; the
 # gurobi-era v3 grid is frozen at 971/1440 pending license.
 specs = json.load(open("/home/ubuntu/sparse_advertisements_code/"
-                       "tools/grid_maxhard_r4_manifest.json"))
+                       "tools/grid_maxhard_v2_manifest.json"))
 done_it = est = done_cells = total = 0
 root = "/home/ubuntu/sparse_advertisements_code/"
 for sp in specs:
