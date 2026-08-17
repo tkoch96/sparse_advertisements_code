@@ -117,6 +117,23 @@ def child(seed, dirs, dpsize):
     out.append(eval_adv(
         {'dir': 'REFS', 'seed': seed, 'rung': 'opp_canary'},
         np.eye(len(sas.popps))))
+    # SANITY (Tom 2026-08-17): one-per-peering exposes every path, so in
+    # THIS evaluator no advertisement can beat opp on the bounded
+    # composite (train_obj). clean_avg_lat is conditional-on-routed and
+    # can legitimately dip below opp when routed_frac < 1 (the 79%%-
+    # congested L5N5s1 incident) — the invariant is train_obj ONLY.
+    _opp_train = out[0].get('train_obj') if out[0].get('solved') else None
+    if _opp_train is not None:
+        _tol = max(0.05, 1e-3 * abs(_opp_train))
+        for rec in out[1:]:
+            t = rec.get('train_obj')
+            if (rec.get('solved') and t is not None
+                    and t < _opp_train - _tol):
+                rec['sanity_violation'] = True
+                print('[SANITY] seed {} {} {}: train_obj {:.3f} < opp '
+                      '{:.3f} — impossible in-evaluator; eval bug'.format(
+                          seed, rec.get('dir'), rec.get('rung'),
+                          t, _opp_train), flush=True)
     print(MARKER + json.dumps(out), flush=True)
 
 
@@ -176,6 +193,14 @@ def main():
                 e['steady_congested_frac'], e['routed_frac'],
                 'n/a' if e['clean_avg_lat'] is None
                 else '{:.1f}ms'.format(e['clean_avg_lat'])), flush=True)
+    # THROW after persisting (Tom 2026-08-17): flagged records stay in
+    # the store for forensics, but the run fails loudly so no dashboard
+    # step quietly plots an impossible below-opp composite.
+    bad = [e for e in results if e.get('sanity_violation')]
+    assert not bad, (
+        'SANITY: {} record(s) beat one-per-peering on train_obj — '
+        'impossible in-evaluator; see [SANITY] lines / store {}'.format(
+            len(bad), fn))
 
 
 if __name__ == '__main__':
