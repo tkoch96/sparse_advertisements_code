@@ -638,7 +638,19 @@ EXPERIMENTS.extend([
           'heading': 'joint priority — NEW SOLVER (HiGHS), L1-L6, '
                      '10 deployments',
           'figures': ['figures/hardobj_highs_prio.png'],
-          'intro': 'Own-objective ladder; 0 = one-per-peering.'},
+          'intro': 'Own-objective ladder; 0 = one-per-peering. CAVEAT '
+                   '(same as the gurobi-era panel): this metric is '
+                   'TWO-STAGE assignment-derived — the low-latency split '
+                   'is the avg_latency optimum, not prio-optimal — so '
+                   'arms can legitimately cross the opp line by small '
+                   'margins (both eras: worst ~-0.08; WHICH cells cross '
+                   'is stage-1 tie-break dependent, hence solver-'
+                   'sensitive). Early in the campaign the means average '
+                   'few seeds, so single crossings can pull an (arm, N) '
+                   'point below 0; gurobi-era means over n=10 sit '
+                   'positive with identical per-cell dips. Resolution '
+                   'options pending Tom: jointly-LINEAR redefinition vs '
+                   'documented exemption.'},
      ]},
 ])
 
