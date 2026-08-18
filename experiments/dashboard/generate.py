@@ -858,6 +858,33 @@ EXPERIMENTS.append({
              ]}},
     ]})
 
+# ---- v5 SCOUT SWEEP (Tom 2026-08-18: HiGHS for the foreseeable
+# future; L3 / L5-adagrad / L5-rmsprop x every objective x N=10 first,
+# to decide what the absolute full panel should measure) ----
+EXPERIMENTS.append({
+    'id': 'grid_v5scout', 'title': 'v5 scout',
+    'sections': [
+        {'id': 'scout', 'title': 'L3 / L5-ada / L5-rms x objectives',
+         'kind': 'static',
+         'heading': 'v5 scout — 3 arms x 4 objectives x seeds 201-205, '
+                    'N=10, maxhard, HiGHS, NEW stop-v2 (honest init, '
+                    '0.1% REL, trend clause) + component persistence',
+         'figures': ['figures/v5scout_bars.png'],
+         'intro': ('<p>Precursor to the v5 full panel: does rmsprop\'s '
+                   'smoke win transfer to every objective family? 60 '
+                   'cells on the sweep VM. Per-cell convergence PDFs: '
+                   '<a href="figs_v5scout/">figs_v5scout/</a> '
+                   '(v5s_&lt;family&gt;_&lt;arm&gt;_*.pdf). First '
+                   'campaign with objective components persisted in '
+                   'every cell json.</p>'),
+         'refresh': {'steps': [
+             {'in': ['figures/v5scout_bars.png'], 'always': True,
+              'out': ['figures/v5scout_bars.png'],
+              'argv': ['{py}', '-m',
+                       'experiments.dashboard.plot_v5scout']},
+         ]}},
+    ]})
+
 # ---- ADAGRAD TRANSIENT SMOKE (Tom 2026-08-18) ----
 EXPERIMENTS.append({
     'id': 'adagrad_smoke', 'title': 'Adagrad smoke',
@@ -1360,6 +1387,10 @@ def main():
                          ('adagrad_smoke_figs', os.path.join(
                              REPO,
                              'cache/ablation/adagrad_smoke_figs')),
+                         ('figs_v5scout', os.path.join(
+                             REPO,
+                             'cache/ablation/grid_v5scout_artifacts'
+                             '/figs')),
                          ('plots', os.path.join(REPO, 'figures'))):
         lnk = os.path.join(SITE, name)
         if not os.path.islink(lnk):
