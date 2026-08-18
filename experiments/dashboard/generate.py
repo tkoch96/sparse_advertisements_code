@@ -664,15 +664,41 @@ _GG_OBJS = ('lat:latency + gamma*resilience,'
             'mlu:max_util v2,prio:joint latency+bulk')
 
 
-def _gg_section(key, title, figure):
+# Units per objective family (Tom 2026-08-18: "the units of MLU don't
+# make sense" — every panel scalar is an ms-EQUIVALENT composite, not
+# the raw metric its family name suggests). Panels plot (arm - opp).
+_GG_UNITS = {
+    'lat': 'ms: vol-weighted avg routed latency + 50ms*bad-volume-frac, '
+           'plus gamma=0.1 x the same scalar averaged over failure '
+           'scenarios (resilience).',
+    'fracb': 'ms per unit volume: min-achievable vol-weighted excess '
+             'latency beyond (per-user optimal + 10ms), + 1000 x any '
+             'capacity-overflow fraction. NOT a fraction — the '
+             '"frac beyond" ratio is a display component only.',
+    'mlu': 'ms-equivalent: routed avg lat + 50ms*bad_frac + '
+           'alpha*(MLU + bad_frac), where MLU is the best-achievable '
+           'peak link utilization (dimensionless, opp floor ~0.91) and '
+           'alpha = vol-weighted mean per-user optimal latency (~15-40ms) '
+           'converts it to ms. A panel delta of 2 at alpha~20 means '
+           'delta-MLU ~0.1 — the axis is NOT a utilization ratio.',
+    'prio': 'ms-equivalent: vol-weighted avg latency + 100 x '
+            'bulk-congested volume fraction (ALPHA_BULK=100, bulk '
+            'multiplier 2x).',
+}
+_GG_SEEDS = list(range(201, 206))
+
+
+def _gg_section(key, title, figure, figs=_GG_FIGS, url='figs_gridmv2',
+                backend='HiGHS'):
     return {'id': key, 'title': title, 'kind': 'ladder_links',
-            'figs_dir': _GG_FIGS, 'figs_url': 'figs_gridmv2',
-            'fixed_all_n': True,
-            'arms': _hx_arms('figs_gridmv2', _GG_FIGS, key + '_'),
+            'figs_dir': figs, 'figs_url': url,
+            'fixed_all_n': True, 'seeds': _GG_SEEDS,
+            'arms': _hx_arms(url, figs, key + '_'),
             'heading': '{} — unified grid, maxhard world, objectives quantized to 4 decimals, L1-L6, '
-                       '5 deployments (HiGHS)'.format(title),
+                       '5 deployments ({})'.format(title, backend),
             'figures': [figure],
-            'intro': 'Own-objective ladder; 0 = one-per-peering.'}
+            'intro': 'Own-objective ladder; 0 = one-per-peering. '
+                     '<b>Units:</b> {}'.format(_GG_UNITS[key])}
 
 
 EXPERIMENTS.extend([
@@ -682,10 +708,17 @@ EXPERIMENTS.extend([
           'progress_manifest': 'tools/grid_maxhard_v2_manifest.json',
           'intro': ('<p>ONE experimentation framework, every objective a '
                     'first-class citizen: latency+gamma*resilience / '
-                    'fracb / mlu / prio x L1-L6 x N x seeds 1-5, trained '
+                    'fracb / mlu / prio x L1-L6 x N x seeds 201-205, trained '
                     'AND scored in the maxhard world, objectives quantized to 4 decimals, HiGHS backend, '
                     'slotted WHEN from mainline '
-                    'sparse_advertisements_v3.</p>'),
+                    'sparse_advertisements_v3.</p>'
+                    '<p><b>Panel units</b> (every panel plots arm minus '
+                    'same-seed one-per-peering, lower = better; all four '
+                    'scalars are ms-equivalent composites, NOT the raw '
+                    'metric the family name suggests):<br>'
+                    '<b>lat</b>: {lat}<br><b>fracb</b>: {fracb}<br>'
+                    '<b>mlu</b>: {mlu}<br><b>prio</b>: {prio}</p>'.format(
+                        **_GG_UNITS)),
           'figures': ['figures/grid_maxhard_v2_4panel.png'],
           'refresh': {
               'pull': [('cache/ablation/grid_maxhard_v2/',
@@ -770,6 +803,56 @@ EXPERIMENTS.append({
                           'HARDOBJ_OBJS': _GG_OBJS},
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_hardobj_v4']},
+             ]}},
+        # per-family panels + convergence-link grids (Tom 2026-08-18:
+        # "grids on the small maxhards are missing convergence over
+        # iterations") — same sections as the HiGHS tab, gurobi store.
+        _gg_section('lat', 'latency + gamma*resilience',
+                    'figures/grid_maxhard_v2_gurobi_lat.png',
+                    figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
+        _gg_section('fracb', 'frac_beyond_optimal',
+                    'figures/grid_maxhard_v2_gurobi_fracb.png',
+                    figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
+        _gg_section('mlu', 'max_util v2',
+                    'figures/grid_maxhard_v2_gurobi_mlu.png',
+                    figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
+        _gg_section('prio', 'joint priority',
+                    'figures/grid_maxhard_v2_gurobi_prio.png',
+                    figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
+    ]})
+
+# ---- a10x10 GRID (Tom 2026-08-18: actual-10 needs a dash with CPU,
+# RAM, convergence over iterations) — L1-L6 x 10 actual-10 deployments,
+# N=10, 100 iters, lat+gamma*resilience, HiGHS, queue on head. ----
+_A10X10_FIGS = 'cache/ablation/policy_ladder_a10x10_artifacts/figs'
+EXPERIMENTS.append({
+    'id': 'ladder_a10x10', 'title': 'Grid: actual-10 x 10',
+    'sections': [
+        {'id': 'a10x10', 'title': 'L1-L6 @ actual-10, 10 deployments',
+         'kind': 'ladder_links',
+         'figs_dir': _A10X10_FIGS, 'figs_url': 'figs_a10x10',
+         'fixed_all_n': True, 'ns': [10],
+         'progress_manifest': 'tools/a10x10_manifest.json',
+         'arms': _hx_arms('figs_a10x10', _A10X10_FIGS, 'a10x10_'),
+         'heading': 'Policy ladder @ actual-10 — 10 deployments (seeds '
+                    '1-10), N=10, 100 iters, L1-L6, HiGHS (live: VM '
+                    'RAM/CPU above, per-cell convergence links below)',
+         'figures': ['figures/policy_ladder_a10x10_5panel_objective.png'],
+         'intro': 'IN-RUN steady scores (objective - same-seed opp, ms); '
+                  'convergence-over-iterations PDFs link in as cells '
+                  'land and figures are harvested from the head.',
+         'refresh': {
+             'pull': [('cache/ablation/policy_ladder_a10x10/',
+                       'cache/ablation/policy_ladder_a10x10/'),
+                      (_A10X10_FIGS + '/', _A10X10_FIGS + '/')],
+             'steps': [
+                 {'in': ['cache/ablation/policy_ladder_a10x10/*/N*/'
+                         'seed_*_*.json'],
+                  'out': ['figures/'
+                          'policy_ladder_a10x10_5panel_objective.png'],
+                  'always': True,
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_ladder_direct']},
              ]}},
     ]})
 
@@ -948,15 +1031,19 @@ def render_static(exp):
 
 
 def conv_grid(url_prefix, figs_dir_abs, fname_fn, arms=ARMS,
-              painter_fn=None, fixed_ns=(1,)):
+              painter_fn=None, fixed_ns=(1,), seeds=None, ns=None):
     """Compact arm x N grid of convergence-figure links (s1..s5 per
     cell); linked iff the PDF exists on disk. fname_fn(pdir, rung, s,
     n, pname) -> filename. fixed_ns: which N columns the fixed arm
-    occupies ((1,) legacy; NS for budgeted-fixed L1 v2)."""
+    occupies ((1,) legacy; NS for budgeted-fixed L1 v2). seeds/ns
+    override the globals per experiment (Tom 2026-08-18: maxhard v2
+    files are dep201-205 — the global SEEDS 1-10 muted every link)."""
+    seeds = list(seeds) if seeds else SEEDS
+    cols = list(ns) if ns else NS
     out = ['<h3>convergence over iterations <small>every run; links '
            'appear as figures are harvested from the VM</small></h3>']
     out.append('<div class="wrap"><table><thead><tr><th>arm</th>')
-    out += ['<th>N={}</th>'.format(n) for n in NS]
+    out += ['<th>N={}</th>'.format(n) for n in cols]
     out.append('</tr></thead><tbody>')
     for arm in arms:
         # optional per-arm figs override (Tom 2026-08-16: L7 lives in a
@@ -968,13 +1055,13 @@ def conv_grid(url_prefix, figs_dir_abs, fname_fn, arms=ARMS,
         a_dir = os.path.join(REPO, arm[5]) if len(arm) > 5 else figs_dir_abs
         a_pfx = arm[6] if len(arm) > 6 else ''
         out.append('<tr><th>{}</th>'.format(alabel))
-        ns = list(fixed_ns) if pdir == 'fixed' else NS
-        for n in NS:
-            if n not in ns:
+        row_ns = list(fixed_ns) if pdir == 'fixed' else cols
+        for n in cols:
+            if n not in row_ns:
                 out.append('<td class="c mut">&mdash;</td>')
                 continue
             links = []
-            for s in SEEDS:
+            for s in seeds:
                 fn = a_pfx + fname_fn(pdir, rung, s, n, pname)
                 if os.path.exists(os.path.join(a_dir, fn)):
                     cell = '<a href="{}/{}">s{}</a>'.format(a_url, fn, s)
@@ -991,15 +1078,15 @@ def conv_grid(url_prefix, figs_dir_abs, fname_fn, arms=ARMS,
         out.append('</tr>')
     if painter_fn:
         links = []
-        for s in SEEDS:
+        for s in seeds:
             fn = painter_fn(s)
             if os.path.exists(os.path.join(figs_dir_abs, fn)):
                 links.append('<a href="{}/{}">s{}</a>'.format(
                     url_prefix, fn, s))
             else:
                 links.append('<span class="mut">s{}</span>'.format(s))
-        out.append('<tr><th>painter (ref)</th><td class="c" colspan="6">'
-                   '{}</td></tr>'.format(' '.join(links)))
+        out.append('<tr><th>painter (ref)</th><td class="c" colspan="{}">'
+                   '{}</td></tr>'.format(len(cols), ' '.join(links)))
     out.append('</tbody></table></div>')
     return '\n'.join(out)
 
@@ -1166,7 +1253,8 @@ def render_ladder_links(exp):
              if pdir == 'fixed'
              else '{}-dep{}-N{}-{}.pdf'.format(rung, s, n, pname)),
         arms=exp.get('arms', ARMS),
-        fixed_ns=NS if fixed_all else (1,)))
+        fixed_ns=(exp.get('ns') or NS) if fixed_all else (1,),
+        seeds=exp.get('seeds'), ns=exp.get('ns')))
     return '\n'.join(out)
 
 
@@ -1224,6 +1312,14 @@ def main():
                          ('figs_gridmv2', os.path.join(
                              REPO,
                              'cache/ablation/grid_maxhard_v2_artifacts'
+                             '/figs')),
+                         ('figs_gridmv2g', os.path.join(
+                             REPO,
+                             'cache/ablation/grid_maxhard_v2_gurobi_artifacts'
+                             '/figs')),
+                         ('figs_a10x10', os.path.join(
+                             REPO,
+                             'cache/ablation/policy_ladder_a10x10_artifacts'
                              '/figs')),
                          ('plots', os.path.join(REPO, 'figures'))):
         lnk = os.path.join(SITE, name)

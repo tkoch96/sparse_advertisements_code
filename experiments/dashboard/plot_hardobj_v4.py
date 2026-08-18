@@ -47,6 +47,17 @@ else:
 
 N_ERRS = {}
 
+# Per-family y-axis units (Tom 2026-08-18: "clarify what the units are
+# showing" — every scalar is ms-EQUIVALENT, not the raw metric its name
+# suggests; mlu in particular is alpha*MLU folded into a latency sum,
+# NOT a utilization ratio). Formulas live in the dash captions.
+UNITS = {
+    'lat': 'ms (avg routed lat + 50*bad_frac + gamma*resilience)',
+    'fracb': 'ms/unit vol (hinge excess past optimal+10ms)',
+    'mlu': 'ms-equiv (routed lat + 50*bad + alpha*(MLU+bad))',
+    'prio': 'ms-equiv (avg lat + 100*bulk-congested frac)',
+}
+
 
 def load(obj):
     """{(arm, N): [(seed, obj - same-seed opp)]}"""
@@ -142,7 +153,8 @@ def panel(ax, obj, title):
     ax.set_xticks(NS)
     ax.set_xticklabels([str(n) for n in NS])
     ax.set_xlabel('measurement budget N')
-    ax.set_ylabel('objective - same-seed opp')
+    ax.set_ylabel('objective - same-seed opp\n[{}]'.format(
+        UNITS.get(obj, 'ms-equivalent')), fontsize=8)
     _ne = N_ERRS.get(obj, 0)
     if _ne:
         ax.text(0.02, 0.98, '{} CRASHED CELLS'.format(_ne),

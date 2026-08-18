@@ -121,6 +121,12 @@ def main():
                'figures/policy_ladder_a10_5panel_objective.png',
                'actual-10 ladder — IN-RUN steady scores (partial: '
                'license-paused)')
+    # a10x10 grid (Tom 2026-08-18): direct render only — no fresh-eval
+    # steady store; cells carry their own diff_vs_opp.
+    render('cache/ablation/policy_ladder_a10x10',
+           'figures/policy_ladder_a10x10_5panel_objective.png',
+           'actual-10 x 10 deployments — L1-L6, N=10, IN-RUN steady '
+           'scores (mean over landed seeds 1-10)')
 
 
 if __name__ == '__main__':
