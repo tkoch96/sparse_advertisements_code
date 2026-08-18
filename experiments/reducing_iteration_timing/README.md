@@ -54,3 +54,17 @@ d) PDC DISPATCH: job receipt -> lower-level solver call (route
   solve / result serialize per call.
 - Head repo copy at ~/rit_repo (cache+data symlinked) for workshop
   code; live campaigns untouched.
+- 2026-08-18 F2 (free, live v5full mlu worker batch summary): the
+  worker's gradient batch splits **solve_generic_lp_not_persistent
+  43%** / **route simulation (sim_rti + total_rti_calc) 38%** /
+  pmat_organize 5.6% / unified-LP setup 6% / actual optimize() only
+  3.3% / get_paths_by_ug 3%. => Candidate (c) has a precise target:
+  the persistent-LP path EXISTS but only avg_latency/per_site_cost
+  use it — every family objective (mlu/fracb/prio) rebuilds its LP
+  per MC sample per candidate. Since optimize() itself is ~3%, the
+  rebuild overhead is most of the 43%. Candidate (d) = the 38%
+  route-sim block. Next builds: (1) persistent/incremental generic-LP
+  path in rit_repo + A/B smoke; (2) decompose not_persistent
+  internals (setup vs solve); (3) sim_rti vectorization pass;
+  (4) dissect the driver-side 'stop' 13.9 s/iter; (5) startup budget
+  at actual-15/25 once the head frees.
