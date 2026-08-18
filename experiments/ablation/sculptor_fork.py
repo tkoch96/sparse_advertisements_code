@@ -1025,57 +1025,6 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             return a
         return super().solve_max_information(current_advertisement)
 
-    def _solve_apply_step(self, grads):
-        super()._solve_apply_step(grads)
-        # L4 ENSURED FLIP (Tom-ratified 2026-08-18 late: "retains memory
-        # about what was good, but also ensures a flip. And i mean
-        # ENSURES"). Three ways the old L4 failed to net a flip: the
-        # 1.0001x crossing margin got eaten by the L1-proximal shrink
-        # (lambduh*alpha) in the SAME update; the no-viable-coordinate
-        # branch emitted a zero step; momentum eroded the margin. Post-
-        # step enforcement: if the realized step netted no on/off change,
-        # push the stepped coordinate (or the best-|grad| one if nothing
-        # moved) DECISIVELY across threshold with a prox-surviving
-        # margin. Single-coordinate invariant preserved: we only ever
-        # touch the coordinate the step already moved, or exactly one
-        # when nothing moved. SCULPTOR_L4_FORCE_FLIP=0 restores legacy.
-        # Direction-off+memory-on ONLY (i.e. the L4 rung definition);
-        # rmsprop/step policies remain L5+ (direction-on) territory.
-        if self.abl_direction or not self.abl_memory:
-            return
-        if os.environ.get('SCULPTOR_L4_FORCE_FLIP', '1') == '0':
-            return
-        cur = np.asarray(self.optimization_advertisement, dtype=float)
-        la = np.clip(np.asarray(self.last_advertisement,
-                                dtype=float).reshape(cur.shape), 0, 1)
-        if (threshold_a(cur) != threshold_a(la)).any():
-            return          # realized step netted a flip — nothing to do
-        changed = np.flatnonzero(~np.isclose(cur.flatten(),
-                                             la.flatten(), atol=1e-12))
-        if len(changed) == 1:
-            flat = int(changed[0])
-            why = 'stepped-but-unflipped (prox/momentum ate the margin)'
-        else:
-            g = np.asarray(getattr(self, '_abl_last_grads',
-                                   np.zeros_like(cur))).flatten()
-            flat = int(np.abs(g).argmax())
-            why = 'zero-step (no viable coordinate)'
-        margin = float(self.lambduh) * float(self.alpha) + 1e-4
-        arr = np.asarray(self.optimization_advertisement)
-        if cur.flatten()[flat] <= ADVERTISEMENT_THRESHOLD:
-            arr.flat[flat] = ADVERTISEMENT_THRESHOLD + margin
-            direction = 'ON'
-        else:
-            arr.flat[flat] = ADVERTISEMENT_THRESHOLD - margin
-            direction = 'OFF'
-        self._abl_forced_flips = 1 + getattr(self, '_abl_forced_flips', 0)
-        self.metrics.setdefault('abl_forced_flips', []).append(
-            (int(getattr(self, 'iter', -1)), flat))
-        print('[L4-flip] iter={} forced coord {} {} ({}; margin {:.4g}, '
-              'total forced {})'.format(
-                  getattr(self, 'iter', -1), flat, direction, why,
-                  margin, self._abl_forced_flips), flush=True)
-
     # ================= assertions =======================================
     def _abl_assert_iter_start(self):
         if not self.abl_assert:
