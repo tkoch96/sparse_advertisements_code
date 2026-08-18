@@ -59,10 +59,15 @@ UNITS = {
 }
 
 
-def load(obj):
-    """{(arm, N): [(seed, obj - same-seed opp)]}"""
+def load(obj, field='objective'):
+    """{(arm, N): [(seed, arm - same-seed opp)]} for the objective
+    scalar (default) or field='avg_lat' (the stored steady latency,
+    used to decompose the mlu composite: delta-objective minus
+    delta-avg_lat ~ A*(delta-minMLU + 3*delta-bad))."""
     out = {}
     N_ERRS[obj] = 0
+    keys = (('repo_objective', 'opp_objective') if field == 'objective'
+            else ('avg_lat', 'opp_avg_lat'))
     for fn in glob.glob(os.path.join(ROOT, obj, '*', 'N*', 'seed_*_*.json')):
         try:
             d = json.load(open(fn))
@@ -73,13 +78,12 @@ def load(obj):
             # DISPLAY crashed cells instead of silently skipping them
             N_ERRS[obj] += 1
             continue
-        if d.get('repo_objective') is None \
-                or d.get('opp_objective') is None:
+        if d.get(keys[0]) is None or d.get(keys[1]) is None:
             continue
         parts = fn.split(os.sep)
         arm, ndir = parts[-3], parts[-2]
         out.setdefault((arm, int(ndir[1:])), []).append(
-            (d['seed'], float(d['repo_objective']) - float(d['opp_objective'])))
+            (d['seed'], float(d[keys[0]]) - float(d[keys[1]])))
     return out
 
 
@@ -174,6 +178,42 @@ def main():
     for ax, (obj, title) in zip(axes, OBJS):
         d = panel(ax, obj, title)
         any_drawn = any_drawn or d
+        if obj == 'mlu':
+            # mlu decomposition (Tom 2026-08-18: "what does 5 mean?"):
+            # the composite hides whether a delta is utilization or the
+            # latency tie-break. Left: full objective delta. Right: the
+            # latency share (avg_lat - opp_avg_lat) from the same cells;
+            # objective-minus-latency-share ~ A*(dMLU + 3*dbad), i.e.
+            # the pure utilization+stranding component.
+            f2, (a2, a3) = plt.subplots(1, 2, figsize=(13.5, 4.6))
+            if panel(a2, obj, title + ' — full composite'):
+                lat_data = load(obj, field='avg_lat')
+                for arm, label, color in ARMS:
+                    xs, ys = [], []
+                    for n in NS:
+                        vals = [v for _, v in lat_data.get((arm, n), [])]
+                        if vals:
+                            xs.append(n)
+                            ys.append(float(np.mean(vals)))
+                    if xs:
+                        a3.plot(xs, ys, 'o-', color=color, label=label,
+                                lw=1.5, ms=4)
+                a3.axhline(0, color='k', lw=1, linestyle='--')
+                a3.set_xscale('log')
+                a3.set_xticks(NS)
+                a3.set_xticklabels([str(n) for n in NS])
+                a3.set_xlabel('measurement budget N')
+                a3.set_ylabel('avg_lat - same-seed opp [ms]', fontsize=8)
+                a3.set_title('latency share of the composite '
+                             '(remainder = A*(dMLU + 3*dbad))',
+                             fontsize=9)
+                a3.grid(alpha=.25)
+                a2.legend(fontsize=8, frameon=False)
+                f2.tight_layout()
+                f2.savefig(os.path.join(
+                    FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
+            plt.close(f2)
+            continue
         f2, a2 = plt.subplots(figsize=(7.5, 4.6))
         if panel(a2, obj, title):
             a2.legend(fontsize=8, frameon=False)

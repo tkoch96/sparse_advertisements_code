@@ -183,6 +183,20 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 # crash the repo objective; record and keep the run's data
                 result['repo_objective'] = None
                 result['repo_objective_error'] = str(e)
+            # persist objective COMPONENTS (Tom 2026-08-18: the mlu
+            # composite hides whether a panel delta is utilization or
+            # latency tie-break) — one extra driver-side LP per cell
+            try:
+                from experiments.model_error.objectives import _steady_ret
+                _ret = _steady_ret(sas, adv)
+                if _ret:
+                    result['obj_components'] = {
+                        k: float(_ret[k]) for k in
+                        ('max_util', 'steady_avg_lat', 'bad_frac',
+                         'mlu_alpha', 'frac_beyond', 'hinge_excess_ms')
+                        if _ret.get(k) is not None}
+            except Exception as e:
+                print('component persist failed (non-fatal): {}'.format(e))
             result['n_iters'] = int(getattr(solver, 'iter', -1))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
