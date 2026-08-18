@@ -675,12 +675,14 @@ _GG_UNITS = {
              'latency beyond (per-user optimal + 10ms), + 1000 x any '
              'capacity-overflow fraction. NOT a fraction — the '
              '"frac beyond" ratio is a display component only.',
-    'mlu': 'ms-equivalent: routed avg lat + 50ms*bad_frac + '
-           'alpha*(MLU + bad_frac), where MLU is the best-achievable '
-           'peak link utilization (dimensionless, opp floor ~0.91) and '
-           'alpha = vol-weighted mean per-user optimal latency (~15-40ms) '
-           'converts it to ms. A panel delta of 2 at alpha~20 means '
-           'delta-MLU ~0.1 — the axis is NOT a utilization ratio.',
+    'mlu': 'ms-equivalent: A*minMLU + routed avg lat + 3A*bad_frac '
+           '(STANDALONE max_util objective). minMLU = best-achievable '
+           'peak link utilization (dimensionless, opp floor ~0.91); '
+           'A = 10 x the vol-weighted per-user optimal-latency floor '
+           '(~150-400 ms per unit MLU), so MLU carries ~90% of the '
+           'weight and latency is a tie-break. A panel delta of 1 is '
+           'delta-MLU ~ 1/A ~ 0.003-0.007 — the axis is NOT a '
+           'utilization ratio.',
     'prio': 'ms-equivalent: vol-weighted avg latency + 100 x '
             'bulk-congested volume fraction (ALPHA_BULK=100, bulk '
             'multiplier 2x).',

@@ -54,7 +54,7 @@ N_ERRS = {}
 UNITS = {
     'lat': 'ms (avg routed lat + 50*bad_frac + gamma*resilience)',
     'fracb': 'ms/unit vol (hinge excess past optimal+10ms)',
-    'mlu': 'ms-equiv (routed lat + 50*bad + alpha*(MLU+bad))',
+    'mlu': 'ms-equiv (A*minMLU + routed lat + 3A*bad; A=10x floor)',
     'prio': 'ms-equiv (avg lat + 100*bulk-congested frac)',
 }
 
