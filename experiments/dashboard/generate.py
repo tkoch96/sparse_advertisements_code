@@ -861,28 +861,66 @@ EXPERIMENTS.append({
 # ---- v5 SCOUT SWEEP (Tom 2026-08-18: HiGHS for the foreseeable
 # future; L3 / L5-adagrad / L5-rmsprop x every objective x N=10 first,
 # to decide what the absolute full panel should measure) ----
+_V5S_FIGS = 'cache/ablation/grid_v5scout_artifacts/figs'
+_V5S_SEEDS = list(range(201, 206))
+
+
+def _v5s_arms(fam):
+    return [
+        ('sched', 'no_memory', 'scheduled', 'L3 (guaranteed-flip)',
+         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L3_'.format(fam)),
+        ('sched', 'full', 'scheduled', 'L5 adagrad',
+         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L5ada_'.format(fam)),
+        ('sched', 'full', 'scheduled', 'L5 rmsprop b=0.9',
+         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L5rms_'.format(fam)),
+    ]
+
+
+def _v5s_section(fam, title):
+    return {'id': fam, 'title': title, 'kind': 'ladder_links',
+            'figs_dir': _V5S_FIGS, 'figs_url': 'figs_v5scout',
+            'seeds': _V5S_SEEDS, 'ns': [10],
+            'arms': _v5s_arms(fam),
+            'heading': '{} — v5 scout, 3 arms, N=10, seeds 201-205, '
+                       'maxhard, HiGHS, new stop-v2'.format(title),
+            'figures': ['figures/v5scout_{}.png'.format(fam)],
+            'intro': 'Own-objective, 0 = one-per-peering; convergence '
+                     'links land as cells harvest. <b>Units:</b> '
+                     '{}'.format(_GG_UNITS.get(fam, ''))}
+
+
 EXPERIMENTS.append({
     'id': 'grid_v5scout', 'title': 'v5 scout',
     'sections': [
-        {'id': 'scout', 'title': 'L3 / L5-ada / L5-rms x objectives',
-         'kind': 'static',
+        {'id': 'overview', 'title': 'overview', 'kind': 'static',
          'heading': 'v5 scout — 3 arms x 4 objectives x seeds 201-205, '
                     'N=10, maxhard, HiGHS, NEW stop-v2 (honest init, '
                     '0.1% REL, trend clause) + component persistence',
-         'figures': ['figures/v5scout_bars.png'],
+         'figures': ['figures/v5scout_bars.png',
+                     'figures/v5scout_status.png'],
          'intro': ('<p>Precursor to the v5 full panel: does rmsprop\'s '
                    'smoke win transfer to every objective family? 60 '
-                   'cells on the sweep VM. Per-cell convergence PDFs: '
-                   '<a href="figs_v5scout/">figs_v5scout/</a> '
-                   '(v5s_&lt;family&gt;_&lt;arm&gt;_*.pdf). First '
+                   'cells on the sweep VM (NOT the head — RAM/iteration '
+                   'telemetry in the status board comes from the cells\' '
+                   'own [mem] lines). Per-cell convergence PDFs: '
+                   '<a href="figs_v5scout/">figs_v5scout/</a>. First '
                    'campaign with objective components persisted in '
                    'every cell json.</p>'),
          'refresh': {'steps': [
              {'in': ['figures/v5scout_bars.png'], 'always': True,
-              'out': ['figures/v5scout_bars.png'],
+              'out': ['figures/v5scout_bars.png',
+                      'figures/v5scout_status.png',
+                      'figures/v5scout_lat.png',
+                      'figures/v5scout_fracb.png',
+                      'figures/v5scout_mlu.png',
+                      'figures/v5scout_prio.png'],
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_v5scout']},
          ]}},
+        _v5s_section('lat', 'latency + gamma*resilience'),
+        _v5s_section('fracb', 'frac_beyond_optimal'),
+        _v5s_section('mlu', 'max_util (standalone)'),
+        _v5s_section('prio', 'joint priority'),
     ]})
 
 # ---- ADAGRAD TRANSIENT SMOKE (Tom 2026-08-18) ----
