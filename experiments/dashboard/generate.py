@@ -858,6 +858,40 @@ EXPERIMENTS.append({
              ]}},
     ]})
 
+# ---- ADAGRAD TRANSIENT SMOKE (Tom 2026-08-18) ----
+EXPERIMENTS.append({
+    'id': 'adagrad_smoke', 'title': 'Adagrad smoke',
+    'sections': [
+        {'id': 'transient', 'title': 'transient + warmup-skip',
+         'kind': 'static',
+         'heading': 'AdaGrad transient smoke — L3/L5 stock vs L5 '
+                    'warmup-skip (K=5), mlu family, maxhard, seeds '
+                    '201-203, N=10',
+         'figures': ['figures/adagrad_smoke_grads.png',
+                     'figures/adagrad_smoke_obj.png'],
+         'intro': ('<p>Hypothesis chain under test: huge iter-1-5 '
+                   'gradients permanently deflate AdaGrad-Norm\'s '
+                   'learning rate (G never decays) → training freezes '
+                   '→ stop-v2 sees flatness → early exit → the '
+                   'bad-cells-align-with-early-stop pattern. '
+                   '<b>Left figure:</b> per-call |g| and alpha_t (log '
+                   'scale; yellow band = warmup window). If the spike '
+                   'is real, stock arms show alpha collapsing at call '
+                   '~5 and never recovering, while warmup-skip\'s '
+                   'alpha reflects post-transient gradient scale. '
+                   '<b>Right figure:</b> final objective vs opp and '
+                   'exit iteration per arm/seed. Arms run on the '
+                   'profiler VM in an isolated repo copy; figures '
+                   'auto-refresh as cells land.</p>'),
+         'refresh': {'steps': [
+             {'in': ['figures/adagrad_smoke_grads.png'], 'always': True,
+              'out': ['figures/adagrad_smoke_grads.png',
+                      'figures/adagrad_smoke_obj.png'],
+              'argv': ['{py}', '-m',
+                       'experiments.dashboard.plot_adagrad_smoke']},
+         ]}},
+    ]})
+
 # Retired unified-grid campaigns (Tom 2026-08-17: never orphan a view
 # again — every superseded campaign gets an archived section here).
 EXPERIMENTS.append({
