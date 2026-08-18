@@ -97,7 +97,8 @@ def main():
             os.path.join(out, pop + '.npz'),
             ip_id=np.asarray([ip_id[s] for s in ips], dtype=np.uint32),
             peer_id=np.asarray([peer_id[s] for s in peers], dtype=np.uint32),
-            lat=np.asarray(lats, dtype='U16'))
+            lat=np.asarray([float(x) for x in lats],
+                           dtype=np.float64))
         with open(os.path.join(out, pop + '.strings.json'), 'w') as f:
             json.dump({'ips': ip_pool, 'peers': peer_pool}, f)
         manifest[pop] = len(ips)

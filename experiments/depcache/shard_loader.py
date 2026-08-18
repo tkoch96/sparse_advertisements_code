@@ -39,8 +39,11 @@ def build_ug_perfs(shard_dir, considering_pops, ignore_popps,
             dtype=bool)
         keep = peer_ok[peer_id] & ip_ok[ip_id]
         # parse_lat memoized over unique latency strings (heavy repeats)
-        uniq, inv = np.unique(lat_s[keep], return_inverse=True)
-        parsed = [parse_lat(u) for u in uniq]
+        # shards store raw float seconds; parse_lat = *1000 + clamp
+        lat_f = lat_s[keep] * 1000.0
+        uniq, inv = np.unique(lat_f, return_inverse=True)
+        from helpers import MIN_LATENCY, MAX_LATENCY
+        parsed = [min(max(u, MIN_LATENCY), MAX_LATENCY) for u in uniq]
         kip = ip_id[keep]
         kpeer = peer_id[keep]
         for j in range(len(kip)):
@@ -78,12 +81,18 @@ def _pop_min_worker(job):
     kip = ip_id[keep].astype(np.uint64)
     kpeer = peer_id[keep].astype(np.uint64)
     # vectorized parse_lat: *1000 then clamp (helpers.parse_lat verbatim)
-    lat = lat_s[keep].astype(np.float64) * 1000.0
+    lat = lat_s[keep] * 1000.0
     np.clip(lat, min_lat, max_lat, out=lat)
     key = kip * np.uint64(len(peers)) + kpeer
-    uniq, inv = np.unique(key, return_inverse=True)
-    mins = np.full(len(uniq), np.inf)
-    np.minimum.at(mins, inv, lat)
+    # sort + reduceat groupby: np.minimum.at is a notoriously slow
+    # ufunc.at path (~100x) at tens of millions of rows (26-pop load
+    # hung for 30+ min before this swap; math identical)
+    order = np.argsort(key, kind='stable')
+    ks = key[order]
+    ls = lat[order]
+    starts = np.flatnonzero(np.concatenate(([True], ks[1:] != ks[:-1])))
+    uniq = ks[starts]
+    mins = np.minimum.reduceat(ls, starts)
     u_ip = (uniq // np.uint64(len(peers))).astype(np.int64)
     u_peer = (uniq % np.uint64(len(peers))).astype(np.int64)
     return pop, [(ips[u_ip[i]], peers[u_peer[i]], float(mins[i]))
