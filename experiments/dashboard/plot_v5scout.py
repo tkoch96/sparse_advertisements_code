@@ -36,14 +36,35 @@ ARMS = [('L3_nomem_sched', 'L3 (guaranteed-flip)', '#1baf7a'),
 SEEDS = (201, 202, 203, 204, 205)
 
 
+HEAD_HOST = '107.22.173.189'
+
+
 def pull():
     ssh = 'ssh -i {} -o BatchMode=yes -o ConnectTimeout=15'.format(KEY)
+    # head runs the fracb+prio share of the full grid once a10x10
+    # drains; pull its store too (absent-path rsync fails harmlessly)
+    try:
+        subprocess.run(
+            'rsync -az --timeout=45 -e "{}" ubuntu@{}:{} {}'.format(
+                ssh, HEAD_HOST,
+                '~/sparse_advertisements_code/cache/ablation/'
+                'grid_v5scout/', STORE + '/'),
+            shell=True, timeout=90, check=False)
+        subprocess.run(
+            'rsync -az --timeout=45 -e "{}" ubuntu@{}:{} {}'.format(
+                ssh, HEAD_HOST,
+                '~/sparse_advertisements_code/cache/ablation/'
+                'grid_v5scout_artifacts/figs/', FIGS_DIR + '/'),
+            shell=True, timeout=90, check=False)
+    except subprocess.TimeoutExpired:
+        pass
     for src, dst in (
             ('~/smoke_repo/cache/ablation/grid_v5scout/', STORE + '/'),
             ('~/smoke_repo/cache/ablation/grid_v5scout_artifacts/figs/',
              FIGS_DIR + '/'),
             ('~/v5scout_ws/S*/logs/', LOGS_DIR + '/'),
-            ('~/v5scout2_ws/S*/logs/', LOGS_DIR + '/')):
+            ('~/v5scout2_ws/S*/logs/', LOGS_DIR + '/'),
+            ('~/v5full_ws/S*/logs/', LOGS_DIR + '/')):
         os.makedirs(dst, exist_ok=True)
         try:
             subprocess.run(
