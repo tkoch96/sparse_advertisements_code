@@ -12,6 +12,7 @@ Run (survives like the refresh loop):
     nohup python -m experiments.dashboard.progress_tick --loop > /dev/null 2>&1 &
 """
 import argparse
+import glob
 import json
 import os
 import subprocess
@@ -138,13 +139,88 @@ def tick():
     _add_rate_and_eta(data)
     with open(os.path.join(REPO, 'dashboard_site', 'progress.json'), 'w') as f:
         json.dump(data, f)
-    return 'ok {done_it}/{est_total}'.format(**data)
+    _v5s = _tick_v5scout()
+    return 'ok {done_it}/{est_total}'.format(**data) + ' | v5s ' + _v5s
+
+
+V5S_HOST = os.environ.get('SCULPTOR_SMOKE_HOST', '32.197.41.137')
+V5S_MANIFEST = os.path.join(REPO, 'tools', 'grid_v5scout_manifest.json')
+V5S_REMOTE = (
+    'echo "$(ls ~/smoke_repo/cache/ablation/grid_v5scout/*/*/N*/'
+    'seed_*.json 2>/dev/null | wc -l) '
+    '$(free -g | sed -n 2p | awk \'{print $3, $2}\') '
+    '$(cat /proc/loadavg | cut -d\" \" -f1) $(nproc) '
+    '$(ls /proc/*/cmdline 2>/dev/null | xargs grep -l run_fork_ladder '
+    '2>/dev/null | wc -l)"')
+
+
+def _tick_v5scout():
+    """Sweep-VM sibling of the head tick (Tom 2026-08-18: the scout
+    tab needs its OWN live RAM/CPU/rate — it runs on the sweep VM).
+    Cell doneness/iters from the LOCAL pulled store; box stats via one
+    ssh; writes dashboard_site/progress_v5scout.json."""
+    try:
+        specs = json.load(open(V5S_MANIFEST))
+    except Exception as e:
+        return 'no manifest'
+    done_it = est = done_cells = total = 0
+    for sp in specs:
+        for n in [int(x) for x in str(sp['n_values']).split(',')]:
+            for seed in range(201, 206):
+                total += 1
+                hits = glob.glob(os.path.join(
+                    REPO, sp['out_root'], 'N{}'.format(n),
+                    'seed_{}_*.json'.format(seed)))
+                got = None
+                if hits:
+                    try:
+                        got = json.load(open(hits[0])).get('n_iters')
+                    except Exception:
+                        got = None
+                if got:
+                    done_it += int(got)
+                    est += int(got)
+                    done_cells += 1
+                else:
+                    est += 250   # new stop-v2 trend clause: longer runs
+    data = {'done_it': done_it, 'est_total': est,
+            'done_cells': done_cells, 'total_cells': total,
+            'ts': time.strftime('%H:%M:%SZ', time.gmtime())}
+    try:
+        out = subprocess.run(
+            ['ssh', '-o', 'ConnectTimeout=10', '-o', 'BatchMode=yes',
+             '-i', SSH_KEY, 'ubuntu@{}'.format(V5S_HOST),
+             'echo "$(free -g | sed -n 2p) ; $(cat /proc/loadavg) ; '
+             '$(nproc) ; $(pgrep -fc run_fork_ladder)"'],
+            capture_output=True, text=True, timeout=20)
+        parts = out.stdout.strip().split(';')
+        memf = parts[0].split()
+        used, tot_g = float(memf[2]), float(memf[1])
+        load1 = float(parts[1].split()[0])
+        cores = int(parts[2].strip())
+        cells = int(parts[3].strip())
+        data.update({
+            'ram_used_gb': round(used, 1), 'ram_total_gb': round(tot_g, 1),
+            'ram_pct': round(100 * used / max(tot_g, 1), 1),
+            'cpu_pct': round(min(100.0, 100 * load1 / cores), 1),
+            'load1': load1, 'cores': cores, 'cells_running': cells})
+    except Exception:
+        pass
+    _add_rate_and_eta(data, state_fn=os.path.expanduser(
+        '~/sculptor_dashboard/tick_rate_state_v5s.json'))
+    try:
+        with open(os.path.join(REPO, 'dashboard_site',
+                               'progress_v5scout.json'), 'w') as f:
+            json.dump(data, f)
+    except Exception as e:
+        return 'write failed'
+    return '{}/{}'.format(done_cells, total)
 
 
 RATE_STATE = os.path.expanduser('~/sculptor_dashboard/tick_rate_state.json')
 
 
-def _add_rate_and_eta(data):
+def _add_rate_and_eta(data, state_fn=None):
     """Iteration rate + full-grid ETA (Tom 2026-08-17). Progress metric =
     landed iterations + in-flight iterations (running cells' current
     iter, from their logs), sampled every tick into a rolling ~30-min
@@ -153,9 +229,10 @@ def _add_rate_and_eta(data):
     resets); negative or ~zero rates just blank the ETA for a few ticks
     until the window recovers."""
     now = time.time()
+    _state = state_fn or RATE_STATE
     prog = float(data['done_it'] + data.get('inflight_it', 0))
     try:
-        st = json.load(open(RATE_STATE))
+        st = json.load(open(_state))
         hist, rate_ema = st['hist'], st.get('rate_ema')
     except Exception:
         hist, rate_ema = [], None
@@ -189,7 +266,7 @@ def _add_rate_and_eta(data):
         rate_ema = rate if rate_ema is None else 0.85 * rate_ema + 0.15 * rate
     try:
         json.dump({'hist': hist, 'rate_ema': rate_ema},
-                  open(RATE_STATE, 'w'))
+                  open(_state, 'w'))
     except OSError:
         pass
     if not rate_ema or rate_ema <= 0:

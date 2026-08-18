@@ -893,6 +893,9 @@ EXPERIMENTS.append({
     'id': 'grid_v5scout', 'title': 'v5 scout',
     'sections': [
         {'id': 'overview', 'title': 'overview', 'kind': 'static',
+         'progress_manifest': 'tools/grid_v5scout_manifest.json',
+         'progress_src': 'progress_v5scout.json',
+         'progress_scope': 'v5s',
          'heading': 'v5 scout — 3 arms x 4 objectives x seeds 201-205, '
                     'N=10, maxhard, HiGHS, NEW stop-v2 (honest init, '
                     '0.1% REL, trend clause) + component persistence',
@@ -1135,7 +1138,9 @@ def render_static(exp):
     if exp.get('progress_manifest'):
         out.append(grid_progress_html(
             exp['progress_manifest'],
-            live=exp.get('progress_live', True)))
+            live=exp.get('progress_live', True),
+            src=exp.get('progress_src', 'progress.json'),
+            scope=exp.get('progress_scope', '')))
     for f in exp.get('figures', []):
         if os.path.exists(os.path.join(REPO, f)):
             out.append(_img(f))
@@ -1213,7 +1218,8 @@ def _parse_seed_spec(spec):
     return [int(s) for s in str(spec).split(',')]
 
 
-def grid_progress_html(manifest_path, live=True):
+def grid_progress_html(manifest_path, live=True, src='progress.json',
+                       scope=''):
     """Live iteration-progress bar for a running grid (Tom 2026-08-16):
     completed learning iterations / total queued. Done cells contribute
     their ACTUAL n_iters to both sides; pending cells contribute a
@@ -1264,7 +1270,7 @@ def grid_progress_html(manifest_path, live=True):
                 '</div></div></div>').format(
             done_it, est_total, pct, done_cells, total_cells,
             min(pct, 100))
-    return (
+    html = (
         '<div style="margin:10px 0 18px 0">'
         '<div style="font-size:13px;margin-bottom:4px" class="gridprog-text">'
         'grid progress: <b>{:,}</b> / ~{:,} learning iterations ({:.1f}%) '
@@ -1342,6 +1348,19 @@ def grid_progress_html(manifest_path, live=True):
         'upd(); setInterval(upd, 30000);}})();</script>'
         '</div>'.format(
             done_it, est_total, pct, done_cells, total_cells, min(pct, 100)))
+    # per-source scoping (Tom 2026-08-18: the v5 scout runs on the SWEEP
+    # VM; its widget must fetch its own progress json, not the head's).
+    # Suffix every class + the armed-flag + the fetch URL so scoped
+    # widgets are fully independent of the default ones.
+    if scope:
+        for c in ('gridprog-text', 'gridprog-bar', 'gridprog-sys',
+                  'gridprog-eta', 'gridprog-ts', 'vm-ram-text',
+                  'vm-ram-bar', 'vm-cpu-text', 'vm-cpu-bar'):
+            html = html.replace(c, c + '-' + scope)
+        html = html.replace('_gridprogArmed', '_gridprogArmed_' + scope)
+    if src != 'progress.json':
+        html = html.replace('progress.json', src)
+    return html
 
 
 def render_ladder_links(exp):
@@ -1352,7 +1371,9 @@ def render_ladder_links(exp):
     if exp.get('progress_manifest'):
         out.append(grid_progress_html(
             exp['progress_manifest'],
-            live=exp.get('progress_live', True)))
+            live=exp.get('progress_live', True),
+            src=exp.get('progress_src', 'progress.json'),
+            scope=exp.get('progress_scope', '')))
     out.append('<p class="note">{}</p>'.format(exp.get('intro', '')))
     for f in exp.get('figures', []):
         if os.path.exists(os.path.join(REPO, f)):
