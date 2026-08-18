@@ -533,6 +533,14 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 		all_rets = []
 		for worker_i in range(n_workers):
+			# a worker that swallowed an exception returns the STRING
+			# 'ERROR' -- fail with the actual message instead of the
+			# cryptic list+str concat TypeError (2026-08-18)
+			if isinstance(rets[worker_i], str):
+				raise RuntimeError(
+					'worker {} returned error for calc_compressed_lb: '
+					'{!r} (see worker log lines above)'.format(
+						worker_i, rets[worker_i][:200]))
 			if worker_i > 0:
 				all_rets = all_rets + rets[worker_i][1:]
 			else: ## get the base answer from worker 0

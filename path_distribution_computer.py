@@ -969,7 +969,18 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# objectives ignore the kwarg.
 				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj, adv=a)['objective']
 				self.timing['solve_generic_lp_not_persistent'] += time.time() - ts
-			objs[i] = total_obj
+			# Non-finite objective (e.g. maxhard prio: stage-2 bulk LP
+			# infeasible in-worker returns objective=None) previously
+			# poisoned the histogram (autodetected range [nan, nan]) ->
+			# worker 'ERROR' -> driver concat TypeError -> cell death
+			# (2026-08-18, 162/180 maxhard-v2 prio cells). Infeasible
+			# realizations get a pessimistic finite benefit instead.
+			objs[i] = total_obj if (total_obj is not None
+					and np.isfinite(total_obj)) else np.nan
+		if np.isnan(objs).any():
+			_finite = objs[~np.isnan(objs)]
+			_worst = (float(_finite.min()) - 1.0) if len(_finite) else -1e4
+			objs[np.isnan(objs)] = _worst
 		### return x and distribution of x
 		## numpy histogram returns all bin edges which is of length len(x) + 1
 		## so cut off the last edge
