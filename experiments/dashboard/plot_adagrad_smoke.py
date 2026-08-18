@@ -29,7 +29,7 @@ KEY = os.path.expanduser('~/.ssh/ray-autoscaler_us-east-1.pem')
 LOGS = os.path.join(REPO, 'cache', 'ablation', 'adagrad_smoke_logs')
 STORE = os.path.join(REPO, 'cache', 'ablation', 'adagrad_smoke')
 FIGS = os.path.join(REPO, 'figures')
-ARMS = [('smk_L3_stock', 'L3 stock adagrad', '#1baf7a'),
+ARMS = [('smk_L3_stock', 'L3 control (guaranteed-flip; no adagrad)', '#1baf7a'),
         ('smk_L5_stock', 'L5 stock adagrad', '#e87ba4'),
         ('smk_L5_wskip', 'L5 warmup-skip K=5', '#2a78d6'),
         ('smk_L5_wskip20', 'L5 warmup-skip K=20', '#eda100'),
