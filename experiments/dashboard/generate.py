@@ -739,6 +739,40 @@ EXPERIMENTS.append({
                   'trace. Feeds the SCALE-500 scaling report.'},
     ]})
 
+# ---- GUROBI TWIN of the maxhard v2 grid (Tom 2026-08-17 night) ----
+_GT_FIGS = 'cache/ablation/grid_maxhard_v2_gurobi_artifacts/figs'
+EXPERIMENTS.append({
+    'id': 'grid_mv2_gurobi', 'title': 'maxhard v2 — GUROBI twin',
+    'sections': [
+        {'id': 'overview', 'title': 'overview', 'kind': 'static',
+         'progress_manifest': 'tools/grid_maxhard_v2_gurobi_manifest.json',
+         'progress_live': False,
+         'intro': ('<p>GUROBI TWIN: identical grid to Unified grid '
+                   '(maxhard v2) — same deployments (seeds 201-205), '
+                   'same canonical inits, same world + OBJ_ROUND=4 — '
+                   'with the LP backend swapped to gurobi. Launches '
+                   'automatically when the HiGHS sweep drains. Paired '
+                   'per-seed comparison = the campaign-scale backend '
+                   'A/B.</p>'),
+         'figures': ['figures/grid_maxhard_v2_gurobi_4panel.png'],
+         'refresh': {
+             'pull': [('cache/ablation/grid_maxhard_v2_gurobi/',
+                       'cache/ablation/grid_maxhard_v2_gurobi/'),
+                      (_GT_FIGS + '/', _GT_FIGS + '/')],
+             'steps': [
+                 {'in': ['cache/ablation/grid_maxhard_v2_gurobi/*/*/N*/'
+                         'seed_*_*.json'],
+                  'out': ['figures/grid_maxhard_v2_gurobi_4panel.png'],
+                  'always': True,
+                  'env': {'HARDOBJ_ROOT':
+                          'cache/ablation/grid_maxhard_v2_gurobi',
+                          'HARDOBJ_OUT_PREFIX': 'grid_maxhard_v2_gurobi',
+                          'HARDOBJ_OBJS': _GG_OBJS},
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_hardobj_v4']},
+             ]}},
+    ]})
+
 # Retired unified-grid campaigns (Tom 2026-08-17: never orphan a view
 # again — every superseded campaign gets an archived section here).
 EXPERIMENTS.append({
