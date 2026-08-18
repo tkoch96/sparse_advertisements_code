@@ -45,15 +45,24 @@ else:
             ('prio', 'joint latency+bulk')]
 
 
+N_ERRS = {}
+
+
 def load(obj):
     """{(arm, N): [(seed, obj - same-seed opp)]}"""
     out = {}
+    N_ERRS[obj] = 0
     for fn in glob.glob(os.path.join(ROOT, obj, '*', 'N*', 'seed_*_*.json')):
         try:
             d = json.load(open(fn))
         except (OSError, ValueError):
             continue
-        if d.get('solve_error') or d.get('repo_objective') is None \
+        if d.get('solve_error'):
+            # dash is the source of truth (Tom 2026-08-18): count and
+            # DISPLAY crashed cells instead of silently skipping them
+            N_ERRS[obj] += 1
+            continue
+        if d.get('repo_objective') is None \
                 or d.get('opp_objective') is None:
             continue
         parts = fn.split(os.sep)
@@ -134,6 +143,11 @@ def panel(ax, obj, title):
     ax.set_xticklabels([str(n) for n in NS])
     ax.set_xlabel('measurement budget N')
     ax.set_ylabel('objective - same-seed opp')
+    _ne = N_ERRS.get(obj, 0)
+    if _ne:
+        ax.text(0.02, 0.98, '{} CRASHED CELLS'.format(_ne),
+                transform=ax.transAxes, va='top', fontsize=9,
+                color='#c02f4e', fontweight='bold')
     ax.set_title(title, fontsize=10)
     ax.grid(alpha=.25)
     return drawn
