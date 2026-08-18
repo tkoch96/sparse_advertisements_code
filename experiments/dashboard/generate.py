@@ -866,20 +866,27 @@ _V5S_SEEDS = list(range(201, 206))
 
 
 def _v5s_arms(fam):
+    # full 7-arm ladder (Tom 2026-08-18 evening: fill out the plot) —
+    # prefixes match the v5full manifest labels; L5 rmsprop is the
+    # status-quo arm, legacy adagrad kept for the comparison.
+    def a(rung_pdir, rung, pname, label, key):
+        return (rung_pdir, rung, pname, label, 'figs_v5scout', _V5S_FIGS,
+                'v5s_{}_{}_'.format(fam, key))
     return [
-        ('sched', 'no_memory', 'scheduled', 'L3 (guaranteed-flip)',
-         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L3_'.format(fam)),
-        ('sched', 'full', 'scheduled', 'L5 adagrad',
-         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L5ada_'.format(fam)),
-        ('sched', 'full', 'scheduled', 'L5 rmsprop b=0.9',
-         'figs_v5scout', _V5S_FIGS, 'v5s_{}_L5rms_'.format(fam)),
+        a('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed', 'L1'),
+        a('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched', 'L2'),
+        a('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched', 'L3'),
+        a('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched', 'L4'),
+        a('sched', 'full', 'scheduled', 'L5 adagrad (legacy)', 'L5ada'),
+        a('sched', 'full', 'scheduled', 'L5 rmsprop (default)', 'L5rms'),
+        a('sched', 'full', 'slotted', 'L6 slotted WHEN', 'L6'),
     ]
 
 
 def _v5s_section(fam, title):
     return {'id': fam, 'title': title, 'kind': 'ladder_links',
             'figs_dir': _V5S_FIGS, 'figs_url': 'figs_v5scout',
-            'seeds': _V5S_SEEDS, 'ns': [10],
+            'seeds': _V5S_SEEDS, 'fixed_all_n': True,
             'arms': _v5s_arms(fam),
             'heading': '{} — v5 scout, 3 arms, N=10, seeds 201-205, '
                        'maxhard, HiGHS, new stop-v2'.format(title),
