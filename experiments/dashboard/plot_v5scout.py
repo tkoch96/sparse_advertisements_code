@@ -42,7 +42,8 @@ def pull():
             ('~/smoke_repo/cache/ablation/grid_v5scout/', STORE + '/'),
             ('~/smoke_repo/cache/ablation/grid_v5scout_artifacts/figs/',
              FIGS_DIR + '/'),
-            ('~/v5scout_ws/S*/logs/', LOGS_DIR + '/')):
+            ('~/v5scout_ws/S*/logs/', LOGS_DIR + '/'),
+            ('~/v5scout2_ws/S*/logs/', LOGS_DIR + '/')):
         os.makedirs(dst, exist_ok=True)
         try:
             subprocess.run(
