@@ -327,7 +327,15 @@ def main():
         os.makedirs(figs, exist_ok=True)
         pat = os.path.join(ws, 'runs',
                            'ablation-{}-{}-dep{}-*'.format(sp['dpsize'], rung, s))
-        for d in glob.glob(pat):
+        hits = glob.glob(pat)
+        if not hits:
+            # actual-N runs create TIMESTAMPED dirs ('<ts>-actual-10-
+            # sparse') that escape the labeled glob (found 2026-08-18:
+            # a10x10 disk creep + zero harvested conv PDFs). Each slot
+            # runs ONE cell at a time and harvest_cell fires right after
+            # its own cell, so any dir in this slot's runs/ is ours.
+            hits = glob.glob(os.path.join(ws, 'runs', '*'))
+        for d in hits:
             suffix = os.path.basename(d).replace(
                 'ablation-{}-'.format(sp['dpsize']), '', 1)
             src = os.path.join(d, 'convergence_over_iterations.pdf')
