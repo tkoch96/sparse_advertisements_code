@@ -588,3 +588,97 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+# ---------------------------------------------------------------------------
+# Lexicographic priority/bulk capability pair (Tom-ratified 2026-08-18:
+# "we NEEEED to optimize high-priority traffic. bulk is completely
+# best-effort" — strict priority is a hard requirement, so the metric is
+# a PAIR, never a weighted sum. Stage A: capability latency for the
+# priority class (monotone; opp exact floor). Stage B: max bulk volume
+# deliverable WITHOUT costing priority anything — optimized over the
+# ENTIRE latency-optimal face, not one solver vertex (the vertex
+# conditioning was why the legacy two-stage scalar let arms beat opp).
+# ---------------------------------------------------------------------------
+
+def prio_lex_pair(sas, routed_through_ingress, face_tol=1e-6):
+    """Returns (L_star_benefit, bulk_frac) or (None, None).
+    L_star_benefit: the avg_latency capability scalar (benefit
+    convention, obj_round'd — IDENTICAL semantics to the lat family).
+    bulk_frac: fraction of total bulk volume deliverable within TRUE
+    link capacities by SOME latency-optimal priority routing."""
+    from solve_lp_assignment import (solve_generic_lp_with_failure_catch,
+                                     get_paths_by_ug, NO_PATH_INGRESS,
+                                     obj_round)
+    import gpshim as gp
+    from scipy.sparse import lil_matrix
+    from constants import NO_ROUTE_LATENCY
+    steady = solve_generic_lp_with_failure_catch(
+        sas, routed_through_ingress, 'avg_latency', no_persistent=True)
+    if not steady.get('solved'):
+        return None, None
+    L_star = steady['objective']
+    x_raw = np.asarray(steady['raw_solution'], dtype=float).flatten()
+
+    available_paths, _ = get_paths_by_ug(sas, routed_through_ingress)
+    n_paths = len(available_paths)
+    if len(x_raw) > n_paths:
+        x_raw = x_raw[1:]
+    lats = np.empty(n_paths)
+    for i, (ug, poppi) in enumerate(available_paths):
+        if poppi == NO_PATH_INGRESS(sas):
+            lats[i] = NO_ROUTE_LATENCY
+        else:
+            lats[i] = sas.whole_deployment_ug_perfs[ug][sas.popps[poppi]]
+    face_val = float(np.dot(lats, x_raw))
+
+    vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float).flatten()
+    bulk = np.asarray(sas.whole_deployment_ug_bulk_vols,
+                      dtype=float).flatten()
+    total_bulk = float(bulk.sum())
+    if total_bulk <= 0:
+        return L_star, None
+    n_ug = sas.whole_deployment_n_ug
+    n_popps = sas.n_popps + 1
+    from solve_lp_assignment import _apply_capacity_headroom
+    caps = np.concatenate([_apply_capacity_headroom(
+        sas.link_capacities_arr.flatten(), sas), np.array([0.0])])
+
+    # joint (x, b, short) LP over the latency-optimal face:
+    #   x: priority path vols (conservation ==, lat.x <= face value;
+    #      sentinel no-route path allowed, huge cap — steady semantics)
+    #   b: bulk path vols on REAL ingresses only (sentinel barred:
+    #      undelivered bulk must show up as shortfall, never fake-route)
+    #   short: per-ug undelivered bulk;  min sum(short)
+    nv = 2 * n_paths + n_ug
+    A_eq = lil_matrix((2 * n_ug, nv))
+    b_eq = np.concatenate([vols[:n_ug], bulk[:n_ug]])
+    A_ub = lil_matrix((n_popps + 1, nv))
+    caps_row = caps.copy()
+    caps_row[NO_PATH_INGRESS(sas)] = 1e9
+    b_ub = np.concatenate([caps_row, [face_val * (1 + 1e-9) + face_tol]])
+    for pli, (ug, poppi) in enumerate(available_paths):
+        ugi = sas.whole_deployment_ug_to_ind[ug]
+        A_eq[ugi, pli] = 1.0
+        A_ub[poppi, pli] = 1.0
+        A_ub[n_popps, pli] = lats[pli]
+        if poppi != NO_PATH_INGRESS(sas):
+            A_eq[n_ug + ugi, n_paths + pli] = 1.0
+            A_ub[poppi, n_paths + pli] = 1.0
+    for ugi in range(n_ug):
+        A_eq[n_ug + ugi, 2 * n_paths + ugi] = 1.0   # b + short == bulk
+    model = gp.Model()
+    model.Params.LogToConsole = 0
+    model.Params.TimeLimit = 15.0
+    z = model.addMVar(nv, lb=0)
+    model.addConstr(A_eq.tocsr() @ z == b_eq)
+    model.addConstr(A_ub.tocsr() @ z <= b_ub)
+    cvec = np.concatenate([np.zeros(2 * n_paths), np.ones(n_ug)])
+    model.setObjective(cvec @ z, gp.GRB.MINIMIZE)
+    model.optimize()
+    if model.status != gp.GRB.OPTIMAL:
+        print('[prio-lex] stage-B status {}; bulk_frac=None'.format(
+            model.status))
+        return L_star, None
+    short = float(model.objVal)
+    return L_star, obj_round(max(0.0, 1.0 - short / total_bulk))

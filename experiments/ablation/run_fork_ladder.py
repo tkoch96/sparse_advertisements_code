@@ -185,17 +185,47 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 result['repo_objective_error'] = str(e)
             # persist objective COMPONENTS (Tom 2026-08-18: the mlu
             # composite hides whether a panel delta is utilization or
-            # latency tie-break) — one extra driver-side LP per cell
+            # latency tie-break). v2 fix (v5 scout shipped empty {}):
+            # _steady_ret solves the PLAIN latency LP — components only
+            # exist in the REGISTERED family objective's ret, so call it
+            # directly on the adv's ground-truth ingress map.
             try:
-                from experiments.model_error.objectives import _steady_ret
-                _ret = _steady_ret(sas, adv)
-                if _ret:
-                    result['obj_components'] = {
-                        k: float(_ret[k]) for k in
-                        ('max_util', 'steady_avg_lat', 'bad_frac',
-                         'mlu_alpha', 'frac_beyond', 'hinge_excess_ms')
-                        if _ret.get(k) is not None}
+                _objname = os.environ.get('SCULPTOR_ABLATION_OBJECTIVE',
+                                          'avg_latency')
+                from solve_lp_assignment import generic_lp_functions
+                _fn = generic_lp_functions.get(_objname)
+                _rti = None
+                if _fn is not None:
+                    _rti, _ = sas.calculate_ground_truth_ingress(adv)
+                    _ret = _fn(sas, _rti, _objname)
+                    if _ret and _ret.get('solved', True):
+                        result['obj_components'] = {
+                            k: float(_ret[k]) for k in
+                            ('max_util', 'steady_avg_lat', 'bad_frac',
+                             'mlu_alpha', 'frac_beyond',
+                             'frac_beyond_capability', 'hinge_excess_ms')
+                            if _ret.get(k) is not None}
+                # lexicographic prio capability pair (Tom-ratified
+                # 2026-08-18: priority strictly first, bulk best-effort
+                # over the latency-optimal FACE; a PAIR, never summed)
+                if _objname == 'joint_latency_bulk_download':
+                    from experiments.model_error.objectives import \
+                        prio_lex_pair
+                    if _rti is None:
+                        _rti, _ = sas.calculate_ground_truth_ingress(adv)
+                    _orti, _ = sas.calculate_ground_truth_ingress(opp_adv)
+                    _L, _B = prio_lex_pair(sas, _rti)
+                    _Lo, _Bo = prio_lex_pair(sas, _orti)
+                    result['prio_lex'] = {
+                        'Lstar': _L, 'bulk_frac': _B,
+                        'opp_Lstar': _Lo, 'opp_bulk_frac': _Bo}
+                    if (_L is not None and _Lo is not None
+                            and _L > _Lo + 1e-6):
+                        print('[prio-lex] WARNING: arm Lstar beats opp '
+                              '({} > {}) — invariant violation'.format(
+                                  _L, _Lo))
             except Exception as e:
+                import traceback; traceback.print_exc()
                 print('component persist failed (non-fatal): {}'.format(e))
             result['n_iters'] = int(getattr(solver, 'iter', -1))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))

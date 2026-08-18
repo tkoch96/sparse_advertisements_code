@@ -140,6 +140,31 @@ def painter_ref(obj):
     return float(np.mean(diffs)) if diffs else None
 
 
+def load_prio_lex():
+    """{(arm, N): [(seed, Lstar_gap, bulk_frac, opp_bulk_frac)]} from
+    the lexicographic pair persisted by run_fork_ladder (Tom 2026-08-18:
+    priority strictly first, bulk best-effort — a PAIR, never summed).
+    Lstar_gap = opp_Lstar - Lstar in BENEFIT convention, i.e. positive
+    = arm worse, 0 = opp: same panel semantics as every other family,
+    but provably opp-floored (capability metric)."""
+    out = {}
+    for fn in glob.glob(os.path.join(ROOT, 'prio', '*', 'N*',
+                                     'seed_*_*.json')):
+        try:
+            d = json.load(open(fn))
+        except (OSError, ValueError):
+            continue
+        pl = d.get('prio_lex') or {}
+        if pl.get('Lstar') is None or pl.get('opp_Lstar') is None:
+            continue
+        parts = fn.split(os.sep)
+        arm, ndir = parts[-3], parts[-2]
+        out.setdefault((arm, int(ndir[1:])), []).append(
+            (d.get('seed'), float(pl['opp_Lstar']) - float(pl['Lstar']),
+             pl.get('bulk_frac'), pl.get('opp_bulk_frac')))
+    return out
+
+
 def panel(ax, obj, title):
     data = load(obj)
     drawn = False
@@ -191,6 +216,58 @@ def main():
     for ax, (obj, title) in zip(axes, OBJS):
         d = panel(ax, obj, title)
         any_drawn = any_drawn or d
+        if obj == 'prio':
+            lex = load_prio_lex()
+            if lex:
+                # lexicographic 2-panel (Tom 2026-08-18): left = the
+                # priority capability gap (opp exact floor); right =
+                # bulk deliverable at ZERO priority cost. Never summed.
+                f2, (a2, a3) = plt.subplots(1, 2, figsize=(13.5, 4.6))
+                for arm, label, color in ARMS:
+                    xs, ys, bs = [], [], []
+                    for n in NS:
+                        rows = lex.get((arm, n), [])
+                        if rows:
+                            xs.append(n)
+                            ys.append(float(np.mean(
+                                [r[1] for r in rows])))
+                            bb = [r[2] for r in rows
+                                  if r[2] is not None]
+                            bs.append(float(np.mean(bb))
+                                      if bb else np.nan)
+                    if xs:
+                        a2.plot(xs, ys, 'o-', color=color, label=label,
+                                lw=1.5, ms=4)
+                        a3.plot(xs, bs, 'o-', color=color, lw=1.5, ms=4)
+                ob = [r[3] for rows in lex.values() for r in rows
+                      if r[3] is not None]
+                if ob:
+                    a3.axhline(float(np.mean(ob)), color='k', lw=1,
+                               linestyle='--')
+                    a3.text(0.99, float(np.mean(ob)), ' opp',
+                            va='bottom', ha='right', fontsize=8,
+                            transform=a3.get_yaxis_transform())
+                a2.axhline(0, color='k', lw=1, linestyle='--')
+                for ax_ in (a2, a3):
+                    ax_.set_xscale('log')
+                    ax_.set_xticks(NS)
+                    ax_.set_xticklabels([str(n) for n in NS])
+                    ax_.set_xlabel('measurement budget N')
+                    ax_.grid(alpha=.25)
+                a2.set_ylabel('priority L* - opp (ms; capability, '
+                              'opp exact floor)', fontsize=8)
+                a2.set_title(title + ' — PRIORITY (lexicographic '
+                             'primary)', fontsize=10)
+                a2.legend(fontsize=8, frameon=False)
+                a3.set_ylabel('bulk delivered fraction at zero '
+                              'priority cost', fontsize=8)
+                a3.set_title('BULK (lexicographic secondary; higher '
+                             'better)', fontsize=10)
+                f2.tight_layout()
+                f2.savefig(os.path.join(
+                    FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
+                plt.close(f2)
+                continue
         if obj == 'mlu':
             # mlu decomposition (Tom 2026-08-18: "what does 5 mean?"):
             # the composite hides whether a delta is utilization or the

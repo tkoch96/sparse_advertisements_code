@@ -1538,8 +1538,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# composite vs opp), horizon-free, no per-size retuning. 'fixed' =
 		# vanilla alpha*grad; 'dog' = DoG (parameter-free, Ivgi et al. 2023);
 		# 'auto' = the legacy amplify/damp policy (kept for reproduction).
+		# DEFAULT rmsprop (Tom-ratified 2026-08-18 after the v5 scout:
+		# beats adagrad 13/3/4 across all 4 families and beats the L3
+		# control in 3/4 — first config where L5 machinery pays).
+		# adagrad remains one env var away for reproduction.
 		_mode = os.environ.get('SCULPTOR_GRAD_SCALE',
-			os.environ.get('SCULPTOR_ABLATION_GRAD_SCALE', 'adagrad'))
+			os.environ.get('SCULPTOR_ABLATION_GRAD_SCALE', 'rmsprop'))
 		if _mode == 'fixed':
 			return net_grad
 		if _mode == 'adagrad':
