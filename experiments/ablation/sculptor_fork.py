@@ -1374,9 +1374,20 @@ RUNGS = {
     'expl_random': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'random', 'SCULPTOR_ABLATION_MC': '1'},
     'expl_none':   {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
     'no_direction': {'SCULPTOR_ABLATION_MEMORY': '1', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
+    # L4 v2 (Tom 2026-08-18 late: "L4 [memory+no-direction] makes no
+    # sense. The thing that would make sense would be no mem, but dir
+    # ... flip all indices over a certain threshold instead of
+    # continuous memory"). MEMORY 0 + DIRECTION 1: full multi-coordinate
+    # continuous step, then impose_advertisement_constraint's memory-off
+    # threshold_a binarizes — every index pushed past threshold flips.
+    # GRAD_SCALE pinned to the legacy 'auto' amplifier: from binary
+    # values a crossing needs |alpha*g| >= 0.5, so adaptive-small
+    # policies (rmsprop/adagrad) would flip nothing; 'auto' amplifies
+    # until crossings occur. rmsprop stays L5+ ONLY (Tom's rule).
+    'no_memory_dir': {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1', 'SCULPTOR_ABLATION_GRAD_SCALE': 'auto'},
     'no_memory':   {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
     # bottom link of the ladder (connects painter <-> no_memory): monte-carlo
     # OFF on top of the no_memory semantics.
     'no_mc':       {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '0'},
 }
-RUNG_ORDER = ['full', 'expl_random', 'expl_none', 'no_direction', 'no_memory', 'no_mc']
+RUNG_ORDER = ['full', 'expl_random', 'expl_none', 'no_memory_dir', 'no_memory', 'no_mc']  # no_direction RETIRED (Tom 2026-08-18)
