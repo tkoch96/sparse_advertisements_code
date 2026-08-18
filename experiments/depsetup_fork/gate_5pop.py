@@ -76,10 +76,14 @@ def run_arm(ds, pops, arm, do_filter=True):
     np.random.seed(SEED)
     t0 = time.time()
     if arm == 'b2':
-        from experiments.depsetup_fork import fork_load
-        anycast, ug_perfs = fork_load.load_actual_perfs_arrays(
-            pops, do_filter=do_filter)
+        # exercise the MERGED mainline seam end-to-end (2026-08-18)
+        os.environ['SCULPTOR_DEPSETUP_ARRAYS'] = '1'
+        anycast, ug_perfs = ds.load_actual_perfs(
+            considering_pops=pops, do_filter=do_filter)
     else:
+        # baseline arms must pin the legacy loop now that the seam
+        # defaults ON
+        os.environ['SCULPTOR_DEPSETUP_ARRAYS'] = '0'
         if arm == 'b1':
             fast_perfs.install()
         else:
@@ -87,6 +91,7 @@ def run_arm(ds, pops, arm, do_filter=True):
         anycast, ug_perfs = ds.load_actual_perfs(
             considering_pops=pops, do_filter=do_filter)
         fast_perfs.uninstall()
+        os.environ.pop('SCULPTOR_DEPSETUP_ARRAYS', None)
     dt = time.time() - t0
     return anycast, ug_perfs, dt
 

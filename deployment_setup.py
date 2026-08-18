@@ -826,6 +826,26 @@ def characterize_measurements_from_deployment(considering_pops=list(POP_TO_LOC['
 	load_actual_perfs(considering_pops, do_plot=False, **kwargs)
 
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
+	# ARRAY-NATIVE FAST PATH (experiments/depsetup_fork, merged 2026-08-18
+	# Tom-ratified): keeps parse/min/filters/SOL/quota as numpy arrays and
+	# materializes dicts only for the final survivor set. Byte-exact gated
+	# against this function at 5/10/16/20/26 pops (values bitwise, key
+	# ORDER, RNG stream; ~5x at production sizes — see the fork README for
+	# the CPython set-presize war story). Requires the depcache lat shards;
+	# SCULPTOR_DEPSETUP_ARRAYS=0 restores the loop below unconditionally.
+	if os.environ.get('SCULPTOR_DEPSETUP_ARRAYS', '1') != '0':
+		_shdir = os.environ.get('SCULPTOR_LAT_SHARDS')
+		if _shdir:
+			try:
+				from experiments.depcache import shard_loader as _shl
+				if _shl.available(_shdir):
+					from experiments.depsetup_fork import fork_load as _fl
+					return _fl.load_actual_perfs_arrays(
+						considering_pops, **kwargs)
+			except Exception as _e:
+				import traceback; traceback.print_exc()
+				print('[depsetup] array fast-path failed ({}); using '
+					'legacy loop'.format(_e))
 	print("Loading performances, only considering pops: {}".format(considering_pops))
 	lat_fn = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
 	pop_to_loc = {pop:POP_TO_LOC['vultr'][pop] for pop in considering_pops}

@@ -82,15 +82,17 @@ False`) — there is nothing to remove; it only runs for the RIPE
 prototype sizes. The wins here came from killing the raw-measurement
 dict-of-lists and the python tail loops.
 
-### Next
+### MERGED INTO MAINLINE 2026-08-18 (Tom-ratified)
 
-- Bench at 26 pops on the head (orig ~650 s known) for the scaling
-  point that matters to EODS/fleet.
-- If adopted: wire behind an env seam (e.g. SCULPTOR_DEPSETUP_FORK=1)
-  in deployment_setup so cache-MISS builds use it; cache-HIT paths
-  are unaffected. Pre-baked AMI caches remain the zero-risk
-  alternative for repeated pop-sets; this fork is the win for FRESH
-  pop-set builds (exactly the EODS fleet pattern).
+deployment_setup.load_actual_perfs routes to
+fork_load.load_actual_perfs_arrays whenever SCULPTOR_LAT_SHARDS points
+at available shards (exception -> legacy fallback).
+SCULPTOR_DEPSETUP_ARRAYS=0 pins the legacy loop (the gate's baseline
+arm does this). Bench: byte-exact 4.99x/5.09x/4.83x at 16/20/26 pops;
+post-merge gate re-verified through the seam (3.03x at 5 pops).
+Cache-HIT paths (pruned_performances / actual_deployment_cache) are
+untouched; cache-MISS builds get the win — exactly the fresh-pop-set
+EODS/fleet pattern. AMI cache pre-baking remains complementary.
 
 ## Hazards
 
