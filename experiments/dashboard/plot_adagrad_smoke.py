@@ -31,7 +31,9 @@ STORE = os.path.join(REPO, 'cache', 'ablation', 'adagrad_smoke')
 FIGS = os.path.join(REPO, 'figures')
 ARMS = [('smk_L3_stock', 'L3 stock adagrad', '#1baf7a'),
         ('smk_L5_stock', 'L5 stock adagrad', '#e87ba4'),
-        ('smk_L5_wskip', 'L5 warmup-skip K=5', '#2a78d6')]
+        ('smk_L5_wskip', 'L5 warmup-skip K=5', '#2a78d6'),
+        ('smk_L5_wskip20', 'L5 warmup-skip K=20', '#eda100'),
+        ('smk_L5_rmsprop', 'L5 rmsprop b=0.99', '#4a3aa7')]
 _LINE = re.compile(
     r'\[adagrad\] call=(\d+) \|g\|=([0-9.e+-]+) G=([0-9.e+-]+) '
     r'alpha_t=([0-9.e+-]+)')
@@ -41,6 +43,7 @@ def pull():
     ssh = 'ssh -i {} -o BatchMode=yes -o ConnectTimeout=15'.format(KEY)
     for src, dst in (
             ('~/adagrad_smoke_ws/S*/logs/', LOGS + '/'),
+            ('~/adagrad_smoke2_ws/S*/logs/', LOGS + '/'),
             ('~/smoke_repo/cache/ablation/adagrad_smoke/', STORE + '/')):
         os.makedirs(dst, exist_ok=True)
         try:
