@@ -1,7 +1,7 @@
 [
  {
   "label": "a10x10_L1",
-  "out_root": "cache/eods/v1/a10x10/L1_nomc_fixed",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L1_nomc_fixed",
   "probe_mode": "fixed",
   "rungs": "no_mc",
   "seeds": "1-10",
@@ -9,7 +9,7 @@
   "gamma": "0.1",
   "max_iter": 100,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_FIXED_BUDGET": "1",
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
@@ -17,11 +17,11 @@
    "SCULPTOR_ABLATION_ALPHA0": "1",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  },
  {
   "label": "a10x10_L2",
-  "out_root": "cache/eods/v1/a10x10/L2_nomc_sched",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L2_nomc_sched",
   "probe_mode": "scheduled",
   "rungs": "no_mc",
   "seeds": "1-10",
@@ -29,18 +29,18 @@
   "gamma": "0.1",
   "max_iter": 100,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
    "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
    "SCULPTOR_ABLATION_ALPHA0": "1",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  },
  {
   "label": "a10x10_L3",
-  "out_root": "cache/eods/v1/a10x10/L3_nomem_sched",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L3_nomem_sched",
   "probe_mode": "scheduled",
   "rungs": "no_memory",
   "seeds": "1-10",
@@ -48,18 +48,18 @@
   "gamma": "0.1",
   "max_iter": 100,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
    "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
    "SCULPTOR_ABLATION_ALPHA0": "1",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  },
  {
   "label": "a10x10_L4",
-  "out_root": "cache/eods/v1/a10x10/L4_nodir_sched",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L4_nodir_sched",
   "probe_mode": "scheduled",
   "rungs": "no_direction",
   "seeds": "1-10",
@@ -67,18 +67,18 @@
   "gamma": "0.1",
   "max_iter": 100,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
    "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
    "SCULPTOR_ABLATION_ALPHA0": "1",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  },
  {
   "label": "a10x10_L5",
-  "out_root": "cache/eods/v1/a10x10/L5_full_sched",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L5_full_sched",
   "probe_mode": "scheduled",
   "rungs": "full",
   "seeds": "1-10",
@@ -86,7 +86,7 @@
   "gamma": "0.1",
   "max_iter": 500,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
    "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
@@ -96,11 +96,11 @@
    "SCULPTOR_ABLATION_PROBE_TCONV": "100",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  },
  {
   "label": "a10x10_L6",
-  "out_root": "cache/eods/v1/a10x10/L6_full_slotted",
+  "out_root": "cache/ablation/policy_ladder_a10x10/L6_full_slotted",
   "probe_mode": "slotted",
   "rungs": "full",
   "seeds": "1-10",
@@ -108,7 +108,7 @@
   "gamma": "0.1",
   "max_iter": 500,
   "dpsize": "actual-10",
-  "init_src": "cache/ablation/nsweep_v2_inits_georand",
+  "init_src": "cache/ablation/a10x10_inits",
   "env": {
    "SCULPTOR_ABLATION_PROBE_TARGET": "current",
    "SCULPTOR_ABLATION_GRAD_SCALE": "adagrad",
@@ -118,6 +118,6 @@
    "SCULPTOR_ABLATION_PROBE_TCONV": "100",
    "SCULPTOR_OBJ_ROUND": "4"
   },
-  "artifacts_figs": "cache/eods/v1_artifacts/figs"
+  "artifacts_figs": "cache/ablation/policy_ladder_a10x10_artifacts/figs"
  }
 ]
