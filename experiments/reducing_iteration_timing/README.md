@@ -42,4 +42,15 @@ d) PDC DISPATCH: job receipt -> lower-level solver call (route
 
 ## Findings log
 
-(appended as measured)
+- 2026-08-18 F1 (free, from live a10x10 L6 logs, actual-10, 16
+  workers, 40 iters): **grads 64.1 s/iter (82%)**, **stop 13.9 s/iter
+  (18%)**, measure 0.10, info ~0, worker-notify 0.003, resilience
+  0.026, GT-latency-benefit 0.27. => (b) comms is a non-issue at this
+  scale; the whole game is INSIDE the gradient computation, with the
+  per-iteration stop/believed-objective evaluation a clear second
+  target. Worker logs carry NO internal gradient timing — first build
+  is env-gated instrumentation (SCULPTOR_RIT_PROF=1) of the pdc
+  gradient call chain: job deserialize / route-sim / LP setup / LP
+  solve / result serialize per call.
+- Head repo copy at ~/rit_repo (cache+data symlinked) for workshop
+  code; live campaigns untouched.
