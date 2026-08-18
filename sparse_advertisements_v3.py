@@ -1519,7 +1519,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			return net_grad
 		if _mode == 'adagrad':
 			g2 = float(np.sum(np.asarray(net_grad) ** 2))
-			self._adagrad_G = getattr(self, '_adagrad_G', 0.0) + g2
+			# SCULPTOR_ADAGRAD_WARMUP_SKIP=K (Tom 2026-08-18): huge
+			# iter-1..5 transient gradients permanently deflate alpha
+			# (AdaGrad-Norm never decays G). With warmup-skip, the first
+			# K calls' g^2 still damp their OWN step (G_eff includes the
+			# current spike) but are NOT persisted into G, so the
+			# post-transient learning rate reflects post-transient
+			# gradient scale. Default 0 == stock AdaGrad-Norm.
+			_wk = int(os.environ.get('SCULPTOR_ADAGRAD_WARMUP_SKIP', '0') or 0)
+			self._adagrad_calls = getattr(self, '_adagrad_calls', 0) + 1
+			if self._adagrad_calls <= _wk:
+				G_eff = getattr(self, '_adagrad_G', 0.0) + g2
+			else:
+				self._adagrad_G = getattr(self, '_adagrad_G', 0.0) + g2
+				G_eff = self._adagrad_G
 			if not hasattr(self, '_adagrad_alpha0'):
 				_a0 = os.environ.get('SCULPTOR_ALPHA0',
 					os.environ.get('SCULPTOR_ABLATION_ALPHA0', '1'))
@@ -1529,7 +1542,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					print('[adagrad] alpha0=auto -> {:.4g}'.format(self._adagrad_alpha0), flush=True)
 				else:
 					self._adagrad_alpha0 = float(_a0)
-			alpha_t = self._adagrad_alpha0 / np.sqrt(1e-12 + self._adagrad_G)
+			alpha_t = self._adagrad_alpha0 / np.sqrt(1e-12 + G_eff)
+			if os.environ.get('SCULPTOR_ADAGRAD_LOG', '0') == '1':
+				print('[adagrad] call={} |g|={:.5g} G={:.5g} alpha_t={:.5g}{}'.format(
+					self._adagrad_calls, g2 ** 0.5, G_eff, alpha_t,
+					' (warmup-skip)' if self._adagrad_calls <= _wk else ''), flush=True)
 			return net_grad * (alpha_t / self.alpha)
 		if _mode == 'dog':
 			aa = np.asarray(a, dtype=float)
