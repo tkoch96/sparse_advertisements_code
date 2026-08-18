@@ -115,7 +115,7 @@ def main():
 
     # final objective bars
     fig, (a1, a2) = plt.subplots(1, 2, figsize=(11, 4.4))
-    width = .25
+    width = .16
     seeds = (201, 202, 203)
     got = False
     for ai, (arm, label, color) in enumerate(ARMS):
@@ -136,7 +136,7 @@ def main():
             else:
                 dvals.append(np.nan)
                 ivals.append(0)
-        x = np.arange(len(seeds)) + (ai - 1) * width
+        x = np.arange(len(seeds)) + (ai - 2) * width
         a1.bar(x, dvals, width, color=color, label=label)
         a2.bar(x, ivals, width, color=color, label=label)
     a1.set_xticks(np.arange(len(seeds)))
