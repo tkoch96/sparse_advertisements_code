@@ -55,3 +55,67 @@ def build_ug_perfs(shard_dir, considering_pops, ignore_popps,
                 except KeyError:
                     ug_perfs[ug] = {key: [lat]}
     return ug_perfs
+
+
+def _pop_min_worker(job):
+    """Per-pop vectorized reduction: (pop, shard_dir, ignore_popps_pop,
+    violate_keys) -> (pop, [(ip, peer, min_lat)])."""
+    import json as _json
+    pop, shard_dir, ignored_peers, violate_ips, min_lat, max_lat = job
+    npz_fn = os.path.join(shard_dir, pop + '.npz')
+    if not os.path.exists(npz_fn):
+        return pop, []
+    z = np.load(npz_fn)
+    with open(os.path.join(shard_dir, pop + '.strings.json')) as f:
+        pools = _json.load(f)
+    ips, peers = pools['ips'], pools['peers']
+    ip_id, peer_id, lat_s = z['ip_id'], z['peer_id'], z['lat']
+    peer_ok = np.asarray([p not in ignored_peers for p in peers], bool)
+    ip_ok = np.asarray([ip not in violate_ips for ip in ips], bool)
+    keep = peer_ok[peer_id] & ip_ok[ip_id]
+    if not keep.any():
+        return pop, []
+    kip = ip_id[keep].astype(np.uint64)
+    kpeer = peer_id[keep].astype(np.uint64)
+    # vectorized parse_lat: *1000 then clamp (helpers.parse_lat verbatim)
+    lat = lat_s[keep].astype(np.float64) * 1000.0
+    np.clip(lat, min_lat, max_lat, out=lat)
+    key = kip * np.uint64(len(peers)) + kpeer
+    uniq, inv = np.unique(key, return_inverse=True)
+    mins = np.full(len(uniq), np.inf)
+    np.minimum.at(mins, inv, lat)
+    u_ip = (uniq // np.uint64(len(peers))).astype(np.int64)
+    u_peer = (uniq % np.uint64(len(peers))).astype(np.int64)
+    return pop, [(ips[u_ip[i]], peers[u_peer[i]], float(mins[i]))
+                 for i in range(len(uniq))]
+
+
+def build_ug_perfs_min(shard_dir, considering_pops, ignore_popps,
+                       violate_sol, procs=1, ug_perfs=None):
+    """Vectorized phase-2 loader: returns ug_perfs with per-(ug, popp)
+    MINIMUM latencies directly (the downstream reduction block is
+    idempotent: np.min(scalar) == scalar). Equivalent to
+    build_ug_perfs + the line-912 reduction; gated in
+    experiments/depcache/test_phase2_gate.py."""
+    from helpers import MIN_LATENCY, MAX_LATENCY
+    ug_perfs = {} if ug_perfs is None else ug_perfs
+    violate_ips = {ug[1] for ug, v in violate_sol.items() if v}
+    jobs = []
+    for pop in sorted(set(considering_pops)):
+        ignored = {peer for (p, peer) in ignore_popps if p == pop}
+        jobs.append((pop, shard_dir, ignored, violate_ips,
+                     MIN_LATENCY, MAX_LATENCY))
+    if procs > 1:
+        import multiprocessing as mp
+        with mp.Pool(procs) as pool:
+            results = pool.map(_pop_min_worker, jobs)
+    else:
+        results = [_pop_min_worker(j) for j in jobs]
+    for pop, triples in results:
+        for ip, peer, m in triples:
+            ug = ('tmp', ip)
+            try:
+                ug_perfs[ug][pop, peer] = m
+            except KeyError:
+                ug_perfs[ug] = {(pop, peer): m}
+    return ug_perfs

@@ -30,7 +30,9 @@ SSH = ['ssh', '-i', KEY.replace('~', __import__('os').path.expanduser('~')),
 
 BOOTSTRAP = r'''set -e
 cd ~/sparse_advertisements_code
-git fetch -q origin && git checkout -q {sha}
+# the AMI may be baked mid-git-operation on the head: clear stale locks
+rm -f .git/index.lock .git/shallow.lock
+git fetch -q origin && git checkout -qf {sha}
 sudo ln -sf ~/venv/bin/ray /usr/local/bin/ray || true
 mkdir -p /tmp/ray_tmp
 echo BOOTSTRAP_OK $(git rev-parse --short HEAD)
