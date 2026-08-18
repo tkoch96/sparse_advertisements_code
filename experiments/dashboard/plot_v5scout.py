@@ -64,7 +64,8 @@ def pull():
              FIGS_DIR + '/'),
             ('~/v5scout_ws/S*/logs/', LOGS_DIR + '/'),
             ('~/v5scout2_ws/S*/logs/', LOGS_DIR + '/'),
-            ('~/v5full_ws/S*/logs/', LOGS_DIR + '/')):
+            ('~/v5full_ws/S*/logs/', LOGS_DIR + '/'),
+            ('~/v5full2_ws/S*/logs/', LOGS_DIR + '/')):
         os.makedirs(dst, exist_ok=True)
         try:
             subprocess.run(
