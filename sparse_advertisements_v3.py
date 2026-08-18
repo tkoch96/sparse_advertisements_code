@@ -396,7 +396,19 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				# verification, not merely after its last best)
 				_lp = getattr(_self, '_abl_last_probe_iter', None)
 				_post_ok = (_lp is None) or ((it - _lp) >= _pat)
-				fire = grounded and _post_ok and rd < _rel * init and (it - bi) >= _pat
+				# TREND clause (Tom-ratified 2026-08-18): never exit while the
+				# believed objective is NET-DECLINING over the last PATIENCE
+				# iters. The run keeps its FINAL advertisement (not best-seen),
+				# so local decline matters even above the historical low —
+				# best_iter patience alone cannot see it. eps default 0: any
+				# net window decline blocks exit.
+				_teps = float(os.environ.get('SCULPTOR_STOP_V2_TREND_EPS', '0'))
+				_tr = _self.metrics.get('abl_belief_objective') or []
+				if len(_tr) > _pat:
+					_trend_flat = float(_tr[-1][1]) >= float(_tr[-1 - _pat][1]) - _teps
+				else:
+					_trend_flat = len(_tr) > 0  # short trace: no evidence of decline
+				fire = grounded and _post_ok and _trend_flat and rd < _rel * init and (it - bi) >= _pat
 				if fire:
 					_self.abl_exit_reason = 'stop_v2'
 					print('[stop-v2] iter={} rd={:.4g} rd_init={:.4g} best_iter={} -> EARLY EXIT'.format(it, rd, init, bi), flush=True)
@@ -1482,7 +1494,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self._stopv2_best = float(_b)
 				self._stopv2_best_iter = int(getattr(self, 'iter', 0))
 			else:
-				_imp = float(os.environ.get('SCULPTOR_STOP_V2_IMP', '0.02'))
+				# IMP default 0.02 -> 0 (Tom 2026-08-18: "as long as believed
+				# objective is going down it's ok" — the 2%-of-span debounce
+				# froze best_iter during slow steady descent, e.g. the rmsprop
+				# smoke tail at 0.002/iter vs a 0.14 threshold; the rd
+				# flatness clause already filters churn noise)
+				_imp = float(os.environ.get('SCULPTOR_STOP_V2_IMP', '0'))
 				_span = max(self._stopv2_b0 - self._stopv2_best, 1e-9)
 				if float(_b) < self._stopv2_best - _imp * _span:
 					self._stopv2_best = float(_b)
