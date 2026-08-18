@@ -923,6 +923,10 @@ EXPERIMENTS.append({
                       'HARDOBJ_OBJS': _GG_OBJS,
                       'HARDOBJ_PAINTER_ROOT':
                           'cache/ablation/grid_maxhard_v2',
+                      'HARDOBJ_TITLE':
+                          'v5 scout — L3 vs L5-adagrad vs L5-rmsprop, '
+                          'seeds 201-205, maxhard, HiGHS, new stop-v2 '
+                          '(0 = one-per-peering; lower = better)',
                       'HARDOBJ_ARMS': 'L3_nomem_sched:L3 no_mem+sched:#1baf7a,L5_full_adagrad:L5 adagrad:#e87ba4,L5_full_rmsprop:L5 rmsprop b=0.9:#4a3aa7'},
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_hardobj_v4']},

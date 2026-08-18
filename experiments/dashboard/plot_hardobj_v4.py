@@ -235,8 +235,10 @@ def main():
                        dpi=150)
         plt.close(f2)
     axes[0].legend(fontsize=8, frameon=False)
-    fig.suptitle('Hard objectives v4 — L1-L6 ladder, 10 deployments '
-                 '(0 = one-per-peering; lower = better)', fontsize=11)
+    fig.suptitle(os.environ.get(
+        'HARDOBJ_TITLE',
+        'Hard objectives v4 — L1-L6 ladder, 10 deployments '
+        '(0 = one-per-peering; lower = better)'), fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     if any_drawn:
         fig.savefig(os.path.join(
