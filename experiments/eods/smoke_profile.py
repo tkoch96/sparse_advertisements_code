@@ -102,9 +102,14 @@ def run_pick(sp, seed, args):
         sp['label'], seed, args.workers), flush=True)
     t0 = time.time()
     with open(log_fn, 'w') as lf:
-        rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf,
-                             stderr=subprocess.STDOUT,
-                             timeout=args.cell_timeout)
+        try:
+            rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf,
+                                 stderr=subprocess.STDOUT,
+                                 timeout=args.cell_timeout)
+        except subprocess.TimeoutExpired:
+            # a timeout IS a datum (startup + RAM + partial iters land
+            # in the log); it killed the whole ladder on 2026-08-18
+            rc = -99
     wall = round(time.time() - t0, 1)
     prof = {'label': sp['label'], 'dpsize': sp['dpsize'], 'seed': seed,
             'runner': runner, 'workers': args.workers, 'rc': rc,
