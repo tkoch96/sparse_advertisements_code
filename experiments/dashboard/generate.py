@@ -719,7 +719,8 @@ EXPERIMENTS.append({
          'heading': 'Scoping smokes — single-core timing/RAM/cost ladder '
                     '(a10, EODS 5-32, obj32) on a dedicated fleet VM',
          'figures': ['figures/profiler_status.png',
-                     'figures/profiler_scaling.png'],
+                     'figures/profiler_scaling.png',
+                     'figures/depcache_bench.png'],
          'refresh': {'steps': [
              {'in': ['figures/profiler_status.png'], 'always': True,
               'out': ['figures/profiler_status.png'],
@@ -728,7 +729,11 @@ EXPERIMENTS.append({
              {'in': ['figures/profiler_scaling.png'], 'always': True,
               'out': ['figures/profiler_scaling.png'],
               'argv': ['{py}', '-m',
-                       'experiments.eods.profiler_plots']}]},
+                       'experiments.eods.profiler_plots']},
+             {'in': ['cache/depcache_bench.json'], 'always': True,
+              'out': ['figures/depcache_bench.png'],
+              'argv': ['{py}', '-m',
+                       'experiments.depcache.plot_bench']}]},
          'intro': 'Left: completed picks with startup / s-per-iter / RAM '
                   'peaks / $-per-cell. Right: live cell RAM + iteration '
                   'trace. Feeds the SCALE-500 scaling report.'},
