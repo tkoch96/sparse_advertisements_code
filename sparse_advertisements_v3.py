@@ -364,7 +364,13 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# <= 0.11ms; 500-cap smoke exited at 167 with full budget spent).
 		# SCULPTOR_STOP_RULE=stock restores the legacy lambda.
 		if _os.environ.get('SCULPTOR_STOP_RULE', 'v2') == 'v2':
-			_rel = float(_os.environ.get('SCULPTOR_STOP_V2_REL', '0.03'))
+			# REL default 0.03 -> 0.001 (Tom-ratified 2026-08-18, paired
+			# with STOP_V2_INIT=honest): exit only when smoothed motion is
+			# 0.1% of the run's TRUE initial motion. The old 3% was
+			# calibrated against the sentinel-pinned init (~8.5), i.e. an
+			# accidental absolute ~0.25/iter bar that cut slow objectives
+			# (mlu/fracb early-exit cells score WORSE than to-cap cells).
+			_rel = float(_os.environ.get('SCULPTOR_STOP_V2_REL', '0.001'))
 			_pat = int(_os.environ.get('SCULPTOR_STOP_V2_PATIENCE', '20'))
 			def _stop_v2(el, _self=self, _rel=_rel, _pat=_pat):
 				it, rd = el[0], el[1]
@@ -2765,12 +2771,32 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		print(f"[Timing] Worker notification loop: {time.time() - perf_t:.5f}s")
 		perf_t = time.time()
 
-		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.current_pseudo_objective - self.last_objective)
-		# Capture the first non-default rolling_delta as the "init" reference
-		# for SCULPTOR_ADAPTIVE_PROBE_BUDGET's ratio computation.
-		if not hasattr(self, '_rolling_delta_init') or self._rolling_delta_init is None:
-			# Set after the first real EWMA update (skip the initial 10.0 sentinel).
-			if self.rolling_delta < 10.0:
+		_rd_delta = np.abs(self.current_pseudo_objective - self.last_objective)
+		# stop-v2 HONEST INIT (Tom-ratified 2026-08-18; SCULPTOR_STOP_V2_INIT=
+		# legacy restores): the legacy capture blended the first real delta
+		# against the 10.0 init sentinel, pinning _rolling_delta_init to the
+		# 8-10 band for EVERY run — the "REL x initial" threshold was
+		# effectively an absolute ~REL*8.5/iter bar, blind to slow-moving
+		# objectives (mlu late-stage moves ~0.03/iter). Honest mode seeds the
+		# EWMA with the first REAL delta and captures init as the EWMA after
+		# 5 real deltas — the run's true initial motion scale.
+		if _os.environ.get('SCULPTOR_STOP_V2_INIT', 'honest') == 'legacy':
+			self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * _rd_delta
+			# Capture the first non-default rolling_delta as the "init" reference
+			# for SCULPTOR_ADAPTIVE_PROBE_BUDGET's ratio computation.
+			if not hasattr(self, '_rolling_delta_init') or self._rolling_delta_init is None:
+				# Set after the first real EWMA update (skip the initial 10.0 sentinel).
+				if self.rolling_delta < 10.0:
+					self._rolling_delta_init = float(self.rolling_delta)
+		else:
+			self._rd_real_updates = getattr(self, '_rd_real_updates', 0) + 1
+			if self._rd_real_updates == 1:
+				self.rolling_delta = float(_rd_delta)
+			else:
+				self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * _rd_delta
+			if self._rd_real_updates == 5 and (
+					not hasattr(self, '_rolling_delta_init')
+					or self._rolling_delta_init is None):
 				self._rolling_delta_init = float(self.rolling_delta)
 		self.rolling_delta_eff = (1 - delta_eff_alpha) * self.rolling_delta_eff + \
 			delta_eff_alpha * np.abs(self.current_effective_objective - self.last_effective_objective)
