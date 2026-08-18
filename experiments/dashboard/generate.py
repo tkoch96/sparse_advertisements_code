@@ -883,7 +883,7 @@ def _v5s_section(fam, title):
             'arms': _v5s_arms(fam),
             'heading': '{} — v5 scout, 3 arms, N=10, seeds 201-205, '
                        'maxhard, HiGHS, new stop-v2'.format(title),
-            'figures': ['figures/v5scout_{}.png'.format(fam)],
+            'figures': ['figures/grid_v5scout_{}.png'.format(fam)],
             'intro': 'Own-objective, 0 = one-per-peering; convergence '
                      'links land as cells harvest. <b>Units:</b> '
                      '{}'.format(_GG_UNITS.get(fam, ''))}
@@ -896,7 +896,7 @@ EXPERIMENTS.append({
          'heading': 'v5 scout — 3 arms x 4 objectives x seeds 201-205, '
                     'N=10, maxhard, HiGHS, NEW stop-v2 (honest init, '
                     '0.1% REL, trend clause) + component persistence',
-         'figures': ['figures/v5scout_bars.png',
+         'figures': ['figures/grid_v5scout_4panel.png',
                      'figures/v5scout_status.png'],
          'intro': ('<p>Precursor to the v5 full panel: does rmsprop\'s '
                    'smoke win transfer to every objective family? 60 '
@@ -907,15 +907,25 @@ EXPERIMENTS.append({
                    'campaign with objective components persisted in '
                    'every cell json.</p>'),
          'refresh': {'steps': [
-             {'in': ['figures/v5scout_bars.png'], 'always': True,
-              'out': ['figures/v5scout_bars.png',
-                      'figures/v5scout_status.png',
-                      'figures/v5scout_lat.png',
-                      'figures/v5scout_fracb.png',
-                      'figures/v5scout_mlu.png',
-                      'figures/v5scout_prio.png'],
+             {'in': ['figures/v5scout_status.png'], 'always': True,
+              'out': ['figures/v5scout_status.png'],
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_v5scout']},
+             {'in': ['cache/ablation/grid_v5scout/*/*/N*/seed_*.json'],
+              'out': ['figures/grid_v5scout_4panel.png',
+                      'figures/grid_v5scout_lat.png',
+                      'figures/grid_v5scout_fracb.png',
+                      'figures/grid_v5scout_mlu.png',
+                      'figures/grid_v5scout_prio.png'],
+              'always': True,
+              'env': {'HARDOBJ_ROOT': 'cache/ablation/grid_v5scout',
+                      'HARDOBJ_OUT_PREFIX': 'grid_v5scout',
+                      'HARDOBJ_OBJS': _GG_OBJS,
+                      'HARDOBJ_PAINTER_ROOT':
+                          'cache/ablation/grid_maxhard_v2',
+                      'HARDOBJ_ARMS': 'L3_nomem_sched:L3 no_mem+sched:#1baf7a,L5_full_adagrad:L5 adagrad:#e87ba4,L5_full_rmsprop:L5 rmsprop b=0.9:#4a3aa7'},
+              'argv': ['{py}', '-m',
+                       'experiments.dashboard.plot_hardobj_v4']},
          ]}},
         _v5s_section('lat', 'latency + gamma*resilience'),
         _v5s_section('fracb', 'frac_beyond_optimal'),

@@ -33,6 +33,19 @@ ARMS = [('L1_nomc_fixed', 'L1 no_mc+fixed', '#2a78d6'),
         ('L4_nodir_sched', 'L4 no_dir+sched', '#eda100'),
         ('L5_full_sched', 'L5 full+sched', '#e87ba4'),
         ('L6_full_slotted', 'L6 slotted WHEN', '#4a3aa7')]
+# HARDOBJ_ARMS="dir:label:color,..." overrides the rung set (Tom
+# 2026-08-18: the v5 scout compares step-size policies, not the L1-L6
+# ladder, but must render through THIS engine so the dash view is
+# identical to the unified grid / future full panel).
+_arms_env = os.environ.get('HARDOBJ_ARMS')
+if _arms_env:
+    ARMS = [tuple(x.split(':', 2)) for x in _arms_env.split(',')]
+# HARDOBJ_PAINTER_ROOT: painter-reference store override — scout
+# stores carry no painter rung; the maxhard v2 painters share world,
+# seeds and objective scalars, so their band transfers exactly.
+PROOT = os.path.join(REPO, os.environ.get(
+    'HARDOBJ_PAINTER_ROOT', os.environ.get(
+        'HARDOBJ_ROOT', 'cache/ablation/hardobj_v3')))
 # HARDOBJ_OBJS: comma list of key:title pairs — makes the objective set
 # env-driven so the unified grid view renders latency+resilience as an
 # equal first-class panel next to the hard objectives (Tom 2026-08-17).
@@ -96,7 +109,7 @@ def painter_ref(obj):
     changed between eras)."""
     diffs = []
     for fn in glob.glob(os.path.join(
-            ROOT, obj, 'painter', 'N*', 'seed_*_painter.json')):
+            PROOT, obj, 'painter', 'N*', 'seed_*_painter.json')):
         try:
             d = json.load(open(fn))
         except (OSError, ValueError):
