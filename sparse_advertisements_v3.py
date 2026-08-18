@@ -400,9 +400,11 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				# believed objective is NET-DECLINING over the last PATIENCE
 				# iters. The run keeps its FINAL advertisement (not best-seen),
 				# so local decline matters even above the historical low —
-				# best_iter patience alone cannot see it. eps default 0: any
-				# net window decline blocks exit.
-				_teps = float(os.environ.get('SCULPTOR_STOP_V2_TREND_EPS', '0'))
+				# best_iter patience alone cannot see it. eps default 1e-3
+				# (Tom 2026-08-18: "not 0, just small"): one OBJ_ROUND
+				# quantum (1e-4) of jitter per window can't hold a run at
+				# the cap, but any real drift (>=0.001/20 iters) blocks exit.
+				_teps = float(os.environ.get('SCULPTOR_STOP_V2_TREND_EPS', '0.001'))
 				_tr = _self.metrics.get('abl_belief_objective') or []
 				if len(_tr) > _pat:
 					_trend_flat = float(_tr[-1][1]) >= float(_tr[-1 - _pat][1]) - _teps
