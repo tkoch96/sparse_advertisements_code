@@ -1554,6 +1554,26 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					self._adagrad_calls, g2 ** 0.5, G_eff, alpha_t,
 					' (warmup-skip)' if self._adagrad_calls <= _wk else ''), flush=True)
 			return net_grad * (alpha_t / self.alpha)
+		if _mode == 'rmsprop':
+			# RMSProp (Tom 2026-08-18): the adagrad smoke showed gradient
+			# scale DECAYS GRADUALLY (~17 -> ~2 over 50 calls) rather than
+			# spiking-then-flat, so a decaying-memory denominator is the
+			# principled fix (no arbitrary warmup K; beta is a timescale).
+			# Caveat vs AdaGrad: alpha does not decay to zero — near
+			# convergence steps approach alpha0 x unit gradient.
+			_beta = float(os.environ.get('SCULPTOR_RMSPROP_BETA', '0.99'))
+			g2 = float(np.sum(np.asarray(net_grad) ** 2))
+			v = getattr(self, '_rmsprop_V', None)
+			self._rmsprop_V = g2 if v is None else _beta * v + (1 - _beta) * g2
+			if not hasattr(self, '_adagrad_alpha0'):
+				self._adagrad_alpha0 = float(os.environ.get('SCULPTOR_ALPHA0',
+					os.environ.get('SCULPTOR_ABLATION_ALPHA0', '1')))
+			alpha_t = self._adagrad_alpha0 / np.sqrt(1e-12 + self._rmsprop_V)
+			if os.environ.get('SCULPTOR_ADAGRAD_LOG', '0') == '1':
+				self._adagrad_calls = getattr(self, '_adagrad_calls', 0) + 1
+				print('[adagrad] call={} |g|={:.5g} G={:.5g} alpha_t={:.5g} (rmsprop)'.format(
+					self._adagrad_calls, g2 ** 0.5, self._rmsprop_V, alpha_t), flush=True)
+			return net_grad * (alpha_t / self.alpha)
 		if _mode == 'dog':
 			aa = np.asarray(a, dtype=float)
 			if not hasattr(self, '_dog_a0'):
