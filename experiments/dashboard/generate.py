@@ -882,7 +882,7 @@ EXPERIMENTS.append({
                    '<b>Right figure:</b> final objective vs opp and '
                    'exit iteration per arm/seed. Arms run on the '
                    'profiler VM in an isolated repo copy; figures '
-                   'auto-refresh as cells land.</p>'),
+                   'auto-refresh as cells land. Per-cell convergence PDFs: <a href="adagrad_smoke_figs/">adagrad_smoke_figs/</a> (smk_&lt;arm&gt;_dep&lt;seed&gt;.pdf).</p>'),
          'refresh': {'steps': [
              {'in': ['figures/adagrad_smoke_grads.png'], 'always': True,
               'out': ['figures/adagrad_smoke_grads.png',
@@ -1357,6 +1357,9 @@ def main():
                              REPO,
                              'cache/ablation/policy_ladder_a10x10_artifacts'
                              '/figs')),
+                         ('adagrad_smoke_figs', os.path.join(
+                             REPO,
+                             'cache/ablation/adagrad_smoke_figs')),
                          ('plots', os.path.join(REPO, 'figures'))):
         lnk = os.path.join(SITE, name)
         if not os.path.islink(lnk):
