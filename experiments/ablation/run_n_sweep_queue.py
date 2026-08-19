@@ -67,7 +67,7 @@ import time
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # heavy rungs first so the queue's tail is a cheap cell, not a 'full' run
-RUNGS_HEAVY_FIRST = ['full', 'expl_random', 'expl_none', 'no_direction',
+RUNGS_HEAVY_FIRST = ['full', 'expl_random', 'expl_none', 'no_direction', 'no_memory_dir',
                      'no_memory', 'no_mc', 'painter']
 
 
