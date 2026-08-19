@@ -220,6 +220,7 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		self.update_deployment(deployment, **kwargs)
 		_log_mem_worker(self.worker_i, 'update_deployment_done',
 		                dpsize=deployment.get('dpsize', '?'))
+		self.dump_mem_components('post_update_deployment')
 		return "ACK"
 
 	def _cmd_dump_mem_log(self, _data=None):

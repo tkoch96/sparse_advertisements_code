@@ -1138,8 +1138,54 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		except (FileNotFoundError, PermissionError):
 			return ''
 
+	def dump_mem_components(self, tag='manual'):
+		"""SCULPTOR_WORKER_MEMPROF=1: log deep sizes of the worker's big
+		attributes (Tom 2026-08-19 RAM-attribution ask). One `[memprof]`
+		line per component >50MB, same sink as _log_mem_worker. Cheap
+		enough to call at update_deployment_done / cache-clear points
+		only — NOT per lb call."""
+		if os.environ.get('SCULPTOR_WORKER_MEMPROF', '0') != '1':
+			return
+		import sys as _sys
+		def _sz(o, seen):
+			if id(o) in seen:
+				return 0
+			seen.add(id(o))
+			if isinstance(o, np.ndarray):
+				return o.nbytes
+			s = _sys.getsizeof(o, 0)
+			if isinstance(o, dict):
+				s += sum(_sz(k, seen) + _sz(v, seen) for k, v in o.items())
+			elif isinstance(o, (list, tuple, set, frozenset)):
+				s += sum(_sz(x, seen) for x in o)
+			return s
+		comps = {}
+		for name in ('calc_cache', 'ingress_probabilities', 'ug_perfs',
+					 'whole_deployment_ug_perfs', 'measured_prefs',
+					 'parent_tracker', 'pattern_cache',
+					 'this_time_ip_cache', 'ingress_priorities',
+					 'popp_by_ug_indicator', 'linear_prog_soln_cache'):
+			try:
+				v = getattr(self, name)
+			except AttributeError:
+				continue
+			if name == 'calc_cache':
+				for ck, cv in getattr(v, 'all_caches', {}).items():
+					b = _sz(cv, set())
+					if b > 5e7:
+						comps['calc_cache.' + str(ck)] = b
+				continue
+			b = _sz(v, set())
+			if b > 5e7:
+				comps[name] = b
+		for name, b in sorted(comps.items(), key=lambda kv: -kv[1]):
+			_log_mem_worker(self.worker_i, 'memprof_' + tag,
+							component=name,
+							size_mb=int(b / 1048576))
+
 	def clear_new_meas_caches(self):
 		# print("Clearing caches in worker {}".format(self.worker_i))
+		self.dump_mem_components('pre_clear')
 		self.this_time_ip_cache = {}
 		self.pattern_cache = {}
 		self.calc_cache.clear_new_measurement_caches()
