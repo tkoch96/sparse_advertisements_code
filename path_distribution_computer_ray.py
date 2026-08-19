@@ -177,7 +177,8 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 				base_adv[ind] = not base_adv[ind]
 			i += 1
 			if time.time() - tlp > 100:
-				self.print("{} pct. done calcing latency benefits, {}ms per iter".format(
+				self.print("[{}] {} pct. done calcing latency benefits, {}ms per iter".format(
+					time.strftime("%H:%M:%SZ", time.gmtime()),
 					round(i * 100.0 / len(data), 1),
 					round(1000 * (time.time() - ts) / i)))
 				tlp = time.time()

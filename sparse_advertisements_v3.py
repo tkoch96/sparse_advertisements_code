@@ -1450,12 +1450,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			ts = time.time()
 		L_grad = self.gradients_latency_benefit(a)
 		if self.verbose:
-			print("Calcing latency benefit grad took {}s".format(int(time.time() - ts)))
+			print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing latency benefit grad took {}s".format(int(time.time() - ts)))
 		if self.verbose:
 			ts = time.time()
 		res_grad = self.gradients_resilience_benefit_fn(a)
 		if self.verbose:
-			print("Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
+			print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
 		
 		gamma = self.get_gamma()
 		# gamma specifies a tradeoff between LB and RB, so shouldn't really be > 1

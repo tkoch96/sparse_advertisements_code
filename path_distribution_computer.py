@@ -180,7 +180,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 							   100.0 * self.timing[k] / total_time)
 			for k in sorted(self.timing, key=lambda el: -self.timing[el])
 			if self.timing[k] / total_time >= 0.01)
-		print("[wt] w={} total={:.1f}s {}".format(
+		print("[{}] [wt] w={} total={:.1f}s {}".format(
+			time.strftime('%H:%M:%SZ', time.gmtime()),
 			self.worker_i, total_time, parts), flush=True)
 
 	def init_persistent_lp(self):
