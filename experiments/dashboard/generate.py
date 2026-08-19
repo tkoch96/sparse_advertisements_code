@@ -997,7 +997,15 @@ EXPERIMENTS.append({
                     '&nbsp; <a href="eods25_tail.txt" style="font-size:14px;'
                     'padding:2px 10px;border:1px solid #4a3aa7;'
                     'border-radius:6px;text-decoration:none">'
-                    '&#9654; live log tail</a>',
+                    '&#9654; live log tail</a> &nbsp; '
+                    '<a href="eods25_convergence.pdf" style="font-size:14px;'
+                    'padding:2px 10px;border:1px solid #1baf7a;'
+                    'border-radius:6px;text-decoration:none">'
+                    '&#9654; convergence (live)</a> &nbsp; '
+                    '<a href="worker_flame.svg" style="font-size:14px;'
+                    'padding:2px 10px;border:1px solid #c98f1e;'
+                    'border-radius:6px;text-decoration:none">'
+                    '&#9654; worker flamegraph</a>',
          'figures': ['figures/eods25_run.png',
                      'figures/eods25_status.png',
                      'figures/eods25_results.png'],
