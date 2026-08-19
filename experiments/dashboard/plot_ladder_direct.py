@@ -23,7 +23,8 @@ ARMS = [('L1_nomc_fixed', 'L1 no_mc+fixed', '#2a78d6'),
         ('L6_full_slotted', 'L6 slotted WHEN', '#4a3aa7')]
 
 
-def render(root, out, title):
+def render(root, out, title, field='diff_vs_opp',
+           ylabel='steady avg_lat - same-seed opp (ms)'):
     fig, ax = plt.subplots(figsize=(9.5, 5.2))
     drawn = False
     for arm, label, color in ARMS:
@@ -36,9 +37,17 @@ def render(root, out, title):
                     d = json.load(open(fn))
                 except (OSError, ValueError):
                     continue
-                if d.get('solve_error') or d.get('diff_vs_opp') is None:
+                if d.get('solve_error'):
                     continue
-                vals.append(d['diff_vs_opp'])
+                if field == 'objective':
+                    if d.get('repo_objective') is None \
+                            or d.get('opp_objective') is None:
+                        continue
+                    vals.append(d['repo_objective'] - d['opp_objective'])
+                else:
+                    if d.get(field) is None:
+                        continue
+                    vals.append(d[field])
             if vals:
                 xs.append(n); ys.append(float(np.mean(vals)))
                 ns_.append(len(vals))
@@ -53,7 +62,7 @@ def render(root, out, title):
     ax.set_xscale('log'); ax.set_xticks(NS)
     ax.set_xticklabels([str(n) for n in NS])
     ax.set_xlabel('measurement budget N')
-    ax.set_ylabel('steady avg_lat - same-seed opp (ms)')
+    ax.set_ylabel(ylabel)
     ax.set_title(title, fontsize=10)
     ax.grid(alpha=.25); ax.legend(fontsize=8, frameon=False)
     fig.tight_layout()
@@ -123,10 +132,14 @@ def main():
                'license-paused)')
     # a10x10 grid (Tom 2026-08-18): direct render only — no fresh-eval
     # steady store; cells carry their own diff_vs_opp.
+    # y-axis = the TRAINED objective (lat + 0.1*resilience), not just
+    # its steady-latency component (Tom's catch 2026-08-19)
     render('cache/ablation/policy_ladder_a10x10',
            'figures/policy_ladder_a10x10_5panel_objective.png',
-           'actual-10 x 10 deployments — L1-L6, N=10, IN-RUN steady '
-           'scores (mean over landed seeds 1-10)')
+           'actual-10 x 10 deployments — L1-L6, N=10, TRAINED objective '
+           '(lat + 0.1*resilience) vs opp (mean over landed seeds)',
+           field='objective',
+           ylabel='objective (lat + 0.1*resilience) - same-seed opp')
 
 
 if __name__ == '__main__':
