@@ -772,8 +772,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# Instead of nested dicts, we build the flat lists required for vectorization directly.
 		self.rti_data = {
 			"meta_data": [],  # List of tuples: (ui, pref_i, ug_name)
-			"all_probs": [],  # List of probability lists: [0.5, 0.5]
-			"all_poppis": []  # List of choice lists: [pop_A, pop_B]
+			"all_probs": [],  # legacy per-scenario lists (sim_rti_better)
+			"all_poppis": [],
+			"blocks": [],     # [(lengths:int16[], choices_pad:int16[nxm])]
 		}
 
 		# Ensure persistent cache exists (persist this across function calls)
@@ -801,17 +802,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			tloga = tuple(col)
 
 			# --- CACHE CHECK ---
-			if tloga in self.pattern_cache:
-				# HIT: We have seen this network state before.
-				# cached_entries is a list of: (ui, valid_pops_list, probs_list)
-				cached_entries = self.pattern_cache[tloga]
-				
-				# Fast append to master lists
-				# We reuse the logic (pops/probs), but update the prefix index (pref_i)
-				for ui, pops, probs in cached_entries:
-					self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
-					self.rti_data["all_probs"].append(probs)
-					self.rti_data["all_poppis"].append(pops)
+			key = np.packbits(col).tobytes()
+			if key in self.pattern_cache:
+				# HIT: compact padded entry (uis:int32, lengths:int16,
+				# choices_pad:int16[n_scen x max_n], -1 padded). Appended
+				# as a BLOCK; _sample_scenario_realizations assembles the
+				# padded sampling matrices with vectorized copies instead
+				# of per-scenario python (Tom 2026-08-19 pattern_cache
+				# compaction: ~7x RAM, hit path faster than list appends).
+				uis_e, lens_e, pad_e = self.pattern_cache[key]
+				md = self.rti_data["meta_data"]
+				for ui in uis_e:
+					md.append((ui, pref_i, ugs[ui]))
+				self.rti_data["blocks"].append((lens_e, pad_e))
 				continue
 
 			# --- CACHE MISS: Calculate Logic ---
@@ -859,16 +862,28 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				n = len(valid_pops)
 				probs = [1.0 / n] * n
 				
-				# Append to current run
+				# Append to current run (pops/probs ride in the block)
 				self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
-				self.rti_data["all_probs"].append(probs)
-				self.rti_data["all_poppis"].append(valid_pops)
 
 				# Append to Cache
 				entries_for_cache.append((ui, valid_pops, probs))
 
-			# Save this state's logic to cache so we never calculate it again for this pattern
-			self.pattern_cache[tloga] = entries_for_cache
+			# Save this state's logic compactly (padded int16 matrix):
+			# per pattern: uis, per-scenario option counts, and the padded
+			# option matrix. probs are always uniform 1/n -- reconstructed
+			# at assembly, never stored.
+			n_scen = len(entries_for_cache)
+			uis_e = np.fromiter((e[0] for e in entries_for_cache),
+								dtype=np.int32, count=n_scen)
+			lens_e = np.fromiter((len(e[1]) for e in entries_for_cache),
+								 dtype=np.int16, count=n_scen)
+			max_n = int(lens_e.max()) if n_scen else 0
+			pad_e = np.full((n_scen, max_n), -1, dtype=np.int16)
+			for _i, (_ui, _pops, _probs) in enumerate(entries_for_cache):
+				pad_e[_i, :len(_pops)] = _pops
+			self.pattern_cache[np.packbits(col).tobytes()] = (
+				uis_e, lens_e, pad_e)
+			self.rti_data["blocks"].append((lens_e, pad_e))
 
 		self.timing['pmat_organize'] += time.time() - ts_total
 
@@ -880,20 +895,43 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# --- 3. Vectorized Simulation (Previously sim_rti_better) ---
 		# Now self.rti_data is fully populated. We proceed with the vectorized selection.
 
-		self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
-		if self.rti_data["num_scenarios"] == 0:
-			return {}
+		blocks = self.rti_data.get("blocks") or []
+		if blocks:
+			# Compact-block path (pattern-cache producer, Tom 2026-08-19):
+			# assemble padded matrices with vectorized block copies.
+			# Arithmetic matches the legacy path exactly — P rows are the
+			# same uniform [1/n]*n float64 values, cumsum'd identically.
+			lens_all = np.concatenate([b[0] for b in blocks]).astype(np.int64)
+			self.rti_data["num_scenarios"] = int(lens_all.shape[0])
+			if self.rti_data["num_scenarios"] == 0:
+				return {}
+			self.rti_data["max_choices"] = int(lens_all.max())
+			P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
+			self.rti_data["choices_matrix"] = np.full(
+				(self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
+			row = 0
+			for lens_e, pad_e in blocks:
+				nrow, ncol = pad_e.shape
+				self.rti_data["choices_matrix"][row:row + nrow, :ncol] = pad_e
+				row += nrow
+			mask = (np.arange(self.rti_data["max_choices"])[None, :]
+					< lens_all[:, None])
+			P_matrix[mask] = np.repeat(1.0 / lens_all, lens_all)
+		else:
+			self.rti_data["num_scenarios"] = len(self.rti_data["all_probs"])
+			if self.rti_data["num_scenarios"] == 0:
+				return {}
 
-		self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
+			self.rti_data["max_choices"] = max(len(p) for p in self.rti_data["all_probs"])
 
-		# Create Padded Matrix
-		P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
-		self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
+			# Create Padded Matrix
+			P_matrix = np.zeros((self.rti_data["num_scenarios"], self.rti_data["max_choices"]))
+			self.rti_data["choices_matrix"] = np.full((self.rti_data["num_scenarios"], self.rti_data["max_choices"]), -1, dtype=int)
 
-		for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
-			n = len(probs)
-			P_matrix[i, :n] = probs
-			self.rti_data["choices_matrix"][i, :n] = pops
+			for i, (probs, pops) in enumerate(zip(self.rti_data["all_probs"], self.rti_data["all_poppis"])):
+				n = len(probs)
+				P_matrix[i, :n] = probs
+				self.rti_data["choices_matrix"][i, :n] = pops
 
 		# CDF Construction
 		cdf = np.cumsum(P_matrix, axis=1)
