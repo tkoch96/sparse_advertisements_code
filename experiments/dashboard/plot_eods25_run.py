@@ -27,6 +27,8 @@ TIMERCAT_OLD_RE = re.compile(r'(\w+)\s+([0-9.]+)%\s+\(')
 ITER_RE = re.compile(r'rss_mb=(\d+) .*sys_avail_mb=(\d+) .*'
                      r't=([0-9.]+) iter=(\d+)')
 OBJ_RE = re.compile(r'objective[:= ]+(-?[0-9]+\.[0-9]+)', re.I)
+IT_RE = re.compile(r'\[it\] t=\S+ iter=(\d+) obj=(\S+) pseudo=(\S+) '
+                   r'rd=(\S+) rde=\S+ rad=(\S+) n_on=(\d+)')
 
 
 def main():
@@ -111,14 +113,30 @@ def main():
                 np.percentile(spi, 50)) if len(spi) else 'iterations')
             ax_iter.set_title(ttl); ax_iter.grid(alpha=.3)
 
-    # -- objective trace (best-effort grep)
-    objs = [float(v) for v in OBJ_RE.findall(txt)][-500:]
-    if objs:
-        ax_obj.plot(objs, '.-', ms=2)
-        ax_obj.set_title('objective mentions over time (convergence)')
+    # -- convergence: [it] per-iter metrics (falls back to grep)
+    its = IT_RE.findall(txt)
+    if its:
+        it_n = [int(a[0]) for a in its]
+        pse = [float(a[2]) for a in its]
+        rd = [float(a[3]) for a in its]
+        non = [int(a[5]) for a in its]
+        ax_obj.plot(it_n, pse, 'k.-', ms=3, label='believed obj')
+        a2 = ax_obj.twinx()
+        a2.semilogy(it_n, np.maximum(rd, 1e-12), 'r--', alpha=.5,
+                    label='rolling delta')
+        a2.set_ylabel('rolling delta (red, log)')
+        ax_obj.set_xlabel('iter (n_on last={})'.format(non[-1]))
+        ax_obj.set_title('convergence: believed objective + stop signal')
+        ax_obj.legend(fontsize=7, loc='upper right')
         ax_obj.grid(alpha=.3)
     else:
-        ax_obj.set_title('objective trace: no lines yet')
+        objs = [float(v) for v in OBJ_RE.findall(txt)][-500:]
+        if objs:
+            ax_obj.plot(objs, '.-', ms=2)
+            ax_obj.set_title('objective mentions (no [it] lines yet)')
+            ax_obj.grid(alpha=.3)
+        else:
+            ax_obj.set_title('convergence: no [it] lines yet')
 
     fig.suptitle('EODS-25 run inspection — 96w, incremental LP, MC=1')
     fig.tight_layout()

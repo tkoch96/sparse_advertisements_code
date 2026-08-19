@@ -2982,7 +2982,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.worker_manager.send_receive_workers(pickle.dumps(('set_iter', self.iter)))
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
-		print(np.sum(self.optimization_advertisement>.5,axis=0))
+		# one compact parseable metrics line per training iteration
+		# (Tom 2026-08-19 dash: objective, stop signals, adv sparsity)
+		print("[it] t={} iter={} obj={:.6g} pseudo={:.6g} rd={:.3g} rde={:.3g} rad={:.3g} n_on={}".format(
+			time.strftime('%H:%M:%SZ', time.gmtime()), self.iter,
+			float(getattr(self, 'current_objective', float('nan')) or float('nan')),
+			float(getattr(self, 'current_pseudo_objective', float('nan')) or float('nan')),
+			float(self.rolling_delta), float(self.rolling_delta_eff),
+			float(self.rolling_adv_delta),
+			int(np.sum(self.optimization_advertisement > .5))), flush=True)
 
 	def init_optimization_vars(self):
 		_log_mem('iov_enter')
