@@ -2850,6 +2850,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		print("RAD: {} {}s".format(self.rolling_adv_delta, time.time() - ts))
 		
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
+		self._post_stop_check()
 		print(f"[Timing] stopping_condition: {time.time() - perf_t:.5f}s")
 		perf_t = time.time()
 
@@ -2982,42 +2983,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.worker_manager.send_receive_workers(pickle.dumps(('set_iter', self.iter)))
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
-		# Budget-drain stopping (Tom 2026-08-19 v2: 'we already have
-		# logic to execute measurements at a maximum cadence'). Believed
-		# convergence with probes still banked does NOT exit — it flips
-		# the scheduler into drain mode: remaining probes fire at the
-		# existing max cadence (the gate's retry_ok pacing), grounding
-		# the belief as it settles. The exit stands only once the budget
-		# is spent or the current advertisement is ground-truth measured.
-		# SCULPTOR_STOP_CONFIRM_PROBE=0 restores old behavior.
-		if (self.stop and self.iter <= self.max_n_iter
-				and _os.environ.get('SCULPTOR_STOP_CONFIRM_PROBE', '1') != '0'
-				and getattr(self, 'probes_spent', None) is not None
-				and self.probes_spent < getattr(self, 'probe_n', 0)):
-			cur = tuple(threshold_a(np.asarray(
-				self.optimization_advertisement, dtype=float)).flatten())
-			if cur not in getattr(self, 'measured', {}):
-				self.stop = False
-				print('[stop-hold] iter={} believed converged but only '
-					  '{}/{} probes spent — holding exit; staleness '
-					  'floor will ground within {} iters'.format(
-						  self.iter, self.probes_spent, self.probe_n,
-						  self._probe_env('PROBE_MAX_STALENESS', 'period')),
-					  flush=True)
-			else:
-				print('[stop-hold] iter={} exit stands (current adv '
-					  'ground-truth measured; {}/{} spent)'.format(
-						  self.iter, self.probes_spent, self.probe_n),
-					  flush=True)
-		# one compact parseable metrics line per training iteration
-		# (Tom 2026-08-19 dash: objective, stop signals, adv sparsity)
-		print("[it] t={} iter={} obj={:.6g} pseudo={:.6g} rd={:.3g} rde={:.3g} rad={:.3g} n_on={}".format(
-			time.strftime('%H:%M:%SZ', time.gmtime()), self.iter,
-			float(getattr(self, 'current_objective', float('nan')) or float('nan')),
-			float(getattr(self, 'current_pseudo_objective', float('nan')) or float('nan')),
-			float(self.rolling_delta), float(self.rolling_delta_eff),
-			float(self.rolling_adv_delta),
-			int(np.sum(self.optimization_advertisement > .5))), flush=True)
+		self._post_stop_check()
 
 	def _belief_memo_key(self):
 		"""Cache key for the initial-belief memo (Tom 2026-08-19):
@@ -3047,6 +3013,36 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		'rolling_adv_delta', 'rolling_adv_eps', 'metrics', 'measured',
 		'path_measures', 'last_gti', 'calc_times', 'iter', 'stop',
 		'optimization_advertisement_representation', 'popp_to_users')
+
+	def _post_stop_check(self):
+		# Budget-hold + [it] telemetry, shared by BOTH stop-check sites
+		# (Tom 2026-08-19 late: the block originally landed on only one
+		# site; the EODS path executes the other — caught via the empty
+		# dash convergence panel).
+		if (self.stop and self.iter <= self.max_n_iter
+				and _os.environ.get('SCULPTOR_STOP_CONFIRM_PROBE', '1') != '0'
+				and getattr(self, 'probes_spent', None) is not None
+				and self.probes_spent < getattr(self, 'probe_n', 0)):
+			cur = tuple(threshold_a(np.asarray(
+				self.optimization_advertisement, dtype=float)).flatten())
+			if cur not in getattr(self, 'measured', {}):
+				self.stop = False
+				print('[stop-hold] iter={} believed converged but only '
+					  '{}/{} probes spent — holding exit'.format(
+						  self.iter, self.probes_spent, self.probe_n),
+					  flush=True)
+			else:
+				print('[stop-hold] iter={} exit stands (current adv '
+					  'measured; {}/{} spent)'.format(
+						  self.iter, self.probes_spent, self.probe_n),
+					  flush=True)
+		print("[it] t={} iter={} obj={:.6g} pseudo={:.6g} rd={:.3g} rde={:.3g} rad={:.3g} n_on={}".format(
+			time.strftime('%H:%M:%SZ', time.gmtime()), self.iter,
+			float(getattr(self, 'current_objective', float('nan')) or float('nan')),
+			float(getattr(self, 'current_pseudo_objective', float('nan')) or float('nan')),
+			float(self.rolling_delta), float(self.rolling_delta_eff),
+			float(self.rolling_adv_delta),
+			int(np.sum(self.optimization_advertisement > .5))), flush=True)
 
 	def _ensure_popp_to_users(self):
 		# popp_to_users is a side product of the belief bootstrap's LP
