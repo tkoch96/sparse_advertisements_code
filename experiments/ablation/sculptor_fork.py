@@ -971,6 +971,34 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         return g
 
     def _rescale_gradient(self, net_grad, a):
+        # L4' MULTI-FLIP policy (Tom 2026-08-19: first L4nd attempt was
+        # FROZEN AT INIT — iters_to {50:1,90:1,95:1} across all 66 cells.
+        # The legacy 'auto' amplifier caps steps at alpha*DESIRED_MAX_VAL
+        # ~0.05, but from BINARY values a flip must travel 0.5: it can
+        # never flip anything). This branch amplifies UNCAPPED so that
+        # every favorable coordinate with |g| >= theta*max|g| crosses
+        # threshold in one step — "flip all indices over a certain
+        # threshold", theta via SCULPTOR_L4ND_FLIP_FRAC (default 0.5).
+        if not self.abl_memory and self.abl_direction:
+            aa = np.asarray(a, dtype=float)
+            g = np.asarray(net_grad, dtype=float)
+            eps = 1e-12
+            favorable = ((aa <= ADVERTISEMENT_THRESHOLD) & (g > eps)) |                         ((aa > ADVERTISEMENT_THRESHOLD) & (g < -eps))
+            if favorable.any():
+                theta = float(os.environ.get('SCULPTOR_L4ND_FLIP_FRAC',
+                                             '0.5'))
+                gmax = float(np.abs(g[favorable]).max())
+                targets = favorable & (np.abs(g) >= theta * gmax)
+                dist = np.abs(ADVERTISEMENT_THRESHOLD - aa)
+                need = dist[targets] / (self.alpha * np.abs(g[targets]))
+                mult = float(np.max(need)) * 1.0001
+                n_flip = int(targets.sum())
+                print('[L4nd] mult={:.4g} targets={} (theta={}, '
+                      'gmax={:.4g})'.format(mult, n_flip, theta, gmax),
+                      flush=True)
+                return g * mult
+            print('[L4nd] no favorable coordinate; zero step', flush=True)
+            return np.zeros_like(g)
         # Step-size POLICIES (auto/fixed/adagrad/dog) live in the HEAD
         # (SCULPTOR_GRAD_SCALE, default adagrad; merged 2026-08-16).
         # This override keeps ONLY the single-coordinate guaranteed-flip
@@ -1384,7 +1412,7 @@ RUNGS = {
     # values a crossing needs |alpha*g| >= 0.5, so adaptive-small
     # policies (rmsprop/adagrad) would flip nothing; 'auto' amplifies
     # until crossings occur. rmsprop stays L5+ ONLY (Tom's rule).
-    'no_memory_dir': {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1', 'SCULPTOR_ABLATION_GRAD_SCALE': 'auto'},
+    'no_memory_dir': {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '1', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
     'no_memory':   {'SCULPTOR_ABLATION_MEMORY': '0', 'SCULPTOR_ABLATION_DIRECTION': '0', 'SCULPTOR_ABLATION_EXPLORE': 'none', 'SCULPTOR_ABLATION_MC': '1'},
     # bottom link of the ladder (connects painter <-> no_memory): monte-carlo
     # OFF on top of the no_memory semantics.
