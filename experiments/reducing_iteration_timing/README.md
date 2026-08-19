@@ -68,3 +68,19 @@ d) PDC DISPATCH: job receipt -> lower-level solver call (route
   internals (setup vs solve); (3) sim_rti vectorization pass;
   (4) dissect the driver-side 'stop' 13.9 s/iter; (5) startup budget
   at actual-15/25 once the head frees.
+
+- 2026-08-19 A/B VERDICT (actual-15, seed 201, rung full, max-iter 12,
+  head otherwise idle, ~/rit_repo + ~/rit_out_a15): persistent-inner-LP
+  candidate wins but NOT big — `Timer: grads` 1227.22 s (base) vs
+  1015.49 s (persist) = **-17.3%**; worker not_persistent bucket
+  1184.7 s -> 977.5 s (-17.5%, consistent). Driver `stop` 11.7 -> 10.0 s.
+  Instrumentation note: the persist arm still logs its LP time under
+  `solve_generic_lp_not_persistent` (the `_persistent` bucket reads 0.0
+  in BOTH arms) — the wrapper label doesn't move when the persistent
+  path engages; time savings are real (wall + grads timer agree), but
+  the bucket split is not to be trusted for attribution.
+  DECISION: modest win, below the "wins big" bar the handoff set for
+  adopting into EODS-25 pre-gate; EODS-25 runs mainline. Candidate stays
+  open pending byte-exactness/quality gate + a look at whether the
+  persistent path actually engaged for the family objectives (0.0 bucket
+  is suspicious in the engage-direction too).
