@@ -2982,6 +2982,31 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.worker_manager.send_receive_workers(pickle.dumps(('set_iter', self.iter)))
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
+		# Budget-gated exit confirmation (Tom 2026-08-19: 'if our
+		# measurements weren't spent, we shouldn't exit'). A believed-
+		# convergence exit while probes remain banked must be VERIFIED:
+		# spend one probe grounding the CURRENT advertisement and retract
+		# the stop for this iter — beliefs/caches refresh from truth, and
+		# if the plateau was an artifact the stop clauses won't re-fire.
+		# The exit stands only when (a) budget is exhausted, or (b) the
+		# current adv is already ground-truth measured (probe skip path),
+		# which is the strongest possible confirmation of the belief.
+		# SCULPTOR_STOP_CONFIRM_PROBE=0 restores the old behavior.
+		if (self.stop and self.iter <= self.max_n_iter
+				and _os.environ.get('SCULPTOR_STOP_CONFIRM_PROBE', '1') != '0'
+				and getattr(self, 'probes_spent', None) is not None
+				and self.probes_spent < getattr(self, 'probe_n', 0)):
+			fired = self._probe_ground_current()
+			if fired:
+				self.stop = False
+				print('[stop-confirm] iter={} believed converged with '
+					  '{}/{} probes spent — spent one to verify; '
+					  'continuing'.format(self.iter, self.probes_spent,
+										  self.probe_n), flush=True)
+			else:
+				print('[stop-confirm] iter={} exit stands (current adv '
+					  'already ground-truth measured)'.format(self.iter),
+					  flush=True)
 		# one compact parseable metrics line per training iteration
 		# (Tom 2026-08-19 dash: objective, stop signals, adv sparsity)
 		print("[it] t={} iter={} obj={:.6g} pseudo={:.6g} rd={:.3g} rde={:.3g} rad={:.3g} n_on={}".format(
