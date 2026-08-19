@@ -1015,39 +1015,23 @@ class Optimal_Adv_Wrapper:
 				self.compute_one_per_peering_solution()
 			n_workers = self.get_n_workers()
 			ts=time.time()
-			print("In main function computing sub-deployments...")
-			subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
-			msgs = []
-			print("Done, took {}s".format(time.time()-ts))
-			ts=time.time()
-			for worker in range(n_workers):
-				if len(subdeployments[worker]['ugs']) == 0: continue
-				## It would be annoying to make the code work for cases in which a processor focuses on one user
-				assert len(subdeployments[worker]['ugs']) >= 1
-				# send worker startup information
-				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
-			
-				msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
-				msgs.append(msg)
+			# Every worker gets the same init kwa + full deployment (grads
+			# are what's distributed across workers, not deployment data).
+			msg = pickle.dumps(('update_kwa', self.get_init_kwa()))
+			msgs = [msg for _ in range(n_workers)]
 			print("Pickling kwa took {}s".format(time.time()-ts))
 			ts=time.time()
 			self.worker_manager.send_receive_messages_workers(msgs)
 			print("Sending/receiving kwa took {}s".format(time.time()-ts))
 			ts=time.time()
-			msgs = []
 			for worker in range(n_workers):
-				if len(subdeployments[worker]['ugs']) == 0: continue
-				## It would be annoying to make the code work for cases in which a processor focuses on one user
-				assert len(subdeployments[worker]['ugs']) >= 1
-				# send worker startup information
-				self.worker_manager.worker_to_deployments[worker] = subdeployments[worker]
-				
-				msg = pickle.dumps(('update_deployment', (subdeployments[worker], kwargs)))
-				msgs.append(msg)
-			print("Pickling subdeployments took {}s".format(time.time()-ts))
+				self.worker_manager.worker_to_deployments[worker] = self.deployment
+			msg = pickle.dumps(('update_deployment', (self.deployment, kwargs)))
+			msgs = [msg for _ in range(n_workers)]
+			print("Pickling deployment took {}s".format(time.time()-ts))
 			ts=time.time()
 			self.worker_manager.send_receive_messages_workers(msgs)
-			print("Send/rcv subdeployments took {}s".format(time.time()-ts))
+			print("Send/rcv deployment took {}s".format(time.time()-ts))
 			
 		except AttributeError:
 			pass

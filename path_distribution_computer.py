@@ -16,7 +16,7 @@ Key methods used by the driver:
                                    gradient probes
   - `solve_generic_lp_persistent` reuse the Gurobi shell for one LP
                                    evaluation (gradient probes)
-  - `update_deployment(dep)`      re-shard when the deployment changes
+  - `update_deployment(dep)`      refresh worker state when the deployment changes
                                    (per-dpsize boundary or adaptive resize)
   - `dump_mem_log()`              return this worker's [mem-worker] file
                                    content (driver collects at end of run)
@@ -127,7 +127,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	Constructed in production only via the Ray actor subclass
 	(path_distribution_computer_ray._LocalPathDistributionComputer), which
-	calls Optimal_Adv_Wrapper.__init__ directly with the subdeployment +
+	calls Optimal_Adv_Wrapper.__init__ directly with the deployment +
 	init_kwa it was handed by Worker_Manager. The base __init__ below
 	only sets the cheap per-instance state and is callable in debug mode
 	for unit tests that exercise the LP methods in isolation.

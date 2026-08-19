@@ -26,7 +26,7 @@ Key fixtures:
 | Fixture | Scope | What it gives you |
 |---|---|---|
 | `tiny_deployment` | session | Full `really_friggin_small` deployment (2 pops, 20 peers, 75 ugs) |
-| `subdeployment` | session | The one-chunk split, the shape a worker actually receives |
+| `worker_deployment` | session | The full deployment, the shape a worker actually receives |
 | `init_kwa` | session | Matches `Worker_Manager.get_init_kwa()` |
 | `gurobi_available` | session | `True` iff Gurobi can solve a trivial model on this box |
 | `worker` | function | Fresh `_LocalPathDistributionComputer` (the non-Ray class wrapped by `@ray.remote`). Skips automatically if `gurobi_available` is `False`. |
@@ -42,8 +42,8 @@ import pytest
 
 @pytest.mark.unit
 @pytest.mark.gurobi
-def test_my_thing(worker, tiny_advertisement, subdeployment):
-    subdep = dict(subdeployment, generic_objective='avg_latency')
+def test_my_thing(worker, tiny_advertisement, worker_deployment):
+    subdep = dict(worker_deployment, generic_objective='avg_latency')
     out = worker._cmd_solve_lp([(0, tiny_advertisement, subdep, False)])
     assert out[0][1]['solved']
     assert out[0][1]['objective'] > 0

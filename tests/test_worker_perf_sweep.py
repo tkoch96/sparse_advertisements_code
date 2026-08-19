@@ -26,7 +26,6 @@ import pytest
 
 import deployment_setup
 from path_distribution_computer_ray import _LocalPathDistributionComputer
-from helpers import split_deployment_by_ug_separated
 from constants import ADVERTISEMENT_THRESHOLD
 
 # Reuse fingerprint + batch builder from the other test file
@@ -52,7 +51,6 @@ def _build_worker(dpsize, seed, n_prefixes=6):
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
     np.random.seed(seed)
     deployment = deployment_setup.get_random_deployment(dpsize)
-    static_dep, slices = split_deployment_by_ug_separated(deployment, n_chunks=1)
     init_kwargs = {
         'lambduh': 0.1, 'gamma': 1.0, 'with_capacity': False, 'verbose': False,
         'init': {'type': 'normal', 'var': 0.01}, 'explore': 'entropy',
@@ -61,8 +59,8 @@ def _build_worker(dpsize, seed, n_prefixes=6):
     }
     os.makedirs(init_kwargs['save_run_dir'], exist_ok=True)
     return _LocalPathDistributionComputer(
-        worker_i=0, subdeployment=slices[0],
-        init_kwargs=init_kwargs, static_dep=static_dep)
+        worker_i=0, deployment=deployment,
+        init_kwargs=init_kwargs)
 
 
 def _build_advertisement(worker, n_prefixes, seed):

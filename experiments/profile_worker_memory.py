@@ -6,7 +6,7 @@ Four measured phases, all logged to --out (JSON + human table):
 
   1. WORKER CENSUS -- build a real worker IN-PROCESS (the exposed
      _LocalPathDistributionComputer test seam; same construction path as
-     production: split_deployment_by_ug_separated + get_init_kwa) and
+     production: the full deployment + get_init_kwa) and
      pympler.asizeof EVERY instance attribute, post-init and again after
      exercising representative LB-gradient batches.
   2. GROWTH CURVES -- real parent_tracker (+ friends) loaded from the
@@ -84,7 +84,7 @@ def main():
     from wrapper_eval import capacity
     from deployment_setup import get_random_deployment
     from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes, split_deployment_by_ug_separated
+    from helpers import deployment_to_prefixes
     from path_distribution_computer_ray import _LocalPathDistributionComputer
 
     dep = get_random_deployment(args.dpsize)
@@ -94,11 +94,8 @@ def main():
         n_prefixes=deployment_to_prefixes(dep),
         generic_objective='avg_latency')
     init_kwa = sas.get_init_kwa()
-    static_dep, slices = split_deployment_by_ug_separated(
-        sas.output_deployment(), n_chunks=1)
     t0 = time.time()
-    w = _LocalPathDistributionComputer(0, slices[0], init_kwa,
-                                       static_dep=static_dep)
+    w = _LocalPathDistributionComputer(0, sas.output_deployment(), init_kwa)
     print('worker built in {:.1f}s'.format(time.time() - t0))
     census(w, 'worker_post_init', OUT)
 

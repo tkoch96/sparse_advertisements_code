@@ -17,17 +17,17 @@ import pytest
 
 @pytest.mark.gurobi
 @pytest.mark.slow
-def test_persistent_lp_solve_throughput(worker_session, subdeployment,
+def test_persistent_lp_solve_throughput(worker_session, worker_deployment,
                                         tiny_advertisement, lp_timer):
 	"""Measure how fast the worker's persistent-LP path solves the tiny
 	deployment. Useful as a baseline before/after solver changes."""
 	# Build one solve_lp `data` payload. Matches the shape Worker_Manager builds
 	# in optimal_adv_wrapper.solve_lp_assignments_workers.
-	subdeployment_with_obj = dict(subdeployment)
-	subdeployment_with_obj['generic_objective'] = 'avg_latency'
+	deployment_with_obj = dict(worker_deployment)
+	deployment_with_obj['generic_objective'] = 'avg_latency'
 
 	def one_solve():
-		data = [(0, tiny_advertisement, subdeployment_with_obj, False)]
+		data = [(0, tiny_advertisement, deployment_with_obj, False)]
 		out = worker_session._cmd_solve_lp(data)
 		# Make sure we're not silently no-oping.
 		assert out and out[0][1].get('solved'), "LP did not solve"

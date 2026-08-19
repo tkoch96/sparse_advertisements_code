@@ -62,8 +62,8 @@ if _REPO_ROOT not in sys.path:
 # ---------------------------------------------------------------------------
 
 def _ug_vols_for(sas, n):
-    """Volume vector matching a lats_by_ug of length n (workers hold
-    subdeployments, the driver holds the whole deployment)."""
+    """Volume vector matching a lats_by_ug of length n (worker and
+    driver objects can expose either vols attribute)."""
     for attr in ('whole_deployment_ug_vols', 'ug_vols'):
         v = getattr(sas, attr, None)
         if v is not None and len(np.asarray(v).flatten()) == n:

@@ -45,18 +45,14 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 	wrapping this class.
 	"""
 
-	def __init__(self, worker_i, subdeployment, init_kwargs, static_dep=None):
+	def __init__(self, worker_i, deployment, init_kwargs):
 		# Replicate the non-ZMQ portion of the original __init__ (lines 42-62
 		# of path_distribution_computer.py). Skip start_connection / run.
 		#
-		# If `static_dep` is provided (an ObjectRef from worker_comms_ray.
-		# start_workers, auto-dereferenced by Ray at actor-init time), the
-		# `subdeployment` arg contains only the per-UG sliced keys and we
-		# merge with the shared static context here. Tests + ad-hoc callers
-		# that pass a full subdeployment dict (static_dep=None) keep working
-		# unchanged.
-		if static_dep is not None:
-			subdeployment = {**static_dep, **subdeployment}
+		# `deployment` is the FULL deployment (one shared plasma entry,
+		# ray.put once by worker_comms_ray.start_workers and
+		# auto-dereferenced by Ray at actor-init time). Every worker
+		# computes gradient jobs over the entire deployment.
 		self.worker_i = worker_i
 		self.port = 0  # unused under Ray
 		self.logging_iter = 0
@@ -69,9 +65,9 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		self.rti_data = {}
 		self.MC_NUM = 5  ## monte carlo simulations to determine distributions
 
-		# Construct the optimization wrapper directly with the subdeployment
+		# Construct the optimization wrapper directly with the deployment
 		# and init kwargs supplied by Worker_Manager (no ZMQ handshake).
-		Optimal_Adv_Wrapper.__init__(self, subdeployment, **init_kwargs)
+		Optimal_Adv_Wrapper.__init__(self, deployment, **init_kwargs)
 
 		# Open the per-worker log file the same way the original did.
 		log_path = os.path.join(

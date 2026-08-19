@@ -32,7 +32,6 @@ import pytest
 
 import deployment_setup
 from path_distribution_computer_ray import _LocalPathDistributionComputer
-from helpers import split_deployment_by_ug_separated, split_deployment_by_ug
 from constants import ADVERTISEMENT_THRESHOLD
 
 
@@ -62,7 +61,7 @@ def real_deployment_factory():
         if key in cache:
             # Return a deepcopy so per-test mutations don't leak between
             # parametrized cases (the worker constructor mutates the
-            # subdeployment in init_all_vars).
+            # deployment in init_all_vars).
             return copy.deepcopy(cache[key])
         os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
         np.random.seed(seed)
@@ -113,10 +112,6 @@ def worker_factory(real_deployment_factory):
         if key in cache:
             return cache[key]
         deployment = real_deployment_factory(dpsize, seed)
-        # We use the static+slice refactored split so the worker init
-        # path matches what start_workers does in production.
-        static_dep, slices = split_deployment_by_ug_separated(
-            deployment, n_chunks=1)
         init_kwargs = {
             'lambduh': 0.1,
             'gamma': 1.0,
@@ -131,8 +126,8 @@ def worker_factory(real_deployment_factory):
         }
         os.makedirs(init_kwargs['save_run_dir'], exist_ok=True)
         worker = _LocalPathDistributionComputer(
-            worker_i=0, subdeployment=slices[0],
-            init_kwargs=init_kwargs, static_dep=static_dep)
+            worker_i=0, deployment=deployment,
+            init_kwargs=init_kwargs)
         cache[key] = worker
         return worker
 

@@ -186,10 +186,10 @@ class Worker_Manager:
 		return self.kwa_settings
 
 	def get_n_workers(self):
-		# Once workers are running, return the actual count. Partitioning
-		# code (split_deployment_by_ug, send_receive_messages_workers
-		# preallocators in optimal_adv_wrapper) calls this; after a
-		# request_add_workers ramp, callers should see the new size.
+		# Once workers are running, return the actual count. Job-fanout
+		# code (send_receive_messages_workers preallocators in
+		# optimal_adv_wrapper) calls this; after a request_add_workers
+		# ramp, callers should see the new size.
 		if self.worker_sockets:
 			return len(self.worker_sockets)
 		return self._target_n_workers()
@@ -241,15 +241,13 @@ class Worker_Manager:
 			if env_override is not None:
 				print("SCULPTOR_N_WORKERS override active: n_workers={}".format(n_workers))
 
-		# Split the deployment into (shared static dict, per-UG slices) and
-		# ray.put the static dict ONCE. The actor constructor then receives
-		# the static dict via ObjectRef (auto-dereferenced by Ray's actor
-		# protocol from one shared plasma entry) plus its tiny per-UG slice
-		# — avoiding 34 MB × n_workers of redundant pickling at actual-32
-		# scale (~95 sec → ~10 sec wall for 64 actors).
-		static_dep, slices = split_deployment_by_ug_separated(
-			self.deployment, n_chunks=n_workers)
-		static_dep_ref = ray.put(static_dep)
+		# Every worker computes gradient jobs over the ENTIRE deployment
+		# (grads are what's distributed across workers, not UGs — proven
+		# bitwise in experiments/desharding, Tom 2026-08-19). ray.put the
+		# full deployment ONCE; every actor constructor receives the same
+		# ObjectRef (auto-dereferenced from one shared plasma entry), so
+		# nothing is pickled per actor.
+		dep_ref = ray.put(self.deployment)
 
 		# Same trick for init_kwa (already shared across actors).
 		init_kwa = self.get_init_kwa()
@@ -267,18 +265,12 @@ class Worker_Manager:
 				  .format(stagger_sec), flush=True)
 
 		for worker in range(n_workers):
-			if len(slices[worker]['ugs']) == 0:
-				continue
-			assert len(slices[worker]['ugs']) >= 1
-			# worker_to_deployments stores the *full* per-worker dict so any
-			# driver-side code that reads it (e.g. update_worker_deployments)
-			# sees the same shape as before the refactor.
-			self.worker_to_deployments[worker] = {**static_dep, **slices[worker]}
+			# Every worker sees the same full deployment.
+			self.worker_to_deployments[worker] = self.deployment
 			# Construct the actor. The Ray scheduler picks a node/CPU.
-			# Each actor's __init__ (in path_distribution_computer_ray) merges
-			# the static + slice and sets up its persistent Gurobi model.
-			actor = ACTOR_CLS.remote(
-				worker, slices[worker], init_kwa_ref, static_dep_ref)
+			# Each actor's __init__ (in path_distribution_computer_ray)
+			# sets up its persistent Gurobi model.
+			actor = ACTOR_CLS.remote(worker, dep_ref, init_kwa_ref)
 			# Wrap in a ZMQ-shaped shim so external code that calls
 			# socket.send(msg)/socket.recv() (e.g. sparse_advertisements_v3
 			# stop_tracker/set_iter loops) works unchanged. Worker_Manager's
@@ -485,24 +477,17 @@ class Worker_Manager:
 			n_existing, n_total, n_add), flush=True)
 		t0 = time.time()
 
-		# Re-shard the deployment for the NEW total. split_deployment_by_ug_separated
-		# returns (static_dep, [slice for each chunk]). Stable mapping:
-		# index i in slices corresponds to worker_i.
-		static_dep, slices = split_deployment_by_ug_separated(
-			self.deployment, n_chunks=n_total)
-		static_dep_ref = ray.put(static_dep)
+		# Every worker holds the full deployment, so growing the pool is
+		# just spawning actors — existing workers are untouched.
+		dep_ref = ray.put(self.deployment)
 		init_kwa_ref = ray.put(self.get_init_kwa())
 
-		# 1) Spawn the new actors with their slices. Same construct pattern
-		#    as start_workers — they boot their Gurobi shell + init_all_vars
-		#    in parallel.
+		# 1) Spawn the new actors. Same construct pattern as start_workers
+		#    — they boot their Gurobi shell + init_all_vars in parallel.
 		new_sockets = {}
 		stagger_sec = float(os.environ.get('SCULPTOR_WORKER_INIT_STAGGER_SEC', '0') or 0)
 		for i in range(n_existing, n_total):
-			if len(slices[i]['ugs']) == 0:
-				continue
-			actor = ACTOR_CLS.remote(
-				i, slices[i], init_kwa_ref, static_dep_ref)
+			actor = ACTOR_CLS.remote(i, dep_ref, init_kwa_ref)
 			new_sockets[i] = _ActorSocketShim(actor)
 			if stagger_sec > 0 and i + 1 < n_total:
 				time.sleep(stagger_sec)
@@ -513,46 +498,27 @@ class Worker_Manager:
 			ray.get(ready_refs)
 		t_init = time.time() - t0
 
-		# 3) Re-shard existing workers — they need their NEW slice (which
-		#    is a smaller portion of UGs than before). update_deployment
-		#    on each.
-		reshard_refs = []
-		for i in range(n_existing):
-			if i not in self.worker_sockets:
-				continue
-			if len(slices[i]['ugs']) == 0:
-				continue
-			new_subdep = {**static_dep, **slices[i]}
-			self.worker_to_deployments[i] = new_subdep
-			msg = pickle.dumps(('update_deployment', (new_subdep, {})))
-			reshard_refs.append(self.worker_sockets[i].handle_msg.remote(msg))
-		if reshard_refs:
-			ray.get(reshard_refs)
-		t_reshard = time.time() - t0 - t_init
-
-		# 4) Merge new actors into worker_sockets. No lock needed because
+		# 3) Merge new actors into worker_sockets. No lock needed because
 		#    this method is called only from the main thread between iter
 		#    boundaries (no concurrent fanouts).
 		for i, sock in new_sockets.items():
 			self.worker_sockets[i] = sock
-			self.worker_to_deployments[i] = {**static_dep, **slices[i]}
+			self.worker_to_deployments[i] = self.deployment
 
-		print("[adaptive-workers] pool now {} workers; init={:.1f}s reshard={:.1f}s".format(
-			len(self.worker_sockets), t_init, t_reshard), flush=True)
+		print("[adaptive-workers] pool now {} workers; init={:.1f}s".format(
+			len(self.worker_sockets), t_init), flush=True)
 
 	def _do_remove_workers(self, n_remove):
-		"""Remove the highest-indexed `n_remove` actors from the pool and
-		re-shard the deployment across the smaller pool.
+		"""Remove the highest-indexed `n_remove` actors from the pool.
+		Remaining workers are untouched (every worker holds the full
+		deployment; shrinking just means fewer job-runners).
 
 		Steps:
 		  1) Pick the worker_i keys to drop (highest indices first).
 		  2) Pull their [mem-worker] log via dump_mem_log RPC and echo to
 		     stdout (so the records are preserved in the sweep log even
 		     though the actor is about to die).
-		  3) Re-shard the deployment for the new (smaller) total.
-		  4) Send each remaining worker its new (larger) UG slice via
-		     update_deployment.
-		  5) ray.kill the removed actors. The kill is forcible -- any
+		  3) ray.kill the removed actors. The kill is forcible -- any
 		     in-flight method call on a removed actor will error, which
 		     is why this must run between iters (no fanouts in flight).
 		"""
@@ -571,7 +537,6 @@ class Worker_Manager:
 		# 1) Highest indices first, but skip any missing keys (defensive).
 		all_keys = sorted(self.worker_sockets.keys())
 		to_remove = all_keys[-actual_remove:]
-		to_keep = all_keys[:-actual_remove]
 
 		# 2) Collect mem logs from the workers we're about to kill so we
 		#    don't lose their records.
@@ -587,32 +552,7 @@ class Worker_Manager:
 			except Exception:
 				pass
 
-		# 3) Re-shard for the new smaller total. We use the SAME indexing
-		#    scheme as start_workers / _do_add_workers (slice[i] -> worker_i)
-		#    by re-running split_deployment_by_ug_separated with n_chunks=n_total
-		#    and then assigning those slices to the kept worker_i values in
-		#    sorted order.
-		static_dep, slices = split_deployment_by_ug_separated(
-			self.deployment, n_chunks=n_total)
-		# Note: slices is a list of n_total dicts. We map slices[k] -> kept worker
-		# `to_keep[k]`. After this, the kept workers' worker_to_deployments
-		# entries no longer match their physical worker_i (which is fine --
-		# downstream code keys off worker_i, not slice index).
-
-		# 4) Send each kept worker its new slice.
-		reshard_refs = []
-		for k, kept_i in enumerate(to_keep):
-			if k >= len(slices) or len(slices[k]['ugs']) == 0:
-				continue
-			new_subdep = {**static_dep, **slices[k]}
-			self.worker_to_deployments[kept_i] = new_subdep
-			msg = pickle.dumps(('update_deployment', (new_subdep, {})))
-			reshard_refs.append(self.worker_sockets[kept_i].handle_msg.remote(msg))
-		if reshard_refs:
-			ray.get(reshard_refs)
-		t_reshard = time.time() - t0
-
-		# 5) ray.kill the removed actors and drop them from worker_sockets.
+		# 3) ray.kill the removed actors and drop them from worker_sockets.
 		for worker_i in to_remove:
 			sock = self.worker_sockets.pop(worker_i, None)
 			self.worker_to_deployments.pop(worker_i, None)
@@ -624,25 +564,18 @@ class Worker_Manager:
 			except Exception:
 				pass
 
-		print("[adaptive-workers] pool now {} workers; reshard+kill={:.1f}s".format(
+		print("[adaptive-workers] pool now {} workers; kill={:.1f}s".format(
 			len(self.worker_sockets), time.time() - t0), flush=True)
 
 	def update_worker_deployments(self, new_deployment):
+		# Every worker receives the same full deployment.
 		self.deployment = new_deployment
 		self.worker_to_deployments = {}
-		n_workers = self.get_n_workers()
-		print("Splitting deployment into subdeployments...")
-		subdeployments = split_deployment_by_ug(self.deployment, n_chunks=n_workers)
-		print("Done splitting deployment into subdeployments.")
-
 		print("Sending deployment update messages...")
+		msg = pickle.dumps(('update_deployment', (self.deployment, {})))
 		refs = []
-		for worker in range(n_workers):
-			if len(subdeployments[worker]['ugs']) == 0:
-				continue
-			assert len(subdeployments[worker]['ugs']) >= 1
-			self.worker_to_deployments[worker] = subdeployments[worker]
-			msg = pickle.dumps(('update_deployment', (subdeployments[worker], {})))
+		for worker in sorted(self.worker_sockets):
+			self.worker_to_deployments[worker] = self.deployment
 			refs.append(self.worker_sockets[worker].handle_msg.remote(msg))
 		print("Waiting for deployment ACK messages...")
 		ray.get(refs)
@@ -699,10 +632,10 @@ class Worker_Manager:
 		which takes ~30-120s. Raises RuntimeError if capacity never returns
 		within SCULPTOR_RECOVER_NODE_TIMEOUT_S (default 900s).
 
-		Re-spawn re-shards self.deployment (the pool's init deployment). Any
+		Re-spawn uses self.deployment (the pool's init deployment). Any
 		per-run state pushed later via update_deployment is NOT replayed here;
 		the retried operation re-applies it (update_deployment messages carry
-		their own subdeployments, and the eval phase re-runs update_deployment
+		the full deployment, and the eval phase re-runs update_deployment
 		before each strategy), so the retry is self-correcting for the call
 		paths that reach this.
 		"""

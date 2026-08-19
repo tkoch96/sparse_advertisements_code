@@ -42,18 +42,17 @@ def _setup_worker(size='small'):
 	random.seed(31415)
 	np.random.seed(31415)
 	from deployment_setup import get_random_deployment
-	from helpers import split_deployment_by_ug
 	from path_distribution_computer_ray import _LocalPathDistributionComputer
 
 	dep = get_random_deployment(size, port=31600)
-	subdep = split_deployment_by_ug(dep, n_chunks=1)[0]
+	subdep = dep
 	init_kwa = {
 		'lambduh': 1.0, 'gamma': 0, 'verbose': False,
 		'n_prefixes': None, 'with_capacity': False,
 		'save_run_dir': None, 'generic_objective': 'avg_latency',
 	}
 	worker = _LocalPathDistributionComputer(
-		worker_i=0, subdeployment=subdep, init_kwargs=init_kwa)
+		worker_i=0, deployment=subdep, init_kwargs=init_kwa)
 	return worker, dep
 
 

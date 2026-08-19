@@ -73,3 +73,18 @@ CAUTION for Patch A: do NOT fix by shipping full base keys to every
 worker (grows RAM); the lean fix drops the base-key requirement in the
 worker wrapper (read whole_deployment_* only) — pairs naturally with
 Patch B arrayification.
+
+## 2026-08-19 REMOVAL EXECUTED (Tom: 'remove absolutely every reference')
+All UG-sharding removed: helpers.py splitters + _KEYS_TO_SLICE deleted;
+start_workers ray.puts the FULL deployment once (one plasma entry, all
+actors share the ref); actor signature (worker_i, deployment,
+init_kwargs); add/remove-workers reshard machinery deleted (grow=spawn,
+shrink=kill); update fan-outs send the full deployment; tests moved to
+worker_deployment fixture. KEPT deliberately: which_ugs/subset_ugs
+eval-time query params; fleet/shard.py (VM manifest sharding);
+lat_shards (CSV shards); two historical *_SUMMARY.md records.
+GATE: old-code vs new-code bitwise parity on raw deployment under
+PYTHONHASHSEED=0 (values pinned in prove_inert.py) + 18 unit tests.
+HASH-SEED FINDING: cross-process benefit reproduction requires
+PYTHONHASHSEED pinned; unpinned processes each get a different (self-
+consistent) MC alignment. Same-process A/B unaffected.

@@ -28,10 +28,9 @@ def test_tiny_deployment_has_expected_shape(tiny_deployment):
 
 
 @pytest.mark.unit
-def test_subdeployment_is_subset_of_full(tiny_deployment, subdeployment):
-	"""split_deployment_by_ug with n_chunks=1 gives us back basically the same
-	thing. Cheap sanity check that the fixture chain works."""
-	assert set(subdeployment['ugs']).issubset(set(tiny_deployment['ugs']))
+def test_worker_deployment_is_full(tiny_deployment, worker_deployment):
+	"""Workers receive the full deployment (no UG sharding)."""
+	assert set(worker_deployment['ugs']) == set(tiny_deployment['ugs'])
 
 
 # ---------------------------------------------------------------------------#

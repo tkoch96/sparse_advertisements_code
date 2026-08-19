@@ -13,7 +13,7 @@ The fixtures:
   * tiny_deployment            -- a minimal `really_friggin_small` deployment,
                                   generated once per test session with a fixed
                                   seed for reproducibility.
-  * subdeployment              -- the deployment split with n_chunks=1, the
+  * worker_deployment          -- the full deployment, the
                                   shape every worker actually receives.
   * init_kwa                   -- kwargs that Optimal_Adv_Wrapper.__init__ wants.
   * worker (function-scoped)   -- a fresh _LocalPathDistributionComputer
@@ -90,11 +90,10 @@ def tiny_deployment():
 
 
 @pytest.fixture(scope='session')
-def subdeployment(tiny_deployment):
-	"""The single-chunk split of the tiny deployment, i.e., the dict shape that
-	a worker actually receives from Worker_Manager."""
-	from helpers import split_deployment_by_ug
-	return split_deployment_by_ug(tiny_deployment, n_chunks=1)[0]
+def worker_deployment(tiny_deployment):
+	"""The dict shape a worker receives from Worker_Manager: the full
+	deployment (every worker computes over the entire deployment)."""
+	return tiny_deployment
 
 
 @pytest.fixture(scope='session')
@@ -139,7 +138,7 @@ def gurobi_available():
 # ---------------------------------------------------------------------------#
 # Worker fixtures (the non-Ray local class so tests are fast).
 # ---------------------------------------------------------------------------#
-def _build_worker(subdeployment, init_kwa):
+def _build_worker(worker_deployment, init_kwa):
 	"""Internal: build a _LocalPathDistributionComputer without Ray.
 
 	This is the same class body the Ray actor wraps; instantiating it directly
@@ -148,42 +147,42 @@ def _build_worker(subdeployment, init_kwa):
 	from path_distribution_computer_ray import _LocalPathDistributionComputer
 	return _LocalPathDistributionComputer(
 		worker_i=0,
-		subdeployment=subdeployment,
+		deployment=worker_deployment,
 		init_kwargs=init_kwa,
 	)
 
 
 @pytest.fixture
-def worker(subdeployment, init_kwa, gurobi_available):
+def worker(worker_deployment, init_kwa, gurobi_available):
 	"""A fresh worker for each test. Skips automatically if Gurobi isn't
 	available, since the worker's __init__ builds the persistent LP model.
 	Function-scoped so state from one test never leaks into the next."""
 	if not gurobi_available:
 		pytest.skip("Gurobi license not available on this machine")
-	return _build_worker(subdeployment, init_kwa)
+	return _build_worker(worker_deployment, init_kwa)
 
 
 @pytest.fixture(scope='session')
-def worker_session(subdeployment, init_kwa, gurobi_available):
+def worker_session(worker_deployment, init_kwa, gurobi_available):
 	"""Like `worker`, but shared across the whole test session. Use this for
 	read-only tests where you want the (potentially slow) __init__ to happen
 	exactly once. DO NOT use for tests that mutate worker state."""
 	if not gurobi_available:
 		pytest.skip("Gurobi license not available on this machine")
-	return _build_worker(subdeployment, init_kwa)
+	return _build_worker(worker_deployment, init_kwa)
 
 
 # ---------------------------------------------------------------------------#
 # Small helpers.
 # ---------------------------------------------------------------------------#
 @pytest.fixture
-def tiny_advertisement(subdeployment):
+def tiny_advertisement(worker_deployment):
 	"""A valid advertisement matrix for the tiny deployment.
 
 	Shape: (n_popps, n_prefixes). Each column is one prefix; values > 0.5 mean
 	the popp is advertised on that prefix. We default to a single prefix that
 	includes all popps -- the simplest non-trivial case."""
-	n_popps = len(subdeployment['popps'])
+	n_popps = len(worker_deployment['popps'])
 	adv = np.ones((n_popps, 1))
 	return adv
 
@@ -213,9 +212,9 @@ def lp_timer():
 	TimingStats. Useful as a building block for benchmark tests.
 
 	Example:
-	    def test_solve_lp_throughput(worker, tiny_advertisement, lp_timer, subdeployment):
+	    def test_solve_lp_throughput(worker, tiny_advertisement, lp_timer, worker_deployment):
 	        def one_solve():
-	            data = [(0, tiny_advertisement, subdeployment, False)]
+	            data = [(0, tiny_advertisement, worker_deployment, False)]
 	            worker._cmd_solve_lp(data)
 	        stats = lp_timer(one_solve, n=50)
 	        print(stats.summary())

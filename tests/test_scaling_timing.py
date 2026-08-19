@@ -69,7 +69,6 @@ def _build_worker_for(size):
 	random.seed(31415)
 	np.random.seed(31415)
 	from deployment_setup import get_random_deployment
-	from helpers import split_deployment_by_ug
 	from path_distribution_computer_ray import _LocalPathDistributionComputer
 
 	t0 = time.perf_counter()
@@ -77,7 +76,7 @@ def _build_worker_for(size):
 	t_dep = time.perf_counter() - t0
 
 	t0 = time.perf_counter()
-	subdep = split_deployment_by_ug(deployment, n_chunks=1)[0]
+	subdep = deployment
 	t_split = time.perf_counter() - t0
 
 	init_kwa = {
@@ -88,12 +87,12 @@ def _build_worker_for(size):
 
 	t0 = time.perf_counter()
 	worker = _LocalPathDistributionComputer(
-		worker_i=0, subdeployment=subdep, init_kwargs=init_kwa)
+		worker_i=0, deployment=subdep, init_kwargs=init_kwa)
 	t_worker = time.perf_counter() - t0
 
 	return {
 		'deployment': deployment,
-		'subdeployment': subdep,
+		'deployment': subdep,
 		'worker': worker,
 		'init_kwa': init_kwa,
 		'setup_timing': {
@@ -134,7 +133,7 @@ def test_lp_throughput_by_deployment_size(size):
 	print("\n--- size = {} ---".format(size))
 	ctx = _build_worker_for(size)
 	worker = ctx['worker']
-	subdep = ctx['subdeployment']
+	subdep = ctx['deployment']
 	deployment = ctx['deployment']
 
 	st = ctx['setup_timing']
@@ -208,7 +207,7 @@ def test_persistent_model_vs_fresh_build():
 	"""
 	ctx = _build_worker_for('small')
 	worker = ctx['worker']
-	subdep = ctx['subdeployment']
+	subdep = ctx['deployment']
 	deployment = ctx['deployment']
 	n_popps = len(deployment['popps'])
 
