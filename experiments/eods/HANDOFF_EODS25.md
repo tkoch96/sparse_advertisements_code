@@ -5,6 +5,22 @@ below is committed AND pushed (origin/main @ d2a2040) AND deployed to
 the head (107.22.173.189, c8g.24xlarge 96c/185G) with the bitwise
 parity gate green (experiments/desharding/prove_inert.py).
 
+## HIGH-LEVEL GOAL (Tom, 2026-08-19 late)
+Evaluation over deployment sizes AT SCALE — target: run this at
+~1000 cores. Path: valid single-deployment results at 25 then 32 on
+the 96-core head, then multi-node fleet (bandwidth is per-node:
+~96w/node for training, ~32 effective for cold phases -> ~10-12 nodes;
+serial driver floor <10-20s/iter becomes the binding constraint at
+that scale — async/pipelined grads is the known counter). Measured
+scaling model + core-seconds numbers in KNOWN NUMBERS below.
+
+## IMMEDIATE NEXT STEP
+The running 25 cell completes -> check evals VALID (stats populated,
+volume-multiplier assert silent) -> launch the single 32 cell
+(~/eods32_launch_full.sh; consider PROBE_TCONV ~ realistic horizon).
+Then: fleet plan for 1000 cores (nodes x width, Ray multi-node — the
+autoscaler-era code supports it; per-node plasma dedupe already in).
+
 ## SCOPE (Tom, revised mid-day)
 ONE deployment at actual-25 (seed 1), then ONE at actual-32 — through
 run_eods_cell -> eval_latency_failure.evaluate_all_metrics (classical

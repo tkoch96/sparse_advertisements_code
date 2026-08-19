@@ -1,3 +1,21 @@
+# ABLATION PROGRAM CONCLUDED (2026-08-19)
+
+The ladder question is ANSWERED — v5 scout completed all 1080 cells
+(840 v5full_v2 + 120 L4nd + 120 L6c; stores mirrored to the Mac, sweep
+VM terminated). Closing synthesis (in the 2026-08-19 session log, and
+worth an experiments/ablation/V5_SCOUT_FINDINGS.md if formalized):
+L6c (conservative WHEN) wins the trained lat+resilience objective
+(median dObj 2.13, zero blowups) but loses prio/mlu; L6 slotted is the
+LEAST stable arm (9 blowups, seed-202 cluster); L4 flip-all =
+high-variance flop; rmsprop > adagrad; probing frequency is a
+STABILITY knob, not just accuracy. lat+resilience is where gradient
+descent has most traction.
+
+CURRENT PROGRAM: eval over deployment sizes at scale — see
+experiments/eods/HANDOFF_EODS25.md (canonical). This file is retained
+for the ladder's settled findings below; the arc/progress sections are
+HISTORICAL.
+
 # Ablation handoff — V4 ERA (2026-08-17, L1-L6 ladder, license-paused)
 
 ## READ THIS SECTION ONLY. History lives in old_handoffs/ — consult for
@@ -13,8 +31,7 @@ We are isolating which of SCULPTOR's methodological features actually
 earn their complexity, by ablation ladder, while SLOWLY GROWING PROBLEM
 SIZE so conclusions survive scale:
 
-    small x 1 seed (smokes)  ->  small x 10 deployments (CURRENT, 67% done)
-    ->  actual-10 x 1 deployment (STARTED, 2/6 cells)  ->  actual-32 (future)
+    small x 1 seed -> small x 10 -> actual-10 -> v5 scout full grid (ALL DONE)
 
 Ladder (one capability per rung; probing is ALWAYS pure grounding —
 measure the current advertisement):
