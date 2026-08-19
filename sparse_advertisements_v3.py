@@ -2982,30 +2982,32 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.worker_manager.send_receive_workers(pickle.dumps(('set_iter', self.iter)))
 
 		self.stop = self.stopping_condition([self.iter,self.rolling_delta,self.rolling_delta_eff,self.rolling_adv_delta])
-		# Budget-gated exit confirmation (Tom 2026-08-19: 'if our
-		# measurements weren't spent, we shouldn't exit'). A believed-
-		# convergence exit while probes remain banked must be VERIFIED:
-		# spend one probe grounding the CURRENT advertisement and retract
-		# the stop for this iter — beliefs/caches refresh from truth, and
-		# if the plateau was an artifact the stop clauses won't re-fire.
-		# The exit stands only when (a) budget is exhausted, or (b) the
-		# current adv is already ground-truth measured (probe skip path),
-		# which is the strongest possible confirmation of the belief.
-		# SCULPTOR_STOP_CONFIRM_PROBE=0 restores the old behavior.
+		# Budget-drain stopping (Tom 2026-08-19 v2: 'we already have
+		# logic to execute measurements at a maximum cadence'). Believed
+		# convergence with probes still banked does NOT exit — it flips
+		# the scheduler into drain mode: remaining probes fire at the
+		# existing max cadence (the gate's retry_ok pacing), grounding
+		# the belief as it settles. The exit stands only once the budget
+		# is spent or the current advertisement is ground-truth measured.
+		# SCULPTOR_STOP_CONFIRM_PROBE=0 restores old behavior.
 		if (self.stop and self.iter <= self.max_n_iter
 				and _os.environ.get('SCULPTOR_STOP_CONFIRM_PROBE', '1') != '0'
 				and getattr(self, 'probes_spent', None) is not None
 				and self.probes_spent < getattr(self, 'probe_n', 0)):
-			fired = self._probe_ground_current()
-			if fired:
+			cur = tuple(threshold_a(np.asarray(
+				self.optimization_advertisement, dtype=float)).flatten())
+			if cur not in getattr(self, 'measured', {}):
 				self.stop = False
-				print('[stop-confirm] iter={} believed converged with '
-					  '{}/{} probes spent — spent one to verify; '
-					  'continuing'.format(self.iter, self.probes_spent,
-										  self.probe_n), flush=True)
+				print('[stop-hold] iter={} believed converged but only '
+					  '{}/{} probes spent — holding exit; staleness '
+					  'floor will ground within {} iters'.format(
+						  self.iter, self.probes_spent, self.probe_n,
+						  self._probe_env('PROBE_MAX_STALENESS', 'period')),
+					  flush=True)
 			else:
-				print('[stop-confirm] iter={} exit stands (current adv '
-					  'already ground-truth measured)'.format(self.iter),
+				print('[stop-hold] iter={} exit stands (current adv '
+					  'ground-truth measured; {}/{} spent)'.format(
+						  self.iter, self.probes_spent, self.probe_n),
 					  flush=True)
 		# one compact parseable metrics line per training iteration
 		# (Tom 2026-08-19 dash: objective, stop signals, adv sparsity)
@@ -3305,14 +3307,23 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		earliest, latest = center - w, center + w
 		due = self.iter >= (earliest if hot else center)
 		force = self.iter >= latest
-		decision = can and (due or force)
+		# Staleness floor (Tom 2026-08-19: 'if we haven't done a
+		# measurement in X iterations and we have budget, measure').
+		# Guarantees groundings at least every PROBE_MAX_STALENESS iters
+		# while budget remains, independent of slot placement — so a
+		# converging run drains its bank instead of exiting on stale
+		# beliefs. Default X = the natural slot period.
+		max_stale = int(self._probe_env('PROBE_MAX_STALENESS',
+										str(period)))
+		stale = (self.iter - self._probe_last_iter) >= max_stale
+		decision = can and (due or force or stale)
 		if decision:
 			self._probe_last_attempt = self.iter
 			self._probe_arm_surprise()
 		print('[probe-gate] iter={} mode=slotted k={}/{} slot=[{},{}] '
-			  'hot={} spent={} -> {}'.format(
+			  'hot={} stale={} spent={} -> {}'.format(
 				  self.iter, k, self.probe_n, earliest, latest, hot,
-				  self.probes_spent,
+				  stale, self.probes_spent,
 				  'PROBE' if decision else 'step'), flush=True)
 		return decision
 
