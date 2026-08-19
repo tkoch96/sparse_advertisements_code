@@ -3073,7 +3073,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# payload so a loaded run's downstream stream matches the
 		# computing run's bitwise. SCULPTOR_BELIEF_MEMO=0 disables.
 		import random as _random
-		_memo_on = _os.environ.get('SCULPTOR_BELIEF_MEMO', '0') == '1'
+		_memo_on = _os.environ.get('SCULPTOR_BELIEF_MEMO', '1') != '0'
 		_memo_fn = None
 		if _memo_on:
 			try:
