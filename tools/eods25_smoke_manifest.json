@@ -1,0 +1,25 @@
+[
+ {
+  "label": "eods_a25",
+  "runner": "experiments.eods.run_eods_cell",
+  "out_root": "cache/eods/smoke25/actual-25",
+  "rungs": "eods",
+  "probe_mode": "fixed",
+  "seeds": "1-10",
+  "n_values": "1",
+  "gamma": "0",
+  "max_iter": 1,
+  "dpsize": "actual-25",
+  "artifacts_figs": "cache/eods/smoke25_artifacts/figs",
+  "env": {
+   "SCULPTOR_SOLN_TYPES": "sparse",
+   "SCULPTOR_LP_BACKEND": "highs",
+   "SCULPTOR_PROBE_MODE": "slotted",
+   "SCULPTOR_PROBE_N": "10",
+   "SCULPTOR_PROBE_TCONV": "200",
+   "SCULPTOR_OBJ_ROUND": "4",
+   "SCULPTOR_EODS_MODE": "sizes",
+   "SCULPTOR_MAX_ITER": "200"
+  }
+ }
+]

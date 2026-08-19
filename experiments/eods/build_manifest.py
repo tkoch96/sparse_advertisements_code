@@ -46,8 +46,18 @@ OBJ32_RUNGS = {'L6_full_slotted': ('full', 'slotted'),
 
 
 def base_env(args):
-    return {'SCULPTOR_SOLN_TYPES': args.soln_types,
-            'SCULPTOR_LP_BACKEND': args.backend}
+    env = {'SCULPTOR_SOLN_TYPES': args.soln_types,
+           'SCULPTOR_LP_BACKEND': args.backend}
+    # --env KEY=VAL (repeatable): extra per-cell env baked into every
+    # spec. Needed because the queue exports SCULPTOR_ABLATION_PROBE_*
+    # twins derived from the spec's (probe_mode, N, max_iter) queue
+    # fields — which for EODS cells are progress-convention placeholders
+    # (fixed/1/1), NOT training knobs. The solver checks the unprefixed
+    # SCULPTOR_PROBE_* names first, so explicit values here win.
+    for kv in (args.env or []):
+        k, _, v = kv.partition('=')
+        env[k] = v
+    return env
 
 
 def mode_sizes(args):
@@ -113,6 +123,8 @@ def main():
     ap.add_argument('--seeds', default='1-3')
     ap.add_argument('--n-values', default='10')
     ap.add_argument('--train-iters', type=int, default=200)
+    ap.add_argument('--env', action='append', default=[],
+                    help='extra per-cell env KEY=VAL (repeatable)')
     args = ap.parse_args()
 
     specs = {'sizes': mode_sizes, 'prefixes': mode_prefixes,

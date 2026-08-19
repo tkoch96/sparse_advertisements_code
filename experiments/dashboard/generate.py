@@ -982,6 +982,47 @@ EXPERIMENTS.append({
          ]}},
     ]})
 
+# ---- EODS-25 (Tom 2026-08-19: SCULPTOR-full/L6 at dpsize 25 through
+# the classical eval_latency_failure metrics; queue-native cells on the
+# HEAD). Raw per-cell metrics pickles are deployment-sized and stay on
+# the head; experiments.eods.dash_harvest distills store -> v1_dash/
+# (jsons, stats-only merge, [mem] telemetry) and only that is pulled.
+EXPERIMENTS.append({
+    'id': 'eods25', 'title': 'EODS-25',
+    'sections': [
+        {'id': 'overview', 'title': 'overview', 'kind': 'static',
+         'heading': 'evaluate_over_deployment_sizes @ actual-25 ONLY — '
+                    'sparse (L6 slotted, rmsprop, stop-v2) + 5 baselines, '
+                    'HiGHS, sims 1-10 (seed = sim), classical '
+                    'eval_latency_failure metrics',
+         'figures': ['figures/eods25_status.png',
+                     'figures/eods25_results.png'],
+         'intro': ('<p>The v4-era trained solver scored by the CLASSICAL '
+                   'paper evals: normal + link/site-failure latency '
+                   'suboptimality vs one-per-peering et al. One cell = '
+                   'one (dpsize=25, sim); resumable per-cell pickle; '
+                   'deployment seed = sim index (pinned, recorded in '
+                   'each cell json). Runs on the head (185G) — dpsize '
+                   '25 OOM-killed a 64G head historically, so the '
+                   'status board tracks driver RSS + system-available '
+                   'as first-class signals. Training env per cell: '
+                   'PROBE_MODE=slotted PROBE_N=10 PROBE_TCONV=200 '
+                   'MAX_ITER=200 OBJ_ROUND=4 + lat-shard depsetup.</p>'),
+         'refresh': {
+             'remote_harvest':
+                 'cd sparse_advertisements_code && '
+                 '~/venv312/bin/python -m experiments.eods.dash_harvest '
+                 '>/dev/null 2>&1',
+             'pull': [('cache/eods/v1_dash/', 'cache/eods/v1_dash/')],
+             'steps': [
+                 {'in': ['cache/eods/v1_dash/*'], 'always': True,
+                  'out': ['figures/eods25_status.png',
+                          'figures/eods25_results.png'],
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_eods25']},
+             ]}},
+    ]})
+
 # Retired unified-grid campaigns (Tom 2026-08-17: never orphan a view
 # again — every superseded campaign gets an archived section here).
 EXPERIMENTS.append({
