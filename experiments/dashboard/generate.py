@@ -991,10 +991,13 @@ EXPERIMENTS.append({
     'id': 'eods25', 'title': 'EODS-25',
     'sections': [
         {'id': 'overview', 'title': 'overview', 'kind': 'static',
-         'heading': 'evaluate_over_deployment_sizes @ actual-25 ONLY — '
+         'heading': 'evaluate_over_deployment_sizes @ actual-25 — '
                     'sparse (L6 slotted, rmsprop, stop-v2) + 5 baselines, '
-                    'HiGHS, sims 1-10 (seed = sim), classical '
-                    'eval_latency_failure metrics',
+                    'HiGHS, classical eval_latency_failure metrics '
+                    '&nbsp; <a href="eods25_tail.txt" style="font-size:14px;'
+                    'padding:2px 10px;border:1px solid #4a3aa7;'
+                    'border-radius:6px;text-decoration:none">'
+                    '&#9654; live log tail</a>',
          'figures': ['figures/eods25_run.png',
                      'figures/eods25_status.png',
                      'figures/eods25_results.png'],
@@ -1008,9 +1011,7 @@ EXPERIMENTS.append({
                    'status board tracks driver RSS + system-available '
                    'as first-class signals. Training env per cell: '
                    'PROBE_MODE=slotted PROBE_N=10 PROBE_TCONV=200 '
-                   'MAX_ITER=200 OBJ_ROUND=4 + lat-shard depsetup. '
-                   'Raw live log tail: <a href="eods25_tail.txt">'
-                   'eods25_tail.txt</a>.</p>'),
+                   'MAX_ITER=200 OBJ_ROUND=4 + lat-shard depsetup.</p>'),
          'refresh': {
              'remote_harvest':
                  'cd sparse_advertisements_code && '
@@ -1603,7 +1604,8 @@ tbody th { white-space:nowrap; font-weight:600; }
   border-bottom:1px dotted var(--acc); }
 .c a:hover { color:var(--go); border-bottom-style:solid; }
 .mut { color:var(--mut); }
-img { max-width:100%; border:1px solid var(--line); background:#fff;
+img { max-width:100%; max-height:92vh; width:auto; height:auto;
+      object-fit:contain; border:1px solid var(--line); background:#fff;
   margin:.6rem 0; }
 .note { color:var(--mut); font-size:.76rem; max-width:72ch; }
 </style>
