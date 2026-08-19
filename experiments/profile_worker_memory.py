@@ -104,23 +104,25 @@ def main():
     n_popp, n_pref = len(w.popps), w.n_prefixes
     rng = np.random.default_rng(0)
     for it in range(args.exercise_iters):
-        adv = (rng.random((n_popp, n_pref)) > 0.5).astype(float)
-        base = adv.copy()
-        calls = []
-        for ci in range(min(30, n_popp)):
-            a2 = base.copy()
-            a2[ci % n_popp, ci % n_pref] = 1 - a2[ci % n_popp, ci % n_pref]
-            calls.append(((ci % n_popp, ci % n_pref), 'ab'))
+        # production wire format (flush_latency_benefit_queue_generic):
+        # data[0] = ((base_adv,), base_kwa); data[1:] = (np.where(base !=
+        # other), kwa) — the handler flips those indices in-place.
+        base = (rng.random((n_popp, n_pref)) > 0.5).astype(float)
+        kwa = {'generic_obj': 'avg_latency'}
+        data = [((base,), dict(kwa))]
+        for ci in range(min(30, n_popp * n_pref)):
+            other = base.copy()
+            other[ci % n_popp, ci % n_pref] = 1 - other[ci % n_popp, ci % n_pref]
+            data.append((np.where(base != other), dict(kwa)))
         try:
             w.handle_msg(pickle.dumps(('increment_iter', 'meep')))
         except Exception:
             pass
-        try:
-            w.handle_msg(pickle.dumps(('calc_compressed_lb',
-                                       (base, calls, {}))))
-        except Exception as e:
-            print('exercise msg failed (shape may differ): {}'.format(e))
+        ret = w.handle_msg(pickle.dumps(('calc_compressed_lb', data)))
+        if isinstance(ret, str):
+            print('exercise batch errored: {!r}'.format(ret[:120]))
             break
+        print('exercise iter {} ok ({} calls)'.format(it, len(data)))
     census(w, 'worker_after_{}_iters'.format(args.exercise_iters), OUT)
 
     # ---------------- phase 2: real growth curves ----------------------
