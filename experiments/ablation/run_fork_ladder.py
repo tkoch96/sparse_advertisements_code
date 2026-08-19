@@ -228,6 +228,28 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 import traceback; traceback.print_exc()
                 print('component persist failed (non-fatal): {}'.format(e))
             result['n_iters'] = int(getattr(solver, 'iter', -1))
+            # anytime-performance (Tom 2026-08-19: quantify convergence
+            # SPEED, not just exit iteration — exit includes the stop
+            # rule's flat patience tail). First iteration reaching q of
+            # the total believed-objective descent.
+            try:
+                _tr = solver.metrics.get('abl_belief_objective') or []
+                if len(_tr) > 3:
+                    _its = [t[0] for t in _tr]
+                    _bs = [t[1] for t in _tr]
+                    _b0 = _bs[0]
+                    _bmin = min(_bs)
+                    _drop = _b0 - _bmin
+                    if _drop > 1e-9:
+                        _res = {}
+                        for _q in (0.5, 0.9, 0.95):
+                            for _it, _b in zip(_its, _bs):
+                                if (_b0 - _b) >= _q * _drop:
+                                    _res[str(int(_q * 100))] = int(_it)
+                                    break
+                        result['iters_to'] = _res
+            except Exception as _e:
+                print('iters_to persist failed (non-fatal): {}'.format(_e))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
             result['probe_mode'] = getattr(solver, 'abl_probe_mode', 'fixed')
