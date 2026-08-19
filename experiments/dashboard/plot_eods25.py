@@ -27,7 +27,7 @@ REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
 DASH = os.path.join(REPO, 'cache', 'eods', 'v1_dash')
 FIG_DIR = os.path.join(REPO, 'figures')
-SEEDS = list(range(1, 11))
+SEEDS = [1]  # single-deployment scope (Tom 2026-08-19)
 
 MEM_RE = re.compile(
     r'rss_mb=(\d+) vms_mb=\d+ peak_mb=(\d+) sys_avail_mb=(\d+) '
@@ -102,8 +102,8 @@ def status_fig():
         ax.text(i + 0.5, -0.62, txt, ha='center', fontsize=7, rotation=25)
     ax.set_xlim(0, len(SEEDS)); ax.set_ylim(-1.1, 1.1)
     ax.axis('off')
-    ax.set_title('EODS actual-25 cells (seed = sim; {}/{} done)'.format(
-        len(done), len(SEEDS)))
+    ax.set_title('EODS actual-25 — single cell (seed 1): {}'.format(
+        'DONE' if done else ('running' if running or mem else 'pending')))
 
     for s, rows in sorted(mem.items()):
         t0 = rows[0][0]
@@ -140,6 +140,12 @@ def _num(v):
 def results_fig():
     pkl = os.path.join(DASH, 'metrics_by_dpsize.pkl')
     if not os.path.exists(pkl):
+        f, ax = plt.subplots(figsize=(8, 2))
+        ax.text(.5, .5, 'classical eval results appear here when the '
+                'cell completes its eval battery', ha='center', va='center')
+        ax.axis('off')
+        f.savefig(os.path.join(FIG_DIR, 'eods25_results.png'), dpi=110)
+        plt.close(f)
         return
     try:
         mbd = pickle.load(open(pkl, 'rb'))[25]
