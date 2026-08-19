@@ -117,16 +117,19 @@ def main():
     its = IT_RE.findall(txt)
     if its:
         it_n = [int(a[0]) for a in its]
+        gt = [float(a[1]) for a in its]
         pse = [float(a[2]) for a in its]
         rd = [float(a[3]) for a in its]
         non = [int(a[5]) for a in its]
         ax_obj.plot(it_n, pse, 'k.-', ms=3, label='believed obj')
+        ax_obj.plot(it_n, gt, 'g.-', ms=3, alpha=.8,
+                    label='ground-truth obj (last measured)')
         a2 = ax_obj.twinx()
         a2.semilogy(it_n, np.maximum(rd, 1e-12), 'r--', alpha=.5,
                     label='rolling delta')
         a2.set_ylabel('rolling delta (red, log)')
         ax_obj.set_xlabel('iter (n_on last={})'.format(non[-1]))
-        ax_obj.set_title('convergence: believed objective + stop signal')
+        ax_obj.set_title('convergence: believed vs ground-truth + stop signal')
         ax_obj.legend(fontsize=7, loc='upper right')
         ax_obj.grid(alpha=.3)
     else:
