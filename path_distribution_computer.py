@@ -167,11 +167,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		total_time = sum(list(self.timing.values()))
 		if total_time < 1e-6:
 			return
-		print("\n===============\nWorker {} timing summary (cumulative)".format(self.worker_i))
-		for k in sorted(list(self.timing), key=lambda el: -self.timing[el]):
-			pct = round(self.timing[k] * 100.0 / total_time, 2)
-			print("  {:<40s} {:>6.2f}%  ({:.1f} ms)".format(k, pct, self.timing[k] * 1000))
-		print("==================\n")
+		# ONE compact parseable line per batch (Tom 2026-08-19: informative,
+		# not spammy). Format: [wt] w=<i> total=<s> k1=pct k2=pct ...
+		# (categories under 1% omitted). The dash time-share panel parses
+		# this; humans can read it in the raw tail.
+		parts = ' '.join(
+			'{}={:.0f}%'.format(k.replace('solve_generic_lp_', 'lp_')
+								 .replace('solve_unified_lp_not_optimize', 'lp_feed')
+								 .replace('get_ingress_probabilities_by_dict_generic', 'ing_prob')
+								 .replace('get_paths_by_ug', 'paths')
+								 .replace('organizing_results', 'organize'),
+							   100.0 * self.timing[k] / total_time)
+			for k in sorted(self.timing, key=lambda el: -self.timing[el])
+			if self.timing[k] / total_time >= 0.01)
+		print("[wt] w={} total={:.1f}s {}".format(
+			self.worker_i, total_time, parts), flush=True)
 
 	def init_persistent_lp(self):
 		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""

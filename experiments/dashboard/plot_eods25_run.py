@@ -21,8 +21,7 @@ OUT = os.path.join(REPO, 'figures', 'eods25_run.png')
 
 SOLVE_RE = re.compile(r'([0-9.]+)ms per iter')
 GRAD_RE = re.compile(r'(latency|resilience) benefit grad took ([0-9.]+)s')
-TIMERCAT_RE = re.compile(
-    r'(\w+)\s+([0-9.]+)%\s+\(([0-9.]+) ms\)')
+TIMERCAT_RE = re.compile(r'(\w+)=([0-9.]+)%')
 ITER_RE = re.compile(r'rss_mb=(\d+) .*sys_avail_mb=(\d+) .*'
                      r't=([0-9.]+) iter=(\d+)')
 OBJ_RE = re.compile(r'objective[:= ]+(-?[0-9]+\.[0-9]+)', re.I)
@@ -71,7 +70,7 @@ def main():
 
     # -- worker timing categories (from summarize_timing blocks)
     cats = {}
-    for name, pct, ms in TIMERCAT_RE.findall(txt):
+    for name, pct in TIMERCAT_RE.findall(txt):
         cats.setdefault(name, []).append(float(pct))
     if cats:
         names = sorted(cats, key=lambda k: -np.median(cats[k]))[:8]
