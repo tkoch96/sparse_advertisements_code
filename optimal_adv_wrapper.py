@@ -813,6 +813,10 @@ class Optimal_Adv_Wrapper:
 			self.whole_deployment_poppi_to_ui[poppi] = []
 
 	def update_deployment(self, deployment, **kwargs):
+		# Patch B: keep a ref to the INCOMING dict — it is the object the
+		# worker ship paths serialize, so lat_matrix stashed here rides
+		# to every worker as one plasma-shared numpy buffer.
+		self._incoming_dep = deployment
 		self.simulated = deployment.get('simulated', True)
 		if deployment.get('port') is None:
 			print("\n\nWARNING ---- NO PORT SPECIFIED\n\n")
@@ -1067,15 +1071,33 @@ class Optimal_Adv_Wrapper:
 		## at actual-25 (~130B/entry python overhead) vs 24MB as an
 		## array, and the python fill loop was part of driver-init wall.
 		total_vol = np.sum(self.whole_deployment_ug_vols)
-		lat = np.full((self.n_popps, self.n_ug), float(NO_ROUTE_LATENCY))
-		for ug in self.ugs:
-			ugi = self.ug_to_ind[ug]
-			perfs = self.ug_perfs[ug]
-			for popp, l in perfs.items():
-				try:
-					lat[self.popp_to_ind[popp], ugi] = l
-				except KeyError:
-					pass
+		# Patch B (Tom 2026-08-19): the dense (n_popp x n_ug) latency
+		# matrix is built ONCE (driver) and shipped inside the deployment
+		# dict — Ray zero-copies numpy buffers from plasma, so every
+		# worker on a node references ONE physical copy instead of each
+		# rebuilding it from the ug_perfs dicts (worker init cost + RAM).
+		lat = None
+		_dep = getattr(self, '_incoming_dep', None)
+		if isinstance(_dep, dict):
+			_lm = _dep.get('lat_matrix')
+			if (_lm is not None and _lm.shape ==
+					(self.n_popps, self.n_ug)):
+				lat = _lm
+		if lat is None:
+			lat = np.full((self.n_popps, self.n_ug),
+						  float(NO_ROUTE_LATENCY))
+			for ug in self.ugs:
+				ugi = self.ug_to_ind[ug]
+				perfs = self.ug_perfs[ug]
+				for popp, l in perfs.items():
+					try:
+						lat[self.popp_to_ind[popp], ugi] = l
+					except KeyError:
+						pass
+			if isinstance(_dep, dict):
+				# stash for the worker ship (driver builds first)
+				_dep['lat_matrix'] = lat
+		self.lat_matrix = lat
 		weights = self.ug_vols / total_vol
 		self.measured_latency_benefits = -1.0 * lat * weights[None, :]
 		mlb_best = self.measured_latency_benefits.max(axis=0)
