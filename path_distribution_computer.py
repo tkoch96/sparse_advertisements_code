@@ -176,8 +176,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def init_persistent_lp(self):
 		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""
 		self.model = gp.Model(f"Worker_{self.worker_i}_Persistent")
-		# fresh model => no vars are active; O(changed) UB-reset tracker
+		# fresh model => no vars are active; incremental trackers
 		self._last_active_vars = None
+		self._active_keys = None
+		self._last_mlu = False
 		self.model.Params.LogToConsole = 0
 		self.model.Params.Method = 1
 		self.model.Params.Threads = 1
@@ -256,11 +258,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# UB=0 (newly-discovered vars get UB set right after creation
 		# via the active-set setAttr below).
 		ts = time.time()
+		# Deactivation is handled in section 3: incrementally (diff vs
+		# the previous active set) on the hot path, or a full sweep of
+		# the previously-active vars on the fallback path.
 		prev_active = getattr(self, '_last_active_vars', None)
-		if prev_active is None:
-			prev_active = list(self.var_pool.values())
-		if prev_active:
-			self.model.setAttr("UB", prev_active, [0.0] * len(prev_active))
 
 		# 2. Configure MLU variable and Capacity RHS
 		if using_mlu:
@@ -276,18 +277,55 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.model.chgCoeff(constr, self.mlu_dummy, 0.0)
 				constr.RHS = self.static_caps[pi] # Restore static capacity
 
-		# 3. Activate/Discover Columns (Volume RHS is already static)
+		# 3. Activate/Discover columns INCREMENTALLY (Tom 2026-08-19 hot
+		# loop). Consecutive candidates share ~99% of active paths; we
+		# diff with C-level set ops on the path keys and touch ONLY the
+		# changed columns. Minimal perturbation also preserves HiGHS's
+		# basis, so the subsequent optimize() runs warm (the measured
+		# dominant win: within-call MC repeats were near-free).
+		# Assumption guarded by _incr_obj_ok: objective coefficients for
+		# a persisting active path are call-invariant (true for the
+		# static-latency objectives; MLU/site-cost variants pass
+		# obj-coeff arrays that can vary -> fall back to full Obj push).
+		new_keys = set(available_paths)
 		for (ug, poppi), latency in zip(available_paths, obj_coeffs):
-			key = (ug, poppi)
-			if key not in self.var_pool:
+			if (ug, poppi) not in self.var_pool:
 				col = gp.Column()
 				col.addTerms(1.0, self.vol_constrs[ug])
 				col.addTerms(1.0, self.cap_constrs[poppi])
-				self.var_pool[key] = self.model.addVar(lb=0.0, obj=latency, column=col)
-
-		active_vars = [self.var_pool[ug, poppi] for ug, poppi in available_paths]
-		self.model.setAttr("UB", active_vars, [gp.GRB.INFINITY] * len(active_vars))
-		self.model.setAttr("Obj", active_vars, obj_coeffs)
+				self.var_pool[ug, poppi] = self.model.addVar(
+					lb=0.0, obj=latency, column=col)
+		prev_keys = getattr(self, '_active_keys', None)
+		_incr = (prev_keys is not None
+				 and os.environ.get('SCULPTOR_LP_INCREMENTAL', '1') != '0'
+				 and not using_mlu and not getattr(self, '_last_mlu', False))
+		active_vars = [self.var_pool[k] for k in available_paths]
+		if _incr:
+			to_deact = [self.var_pool[k] for k in prev_keys - new_keys]
+			act_idx = [i for i, k in enumerate(available_paths)
+					   if k not in prev_keys]
+			if to_deact:
+				self.model.setAttr("UB", to_deact, [0.0] * len(to_deact))
+			if act_idx:
+				to_act = [active_vars[i] for i in act_idx]
+				self.model.setAttr("UB", to_act,
+								   [gp.GRB.INFINITY] * len(to_act))
+				self.model.setAttr("Obj", to_act,
+								   [obj_coeffs[i] for i in act_idx])
+		else:
+			# fallback: full deactivate of whatever was active, then
+			# full activate of the new set (first call, MLU switches,
+			# or SCULPTOR_LP_INCREMENTAL=0)
+			if prev_active is None:
+				prev_active = list(self.var_pool.values())
+			if prev_active:
+				self.model.setAttr("UB", prev_active,
+								   [0.0] * len(prev_active))
+			self.model.setAttr("UB", active_vars,
+							   [gp.GRB.INFINITY] * len(active_vars))
+			self.model.setAttr("Obj", active_vars, obj_coeffs)
+		self._active_keys = new_keys
+		self._last_mlu = using_mlu
 		# Stash for solve_generic_lp_persistent's raw_x extraction:
 		# iterating self.var_pool there (which can hit 100k-1M entries
 		# in production) and doing a Gurobi `.X` API call per var costs
