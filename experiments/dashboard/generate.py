@@ -1008,7 +1008,9 @@ EXPERIMENTS.append({
                    'status board tracks driver RSS + system-available '
                    'as first-class signals. Training env per cell: '
                    'PROBE_MODE=slotted PROBE_N=10 PROBE_TCONV=200 '
-                   'MAX_ITER=200 OBJ_ROUND=4 + lat-shard depsetup.</p>'),
+                   'MAX_ITER=200 OBJ_ROUND=4 + lat-shard depsetup. '
+                   'Raw live log tail: <a href="eods25_tail.txt">'
+                   'eods25_tail.txt</a>.</p>'),
          'refresh': {
              'remote_harvest':
                  'cd sparse_advertisements_code && '
@@ -1025,6 +1027,11 @@ EXPERIMENTS.append({
                   'out': ['figures/eods25_run.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25_run']},
+                 {'in': ['cache/eods/v1_dash/log_tails.txt'],
+                  'always': True,
+                  'out': ['dashboard_site/eods25_tail.txt'],
+                  'argv': ['cp', '{repo}/cache/eods/v1_dash/log_tails.txt',
+                           '{repo}/dashboard_site/eods25_tail.txt']},
              ]}},
     ]})
 

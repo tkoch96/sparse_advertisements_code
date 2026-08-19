@@ -108,7 +108,7 @@ def main():
         for fn in logs:
             out.write('==> {} <==\n'.format(fn))
             try:
-                r = subprocess.run(['tail', '-n', '4', fn],
+                r = subprocess.run(['tail', '-n', '150', fn],
                                    capture_output=True, text=True,
                                    timeout=15)
                 out.write(r.stdout + '\n')
