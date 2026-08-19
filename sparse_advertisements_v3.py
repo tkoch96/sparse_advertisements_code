@@ -3019,8 +3019,69 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			float(self.rolling_adv_delta),
 			int(np.sum(self.optimization_advertisement > .5))), flush=True)
 
+	def _belief_memo_key(self):
+		"""Cache key for the initial-belief memo (Tom 2026-08-19):
+		everything that determines the iov computation."""
+		import hashlib, json as _json
+		adv = np.asarray(self.optimization_advertisement, dtype=float)
+		world = {k: _os.environ.get(k, '') for k in (
+			'SCULPTOR_LAT_MODEL', 'SCULPTOR_PREF_MODEL',
+			'SCULPTOR_GEO_NOISE', 'SCULPTOR_VOL_SPREAD',
+			'SCULPTOR_SCALE_FACTOR', 'SCULPTOR_LAT_SPREAD')}
+		spec = dict(dpsize=str(getattr(self, 'dpsize', '?')),
+					seed=_os.environ.get('SCULPTOR_DEPLOYMENT_SEED', ''),
+					adv=hashlib.sha1(adv.tobytes()).hexdigest(),
+					mc=int(getattr(self, 'worker_manager', None) and 0 or 0) or _os.environ.get('SCULPTOR_MC_NUM', '5'),
+					gamma=float(getattr(self, 'gamma', 0)),
+					obj=str(getattr(self.generic_objective, 'obj', 'avg_latency')),
+					n_pref=int(getattr(self, 'n_prefixes', 0) or 0),
+					n_ug=int(self.n_ug), n_popp=int(self.n_popps),
+					world=world)
+		return hashlib.sha1(_json.dumps(spec, sort_keys=True).encode()).hexdigest()[:16]
+
+	_BELIEF_MEMO_ATTRS = (
+		'current_objective', 'current_latency_benefit',
+		'current_resilience_benefit', 'current_pseudo_objective',
+		'current_effective_objective', 'last_objective',
+		'last_effective_objective', 'rolling_delta', 'rolling_delta_eff',
+		'rolling_adv_delta', 'rolling_adv_eps', 'metrics', 'measured',
+		'path_measures', 'last_gti', 'calc_times', 'iter', 'stop',
+		'optimization_advertisement_representation')
+
 	def init_optimization_vars(self):
 		_log_mem('iov_enter')
+		# Initial-belief memoization (Tom 2026-08-19): the belief
+		# bootstrap below is a pure function of (deployment, init adv,
+		# MC/objective/world config) and costs ~50 min at actual-25 —
+		# recomputed identically on every same-seed restart. Persist it
+		# once; load in seconds thereafter. RNG states are part of the
+		# payload so a loaded run's downstream stream matches the
+		# computing run's bitwise. SCULPTOR_BELIEF_MEMO=0 disables.
+		import random as _random
+		_memo_on = _os.environ.get('SCULPTOR_BELIEF_MEMO', '0') == '1'
+		_memo_fn = None
+		if _memo_on:
+			try:
+				_memo_dir = os.path.join(CACHE_DIR, 'belief_memo')
+				os.makedirs(_memo_dir, exist_ok=True)
+				_memo_fn = os.path.join(
+					_memo_dir, 'iov_{}.pkl'.format(self._belief_memo_key()))
+				if os.path.exists(_memo_fn):
+					payload = pickle.load(open(_memo_fn, 'rb'))
+					for k in self._BELIEF_MEMO_ATTRS:
+						setattr(self, k, payload['attrs'][k])
+					np.random.set_state(payload['np_state'])
+					_random.setstate(payload['py_state'])
+					self.set_alpha()
+					print('[belief-memo] LOADED initial belief from {} '
+						  '(computed {})'.format(
+							  os.path.basename(_memo_fn),
+							  payload.get('stamp', '?')), flush=True)
+					_log_mem('iov_post_memo_load')
+					return
+			except Exception as e:
+				print('[belief-memo] load failed ({}); computing fresh'
+					  .format(e), flush=True)
 		self.clear_caches()
 		_log_mem('iov_post_clear_caches')
 
@@ -3067,6 +3128,25 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.metrics['actual_nonconvex_objective'].append(self.current_objective)
 		self.metrics['effective_objectives'].append(self.measured_objective(threshold_a(self.optimization_advertisement)))
 		self.metrics['advertisements'].append(copy.copy(self.optimization_advertisement))
+
+		if _memo_on and _memo_fn is not None:
+			try:
+				import random as _random
+				import time as _t
+				payload = {'attrs': {k: getattr(self, k)
+									 for k in self._BELIEF_MEMO_ATTRS},
+						   'np_state': np.random.get_state(),
+						   'py_state': _random.getstate(),
+						   'stamp': _t.strftime('%Y-%m-%dT%H:%M:%SZ',
+												_t.gmtime())}
+				tmp = _memo_fn + '.tmp'
+				pickle.dump(payload, open(tmp, 'wb'))
+				os.replace(tmp, _memo_fn)
+				print('[belief-memo] PERSISTED initial belief -> {}'
+					  .format(os.path.basename(_memo_fn)), flush=True)
+			except Exception as e:
+				print('[belief-memo] persist failed ({})'.format(e),
+					  flush=True)
 
 	def modify_ugs(self):
 		##### DEPRECATED
