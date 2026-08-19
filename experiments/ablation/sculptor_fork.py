@@ -985,17 +985,21 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
             eps = 1e-12
             favorable = ((aa <= ADVERTISEMENT_THRESHOLD) & (g > eps)) |                         ((aa > ADVERTISEMENT_THRESHOLD) & (g < -eps))
             if favorable.any():
-                theta = float(os.environ.get('SCULPTOR_L4ND_FLIP_FRAC',
-                                             '0.5'))
-                gmax = float(np.abs(g[favorable]).max())
-                targets = favorable & (np.abs(g) >= theta * gmax)
+                # top-K by |gradient| (Tom 2026-08-19: "just make it
+                # easy, flip like the top 5 things"). Amplify so ALL K
+                # cross; fewer than K favorable -> flip what's there.
+                topk = int(os.environ.get('SCULPTOR_L4ND_TOPK', '5'))
+                fav_idx = np.flatnonzero(favorable.flatten())
+                order = np.argsort(-np.abs(g.flatten()[fav_idx]))
+                targets_idx = fav_idx[order[:topk]]
+                targets = np.zeros(g.shape, dtype=bool)
+                targets.flat[targets_idx] = True
                 dist = np.abs(ADVERTISEMENT_THRESHOLD - aa)
                 need = dist[targets] / (self.alpha * np.abs(g[targets]))
                 mult = float(np.max(need)) * 1.0001
-                n_flip = int(targets.sum())
-                print('[L4nd] mult={:.4g} targets={} (theta={}, '
-                      'gmax={:.4g})'.format(mult, n_flip, theta, gmax),
-                      flush=True)
+                print('[L4nd] mult={:.4g} targets={}/{} (top-{})'.format(
+                    mult, int(targets.sum()), len(fav_idx), topk),
+                    flush=True)
                 return g * mult
             print('[L4nd] no favorable coordinate; zero step', flush=True)
             return np.zeros_like(g)
