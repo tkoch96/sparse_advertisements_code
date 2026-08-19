@@ -225,7 +225,16 @@ def main():
         sp.setdefault('label', 'spec{}'.format(i))
         assert sp.get('out_root'), 'spec {} missing out_root'.format(sp['label'])
         sp.setdefault('init_src', args.init_src)
-        assert sp['init_src'], 'spec {} missing init_src'.format(sp['label'])
+        # Canonical-init preseeding is an ABLATION-fairness mechanism
+        # (every arm starts from the same advertisement). Custom-runner
+        # cells (EODS: evaluate_all_metrics builds its own deployment
+        # and init; Tom 2026-08-19 'no longer ablation') never read
+        # init_dep*.npy, so init_src is not required for them.
+        sp['_is_ladder'] = (sp.get('runner',
+                            'experiments.ablation.run_fork_ladder')
+                            == 'experiments.ablation.run_fork_ladder')
+        assert sp['init_src'] or not sp['_is_ladder'], \
+            'spec {} missing init_src'.format(sp['label'])
         sp['max_iter'] = int(sp.get('max_iter', args.max_iter))
         sp['gamma'] = str(sp.get('gamma', args.gamma))
         sp['probe_mode'] = sp.get('probe_mode', args.probe_mode)
@@ -237,8 +246,14 @@ def main():
         assert sp['rungs_list'], 'spec {} selected no rungs'.format(sp['label'])
         sp['env'] = {k: str(v) for k, v in sp.get('env', {}).items()}
 
-    # ---- init preseeding: MANDATORY (this is what makes cells independent)
+    # ---- init preseeding: MANDATORY for ladder cells (this is what
+    # makes A/B arms independent); skipped for custom runners.
     for sp in specs:
+        if not sp['_is_ladder']:
+            for N in sp['n_list']:
+                os.makedirs(os.path.join(
+                    sp['out_root'], 'N{}'.format(N)), exist_ok=True)
+            continue
         src_inits = {s: os.path.join(sp['init_src'], 'init_dep{}.npy'.format(s))
                      for s in sp['seeds_list']}
         missing = [s for s, p in src_inits.items() if not os.path.exists(p)]
