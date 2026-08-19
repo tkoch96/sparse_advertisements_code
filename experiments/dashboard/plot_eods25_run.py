@@ -21,7 +21,9 @@ OUT = os.path.join(REPO, 'figures', 'eods25_run.png')
 
 SOLVE_RE = re.compile(r'([0-9.]+)ms per iter')
 GRAD_RE = re.compile(r'(latency|resilience) benefit grad took ([0-9.]+)s')
+# both formats: new '[wt] ... name=12%' and old block ' name  12.34%  (ms)'
 TIMERCAT_RE = re.compile(r'(\w+)=([0-9.]+)%')
+TIMERCAT_OLD_RE = re.compile(r'(\w+)\s+([0-9.]+)%\s+\(')
 ITER_RE = re.compile(r'rss_mb=(\d+) .*sys_avail_mb=(\d+) .*'
                      r't=([0-9.]+) iter=(\d+)')
 OBJ_RE = re.compile(r'objective[:= ]+(-?[0-9]+\.[0-9]+)', re.I)
@@ -70,8 +72,10 @@ def main():
 
     # -- worker timing categories (from summarize_timing blocks)
     cats = {}
-    for name, pct in TIMERCAT_RE.findall(txt):
-        cats.setdefault(name, []).append(float(pct))
+    for name, pct in (TIMERCAT_RE.findall(txt)
+                      + TIMERCAT_OLD_RE.findall(txt)):
+        if float(pct) > 0:
+            cats.setdefault(name, []).append(float(pct))
     if cats:
         names = sorted(cats, key=lambda k: -np.median(cats[k]))[:8]
         ax_cat.boxplot([cats[n] for n in names], vert=False,
