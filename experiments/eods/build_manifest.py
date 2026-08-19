@@ -68,7 +68,9 @@ def mode_sizes(args):
         'runner': 'experiments.eods.run_eods_cell',
         'out_root': '{}/actual-{}'.format(args.store, dp),
         'rungs': 'eods', 'probe_mode': 'fixed',
-        'seeds': '1-{}'.format(ns), 'n_values': '1', 'gamma': '0',
+        # --nsim overrides the scoping-spec sim count (Tom 2026-08-19:
+        # single-deployment runs at 25/32, not the 10-sim campaign)
+        'seeds': '1-{}'.format(args.nsim or ns), 'n_values': '1', 'gamma': '0',
         'max_iter': 1, 'dpsize': 'actual-{}'.format(dp),
         'artifacts_figs': '{}_artifacts/figs'.format(args.store),
         'env': {**base_env(args), 'SCULPTOR_EODS_MODE': 'sizes',
@@ -123,6 +125,8 @@ def main():
     ap.add_argument('--seeds', default='1-3')
     ap.add_argument('--n-values', default='10')
     ap.add_argument('--train-iters', type=int, default=200)
+    ap.add_argument('--nsim', type=int, default=None,
+                    help='override sims per dpsize (sizes mode)')
     ap.add_argument('--env', action='append', default=[],
                     help='extra per-cell env KEY=VAL (repeatable)')
     args = ap.parse_args()

@@ -5,7 +5,7 @@
   "out_root": "cache/eods/v1/actual-32",
   "rungs": "eods",
   "probe_mode": "fixed",
-  "seeds": "1-10",
+  "seeds": "1-1",
   "n_values": "1",
   "gamma": "0",
   "max_iter": 1,
