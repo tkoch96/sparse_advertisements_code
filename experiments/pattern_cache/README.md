@@ -38,3 +38,25 @@ count. The arena (E) wins only when entries shrink further (delta
 encoding vs base pattern — future work; gradient candidates differ from
 base in 1-2 popps, so entries are near-duplicates and delta encoding
 could take another order of magnitude. Not attempted here.)
+
+## 2026-08-19 AT-SCALE VALIDATION (head, testing_feature-actual-25, seed 1)
+217 distinct patterns = 946,120 (ug,pops) pairs (avg ~4360 ugs/entry,
+~40 pops/ug):
+
+| scheme | total | per pair | vs current |
+|--------|-------|----------|------------|
+| A current | 850.48M | 942.6B | 100% |
+| B noprobs | 471.06M | 522.1B | 55% |
+| C csr | 158.34M | 175.5B | 18.6% |
+| D2 csr+key+uint16 | **82.27M** | 91.2B | **9.7%** |
+
+- Storage theory CONFIRMED: 217 patterns = 850MB explains the multi-GB
+  worker growth; D2 = 10.3x at true scale.
+- Current repr degrades SUPERLINEARLY vs tiny-scale extrapolation
+  (942 vs 265 B/pair): large ints not interned, unlike small-int-cached
+  tiny runs. Tiny-scale benches UNDERSTATE the win.
+- CAVEAT vs tiny-scale conclusion: naive hit-path reconstruction is
+  12.7ms/entry at scale (~380ms per 30-column lb call) — NOT viable.
+  Adoption = D2 storage + ARRAY-NATIVE consumer (rti_data assembly in
+  get_ingress_probabilities/sim_rti reads CSR directly). Contained
+  refactor, parity-gated; likely faster than today's list appends.
