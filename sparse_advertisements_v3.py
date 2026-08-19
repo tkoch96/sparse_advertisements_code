@@ -2922,6 +2922,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			import glob
 			all_states = glob.glob(os.path.join(self.save_run_dir, '*'))
 			all_iters = [int(re.search("state\-(.+)\.pkl", fn).group(1)) for fn in all_states if "state" in fn]
+			if not all_iters:
+				# Expected on every fresh run: no prior state exists.
+				# One informative line instead of a scary traceback
+				# bubbling from np.max([]) (Tom 2026-08-19 log cleanup).
+				print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) +
+					  "no prior state in {} -- cold start".format(
+						  self.save_run_dir))
+				raise ValueError('no state pickles (cold start)')
 			specific_iter = np.max(all_iters)
 		print("Loading save state {}".format(specific_iter))
 		save_state = pickle.load(open(os.path.join(self.save_run_dir, 'state-{}.pkl'.format(specific_iter)),'rb'))
