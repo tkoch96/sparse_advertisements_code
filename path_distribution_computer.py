@@ -877,70 +877,64 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.rti_data["blocks"].append((lens_e, pad_e))
 				continue
 
-			# --- CACHE MISS: Calculate Logic ---
-			# This block only runs when we encounter a UNIQUE network failure state
-			
-			# 1. Identify active POPs indices
+			# --- CACHE MISS: Calculate Logic (VECTORIZED, Tom 2026-08-19
+			# startup_optimizations: this per-UG python loop was 23% of
+			# every cold solve at actual-25 per the line-level flamegraph)
+			# One-time CSR of ui -> potential popps; per miss the valid
+			# set is a boolean fancy-index + reduceat, no per-UG python.
 			active_poppis = np.where(col)[0]
 			active_poppis_set = set(active_poppis)
 
-			# 2. Identify Blocked (User, Child) pairs due to Active Parents
-			# blocked_user_child stores (ui, child_poppi) that are FORBIDDEN
+			if not hasattr(self, '_uipop_csr'):
+				_flat, _offs = [], [0]
+				for _ui in range(self.whole_deployment_n_ug):
+					_flat.extend(ui_to_poppi[_ui])
+					_offs.append(len(_flat))
+				self._uipop_csr = (
+					np.asarray(_flat, dtype=np.int32),
+					np.asarray(_offs, dtype=np.int64))
+			_flat, _offs = self._uipop_csr
+
+			# Blocked (ui, child) pairs from active parents (python scan
+			# retained: parent_tracker is small; applied as sparse
+			# corrections to the vector mask below)
 			blocked_user_child = set()
 			for ug, child, parent in self.parent_tracker:
 				parenti = self.popp_to_ind[parent]
-				# If the parent is active in this specific state 'tloga', the child is blocked
 				if parenti in active_poppis_set:
 					ui = self.whole_deployment_ug_to_ind[ug]
 					childi = self.popp_to_ind[child]
 					blocked_user_child.add((ui, childi))
 
-			# 3. Build Routing for this State
-			entries_for_cache = [] # To store (ui, pops, probs) for future reuse
-
-			for ui in range(self.whole_deployment_n_ug):
-				valid_pops = []
-				
-				# Get potentially available POPs for this user (static config)
-				potential_pops = ui_to_poppi[ui]
-				
-				for poppi in potential_pops:
-					# Condition 1: POP must be physically UP
-					if poppi not in active_poppis_set:
-						continue
-					
-					# Condition 2: POP must not be blocked by an active parent
-					if (ui, poppi) in blocked_user_child:
-						continue
-					
-					valid_pops.append(poppi)
-
-				if not valid_pops:
-					continue
-
-				# Compute Uniform Probability
-				n = len(valid_pops)
-				probs = [1.0 / n] * n
-				
-				# Append to current run (pops/probs ride in the block)
-				self.rti_data["meta_data"].append((ui, pref_i, ugs[ui]))
-
-				# Append to Cache
-				entries_for_cache.append((ui, valid_pops, probs))
-
-			# Save this state's logic compactly (padded int16 matrix):
-			# per pattern: uis, per-scenario option counts, and the padded
-			# option matrix. probs are always uniform 1/n -- reconstructed
-			# at assembly, never stored.
-			n_scen = len(entries_for_cache)
-			uis_e = np.fromiter((e[0] for e in entries_for_cache),
-								dtype=np.int32, count=n_scen)
-			lens_e = np.fromiter((len(e[1]) for e in entries_for_cache),
-								 dtype=np.int16, count=n_scen)
+			# 3. Build routing for this state — fully vectorized.
+			mask = col[_flat]                     # popp physically up
+			if blocked_user_child:
+				# sparse corrections: locate each blocked (ui, child)
+				# inside ui's CSR segment and clear it
+				for (_bui, _bchild) in blocked_user_child:
+					seg = slice(_offs[_bui], _offs[_bui + 1])
+					mask[seg] &= (_flat[seg] != _bchild)
+			lens_all = np.add.reduceat(
+				mask.astype(np.int16),
+				_offs[:-1].clip(max=max(len(_flat) - 1, 0)))
+			# reduceat quirk: empty segments (offs[i]==offs[i+1]) copy the
+			# next element — zero them explicitly
+			_empty = (_offs[1:] - _offs[:-1]) == 0
+			if _empty.any():
+				lens_all[_empty] = 0
+			keep = lens_all > 0
+			uis_e = np.where(keep)[0].astype(np.int32)
+			lens_e = lens_all[keep].astype(np.int16)
+			n_scen = int(uis_e.shape[0])
+			valid_flat = _flat[mask]
 			max_n = int(lens_e.max()) if n_scen else 0
 			pad_e = np.full((n_scen, max_n), -1, dtype=np.int16)
-			for _i, (_ui, _pops, _probs) in enumerate(entries_for_cache):
-				pad_e[_i, :len(_pops)] = _pops
+			if n_scen:
+				_colidx = np.arange(max_n)[None, :] < lens_e[:, None]
+				pad_e[_colidx] = valid_flat
+			md = self.rti_data["meta_data"]
+			for _ui in uis_e:
+				md.append((int(_ui), pref_i, ugs[_ui]))
 			self.pattern_cache[np.packbits(col).tobytes()] = (
 				uis_e, lens_e, pad_e)
 			self.rti_data["blocks"].append((lens_e, pad_e))
