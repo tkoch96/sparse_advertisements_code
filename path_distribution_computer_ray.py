@@ -100,9 +100,14 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		try:
 			return method(data)
 		except Exception as e:
-			import traceback
-			print("Worker {} error handling cmd '{}': {}".format(self.worker_i, cmd, e))
-			traceback.print_exc()
+			# One compact line by default; full stack only when
+			# SCULPTOR_VERBOSE_ERRORS=1 (Tom 2026-08-19 log cleanup).
+			print("[{}] Worker {} ERROR cmd '{}': {}: {}".format(
+				time.strftime('%H:%M:%SZ', time.gmtime()),
+				self.worker_i, cmd, type(e).__name__, e))
+			if os.environ.get('SCULPTOR_VERBOSE_ERRORS') == '1':
+				import traceback
+				traceback.print_exc()
 			return "ERROR"
 
 	# ------------------------------------------------------------------ #
