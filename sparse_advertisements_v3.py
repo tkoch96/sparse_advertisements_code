@@ -1693,7 +1693,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 				this_popp_random_kill = self.popp_to_ind[rand_kill_popp]
 				tmp_a[this_popp_random_kill,:] = 0.0 # kill this random popp
-				this_killed_popp_ugs = self.popp_to_users.get(this_popp_random_kill, [])
+				this_killed_popp_ugs = self._ensure_popp_to_users().get(this_popp_random_kill, [])
 				if len(this_killed_popp_ugs) == 0:
 					continue
 
@@ -1746,7 +1746,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			
 			tmp_a = copy.copy(advertisement)
 			tmp_a[rand_kill_poppi,:] = 0.0 # kill this random popp
-			this_killed_popp_ugs = self.popp_to_users.get(rand_kill_poppi, [])
+			this_killed_popp_ugs = self._ensure_popp_to_users().get(rand_kill_poppi, [])
 			if len(this_killed_popp_ugs) == 0:
 				continue
 
@@ -3046,7 +3046,22 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		'last_effective_objective', 'rolling_delta', 'rolling_delta_eff',
 		'rolling_adv_delta', 'rolling_adv_eps', 'metrics', 'measured',
 		'path_measures', 'last_gti', 'calc_times', 'iter', 'stop',
-		'optimization_advertisement_representation')
+		'optimization_advertisement_representation', 'popp_to_users')
+
+	def _ensure_popp_to_users(self):
+		# popp_to_users is a side product of the belief bootstrap's LP
+		# solve (save_ug_ingress_decisions). Hot-started or memo-loaded
+		# runs skip that construction — the historical hot-start
+		# AttributeError (memory: popp_to_users bug) and the memo-load
+		# zero-iter failure share this root cause. Rebuild lazily from
+		# one LP solve when absent (Tom 2026-08-19).
+		if not hasattr(self, 'popp_to_users'):
+			print('[popp-to-users] absent (hot-start/memo load) — '
+				  'rebuilding from one LP solve', flush=True)
+			self.get_ground_truth_user_latencies(
+				self.optimization_advertisement, mode='lp',
+				save_ug_ingress_decisions=True)
+		return self.popp_to_users
 
 	def init_optimization_vars(self):
 		_log_mem('iov_enter')

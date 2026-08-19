@@ -32,3 +32,25 @@ DESIGN:
 - GATES: bitwise parity (prove_inert-style: loaded-vs-computed run
   must produce identical first-iter grads on small), plus the n-seed
   A/B harness if any doubt remains.
+
+## 2026-08-19 late: memo zero-iter ROOT CAUSE + fix
+Load-arm crash = AttributeError popp_to_users in first gradient call —
+IDENTICAL root cause to the historical hot-start bug (memory:
+popp_to_users). It's derived state from the bootstrap's LP solve
+(save_ug_ingress_decisions), skipped by both hot-start and memo-load.
+FIX (in, gated): payload includes popp_to_users + _ensure_popp_to_users
+lazy-rebuild guard at both kill-sampling readers (one LP solve when
+absent) — the guard also repairs classic hot-starting. 10-seed
+load-vs-compute A/B rerunning.
+
+## Miss-path vectorization spec (pdc ~879-902, flamegraph 23% of cold solves)
+Precompute once per worker: CSR of ui->potential popps
+(flat_pops uint16, offs int32 over whole_deployment uis).
+Per miss column: active = bool[n_popp] from packed key;
+mask = active[flat_pops]; parent-blocked pairs (small at bootstrap;
+from parent_tracker) applied as sparse corrections to mask;
+lens = np.add.reduceat(mask, offs[:-1]); entries = the masked flat
+array segmented -> exactly the compact (uis, lens, pad) entry the
+cache now stores, built with the same vectorized padding as the
+sampler. Zero per-UG python. Gate: bitwise (prove_inert) + the
+pattern_cache bench for entry-content equality + timing.
