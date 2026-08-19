@@ -538,10 +538,15 @@ else:
             vals = np.asarray(values, dtype=np.float64)
             if attrname == 'UB':
                 self._col_ub.arr[:self._ncols][idx] = vals
+                # vectorized _to_highs_bound (Tom 2026-08-19 hot loop:
+                # the per-value comprehension materialized O(len) python
+                # floats per solve)
+                _v = np.asarray(vals, dtype=np.float64)
+                _v = np.where(_v >= 1e30, _KHINF,
+                              np.where(_v <= -1e30, -_KHINF, _v))
                 self._h.changeColsBounds(
                     len(idx), idx,
-                    self._col_lb.arr[:self._ncols][idx],
-                    np.array([_to_highs_bound(v) for v in vals]))
+                    self._col_lb.arr[:self._ncols][idx], _v)
             elif attrname == 'Obj':
                 self._col_cost.arr[:self._ncols][idx] = vals
                 self._h.changeColsCost(len(idx), idx, vals)

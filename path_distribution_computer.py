@@ -176,6 +176,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def init_persistent_lp(self):
 		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""
 		self.model = gp.Model(f"Worker_{self.worker_i}_Persistent")
+		# fresh model => no vars are active; O(changed) UB-reset tracker
+		self._last_active_vars = None
 		self.model.Params.LogToConsole = 0
 		self.model.Params.Method = 1
 		self.model.Params.Threads = 1
@@ -246,10 +248,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 	def solve_unified_lp(self, available_paths, obj_coeffs, using_mlu=False):
 		"""Core solve logic. Toggles between Standard and MLU."""
-		# 1. Deactivate all path variables
+		# 1. Deactivate ONLY the previously-active path variables (Tom
+		# 2026-08-19 hot-loop optimization: the old deactivate-ALL swept
+		# O(var_pool)=O(170k at actual-25) per solve — ~46% of lb-solve
+		# time — although consecutive candidates differ in ~tens of
+		# paths. Invariant: vars outside _last_active_vars already have
+		# UB=0 (newly-discovered vars get UB set right after creation
+		# via the active-set setAttr below).
 		ts = time.time()
-		all_vars = list(self.var_pool.values())
-		self.model.setAttr("UB", all_vars, [0.0] * len(all_vars))
+		prev_active = getattr(self, '_last_active_vars', None)
+		if prev_active is None:
+			prev_active = list(self.var_pool.values())
+		if prev_active:
+			self.model.setAttr("UB", prev_active, [0.0] * len(prev_active))
 
 		# 2. Configure MLU variable and Capacity RHS
 		if using_mlu:
