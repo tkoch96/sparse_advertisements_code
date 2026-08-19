@@ -1,100 +1,93 @@
-# HANDOFF: evaluate_over_deployment_sizes @ size 25 ONLY
+# HANDOFF: EODS-25/32 — state as of 2026-08-19 ~21:15Z
 
-Written 2026-08-19 ~03:30 UTC by the outgoing session. Goal (Tom):
-"let L6 rip at a large problem and see how it does with our classical
-evaluations (eval_latency_failure.py) which we do nicely through
-evaluate_over_deployment_sizes.py" — dpsize 25 ONLY, all current fixes.
+Written by the 2026-08-19 session (the "optimization day"). Everything
+below is committed AND pushed (origin/main @ d2a2040) AND deployed to
+the head (107.22.173.189, c8g.24xlarge 96c/185G) with the bitwise
+parity gate green (experiments/desharding/prove_inert.py).
 
-## Code state (all in main, HEAD ~ef4b413)
+## SCOPE (Tom, revised mid-day)
+ONE deployment at actual-25 (seed 1), then ONE at actual-32 — through
+run_eods_cell -> eval_latency_failure.evaluate_all_metrics (classical
+paper metrics). NOT the 10-sim campaign; NOT ablation-ladder semantics.
+Manifests: tools/eods25_manifest.json, tools/eods32_manifest.json
+(1 cell each). Launchers on head: ~/eods25_launch_full.sh (96w),
+~/eods32_launch_full.sh (96w) — both carry the full env.
 
-Merged & validated:
-- HiGHS backend via gpshim (SCULPTOR_LP_BACKEND=highs is THE backend;
-  OBJ_ROUND=4 standard).
-- rmsprop (bias-corrected, beta=0.9) is the DEFAULT step policy for
-  direction-on rungs (L5/L6); SCULPTOR_ABLATION_GRAD_SCALE=adagrad
-  restores legacy.
-- stop-v2 bundle: honest init, REL=0.001, IMP=0, trend clause
-  (TREND_EPS=1e-3). Runs ride while believed objective declines.
-- depsetup array loader: load_actual_perfs auto-routes when
-  SCULPTOR_LAT_SHARDS points at shards (~5x on fresh pop-set builds;
-  byte-exact gated 5/10/16/20/26 pops). Shards exist on BOTH VMs at
-  <repo>/cache/lat_shards.
-- Slotted WHEN (L6) in mainline (SCULPTOR_PROBE_MODE=slotted etc.).
-- Lexicographic prio pair + obj_components + iters_to_{50,90,95}
-  persisted per ablation cell (run_fork_ladder only — the EODS path
-  does NOT persist these).
-- Queue harvest fallback for timestamped run dirs.
+## RUNNING NOW
+The definitive 25 cell (relaunched ~20:23Z): 96 workers, belief phase
+-> training ~21:15Z. It has EVERYTHING: full optimization stack,
+staleness-floor probing, budget-hold stop AT THE LIVE SITE, [it]/[wt]
+telemetry, memo-persist (this run writes the seed-1 belief memo — the
+LAST 50-min startup for this seed). Watch: dash tab EODS-25
+(convergence panel = believed vs GT + stop signal + historical dashed
+context from state-pickle backfill), live tail (20s), live convergence
+PDF, flamegraph. Monitors: 30-min heartbeat in-session; cron
+autochecker (3-min) self-heals the dash pipeline.
 
-DEPLOYED: head (107.22.173.189) repo AND sweep VM (32.197.41.137)
-~/smoke_repo both carry this exact state as of this handoff.
+## THE DAY'S SHIPPED CHANGES (all bitwise-gated; quality-proven
+## n=30 paired A/B: mean delta -0.6% of scale, p=0.70, identical iters)
+1. Desharding: UG-slice machinery removed everywhere; workers get the
+   FULL deployment via one ray.put (plasma). Grads are what's
+   distributed. Gate: experiments/desharding (bitwise, PYTHONHASHSEED
+   pinned — cross-process repro REQUIRES pinned hash seed).
+2. pattern_cache compact repr (uis/lens/pad int16, packed keys, no
+   probs) + vectorized block assembly. ~16x RAM. experiments/
+   pattern_cache/bench.py = the repr bench (run at scale too: 850MB ->
+   82-130MB @217 patterns).
+3. measured_latency_benefits: ndarray (was dict, ~17x); lat_matrix
+   built once driver-side, shipped in deployment dict (zero-copy per
+   node).
+4. Incremental LP activation (set-diff vs prev active; SCULPTOR_LP_
+   INCREMENTAL=1 default) + vectorized _to_highs_bound in gpshim.
+5. MC_NUM=1 standard for EODS (Tom); env in launchers.
+6. Miss-path vectorization (CSR ui->popps + mask/reduceat; was 23% of
+   cold solves per line-level flamegraph).
+7. Belief memoization (SCULPTOR_BELIEF_MEMO=1 default): persists the
+   iov bootstrap keyed on (deployment/init/MC/gamma/obj/world); loads
+   in seconds. Validated 10-seed load-vs-compute (p=0.49). Fixing it
+   also fixed the HISTORICAL hot-start popp_to_users bug
+   (_ensure_popp_to_users lazy rebuild).
+8. Stop rule (Tom's design): staleness floor (PROBE_MAX_STALENESS,
+   default=slot period — measure if no grounding in X iters and budget
+   remains) + budget-hold (no exit while probes banked unless current
+   adv is ground-truth measured). BOTH stop-check sites (2852+2984)
+   via _post_stop_check — the first attempt patched only the dead
+   site (caught via empty dash panel).
+9. Logging: [it] per-iter (obj/pseudo/rd/rde/rad/n_on), [wt] compact
+   worker timing, UTC timestamps, compact worker errors
+   (SCULPTOR_VERBOSE_ERRORS=1 for stacks), cold-start one-liner.
 
-NOT merged (open threads, do not block on them):
-- experiments/reducing_iteration_timing: persistent-inner-LP candidate
-  — actual-15 A/B RUNNING on head in ~/rit_repo + ~/rit_out_a15
-  (COPY repo; do not confuse with the main repo). Verdict = compare
-  "Timer: grads" means base vs persist. If persist wins big, consider
-  it for the EODS run only AFTER a byte-exactness/quality gate.
-- prio_lex is EVAL-side only; training still joint_latency_bulk.
+## KNOWN NUMBERS (measured today, actual-25 96w)
+startup ~50min (belief calc; memoized hereafter; phase is memory-
+bandwidth-bound ~24-32 effective cores/box); training ~90-150s/iter
+(load/N holds: ~10-14k core-s/iter; 500-core abstraction: ~35-50s/iter
++ serial floor <10-20s); worker ~1.4G RSS; eval phases measure 20+
+times (eval-measurement cost unprofiled — driver py-spy it if slow).
 
-## The task
+## OPEN / WATCH
+- Stop behavior at 25: prior runs exited iter ~30 prematurely (REL vs
+  inflated honest-init, MC=1 noise, grounded-gate timing — full
+  analysis in session log). The hold should carry it further; belief
+  scale was still ~19.5k (NO_ROUTE penalty territory) at iter 33.
+- Eval assert: assess_volume_multipliers ValueError = undertrained adv
+  stranding traffic under inflation. If it fires again with a properly
+  trained adv — investigate as a real bug.
+- Task chip pending: KeyError (vtrtokyo,9824) in solve_lp_assignment
+  sort lambda (one-off worker failure; latent popp map mismatch).
+- v5 scout CLOSED: findings synthesis in session log (L6c wins lat
+  2.13/no blowups; L6 slotted least stable 9 blowups incl seed-202
+  cluster; L4 high-variance; rmsprop>adagrad; probing frequency is a
+  STABILITY knob). Consider experiments/ablation/V5_SCOUT_FINDINGS.md.
+- Future perf: delta evaluation of near-identical candidates (order-of-
+  magnitude on belief phase), eval-phase measurement profiling,
+  generic_objective/ug_perfs arrayify for >96w, serial-floor async at
+  500 cores.
+- 32 launch: after a VALID 25 result. Launcher ready; memo makes its
+  restarts cheap; PROBE_TCONV consider ~real horizon.
 
-evaluate_over_deployment_sizes.py at dpsize 25 ONLY, standard NSIM
-(Tom's earlier spec used 10 sims at size 25 — CONFIRM), all soln
-types, HiGHS, full new-code defaults. The interesting arm is sparse
-(SCULPTOR full = L6 semantics in mainline; probe mode via env if the
-driver exposes it — VERIFY what evaluate_over_deployment_sizes runs by
-default before launching).
-
-## Hardware & known hazards (READ ALL)
-
-- dpsize=25 OOM history: OOM-killed the sparse driver on a 64GB head.
-  Current head has 185G; sweep VM (32.197.41.137, r8g.8xlarge) has
-  247G and is the SAFER choice once the v5 grid drains (~morning).
-  Watch driver RSS; disable parallel soln types if RAM climbs
-  (SCULPTOR_DISABLE_PARALLEL_STRATEGIES=1 pattern).
-- Startup at size 25 is HOURS single-core (profiler: >3h at a20+).
-  The depsetup array loader (needs SCULPTOR_LAT_SHARDS=<repo>/cache/
-  lat_shards in env) cuts the load_actual_perfs share ~5x. Startup
-  silence 5-15+ min while pickling deployment to workers is NORMAL.
-- Deployment caches: pruned_performances_<pops>.pkl and
-  actual_deployment_cache_<pops>_seed<k>.pkl under cache/deployments
-  make repeat runs fast BUT keys lack a world fingerprint — for stock
-  world this is fine; do NOT reuse across world-knob changes.
-- SCULPTOR_DEPLOYMENT_SEED determines the 25-pop subset (random
-  choice); pin it and record it.
-- Tracebacks from sparse_advertisements_v3 top-of-file legacy code are
-  NON-FATAL noise; don't alarm on them.
-- pkill on these boxes: ALWAYS bracket patterns (run_fork[_]ladder)
-  AND never put the target string un-bracketed anywhere in your own
-  command line (paths included) — four self-kill incidents on
-  2026-08-18 alone. Use separate kill/verify SSH sessions.
-- Cluster alerting contract: update
-  ~/.sculptor_cluster_alert/active_cluster.json on lifecycle events.
-- Cost: both VMs are on-demand; tear down / stop what you finish with
-  (Tom's standing rule: always tear down at the end).
-
-## Concurrent state to respect
-
-- Sweep VM runs the v5 grid tail + L4nd (top-5 flip redo) + L6c
-  (conservative WHEN: TCONV=650, SURPRISE_THETA=0.08) queues until
-  ~morning. Do NOT start EODS-25 there until
-  `pgrep -c -f run_n_sweep` returns 0 (or coordinate slots).
-- Head runs the rit a15 A/B (~/rit_out_a15). Leave it; harvest its
-  verdict into experiments/reducing_iteration_timing/README.md.
-- Mac loops: dash refresh/sync/ticker/profiles_pull + 30-min monitor
-  cycles (scratchpad night_monitor.sh pattern). Dash:
-  http://107.22.173.189/ (basic auth). "The dash is the source of
-  truth" — monitor RESULTS CONTENT, not just processes.
-
-## Suggested run shape (validate, then commit to it)
-
-1. Smoke: dpsize 25, NSIM=1, single soln type (sparse) on the sweep
-   VM post-drain; confirm startup completes, RSS profile, one full
-   training + eval_latency_failure round trip.
-2. Full: NSIM per Tom's answer (default 10), all soln types,
-   sequential-strategies if RAM demands. Use a queue/manifest pattern
-   (run_eods_cell speaks run_fork_ladder CLI; evaluate_all_metrics is
-   resumable via its pickle).
-3. Dash tab for it (house pattern: pull + steps + figures; see
-   grid_v5scout wiring in experiments/dashboard/generate.py).
-4. 30-min monitors; RAM is the failure mode to watch at 25.
+## HARNESSES (use these; they caught 2 real bugs today)
+- experiments/desharding/prove_inert.py — bitwise gate (self-pins hash)
+- scratchpad ab*.sh pattern — paired-seed statistical A/B
+- experiments/lp_hotloop — fixture replay (correctness+timing)
+- experiments/pattern_cache/bench.py — repr/timing bench
+- experiments/startup_optimizations/NOTES.md — startup program record
