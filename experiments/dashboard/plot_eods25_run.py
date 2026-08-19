@@ -34,6 +34,12 @@ IT_RE = re.compile(r'\[it\] t=\S+ iter=(\d+) obj=(\S+) pseudo=(\S+) '
 def main():
     fig, axs = plt.subplots(2, 3, figsize=(17, 9))
     (ax_ram, ax_solve, ax_cat), (ax_grad, ax_iter, ax_obj) = axs
+    # default titles so pre-training panels explain themselves instead
+    # of rendering blank (Tom 2026-08-19)
+    ax_solve.set_title('per-solve times — awaiting training data')
+    ax_cat.set_title('worker time share — awaiting [wt] batches')
+    ax_grad.set_title('grad durations — awaiting training iters')
+    ax_iter.set_title('iteration pace — awaiting first iter')
 
     # -- system panel: RAM + workers + load
     fn = os.path.join(DASH, 'sys_samples.csv')
