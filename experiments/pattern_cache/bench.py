@@ -120,8 +120,11 @@ def main():
     from deployment_setup import get_random_deployment
     from path_distribution_computer_ray import _LocalPathDistributionComputer
     dep = get_random_deployment(args.dpsize, port=31600)
+    # positional: compatible with both the pre-desharding signature
+    # (worker_i, subdeployment, init_kwargs, static_dep=None) and the
+    # current (worker_i, deployment, init_kwargs)
     w = _LocalPathDistributionComputer(
-        worker_i=0, deployment=dep, init_kwargs={
+        0, dep, {
             'lambduh': 1.0, 'gamma': 0, 'verbose': False,
             'n_prefixes': None, 'with_capacity': False,
             'save_run_dir': None, 'generic_objective': 'avg_latency'})
