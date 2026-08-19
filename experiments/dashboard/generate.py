@@ -995,7 +995,8 @@ EXPERIMENTS.append({
                     'sparse (L6 slotted, rmsprop, stop-v2) + 5 baselines, '
                     'HiGHS, sims 1-10 (seed = sim), classical '
                     'eval_latency_failure metrics',
-         'figures': ['figures/eods25_status.png',
+         'figures': ['figures/eods25_run.png',
+                     'figures/eods25_status.png',
                      'figures/eods25_results.png'],
          'intro': ('<p>The v4-era trained solver scored by the CLASSICAL '
                    'paper evals: normal + link/site-failure latency '
@@ -1020,6 +1021,10 @@ EXPERIMENTS.append({
                           'figures/eods25_results.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25']},
+                 {'in': ['cache/eods/v1_dash/*'], 'always': True,
+                  'out': ['figures/eods25_run.png'],
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_eods25_run']},
              ]}},
     ]})
 

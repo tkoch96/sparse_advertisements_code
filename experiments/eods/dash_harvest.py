@@ -59,6 +59,38 @@ def main():
     if os.path.exists(prof):
         shutil.copy2(prof, os.path.join(dash, 'smoke_profiles.json'))
 
+    # per-cycle system sample: load, free RAM, per-worker RSS (Tom
+    # 2026-08-19 run-inspection dash)
+    import time as _t
+    try:
+        la = open('/proc/loadavg').read().split()[0]
+        avail = [l for l in open('/proc/meminfo') if 'MemAvailable' in l][0].split()[1]
+        r = subprocess.run(['ps', '-eo', 'rss,comm'], capture_output=True, text=True, timeout=15)
+        wrss = sorted(int(l.split()[0]) for l in r.stdout.splitlines()
+                      if 'ray::' in l and int(l.split()[0]) > 200000)
+        drss = max((int(l.split()[0]) for l in r.stdout.splitlines()
+                    if l.strip().endswith('python') and int(l.split()[0]) > 2000000), default=0)
+        import numpy as _np
+        row = [int(_t.time()), la, int(avail)//1024, len(wrss),
+               int(_np.percentile(wrss,50))//1024 if wrss else 0,
+               int(_np.percentile(wrss,90))//1024 if wrss else 0,
+               (max(wrss)//1024) if wrss else 0, drss//1024]
+        with open(os.path.join(dash, 'sys_samples.csv'), 'a') as f:
+            f.write(','.join(str(x) for x in row) + '\n')
+    except Exception:
+        pass
+
+    # timing lines for statistics (bounded)
+    with open(os.path.join(dash, 'timing_lines.txt'), 'w') as out:
+        for fn in sorted(glob.glob(os.path.join(args.ws, '*', 'logs', '*.log'))):
+            try:
+                r = subprocess.run(['grep', '-hE',
+                    'ms per iter|benefit grad took|Timer: |%  \\(|objective',
+                    fn], capture_output=True, text=True, timeout=30)
+                out.write(''.join(r.stdout.splitlines(True)[-3000:]))
+            except Exception:
+                pass
+
     # [mem] telemetry + log tails from the queue workspaces
     logs = sorted(glob.glob(os.path.join(args.ws, '*', 'logs', '*.log')))
     with open(os.path.join(dash, 'mem_iter.txt'), 'w') as out:
