@@ -114,6 +114,23 @@ def main():
             ax_iter.set_title(ttl); ax_iter.grid(alpha=.3)
 
     # -- convergence: [it] per-iter metrics (falls back to grep)
+    # historical runs (state-pickle backfill) as context behind live
+    hist_fn = os.path.join(DASH, 'objective_history.json')
+    if os.path.exists(hist_fn):
+        try:
+            import json as _json
+            hist = _json.load(open(hist_fn))
+            for name, ser in sorted(hist.items()):
+                p = ser.get('pseudo') or []
+                a = ser.get('actual') or []
+                if len(p) > 1:
+                    ax_obj.plot(range(len(p)), p, '--', color='0.7',
+                                lw=1, zorder=1)
+                if len(a) > 1:
+                    ax_obj.plot(range(len(a)), a, ':', color='#7fbf8f',
+                                lw=1, zorder=1)
+        except Exception:
+            pass
     its = IT_RE.findall(txt)
     if its:
         it_n = [int(a[0]) for a in its]
@@ -139,7 +156,7 @@ def main():
             ax_obj.set_title('objective mentions (no [it] lines yet)')
             ax_obj.grid(alpha=.3)
         else:
-            ax_obj.set_title('convergence: no [it] lines yet')
+            ax_obj.set_title('convergence: historical runs (dashed); live [it] pending')
 
     fig.suptitle('EODS-25 run inspection — 96w, incremental LP, MC=1')
     fig.tight_layout()

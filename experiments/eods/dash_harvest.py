@@ -10,6 +10,7 @@ cell pickle is actually newer than the merged output.
 """
 import argparse
 import glob
+import json
 import os
 import shutil
 import subprocess
@@ -90,6 +91,38 @@ def main():
                 out.write(''.join(r.stdout.splitlines(True)[-3000:]))
             except Exception:
                 pass
+
+    # objective-history backfill (Tom 2026-08-19: believed/GT series
+    # recoverable from run-dir state pickles even for runs that never
+    # emitted [it] lines). Newest state pickle per run dir.
+    try:
+        hist = {}
+        for rd in sorted(glob.glob(os.path.join(args.ws, '*', 'runs', '*'))):
+            sps = glob.glob(os.path.join(rd, 'state-*.pkl'))
+            if not sps:
+                continue
+            latest = max(sps, key=lambda f: int(
+                f.split('state-')[1].split('.')[0]))
+            try:
+                import pickle as _p
+                st = _p.load(open(latest, 'rb'))
+                m = st.get('metrics', {})
+                hist[os.path.basename(rd)] = {
+                    'pseudo': [float(x) for x in
+                               m.get('pseudo_objectives', [])],
+                    'actual': [float(x) for x in
+                               m.get('actual_nonconvex_objective', [])]}
+            except Exception as e:
+                print('[dash_harvest] state extract failed {}: {}: {}'.format(
+                    os.path.basename(rd), type(e).__name__, e))
+                continue
+        if hist:
+            with open(os.path.join(dash, 'objective_history.json'), 'w') as f:
+                json.dump(hist, f)
+            print('[dash_harvest] objective history: {} runs'.format(len(hist)))
+    except Exception as e:
+        print('[dash_harvest] history backfill error: {}: {}'.format(
+            type(e).__name__, e))
 
     # [mem] telemetry + log tails from the queue workspaces
     logs = sorted(glob.glob(os.path.join(args.ws, '*', 'logs', '*.log')))
