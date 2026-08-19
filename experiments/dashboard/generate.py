@@ -876,7 +876,8 @@ def _v5s_arms(fam):
         a('fixed', 'no_mc', 'fixed', 'L1 no_mc+fixed', 'L1'),
         a('sched', 'no_mc', 'scheduled', 'L2 no_mc+sched', 'L2'),
         a('sched', 'no_memory', 'scheduled', 'L3 no_mem+sched', 'L3'),
-        a('sched', 'no_direction', 'scheduled', 'L4 no_dir+sched', 'L4'),
+        a('sched', 'no_memory_dir', 'scheduled',
+          'L4 no_mem+dir (flip-all)', 'L4nd'),
         a('sched', 'full', 'scheduled', 'L5 adagrad (legacy)', 'L5ada'),
         a('sched', 'full', 'scheduled', 'L5 rmsprop (default)', 'L5rms'),
         a('sched', 'full', 'slotted', 'L6 slotted WHEN', 'L6'),
@@ -937,7 +938,7 @@ EXPERIMENTS.append({
                           'v5 grid — L1-L6 + legacy-adagrad arm, '
                           'seeds 201-205, maxhard, HiGHS, new stop-v2 '
                           '(0 = one-per-peering; lower = better)',
-                      'HARDOBJ_ARMS': 'L1_nomc_fixed:L1 no_mc+fixed:#2a78d6,L2_nomc_sched:L2 no_mc+sched:#eb6834,L3_nomem_sched:L3 no_mem+sched:#1baf7a,L4_nodir_sched:L4 no_dir+sched:#eda100,L5_full_adagrad:L5 adagrad (legacy):#c9a0b8,L5_full_rmsprop:L5 rmsprop (default):#e87ba4,L6_full_slotted:L6 slotted WHEN:#4a3aa7'},
+                      'HARDOBJ_ARMS': 'L1_nomc_fixed:L1 no_mc+fixed:#2a78d6,L2_nomc_sched:L2 no_mc+sched:#eb6834,L3_nomem_sched:L3 no_mem+sched:#1baf7a,L4_nomem_dir:L4 no_mem+dir flip-all:#eda100,L5_full_adagrad:L5 adagrad (legacy):#c9a0b8,L5_full_rmsprop:L5 rmsprop (default):#e87ba4,L6_full_slotted:L6 slotted WHEN:#4a3aa7'},
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_hardobj_v4']},
          ]}},
