@@ -32,7 +32,7 @@ SEEDS = list(range(1, 11))
 MEM_RE = re.compile(
     r'rss_mb=(\d+) vms_mb=\d+ peak_mb=(\d+) sys_avail_mb=(\d+) '
     r'pid=\d+ t=([0-9.]+) iter=(\d+)')
-SEED_RE = re.compile(r'_s(\d+)_')
+SEED_RE = re.compile(r"_s(\d+)[_.]")
 
 SOLN_ORDER = ['sparse', 'painter', 'one_per_peering', 'anyopt',
               'one_per_pop', 'anycast']
