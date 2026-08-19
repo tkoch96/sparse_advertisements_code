@@ -1059,19 +1059,28 @@ class Optimal_Adv_Wrapper:
 		# except AttributeError:
 		# 	# Only needed for worker bees
 		# 	return
-		self.measured_latency_benefits = {}
-		self.best_latency_benefits = {ui: -1 * NO_ROUTE_LATENCY for ui in range(self.n_ug)}
+		## benefit per user is -1 * latency * volume fraction (volume
+		## fraction so later sums ARE the correct average benefit).
+		## Dense (n_popp x n_ug) float64 ndarray, indexed [popp_i, ugi]
+		## exactly like the dict it replaces ((popp_i,ugi) tuple keys) —
+		## Tom 2026-08-19 phase-2 RAM work: the dict cost ~400MB/worker
+		## at actual-25 (~130B/entry python overhead) vs 24MB as an
+		## array, and the python fill loop was part of driver-init wall.
 		total_vol = np.sum(self.whole_deployment_ug_vols)
+		lat = np.full((self.n_popps, self.n_ug), float(NO_ROUTE_LATENCY))
 		for ug in self.ugs:
 			ugi = self.ug_to_ind[ug]
-			for popp in self.popps:
-				popp_i = self.popp_to_ind[popp]
-				## benefit per user is -1 * latency * volume fraction
-				## we multiply by volume fraction so that later we can just calculate the sum and
-				## have that be the correct average benefit
-				weight = self.ug_vols[ugi] / total_vol
-				self.measured_latency_benefits[popp_i,ugi] = -1 * self.ug_perfs[ug].get(popp, NO_ROUTE_LATENCY) * weight
-				self.best_latency_benefits[ugi] = np.maximum(self.best_latency_benefits[ugi], self.measured_latency_benefits[popp_i,ugi])
+			perfs = self.ug_perfs[ug]
+			for popp, l in perfs.items():
+				try:
+					lat[self.popp_to_ind[popp], ugi] = l
+				except KeyError:
+					pass
+		weights = self.ug_vols / total_vol
+		self.measured_latency_benefits = -1.0 * lat * weights[None, :]
+		mlb_best = self.measured_latency_benefits.max(axis=0)
+		self.best_latency_benefits = {
+			ui: mlb_best[ui] for ui in range(self.n_ug)}
 					
 		# same for each prefix (ease of calculation later)
 
