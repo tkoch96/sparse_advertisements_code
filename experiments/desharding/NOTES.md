@@ -55,3 +55,21 @@ What the code actually does (verified 2026-08-19):
    comments. Gate: byte-identical grads on a small deployment.
 3. Patch B (the RAM fix): arrayify whole_deployment statics ->
    plasma zero-copy. Gate: same + RSS-per-worker before/after.
+
+## 2026-08-19 EMPIRICAL PROOF (prove_inert.py)
+Tiny deployment (75 ugs), split n_chunks=2, three worker views (full /
+static+slice0 / static+slice1), 6 adv patterns, MC draws pinned per
+pattern: **all three views bitwise-identical benefits**. First run
+WITHOUT pinning differed wildly — pure MC noise, not slice effects
+(sim_rti draws from the global numpy RNG; pin np.random.seed before
+comparing anything cross-worker).
+Shapes confirm slices are physically real in the object (n_ug=38/37 vs
+whole=75, big_lbx sliced accordingly) yet the solver output never reads
+them: LP + obj coeffs + pdf all whole_deployment_*. The lbx grid
+derives from sliced ug_vols stats BUT the max(-.1, ...) clamp binds at
+every realistic scale, so grids match anyway.
+=> Tom confirmed correct: sliced ug_* keys are dead weight in workers.
+CAUTION for Patch A: do NOT fix by shipping full base keys to every
+worker (grows RAM); the lean fix drops the base-key requirement in the
+worker wrapper (read whole_deployment_* only) — pairs naturally with
+Patch B arrayification.
