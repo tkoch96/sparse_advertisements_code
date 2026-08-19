@@ -241,8 +241,15 @@ def main():
         sp['dpsize'] = sp.get('dpsize', args.dpsize)
         sp['seeds_list'] = parse_seeds(str(sp.get('seeds', args.seeds)))
         sp['n_list'] = [int(n) for n in str(sp.get('n_values', args.n_values)).split(',')]
-        sp['rungs_list'] = [r for r in RUNGS_HEAVY_FIRST
-                            if r in str(sp.get('rungs', args.rungs)).split(',')]
+        _spec_rungs = [r for r in
+                       str(sp.get('rungs', args.rungs)).split(',') if r]
+        # known ladder rungs keep the heavy-first ordering; custom-runner
+        # rungs (e.g. 'eods') aren't in RUNGS_HEAVY_FIRST — keep them in
+        # spec order after the known ones instead of dropping them
+        sp['rungs_list'] = ([r for r in RUNGS_HEAVY_FIRST
+                             if r in _spec_rungs] +
+                            [r for r in _spec_rungs
+                             if r not in RUNGS_HEAVY_FIRST])
         assert sp['rungs_list'], 'spec {} selected no rungs'.format(sp['label'])
         sp['env'] = {k: str(v) for k, v in sp.get('env', {}).items()}
 
