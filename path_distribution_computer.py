@@ -315,9 +315,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				self.var_pool[ug, poppi] = self.model.addVar(
 					lb=0.0, obj=latency, column=col)
 		prev_keys = getattr(self, '_active_keys', None)
+		# SCULPTOR_LP_INCR_MLU=1 (Tom 2026-08-20, lpdbg finding): the
+		# standard->MLU alternation in congested regimes (belief phase)
+		# permanently disabled incrementality via the _last_mlu guard —
+		# every solve did a full-pool UB sweep + cold simplex on an
+		# ever-growing var_pool. The UB activation state and the path
+		# objective coefficients (static latencies for avg_latency) are
+		# mode-invariant; section 2 already switches the MLU dummy/cap
+		# state per call. So incremental diffs stay valid across modes.
+		_incr_mlu_ok = os.environ.get('SCULPTOR_LP_INCR_MLU', '0') == '1'
 		_incr = (prev_keys is not None
 				 and os.environ.get('SCULPTOR_LP_INCREMENTAL', '1') != '0'
-				 and not using_mlu and not getattr(self, '_last_mlu', False))
+				 and (_incr_mlu_ok or
+					  (not using_mlu and not getattr(self, '_last_mlu', False))))
 		active_vars = [self.var_pool[k] for k in available_paths]
 		if _incr:
 			to_deact = [self.var_pool[k] for k in prev_keys - new_keys]
@@ -408,10 +418,28 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
 		obj_coeffs = self._path_obj_coeffs(available_paths, obj, site_cost_alpha)
 
-		# 1. Try Standard Solve
-		model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+		# 1. Try Standard Solve — unless the standard LP has been
+		# infeasible on a streak (congested/belief regime): then skip the
+		# doomed solve and go straight to MLU, retrying standard every
+		# 25th call so we notice when the regime decongests.
+		# (SCULPTOR_LP_ADAPTIVE_MLU=1, Tom 2026-08-20 lpdbg finding —
+		# halves belief-phase solves and keeps the solve mode stable so
+		# incrementality can engage.)
+		_adaptive = os.environ.get('SCULPTOR_LP_ADAPTIVE_MLU', '0') == '1'
+		_streak = getattr(self, '_std_infeas_streak', 0)
+		_skip_standard = (_adaptive and _streak >= 3
+						  and (_streak % 25) != 0)
+		model_res = None
+		if not _skip_standard:
+			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+			if model_res is None:
+				self._std_infeas_streak = _streak + 1
+			else:
+				self._std_infeas_streak = 0
+		else:
+			self._std_infeas_streak = _streak + 1
 
-		# 2. Fallback to MLU if Standard is Infeasible
+		# 2. Fallback to MLU if Standard is Infeasible (or skipped)
 		if model_res is None:
 			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
 
