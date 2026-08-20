@@ -584,12 +584,16 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def get_gamma(self):
 		return self.gamma
 
-	def resilience_benefit(self, a, **kwargs):
-		""" sum over peers of E(delta benefit when that peer is knocked out)."""
+	def resilience_benefit(self, a, with_lb=False, **kwargs):
+		""" sum over peers of E(delta benefit when that peer is knocked out).
+		with_lb=True also returns the base-adv (latency_benefit, u) tuple
+		(job 0 of the flush, previously discarded) so the caller can share
+		this flush instead of paying a separate 1-job flush; returns
+		(benefit, None) when a gate below skips the flush entirely."""
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
 		if not self.simulated or self.generic_objective.obj not in ["avg_latency"] or self.gamma == 0:
-			return 0
+			return (0, None) if with_lb else 0
 		# Under headroom mode (SCULPTOR_CAPACITY_HEADROOM>0), resilience is
 		# absorbed into the LP via reserved capacity, so we don't use the
 		# RB-grad for optimization. The N_popps+1 LP flush here is purely to
@@ -601,7 +605,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# value for reporting (e.g. paper-figure stats) gets it back. Headroom
 		# is a training-time approximation only.
 		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
-			return 0
+			return (0, None) if with_lb else 0
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
 		cpkwargs['retnow'] = False
@@ -619,6 +623,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		for b,_ in rets[1:]:
 			benefit += b
 
+		if with_lb:
+			return benefit, rets[0]
 		return benefit
 
 	def init_advertisement(self):
@@ -682,13 +688,20 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		if self.verbose:
 			print("Calculating modeled objective")
 		norm_penalty = self.advertisement_cost(a)
-		kwargs['retnow'] = True
-		latency_benefit, u = self.latency_benefit_fn(a, **kwargs)
-
+		latency_benefit = None
 		if self.using_resilience_benefit:
-			resilience_benefit = self.resilience_benefit_fn(a, **kwargs)
+			# combined flush: the base-adv LB rides as job 0 of the
+			# resilience fan-out (it was already queued and discarded there)
+			# instead of a separate 1-job flush that serializes on a single
+			# worker while the rest of the pool idles
+			resilience_benefit, _base = self.resilience_benefit_fn(a, with_lb=True, **kwargs)
+			if _base is not None:
+				latency_benefit, u = _base
 		else:
 			resilience_benefit = 0
+		if latency_benefit is None:
+			kwargs['retnow'] = True
+			latency_benefit, u = self.latency_benefit_fn(a, **kwargs)
 
 		if self.verbose:
 			benefits,probs = u
