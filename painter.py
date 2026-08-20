@@ -97,6 +97,16 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		self.rolling_delta = (1 - delta_alpha) * self.rolling_delta + delta_alpha * np.abs(self.obj - self.last_objective)
 		print("PAINTER ITER {}, RD {}".format(self.iter, self.rolling_delta))
 		self.stop = self.stopping_condition([self.iter, self.rolling_delta])
+		# SCULPTOR_PAINTER_MEASURE_CAP (Tom 2026-08-20): painter measures
+		# the live deployment EVERY iteration, so for measurement-budget
+		# parity with sparse (PROBE_N grounded probes) the loop must exit
+		# once it has spent N measurements. Unset = legacy unbounded
+		# behavior (stop only on max_n_iter/epsilon convergence).
+		_cap = os.environ.get('SCULPTOR_PAINTER_MEASURE_CAP', '')
+		if _cap and self.iter + 1 >= int(_cap):
+			print("PAINTER measurement cap hit ({} iters = {} measurements)"
+				  " -- stopping for budget parity".format(self.iter + 1, _cap))
+			self.stop = True
 
 	def _get_new_improvements(self, being_adved, **kwargs):
 		improvements, ug_decisions = calc_improvements_by_pop_peer(self.ug_perfs, self.ug_anycast_perfs,

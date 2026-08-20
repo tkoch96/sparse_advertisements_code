@@ -1606,6 +1606,32 @@ class Optimal_Adv_Wrapper:
 		self.update_parent_tracker_workers()
 		print("updating parent tracker took {}s".format(time.time() - ts))
 	
+	def _encode_parents_on_csr(self):
+		"""Compact CSR-by-parent encoding of the positives-only parents_on
+		cache (SCULPTOR_COMPACT_PT, Tom 2026-08-20). parent_tracker grows
+		~n_ug*n_popp^2 with measurements; as string-tuple dict keys it hit
+		354MB/worker x 80 workers at actual-25. Encoded: (parents int32[],
+		offsets int64[], rows int32[N,2] of (ui, childi), nonempty flag) —
+		~12B/entry, grouped by parent so the pattern-miss path only touches
+		ACTIVE parents' rows instead of scanning every entry."""
+		parents_on = self.calc_cache.all_caches['parents_on']
+		trip = []
+		for ug, inner in parents_on.items():
+			ui = self.whole_deployment_ug_to_ind[ug]
+			for (beaten, routed) in inner:
+				trip.append((self.popp_to_ind[routed], ui,
+							 self.popp_to_ind[beaten]))
+		nonempty = len(parents_on) > 0
+		if not trip:
+			return (np.zeros(0, dtype=np.int32),
+					np.zeros(1, dtype=np.int64),
+					np.zeros((0, 2), dtype=np.int32), nonempty)
+		t = np.asarray(sorted(trip), dtype=np.int64)
+		parents, starts = np.unique(t[:, 0], return_index=True)
+		offsets = np.concatenate([starts, [t.shape[0]]]).astype(np.int64)
+		return (parents.astype(np.int32), offsets,
+				t[:, 1:].astype(np.int32), nonempty)
+
 	def update_parent_tracker_workers(self):
 		## Update workers about new parent tracker information
 		ts = time.time()
@@ -1618,7 +1644,19 @@ class Optimal_Adv_Wrapper:
 
 		## TODO -- could just send deltas
 		msgs = {}
-		msg = pickle.dumps(('update_parent_tracker', self.calc_cache.all_caches['parents_on']))
+		if os.environ.get('SCULPTOR_COMPACT_PT', '1') != '0':
+			# Ship the compact arrays DIRECTLY in the message. (First
+			# attempt passed a ray.put ObjectRef pickled inside the msg
+			# bytes — an out-of-band ref the worker-side ray.get cannot
+			# always resolve; deadlocked the 2026-08-20 A/B fleet arm-1
+			# cells at 'pickling messages'. Arrays are ~25x smaller than
+			# the legacy dict, so per-worker transfer+residency is fine;
+			# true plasma dedup needs a first-class .remote() arg channel
+			# — future fleet work, see HANDOFF.)
+			payload = self._encode_parents_on_csr()
+			msg = pickle.dumps(('update_parent_tracker_csr', payload))
+		else:
+			msg = pickle.dumps(('update_parent_tracker', self.calc_cache.all_caches['parents_on']))
 		for worker in wm.worker_sockets:
 			msgs[worker] = msg
 		print("pickling messages took {}s".format(time.time()-ts))

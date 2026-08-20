@@ -29,6 +29,25 @@ ITER_RE = re.compile(r'rss_mb=(\d+) .*sys_avail_mb=(\d+) .*'
 OBJ_RE = re.compile(r'objective[:= ]+(-?[0-9]+\.[0-9]+)', re.I)
 IT_RE = re.compile(r'\[it\] t=\S+ iter=(\d+) obj=(\S+) pseudo=(\S+) '
                    r'rd=(\S+) rde=\S+ rad=(\S+) n_on=(\d+)')
+ADAGRAD_RE = re.compile(r'\[adagrad\] call=(\d+) \|g\|=(\S+) G=(\S+) '
+                        r'alpha_t=(\S+)')
+
+
+def _d0(vals):
+    # Tom 2026-08-20 v2: per-series ROBUST NORMALIZATION. Plain
+    # delta-from-start still let one series' huge early transient set
+    # the axis scale (believed drops thousands in the first iters, GT
+    # moves tenths). Center each series on its median and scale by its
+    # own p10-p90 span; the axis is clipped to [-3, 3] so outliers
+    # can't hide the ongoing movement of every line.
+    v = np.asarray([float(x) for x in vals], dtype=float)
+    if v.size == 0:
+        return v
+    med = float(np.median(v))
+    span = float(np.percentile(v, 90) - np.percentile(v, 10))
+    if span < 1e-9:
+        span = abs(med) if abs(med) > 1e-9 else 1.0
+    return (v - med) / span
 
 
 def main():
@@ -120,32 +139,20 @@ def main():
             ax_iter.set_title(ttl); ax_iter.grid(alpha=.3)
 
     # -- convergence: [it] per-iter metrics (falls back to grep)
-    # historical runs (state-pickle backfill) as context behind live
-    hist_fn = os.path.join(DASH, 'objective_history.json')
-    if os.path.exists(hist_fn):
-        try:
-            import json as _json
-            hist = _json.load(open(hist_fn))
-            for name, ser in sorted(hist.items()):
-                p = ser.get('pseudo') or []
-                a = ser.get('actual') or []
-                if len(p) > 1:
-                    ax_obj.plot(range(len(p)), p, '--', color='0.7',
-                                lw=1, zorder=1)
-                if len(a) > 1:
-                    ax_obj.plot(range(len(a)), a, ':', color='#7fbf8f',
-                                lw=1, zorder=1)
-        except Exception:
-            pass
+    # (objective_history backfill overlay REMOVED, Tom 2026-08-20: a
+    # garbage near-zero point in one archived series produced a -19k
+    # outlier that wrecked the axis, and the live run now carries its
+    # own full history. Data still collected in objective_history.json
+    # if ever wanted back.)
     # EODS-32 (other agent's cluster, read-only pull) overlay
     e32 = os.path.join(REPO, 'cache', 'eods', 'eods32_live', 'it.txt')
     if os.path.exists(e32):
         its32 = IT_RE.findall(open(e32, errors='replace').read())
         if its32:
             n32 = [int(a[0]) for a in its32]
-            ax_obj.plot(n32, [float(a[1]) for a in its32], 'x-',
+            ax_obj.plot(n32, _d0([a[1] for a in its32]), 'x-',
                         color='#c98f1e', ms=3, label='32: GT obj')
-            ax_obj.plot(n32, [float(a[2]) for a in its32], '+-',
+            ax_obj.plot(n32, _d0([a[2] for a in its32]), '+-',
                         color='#8f5f00', ms=3, alpha=.5,
                         label='32: believed')
     its = IT_RE.findall(txt)
@@ -155,15 +162,24 @@ def main():
         pse = [float(a[2]) for a in its]
         rd = [float(a[3]) for a in its]
         non = [int(a[5]) for a in its]
-        ax_obj.plot(it_n, pse, 'k.-', ms=3, label='believed obj')
-        ax_obj.plot(it_n, gt, 'g.-', ms=3, alpha=.8,
-                    label='ground-truth obj (last measured)')
+        ax_obj.plot(it_n, _d0(pse), 'k.-', ms=3,
+                    label='believed obj (normalized)')
+        ax_obj.plot(it_n, _d0(gt), 'g.-', ms=3, alpha=.8,
+                    label='GT obj (normalized)')
+        ax_obj.set_ylabel('per-series robust-normalized')
+        ax_obj.set_ylim(-3, 3)
         a2 = ax_obj.twinx()
         a2.semilogy(it_n, np.maximum(rd, 1e-12), 'r--', alpha=.5,
                     label='rolling delta')
-        a2.set_ylabel('rolling delta (red, log)')
+        ads = ADAGRAD_RE.findall(txt)
+        if ads:
+            a2.semilogy([int(x[0]) for x in ads],
+                        [max(float(x[3]), 1e-12) for x in ads],
+                        'b-', alpha=.6, lw=1, label='alpha_t (rmsprop)')
+        a2.set_ylabel('rolling delta (red) / alpha_t (blue), log')
+        a2.legend(fontsize=6, loc='lower left')
         ax_obj.set_xlabel('iter (n_on last={})'.format(non[-1]))
-        ax_obj.set_title('convergence: believed vs ground-truth + stop signal')
+        ax_obj.set_title('convergence (per-series normalized) + stop + step size')
         ax_obj.legend(fontsize=7, loc='upper right')
         ax_obj.grid(alpha=.3)
     else:

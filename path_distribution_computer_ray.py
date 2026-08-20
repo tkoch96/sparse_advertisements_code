@@ -212,6 +212,17 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 			self.clear_new_meas_caches()
 		return "ACK"
 
+	def _cmd_update_parent_tracker_csr(self, payload):
+		# SCULPTOR_COMPACT_PT path: payload is either an ObjectRef to (or
+		# directly) the (parents, offsets, rows, nonempty) CSR from
+		# _encode_parents_on_csr. Zero-copy per node via plasma; replaces
+		# the per-worker string-tuple dict (354MB/worker at actual-25).
+		parents, offsets, rows, nonempty = payload
+		self._pt_csr = (parents, offsets, rows)
+		if nonempty:
+			self.clear_new_meas_caches()
+		return "ACK"
+
 	def _cmd_update_deployment(self, data):
 		# The base-class update_deployment short-circuits its worker_manager
 		# fan-out branch when self.worker_manager is unset (AttributeError

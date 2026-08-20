@@ -126,35 +126,132 @@ class Ing_Obj:
 	def kill(self):
 		self.alive = False
 
+# --- cache usage statistics (SCULPTOR_CACHE_STATS=1; Tom 2026-08-20) ---
+# Records per-key hit counts between clears ("epochs") so we can measure
+# hot/cold key concentration and cross-epoch key re-occurrence — the two
+# numbers that tell us whether a usage-aware (LRU/LFU) eviction policy
+# beats the current clear-everything behavior. Stats-only: no timing, no
+# behavior change; default-off.
+import hashlib as _hashlib
+import json as _json
+import atexit as _atexit
+
+_CACHE_STATS = os.environ.get('SCULPTOR_CACHE_STATS', '0') == '1'
+_CACHE_STATS_DIR = os.environ.get('SCULPTOR_CACHE_STATS_DIR', 'cache_stats')
+
+def _key_id(k):
+	try:
+		b = repr(k).encode()
+	except Exception:
+		b = str(type(k)).encode()
+	return _hashlib.md5(b).hexdigest()[:12]
+
+class _StatsDict(dict):
+	"""dict that counts per-key get-hits and misses."""
+	def __init__(self, name):
+		super().__init__()
+		self.name = name
+		self.hits = {}
+		self.misses = 0
+
+	def __getitem__(self, k):
+		try:
+			v = super().__getitem__(k)
+		except KeyError:
+			self.misses += 1
+			raise
+		self.hits[_key_id(k)] = self.hits.get(_key_id(k), 0) + 1
+		return v
+
+	def get(self, k, default=None):
+		try:
+			return self[k]
+		except KeyError:
+			return default
+
+	def snapshot_and_reset(self):
+		import pickle as _p
+		n = len(self)
+		size_sample = 0
+		for i, (k, v) in enumerate(self.items()):
+			if i >= 5: break
+			try:
+				size_sample = max(size_sample, len(_p.dumps(v, -1)))
+			except Exception:
+				pass
+		rec = {'cache': self.name, 'n_keys': n, 'misses': self.misses,
+			   'entry_bytes_max_sampled': size_sample,
+			   'hits_by_key': self.hits,
+			   'resident_keys': [_key_id(k) for k in self.keys()]}
+		self.hits = {}
+		self.misses = 0
+		return rec
+
+class _CacheStatsWriter:
+	def __init__(self):
+		self.fh = None
+		self.epoch = 0
+
+	def dump(self, caches, reason):
+		if not _CACHE_STATS:
+			return
+		if self.fh is None:
+			os.makedirs(_CACHE_STATS_DIR, exist_ok=True)
+			self.fh = open(os.path.join(
+				_CACHE_STATS_DIR, 'cache_stats_{}.jsonl'.format(os.getpid())), 'a')
+			_atexit.register(self._final)
+		self.epoch += 1
+		for c in caches:
+			if isinstance(c, _StatsDict):
+				rec = c.snapshot_and_reset()
+				rec.update({'epoch': self.epoch, 'reason': reason,
+							'pid': os.getpid(), 't': time.time()})
+				self.fh.write(_json.dumps(rec) + '\n')
+		self.fh.flush()
+
+	def _final(self):
+		try:
+			self.dump(getattr(self, '_registered', []), 'process_exit')
+		except Exception:
+			pass
+
+_cache_stats_writer = _CacheStatsWriter()
+# --- end cache usage statistics ---
+
 class Calc_Cache():
 	### For caching results to computationally intensive tasks
 	def __init__(self):
 		## VARIOUS CACHES
-		self.all_caches = {
-			'gti': {}, # ground truth ingresses for UGs given advertisements
-			'lb': {}, # latency benefit by advertisement (very small)
-			'ing_prob': {}, # ingress probabilities by active ingresses, each entry is npopp x nug
-			'distance': {}, # geographic distances between UGs and PoPs, (very small)
-			'parents_on': {}, # stores indices of parent tracker that should be set to 'on'
-		}
+		self.all_caches = self._fresh_caches()
 		# self.disallowed_caches = ['gti', 'ing_prob', 'lb'] ## wont be transferred among processes
 		self.disallowed_caches = []
+
+	@staticmethod
+	def _fresh_caches():
+		mk = (lambda nm: _StatsDict(nm)) if _CACHE_STATS else (lambda nm: {})
+		return {
+			'gti': mk('gti'), # ground truth ingresses for UGs given advertisements
+			'lb': mk('lb'), # latency benefit by advertisement (very small)
+			'ing_prob': mk('ing_prob'), # ingress probabilities by active ingresses, each entry is npopp x nug
+			'distance': mk('distance'), # geographic distances between UGs and PoPs, (very small)
+			'parents_on': mk('parents_on'), # stores indices of parent tracker that should be set to 'on'
+		}
 
 
 	def clear_new_measurement_caches(self):
 		## Clear the caches that should be cleared when we execute a new measurement
+		if _CACHE_STATS:
+			_cache_stats_writer.dump(
+				[self.all_caches[k] for k in ('lb', 'ing_prob')], 'new_measurement')
+		fresh = self._fresh_caches()
 		for k in ['lb', 'ing_prob']:
-			self.all_caches[k] = {}
+			self.all_caches[k] = fresh[k]
 
 	def clear_all_caches(self):
+		if _CACHE_STATS:
+			_cache_stats_writer.dump(list(self.all_caches.values()), 'clear_all')
 		del self.all_caches
-		self.all_caches = {
-			'gti': {}, # ground truth ingresses for UGs given advertisements
-			'lb': {}, # latency benefit by advertisement (very small)
-			'ing_prob': {}, # ingress probabilities by active ingresses, each entry is npopp x nug
-			'distance': {}, # geographic distances between UGs and PoPs, (very small)
-			'parents_on': {}, # stores indices of parent tracker that should be set to 'on'
-		}
+		self.all_caches = self._fresh_caches()
 
 	def update_cache(self, new_cache_obj):
 		## Just update each entry

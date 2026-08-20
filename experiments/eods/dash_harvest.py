@@ -86,7 +86,7 @@ def main():
         for fn in sorted(glob.glob(os.path.join(args.ws, '*', 'logs', '*.log'))):
             try:
                 r = subprocess.run(['grep', '-hE',
-                    'ms per iter|benefit grad took|Timer: |\\[wt\\] |\\[it\\] |%  \\(|objective',
+                    'ms per iter|benefit grad took|Timer: |\\[wt\\] |\\[it\\] |\\[adagrad\\] |%  \\(|objective',
                     fn], capture_output=True, text=True, timeout=30)
                 out.write(''.join(r.stdout.splitlines(True)[-3000:]))
             except Exception:

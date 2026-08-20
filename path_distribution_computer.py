@@ -895,16 +895,29 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					np.asarray(_offs, dtype=np.int64))
 			_flat, _offs = self._uipop_csr
 
-			# Blocked (ui, child) pairs from active parents (python scan
-			# retained: parent_tracker is small; applied as sparse
-			# corrections to the vector mask below)
+			# Blocked (ui, child) pairs from active parents. Compact path
+			# (SCULPTOR_COMPACT_PT, Tom 2026-08-20): _pt_csr groups rows by
+			# parent, so we touch only ACTIVE parents' rows — the legacy
+			# python scan walked EVERY (ug,child,parent) entry per miss,
+			# which scales ~n_ug*n_popp^2 with measurements (354MB and
+			# millions of entries at actual-25 late-run).
 			blocked_user_child = set()
-			for ug, child, parent in self.parent_tracker:
-				parenti = self.popp_to_ind[parent]
-				if parenti in active_poppis_set:
-					ui = self.whole_deployment_ug_to_ind[ug]
-					childi = self.popp_to_ind[child]
-					blocked_user_child.add((ui, childi))
+			_csr = getattr(self, '_pt_csr', None)
+			if _csr is not None:
+				_pt_parents, _pt_offs, _pt_rows = _csr
+				if _pt_parents.shape[0]:
+					for _j in np.nonzero(col[_pt_parents])[0]:
+						for _bui, _bchild in _pt_rows[
+								_pt_offs[_j]:_pt_offs[_j + 1]].tolist():
+							blocked_user_child.add((_bui, _bchild))
+			else:
+				# legacy dict path (SCULPTOR_COMPACT_PT=0 or no update yet)
+				for ug, child, parent in self.parent_tracker:
+					parenti = self.popp_to_ind[parent]
+					if parenti in active_poppis_set:
+						ui = self.whole_deployment_ug_to_ind[ug]
+						childi = self.popp_to_ind[child]
+						blocked_user_child.add((ui, childi))
 
 			# 3. Build routing for this state — fully vectorized.
 			mask = col[_flat]                     # popp physically up
