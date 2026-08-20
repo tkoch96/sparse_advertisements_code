@@ -36,6 +36,11 @@ from generic_objective import Generic_Objective
 from solve_lp_assignment import *
 from scipy.sparse import csr_matrix, lil_matrix
 
+# SCULPTOR_OPP_ONCE=1: per-process memo for compute_one_per_peering_solution
+# (driver-side). Keyed by a content fingerprint of every input the solve
+# reads; capped small since entries are a few MB at actual-32.
+_OPP_SOLN_MEMO = {}
+
 
 class Optimal_Adv_Wrapper:
 	### Wrapper class for all solutions to finding optimal advertisements
@@ -501,6 +506,29 @@ class Optimal_Adv_Wrapper:
 			from deployment_setup import get_link_capacities_actual_deployment
 			self.link_capacities_by_popp = get_link_capacities_actual_deployment(self.output_deployment(), anycast_catchments)
 
+	def _opp_solution_fingerprint(self):
+		"""Content key for the SCULPTOR_OPP_ONCE memo: every input that
+		compute_one_per_peering_solution's ground-truth ingress + LP solve
+		reads. Anything not captured here MUST NOT vary between two calls
+		that share a fingerprint."""
+		import hashlib
+		payload = (
+			self.generic_objective.obj,
+			tuple(sorted(self.generic_objective.lp_kwargs.items())),
+			float(self.gamma), float(self.lambduh), bool(self.with_capacity),
+			self.n_prefixes,
+			tuple(self.popps),
+			tuple((popp, float(self.link_capacities_by_popp[popp]))
+				  for popp in self.popps),
+			tuple((ug, float(self.whole_deployment_ug_to_vol[ug]))
+				  for ug in self.whole_deployment_ugs),
+			tuple((ug, tuple(sorted(self.whole_deployment_ug_perfs[ug].items())))
+				  for ug in self.whole_deployment_ugs),
+			tuple((ug, tuple(sorted(self.whole_deployment_ground_truth_ingress_priorities[ug].items())))
+				  for ug in self.whole_deployment_ugs),
+		)
+		return hashlib.sha1(pickle.dumps(payload)).hexdigest()
+
 	def compute_one_per_peering_solution(self, **kwargs):
 		try:
 			self.worker_manager
@@ -512,18 +540,45 @@ class Optimal_Adv_Wrapper:
 			### Temporarily stop using pseudo-ugs
 			if self.og_deployment['ugs'] != self.ugs:
 				save_dep = self.output_deployment()
-				self.update_deployment(self.og_deployment, 
+				self.update_deployment(self.og_deployment,
 					compute_best_lats=False, clear_caches=False)
 				revert=True
 		except AttributeError:
 			pass
 
-		one_per_ingress_adv = np.identity(self.n_popps)
-		ret_overall = self.generic_objective.get_latency_benefit_adv(one_per_ingress_adv)
-		objective_lat = ret_overall['objective']
-		objective_res = self.generic_objective.get_ground_truth_resilience_benefit(one_per_ingress_adv)
-		overall_objective = self.actual_nonconvex_objective(one_per_ingress_adv, 
-			latency_benefit_precalc=objective_lat, resilience_benefit_precalc=objective_res)
+		# SCULPTOR_OPP_ONCE (Tom 2026-08-20, HANDOFF_EODS32 (a)): the
+		# one-per-peering solution is a pure function of deployment +
+		# objective, but was re-solved identically on the driver for every
+		# wrapper construction / update_deployment (~268k-column LP each
+		# time at actual-32). Memoize per-process on a content fingerprint.
+		# Workers never reach this point (no worker_manager -> early return
+		# above), so the driver's copy is the only one that exists; there
+		# is nothing to distribute.
+		memo_hit = None
+		memo_key = None
+		if self.simulated and os.environ.get('SCULPTOR_OPP_ONCE', '0') == '1':
+			ts_fp = time.time()
+			memo_key = self._opp_solution_fingerprint()
+			memo_hit = _OPP_SOLN_MEMO.get(memo_key)
+			print("[opp-once] {} fp={} t_fp={:.2f}s".format(
+				'HIT' if memo_hit is not None else 'MISS', memo_key[:10],
+				time.time() - ts_fp), flush=True)
+
+		if memo_hit is not None:
+			ret_overall, objective_lat, objective_res, overall_objective = \
+				copy.deepcopy(memo_hit)
+		else:
+			one_per_ingress_adv = np.identity(self.n_popps)
+			ret_overall = self.generic_objective.get_latency_benefit_adv(one_per_ingress_adv)
+			objective_lat = ret_overall['objective']
+			objective_res = self.generic_objective.get_ground_truth_resilience_benefit(one_per_ingress_adv)
+			overall_objective = self.actual_nonconvex_objective(one_per_ingress_adv,
+				latency_benefit_precalc=objective_lat, resilience_benefit_precalc=objective_res)
+			if memo_key is not None:
+				while len(_OPP_SOLN_MEMO) >= 4:
+					_OPP_SOLN_MEMO.pop(next(iter(_OPP_SOLN_MEMO)))
+				_OPP_SOLN_MEMO[memo_key] = copy.deepcopy(
+					(ret_overall, objective_lat, objective_res, overall_objective))
 
 		# print("{} {}".format(objective_lat, objective_res))
 		# exit(0)

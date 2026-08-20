@@ -307,8 +307,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# static-latency objectives; MLU/site-cost variants pass
 		# obj-coeff arrays that can vary -> fall back to full Obj push).
 		new_keys = set(available_paths)
+		# lpdbg probe (HANDOFF_EODS32 open mystery): var_pool grows past the
+		# full (ug,popp) matrix at actual-32 (268k -> 473k); sample the
+		# newly-minted keys to identify what mints them (pseudo-ug split?).
+		_minted = [] if LP_SOLVE_DEBUG else None
 		for (ug, poppi), latency in zip(available_paths, obj_coeffs):
 			if (ug, poppi) not in self.var_pool:
+				if _minted is not None:
+					_minted.append((ug, poppi))
 				col = gp.Column()
 				col.addTerms(1.0, self.vol_constrs[ug])
 				col.addTerms(1.0, self.cap_constrs[poppi])
@@ -380,10 +386,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			_n_act = len(act_idx) if _incr else len(active_vars)
 			_n_deact = len(to_deact) if _incr else -1
 			print('[lpdbg] w={} k={} backend={} paths={} act=+{}/-{} '
-				  'pool={} simplex_iters={} t_prep={:.3f}s t_opt={:.3f}s'.format(
+				  'pool={} mint={} mint_sample={} simplex_iters={} '
+				  't_prep={:.3f}s t_opt={:.3f}s'.format(
 					  getattr(self, 'worker_i', 'drv'), self._dbg_solve_k,
 					  gp.BACKEND, len(available_paths), _n_act, _n_deact,
-					  len(self.var_pool),
+					  len(self.var_pool), len(_minted or ()),
+					  (_minted or [])[:3],
 					  getattr(self.model, '_last_iter_count', -1),
 					  _dbg_prep_t, time.time() - ts), flush=True)
 		if self.model.status == 2:
