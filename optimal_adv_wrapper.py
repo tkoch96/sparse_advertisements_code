@@ -387,6 +387,66 @@ class Optimal_Adv_Wrapper:
 
 		return all_rets
 
+	def solve_lp_volscen_mp(self, adv, obj, scenarios, **kwargs):
+		"""SCULPTOR_EVAL_VOLSCEN fanout: scenarios = [(vol_vec|None,
+		cap_arr|None), ...] against ONE advertisement. Ships the adv and
+		obj once per worker message plus tiny per-scenario vectors; the
+		worker computes rti once and reuses it (volumes don't affect
+		ingress selection). Same LP builder as the legacy path => exactly
+		identical per-scenario results, ~none of the legacy per-scenario
+		update_deployment/clear_caches/full-deployment-pickle cost."""
+		light_result = kwargs.get('light_result', False)
+		LIGHT_KEEP_FIELDS = {'lats_by_ug', 'fraction_congested_volume', 'paths_by_ug'}
+		def _maybe_strip(answer):
+			if not light_result or not isinstance(answer, dict):
+				return answer
+			for k in list(answer.keys()):
+				if k not in LIGHT_KEEP_FIELDS:
+					answer.pop(k, None)
+			return answer
+		indexed = [(i, v, c) for i, (v, c) in enumerate(scenarios)]
+		all_rets = [None for _ in indexed]
+		if self._get_n_workers_safe() == 0:
+			# subprocess/serial fallback: identical semantics, in-process
+			from solve_lp_assignment import solve_generic_lp_with_failure_catch
+			rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
+			save_vols = self.whole_deployment_ug_vols
+			save_map = self.whole_deployment_ug_to_vol
+			save_caps = self.link_capacities_arr
+			try:
+				for adv_i, vol_vec, cap_arr in indexed:
+					if vol_vec is not None:
+						self.whole_deployment_ug_vols = vol_vec
+						self.whole_deployment_ug_to_vol = {
+							ug: v for ug, v in zip(self.whole_deployment_ugs, vol_vec)}
+					if cap_arr is not None:
+						self.link_capacities_arr = cap_arr
+					all_rets[adv_i] = _maybe_strip(
+						solve_generic_lp_with_failure_catch(self, rti, obj, adv=adv))
+			finally:
+				self.whole_deployment_ug_vols = save_vols
+				self.whole_deployment_ug_to_vol = save_map
+				self.link_capacities_arr = save_caps
+			return all_rets
+		n_w = self.get_n_workers()
+		chunks = split_seq(indexed, n_w)
+		msgs = []
+		for i in range(n_w):
+			msgs.append(pickle.dumps(['solve_lp_volscen',
+									  (adv, obj, chunks[i])]))
+		from_workers = self.worker_manager.send_receive_messages_workers(msgs)
+		for worker_i, ret in from_workers.items():
+			if not isinstance(ret, list):
+				# worker-side exception was swallowed into an 'ERROR'
+				# string by handle_msg — surface it loudly instead of a
+				# confusing unpack crash here
+				raise RuntimeError(
+					'solve_lp_volscen worker {} returned {!r}'.format(
+						worker_i, ret))
+			for adv_i, answer in ret:
+				all_rets[adv_i] = _maybe_strip(answer)
+		return all_rets
+
 	def update_cache(self, new_cache):
 		self.calc_cache.update_cache(new_cache)
 		### Keeps the parent-tracker up to date

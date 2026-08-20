@@ -39,3 +39,19 @@ Evidence: head memprof at actual-25 (production, 80w) + isolated bench
 - LRU/retention for Calc_Cache dicts across measurement clears:
   reoccurrence ~13% (actual-5 smoke) — the optimizer moves on; the
   clear-everything policy is approximately right there.
+
+## Eval-tail program (2026-08-20 afternoon) — SHIPPED
+- SCULPTOR_EVAL_VOLSCEN=1: diurnal/flash/vol-mult scenarios ship as
+  vol/cap vectors; rti computed once per adv; persistent LP with
+  per-scenario RHS updates. 7.7x on eval recompute at small (77s->10s);
+  diurnal was 70% of the size-20 eval tail (2206s of 3064s).
+- ug-sentinel pricing (auto with volscen): congestion-touched ugs
+  priced exactly NO_ROUTE_LATENCY, killing vertex-dependent mixture
+  leakage into the ==sentinel aggregation filter. Validated: diurnal
+  curves match legacy exactly; 25/4176 scalars differ >1e-6 (degenerate
+  taint-set edges).
+- LATENT LEGACY BUG documented: the flash/diurnal aggregation silently
+  EXCLUDES congested ugs (exact-sentinel filter), so legacy curves are
+  flat under volume surges. Metric redesign (volume-weighted congested
+  fraction) is a paper-level decision — not changed here.
+- Eval phase mem/time markers ([mem] tag=eval_*) permanent.

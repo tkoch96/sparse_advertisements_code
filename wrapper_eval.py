@@ -633,6 +633,35 @@ def get_inflated_metro_deployments_actual_deployment(sas, X_vals, Y_vals):
 				ret[Y][X][metro] = quick_deployment
 	return ret
 
+
+def _volscen_extract(sas, flat_deployments, base_dep):
+	"""SCULPTOR_EVAL_VOLSCEN conformance check + extraction. Returns
+	[(vol_vec|None, cap_arr|None), ...] iff every scenario deployment
+	differs from the CURRENT sas deployment only in ug volumes and/or
+	link capacities (the shape produced by get_diurnal_deployments /
+	get_inflated_metro_deployments / get_inflated_total_deployments via
+	output_deployment(copykeys=...)); None => caller uses legacy path.
+	Identity comparison on the non-copied fields is the guard: any
+	structural difference fails closed."""
+	VOL_KEYS = {'ug_to_vol', 'whole_deployment_ug_to_vol', 'link_capacities'}
+	out = []
+	for d in flat_deployments:
+		for k, v in d.items():
+			if k in VOL_KEYS or k == 'port':
+				continue
+			if k not in base_dep or base_dep[k] is not v:
+				return None
+		vol_vec = None
+		if d.get('whole_deployment_ug_to_vol') is not base_dep.get('whole_deployment_ug_to_vol'):
+			m = d['whole_deployment_ug_to_vol']
+			vol_vec = np.array([m[ug] for ug in sas.whole_deployment_ugs], dtype=np.float64)
+		cap_arr = None
+		if d.get('link_capacities') is not base_dep.get('link_capacities'):
+			lc = d['link_capacities']
+			cap_arr = np.array([lc[popp] for popp in sas.popps], dtype=np.float64)
+		out.append((vol_vec, cap_arr))
+	return out
+
 def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inflated_deployments):
 	## X vals is flash crowd volume surge
 	## Y vals is link capacity multiplier
@@ -650,17 +679,29 @@ def assess_resilience_to_flash_crowds_mp(sas, adv, solution, X_vals, Y_vals, inf
 
 	base_soln = sas.solve_lp_with_failure_catch(adv)
 
-	call_args = []
+	flat_deps = []
 	for Y_val in Y_vals:
 		for X_val in X_vals:
-			for metro, d in inflated_deployments[Y_val][X_val].items():
-				## always clear the deployment cache (True on third arg)
-				call_args.append((adv, d, True))
+			for metro in inflated_deployments[Y_val][X_val]:
+				flat_deps.append(inflated_deployments[Y_val][X_val][metro])
 
-	### Call all the solutions with multiprocessing
-	all_rets = sas.solve_lp_with_failure_catch_mp(call_args)
+	scen = None
+	if os.environ.get('SCULPTOR_EVAL_VOLSCEN', '0') == '1':
+		scen = _volscen_extract(sas, flat_deps, sas.output_deployment(copykeys=None))
+	if scen is not None:
+		_obj = getattr(getattr(sas, 'generic_objective', None), 'obj', 'avg_latency')
+		all_rets = sas.solve_lp_volscen_mp(threshold_a(adv), _obj, scen)
+	else:
+		call_args = [(adv, d, True) for d in flat_deps]
+		### Call all the solutions with multiprocessing
+		all_rets = sas.solve_lp_with_failure_catch_mp(call_args)
 	i=0
 	print("Done, parsing return values from workers")
+	if os.environ.get('SCULPTOR_VOLDEBUG') == '1' and len(all_rets) > 258:
+		_l = np.asarray(all_rets[258]['lats_by_ug'], dtype=float)
+		print('[voldebug-agg] i=258 mean={:.1f} max={:.1f} n_exact30000={} n_ge15000={}'.format(
+			float(np.mean(_l)), float(np.max(_l)),
+			int(np.sum(_l == 30000.0)), int(np.sum(_l >= 15000))), flush=True)
 	for Y in Y_vals:
 		previous_hour_solution = None
 		for X in X_vals:
@@ -880,14 +921,17 @@ def assess_volume_multipliers(sas, adv, solution, inflated_deployments):
 
 	adv = threshold_a(adv)
 	base_soln = sas.solve_lp_with_failure_catch(adv)
-	call_args = []
-	for X_val in X_vals:
-		## always clear the deployment cache (True on third arg)
-		d = inflated_deployments[X_val]
-		call_args.append((adv, d, True))
-
-	### Call all the solutions with multiprocessing
-	all_rets = sas.solve_lp_with_failure_catch_mp(call_args)
+	flat_deps = [inflated_deployments[X_val] for X_val in X_vals]
+	scen = None
+	if os.environ.get('SCULPTOR_EVAL_VOLSCEN', '0') == '1':
+		scen = _volscen_extract(sas, flat_deps, sas.output_deployment(copykeys=None))
+	if scen is not None:
+		_obj = getattr(getattr(sas, 'generic_objective', None), 'obj', 'avg_latency')
+		all_rets = sas.solve_lp_volscen_mp(adv, _obj, scen)
+	else:
+		call_args = [(adv, d, True) for d in flat_deps]
+		### Call all the solutions with multiprocessing
+		all_rets = sas.solve_lp_with_failure_catch_mp(call_args)
 	i=0
 	print("Done, parsing return values from workers")
 	for X in X_vals:

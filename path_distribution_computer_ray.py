@@ -24,6 +24,7 @@ import os
 import time
 import pickle
 import ray
+import numpy as np
 
 # Inherit ALL the heavy logic (latency_benefit, solve_*_lp, monte-carlo, etc.)
 # from the original module by importing it. We override only what changes.
@@ -141,6 +142,13 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 				self.clear_caches()
 				self.update_deployment(deployment, quick_update=True,
 					verb=False, exit_on_impossible=False)
+			if os.environ.get('SCULPTOR_VOLDEBUG') == '1':
+				_ug0 = self.whole_deployment_ugs[0]
+				print('[voldebug] adv_i={} update_dep={} attr_vol={:.4f} rhs={:.4f} dep_vol={:.4f}'.format(
+					adv_i if len(fields) == 4 else fields[0], update_dep,
+					float(self.whole_deployment_ug_to_vol[_ug0]),
+					float(self.vol_constrs[_ug0].RHS) if hasattr(self, 'vol_constrs') else -1,
+					float(deployment['whole_deployment_ug_to_vol'][_ug0])), flush=True)
 			self.check_load_rw_measure_wrapper()
 
 			rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
@@ -203,6 +211,71 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 	def _cmd_reset_new_meas_cache(self, _data=None):
 		self.clear_new_meas_caches()
 		return "ACK"
+
+	def _cmd_solve_lp_volscen(self, data):
+		# SCULPTOR_EVAL_VOLSCEN fast path (Tom 2026-08-20): a batch of
+		# eval scenarios that differ from the loaded deployment ONLY in
+		# ug volumes and/or link capacities (diurnal / flash-crowd /
+		# volume-multiplier phases). Volumes don't affect ingress
+		# selection, so rti is computed ONCE per adv; each scenario then
+		# swaps in its vol/cap vectors directly — no per-scenario
+		# update_deployment + clear_caches, no full-deployment pickles.
+		# Uses the SAME LP builder as _cmd_solve_lp, so per-scenario LP
+		# results are exactly identical to the legacy path.
+		adv, obj, scenarios = data
+		self.check_load_rw_measure_wrapper()
+		rti, _ = self.calculate_ground_truth_ingress(adv, do_cache=False)
+		save_vols = self.whole_deployment_ug_vols
+		save_map = self.whole_deployment_ug_to_vol
+		save_caps = self.link_capacities_arr
+		save_caps_full = getattr(self, '_link_capacities_full', None)
+		save_static = getattr(self, 'static_caps', None)
+		# scenario volumes must ALSO reach the persistent LP model's
+		# per-ug volume constraints — solve_generic_lp_with_failure_catch
+		# prefers the persistent model, whose RHS was baked at build time
+		# (missed on the first pass; caught by the eval exactness A/B:
+		# arm B solved with stale volumes).
+		self._ug_sentinel_pricing = True
+		_have_model = hasattr(self, 'model') and hasattr(self, 'vol_constrs')
+		if _have_model:
+			_ordered_constrs = [self.vol_constrs[ug]
+								for ug in self.whole_deployment_ugs]
+		ret = []
+		try:
+			for adv_i, vol_vec, cap_arr in scenarios:
+				if vol_vec is not None:
+					self.whole_deployment_ug_vols = vol_vec
+					self.whole_deployment_ug_to_vol = {
+						ug: v for ug, v in zip(self.whole_deployment_ugs, vol_vec)}
+					if _have_model:
+						for _c, _v in zip(_ordered_constrs, vol_vec):
+							_c.RHS = float(_v)
+				if cap_arr is not None:
+					self.link_capacities_arr = cap_arr
+					self._link_capacities_full = np.concatenate(
+						[cap_arr.flatten(), [1000000.0]])
+					self.static_caps = self._compute_static_caps()
+				if os.environ.get('SCULPTOR_VOLDEBUG') == '1':
+					_ug0 = self.whole_deployment_ugs[0]
+					print('[voldebug-vs] adv_i={} vol={:.4f} rhs={:.4f}'.format(
+						adv_i, float(self.whole_deployment_ug_to_vol[_ug0]),
+						float(self.vol_constrs[_ug0].RHS)), flush=True)
+				this_ret = solve_generic_lp_with_failure_catch(
+					self, rti, obj, adv=adv)
+				ret.append((adv_i, this_ret))
+		finally:
+			self._ug_sentinel_pricing = False
+			self.whole_deployment_ug_vols = save_vols
+			self.whole_deployment_ug_to_vol = save_map
+			self.link_capacities_arr = save_caps
+			if save_caps_full is not None:
+				self._link_capacities_full = save_caps_full
+			if save_static is not None:
+				self.static_caps = save_static
+			if _have_model:
+				for _c, _v in zip(_ordered_constrs, save_vols):
+					_c.RHS = float(_v)
+		return ret
 
 	def _cmd_update_parent_tracker(self, parents_on):
 		for ug in parents_on:

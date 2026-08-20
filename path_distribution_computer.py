@@ -469,6 +469,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		_soft_routed_wsum = 0.0
 		_soft_routed_vol = 0.0
 		_soft_bad_vol = 0.0
+		_sentinel_tainted = set()
 		for (ug, poppi), vol_amt in raw_x.items():
 			ugi = self.whole_deployment_ug_to_ind[ug]
 
@@ -493,6 +494,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 			# Weighted average latency contribution
 			lats_by_ug_arr[ugi] += path_lat * (vol_amt / self.whole_deployment_ug_to_vol[ug])
+			if path_lat == NO_ROUTE_LATENCY:
+				_sentinel_tainted.add(ugi)
+
+		# _ug_sentinel_pricing (SCULPTOR_EVAL_VOLSCEN eval solves, Tom
+		# 2026-08-20): degenerate optima split a congestion-touched ug's
+		# volume differently across vertices, so its lats_by_ug value is a
+		# vertex-dependent MIXTURE of sentinel and real latency. Downstream
+		# eval aggregations filter on lat == NO_ROUTE_LATENCY exactly, so
+		# mixtures leak sentinel-scale garbage into averages. Under this
+		# flag any congestion-touched ug is priced at the sentinel exactly
+		# — vertex-stable and matches the aggregation's intent ("skip ugs
+		# touching congestion"). Training paths never set the flag.
+		if getattr(self, '_ug_sentinel_pricing', False) and _sentinel_tainted:
+			for _ti in _sentinel_tainted:
+				lats_by_ug_arr[_ti] = NO_ROUTE_LATENCY
 
 		obj_norm = np.sum(self.whole_deployment_ug_vols)
 		if _cong_aware:
