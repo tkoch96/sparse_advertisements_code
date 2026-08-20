@@ -14,6 +14,30 @@ serial driver floor <10-20s/iter becomes the binding constraint at
 that scale — async/pipelined grads is the known counter). Measured
 scaling model + core-seconds numbers in KNOWN NUMBERS below.
 
+## OVERNIGHT 08-19/20 DELTA (read before acting)
+- KeyError popp-map bug turned BLOCKING (killed sparse at iter 67) —
+  FIXED (solve_lp_assignment sort key via lat_matrix, NO_ROUTE for
+  missing pairs). 96-worker OOM-reap treadmill -> run at 80 workers.
+  Resume-trap reminder: clear seed_1_metrics.pkl+json before any
+  relaunch or the cell skips training on the stale checkpoint.
+- Belief memo WORKS in production (3 restarts at ~7min startup).
+- HOT-START now wired: SCULPTOR_EODS_HOTSTART_DIR=<run-dir name under
+  ws/runs> on run_eods_cell resumes training from newest state-N.pkl
+  (popp_to_users guard makes it safe). VALIDATION SMOKE STILL PENDING
+  — do one small kill-resume test before relying on it.
+- The parallel "32 agent" cluster (3x c8g.24xlarge) launched WITHOUT
+  its valid-25 gate, stalled ~2.5h at iter 10, node went unreachable;
+  TERMINATED 2026-08-20 ~10:45Z per Tom (~$40 spent). Forensic
+  telemetry: cache/eods/eods32_live/. Lesson: 32 runs ON THE HEAD
+  (single cell, 80 workers); fleets only as deliberate gated
+  experiments.
+- CURRENT: clean 25 run (fixed code) training on the head — iter ~52
+  at ~10:15Z, GT obj 7.35, ~95-120s/iter, 3+/10 probes spent, no stop
+  attempts yet. Expect stop window ~iter 100-150, evals after, valid
+  result mid-afternoon. Dash: 25 curves + (dormant) 32 overlay + all
+  buttons. Believed-vs-GT gap (pseudo ~19k vs obj ~7.4) never closes —
+  open scientific question, discuss with Tom before treating as bug.
+
 ## IMMEDIATE NEXT STEP
 The running 25 cell completes -> check evals VALID (stats populated,
 volume-multiplier assert silent) -> launch the single 32 cell

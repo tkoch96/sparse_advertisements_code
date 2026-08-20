@@ -56,6 +56,17 @@ def main():
                           'seed_{}_metrics.pkl'.format(args.seed))
     kwargs = {'nsim': 1, 'use_performance_metrics_fn': pkl_fn,
               'soln_types': soln_types}
+    # SCULPTOR_EODS_HOTSTART_DIR (Tom 2026-08-20: training state IS
+    # resumable — the solver saves state-N.pkl in its run dir and
+    # load_optimization_state hot-starts from the newest one; the
+    # popp_to_users blocker was fixed 2026-08-19). Value = run-dir name
+    # relative to RUN_DIR (the workspace runs/ dir). Passing it also
+    # bypasses the compare_rets resume-skip, forcing sparse to continue
+    # training from the saved state.
+    _hs = os.environ.get('SCULPTOR_EODS_HOTSTART_DIR')
+    if _hs:
+        print('[eods] HOTSTART from run dir: {}'.format(_hs), flush=True)
+        kwargs['save_run_dir'] = _hs
 
     if mode == 'prefixes':
         # the queue's swept N value = prefix count for this cell
