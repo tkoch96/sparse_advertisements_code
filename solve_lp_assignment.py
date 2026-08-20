@@ -83,8 +83,23 @@ def get_paths_by_ug(sas, routed_through_ingress):
 	### As an approximation, only consider the best N paths per UG. Otherwise computation is too expensive
 	all_ug_lat_ingresses = {}
 	N_KEEP = -1
+	_lm = getattr(sas, 'lat_matrix', None)
 	for ug in sorted(paths_by_ug):
-		sorted_options = sorted(set(paths_by_ug[ug]), key = lambda el : sas.whole_deployment_ug_perfs[ug][sas.popps[el]])
+		# 2026-08-20 fix (recurring worker KeyError, e.g. (vtrtokyo,
+		# 9824)): paths_by_ug can contain a popp the UG has no perf
+		# entry for; missing == NO_ROUTE by codebase convention. The
+		# dense lat_matrix (Patch B) encodes exactly that and is faster
+		# than the dict chain; dict fallback keeps non-lat_matrix
+		# callers working.
+		if _lm is not None:
+			_u = sas.whole_deployment_ug_to_ind[ug]
+			sorted_options = sorted(set(paths_by_ug[ug]),
+									key=lambda el: _lm[el, _u])
+		else:
+			_perf = sas.whole_deployment_ug_perfs[ug]
+			sorted_options = sorted(set(paths_by_ug[ug]),
+									key=lambda el: _perf.get(
+										sas.popps[el], NO_ROUTE_LATENCY))
 		if N_KEEP >= 0:
 			keep_options = sorted_options[0:N_KEEP]
 		else:
