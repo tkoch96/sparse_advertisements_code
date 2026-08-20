@@ -1024,7 +1024,7 @@ EXPERIMENTS.append({
              'remote_harvest':
                  'cd sparse_advertisements_code && '
                  '~/venv312/bin/python -m experiments.eods.dash_harvest '
-                 '>/dev/null 2>&1',
+                 '--sizes actual-25 >/dev/null 2>&1',
              'pull': [('cache/eods/v1_dash/', 'cache/eods/v1_dash/')],
              'steps': [
                  {'in': ['cache/eods/v1_dash/*'], 'always': True,
@@ -1041,6 +1041,70 @@ EXPERIMENTS.append({
                   'out': ['dashboard_site/eods25_tail.txt'],
                   'argv': ['cp', '{repo}/cache/eods/v1_dash/log_tails.txt',
                            '{repo}/dashboard_site/eods25_tail.txt']},
+             ]}},
+    ]})
+
+# ---- EODS-32 (Tom 2026-08-20: 'a separate dash for the 32-sized one
+# just like EODS-25'). Same store (cache/eods/v1) and the SAME plot
+# modules, env-parameterized; own dash dir (v1_dash32) because both
+# campaigns are seed 1 and flat copies would collide. Campaign runs in
+# ~/eods32_ws on the head with the opp-once + incr/adaptive-MLU stack.
+EXPERIMENTS.append({
+    'id': 'eods32', 'title': 'EODS-32',
+    'sections': [
+        {'id': 'overview', 'title': 'overview', 'kind': 'static',
+         'heading': 'evaluate_over_deployment_sizes @ actual-32 — '
+                    'sparse (L6 slotted, rmsprop, stop-v2) + 5 baselines, '
+                    'HiGHS, 64 workers, opp-once + incr/adaptive MLU '
+                    '&nbsp; <a href="eods32_tail.txt" style="font-size:14px;'
+                    'padding:2px 10px;border:1px solid #4a3aa7;'
+                    'border-radius:6px;text-decoration:none">'
+                    '&#9654; live log tail</a>',
+         'figures': ['figures/eods32_run.png',
+                     'figures/eods32_status.png',
+                     'figures/eods32_results.png'],
+         'intro': ('<p>The dpsize-32 production cell, launched 2026-08-20 '
+                   'with the startup-optimization stack: SCULPTOR_OPP_ONCE '
+                   '(driver-side one-per-peering memo, ~10.7x per avoided '
+                   're-solve), LP_INCR_MLU + LP_ADAPTIVE_MLU (belief-phase '
+                   'incremental LP stays engaged across standard/MLU '
+                   'alternation). One cell = (dpsize=32, seed 1), 64 '
+                   'workers (96 OOM-killed this box historically). '
+                   'Training env: PROBE_MODE=slotted PROBE_N=10 '
+                   'PROBE_TCONV=150 MAX_ITER=200 OBJ_ROUND=4 '
+                   'REQUIRE_SOLNS=sparse.</p>'),
+         'refresh': {
+             'remote_harvest':
+                 'cd sparse_advertisements_code && '
+                 '~/venv312/bin/python -m experiments.eods.dash_harvest '
+                 '--ws ~/eods32_ws --dash cache/eods/v1_dash32 '
+                 '--sizes actual-32 >/dev/null 2>&1',
+             'pull': [('cache/eods/v1_dash32/', 'cache/eods/v1_dash32/')],
+             'steps': [
+                 {'in': ['cache/eods/v1_dash32/*'], 'always': True,
+                  'out': ['figures/eods32_status.png',
+                          'figures/eods32_results.png'],
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_eods25'],
+                  'env': {'EODS_DASH_DIR': 'cache/eods/v1_dash32',
+                          'EODS_FIG_PREFIX': 'eods32',
+                          'EODS_DPSIZE': '32',
+                          'EODS_LABEL': 'actual-32'}},
+                 {'in': ['cache/eods/v1_dash32/*'], 'always': True,
+                  'out': ['figures/eods32_run.png'],
+                  'argv': ['{py}', '-m',
+                           'experiments.dashboard.plot_eods25_run'],
+                  'env': {'EODS_DASH_DIR': 'cache/eods/v1_dash32',
+                          'EODS_FIG_PREFIX': 'eods32',
+                          'EODS_RUN_TITLE':
+                              'EODS-32 run inspection — 64w, opp-once + '
+                              'incr/adaptive MLU, MC=1'}},
+                 {'in': ['cache/eods/v1_dash32/log_tails.txt'],
+                  'always': True,
+                  'out': ['dashboard_site/eods32_tail.txt'],
+                  'argv': ['cp',
+                           '{repo}/cache/eods/v1_dash32/log_tails.txt',
+                           '{repo}/dashboard_site/eods32_tail.txt']},
              ]}},
     ]})
 

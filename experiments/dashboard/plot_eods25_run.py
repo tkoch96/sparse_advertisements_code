@@ -16,8 +16,14 @@ import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
-DASH = os.path.join(REPO, 'cache', 'eods', 'v1_dash')
-OUT = os.path.join(REPO, 'figures', 'eods25_run.png')
+# env-parameterized so the same module renders any EODS campaign
+# (Tom 2026-08-20: EODS-32 dash 'just like EODS-25')
+DASH = os.path.join(REPO, os.environ.get(
+    'EODS_DASH_DIR', 'cache/eods/v1_dash'))
+PREFIX = os.environ.get('EODS_FIG_PREFIX', 'eods25')
+TITLE = os.environ.get(
+    'EODS_RUN_TITLE', 'EODS-25 run inspection — 96w, incremental LP, MC=1')
+OUT = os.path.join(REPO, 'figures', PREFIX + '_run.png')
 
 SOLVE_RE = re.compile(r'([0-9.]+)ms per iter')
 GRAD_RE = re.compile(r'(latency|resilience) benefit grad took ([0-9.]+)s')
@@ -144,9 +150,10 @@ def main():
     # outlier that wrecked the axis, and the live run now carries its
     # own full history. Data still collected in objective_history.json
     # if ever wanted back.)
-    # EODS-32 (other agent's cluster, read-only pull) overlay
+    # EODS-32 (other agent's cluster, read-only pull) overlay —
+    # eods25 view only; the eods32 tab carries its own [it] series
     e32 = os.path.join(REPO, 'cache', 'eods', 'eods32_live', 'it.txt')
-    if os.path.exists(e32):
+    if PREFIX == 'eods25' and os.path.exists(e32):
         its32 = IT_RE.findall(open(e32, errors='replace').read())
         if its32:
             n32 = [int(a[0]) for a in its32]
@@ -191,7 +198,7 @@ def main():
         else:
             ax_obj.set_title('convergence: historical runs (dashed); live [it] pending')
 
-    fig.suptitle('EODS-25 run inspection — 96w, incremental LP, MC=1')
+    fig.suptitle(TITLE)
     fig.tight_layout()
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     fig.savefig(OUT, dpi=110)

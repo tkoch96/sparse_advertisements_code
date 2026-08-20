@@ -25,7 +25,13 @@ import numpy as np
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
-DASH = os.path.join(REPO, 'cache', 'eods', 'v1_dash')
+# env-parameterized so the same module renders any EODS campaign
+# (Tom 2026-08-20: EODS-32 dash 'just like EODS-25')
+DASH = os.path.join(REPO, os.environ.get(
+    'EODS_DASH_DIR', 'cache/eods/v1_dash'))
+PREFIX = os.environ.get('EODS_FIG_PREFIX', 'eods25')
+DPSIZE = int(os.environ.get('EODS_DPSIZE', '25'))
+LABEL = os.environ.get('EODS_LABEL', 'actual-25')
 FIG_DIR = os.path.join(REPO, 'figures')
 SEEDS = [1]  # single-deployment scope (Tom 2026-08-19)
 
@@ -102,7 +108,8 @@ def status_fig():
         ax.text(i + 0.5, -0.62, txt, ha='center', fontsize=7, rotation=25)
     ax.set_xlim(0, len(SEEDS)); ax.set_ylim(-1.1, 1.1)
     ax.axis('off')
-    ax.set_title('EODS actual-25 — single cell (seed 1): {}'.format(
+    ax.set_title('EODS {} — single cell (seed 1): {}'.format(
+        LABEL,
         'DONE' if done else ('running' if running or mem else 'pending')))
 
     for s, rows in sorted(mem.items()):
@@ -122,7 +129,7 @@ def status_fig():
     if mem:
         axm.legend(fontsize=7, ncol=4)
     f.tight_layout()
-    out = os.path.join(FIG_DIR, 'eods25_status.png')
+    out = os.path.join(FIG_DIR, PREFIX + '_status.png')
     f.savefig(out, dpi=110); plt.close(f)
     print('[plot_eods25] wrote', out)
 
@@ -139,18 +146,21 @@ def _num(v):
 
 def results_fig():
     pkl = os.path.join(DASH, 'metrics_by_dpsize.pkl')
-    if not os.path.exists(pkl):
+    mbd = None
+    if os.path.exists(pkl):
+        try:
+            mbd = pickle.load(open(pkl, 'rb')).get(DPSIZE)
+        except Exception as e:
+            print('[plot_eods25] merged pkl unreadable:', e)
+    if mbd is None:
+        # placeholder keeps the figure (and the dash slot) alive until
+        # this campaign's dpsize lands in the merge
         f, ax = plt.subplots(figsize=(8, 2))
         ax.text(.5, .5, 'classical eval results appear here when the '
                 'cell completes its eval battery', ha='center', va='center')
         ax.axis('off')
-        f.savefig(os.path.join(FIG_DIR, 'eods25_results.png'), dpi=110)
+        f.savefig(os.path.join(FIG_DIR, PREFIX + '_results.png'), dpi=110)
         plt.close(f)
-        return
-    try:
-        mbd = pickle.load(open(pkl, 'rb'))[25]
-    except Exception as e:
-        print('[plot_eods25] merged pkl unreadable:', e)
         return
     panels = [
         ('stats_best_latencies', -1.0,
@@ -176,10 +186,10 @@ def results_fig():
         ax.set_xticklabels(solns, rotation=30, ha='right', fontsize=7)
         ax.set_title(title, fontsize=9)
         ax.grid(alpha=0.3, axis='y')
-    f.suptitle('EODS actual-25 — classical eval, sims completed so far '
-               '(dots = per-sim)')
+    f.suptitle('EODS {} — classical eval, sims completed so far '
+               '(dots = per-sim)'.format(LABEL))
     f.tight_layout()
-    out = os.path.join(FIG_DIR, 'eods25_results.png')
+    out = os.path.join(FIG_DIR, PREFIX + '_results.png')
     f.savefig(out, dpi=110); plt.close(f)
     print('[plot_eods25] wrote', out)
 

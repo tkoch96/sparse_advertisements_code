@@ -26,20 +26,29 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--store', default='cache/eods/v1')
     ap.add_argument('--ws', default=os.path.expanduser('~/eods25_ws'))
+    ap.add_argument('--dash', default='',
+                    help='dash out dir (default: <store>_dash)')
+    ap.add_argument('--sizes', default='actual-*',
+                    help='store size-dir glob; campaigns sharing a store '
+                         'MUST filter (25 and 32 both write seed_1_*.json '
+                         '-- flat copies collide)')
     args = ap.parse_args()
     store = (args.store if os.path.isabs(args.store)
              else os.path.join(_REPO_ROOT, args.store))
-    dash = store.rstrip('/') + '_dash'
+    dash = (args.dash if os.path.isabs(args.dash)
+            else os.path.join(_REPO_ROOT, args.dash)) if args.dash \
+        else store.rstrip('/') + '_dash'
     os.makedirs(dash, exist_ok=True)
 
     # cell result JSONs + inprog markers (small)
-    for pat in ('actual-*/N1/seed_*.json', 'actual-*/N1/*.inprog'):
+    for pat in (args.sizes + '/N1/seed_*.json',
+                args.sizes + '/N1/*.inprog'):
         for fn in glob.glob(os.path.join(store, pat)):
             shutil.copy2(fn, dash)
     # prune stale inprog markers (queue removes them when the cell exits)
     for m in glob.glob(os.path.join(dash, '*.inprog')):
-        src = os.path.join(store, 'actual-25', 'N1', os.path.basename(m))
-        if not os.path.exists(src):
+        if not glob.glob(os.path.join(store, args.sizes, 'N1',
+                                      os.path.basename(m))):
             os.remove(m)
 
     # stats-only merge, gated on pickle mtimes (merge loads every big
