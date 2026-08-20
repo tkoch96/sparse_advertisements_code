@@ -53,7 +53,9 @@ def test_my_thing(worker, tiny_advertisement, worker_deployment):
 
 * `unit` – fast, in-process, no Ray.
 * `integration` – exercises Ray actors via `Worker_Manager_ray`.
-* `gurobi` – needs a working Gurobi license.
+* `gurobi` – needs a working Gurobi license. (HiGHS is the project
+  default backend since 2026-08-20 — Gurobi had WLS scaling issues on
+  fleets — so these tests are opt-in on boxes with a license.)
 * `slow` – takes more than a few seconds; skipped by `-m "not slow"`.
 
 ## Notes

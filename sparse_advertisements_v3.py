@@ -1148,6 +1148,21 @@ class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 							sorted(set(self._failed_strategies))))
 				except Exception:
 					pass
+			# SCULPTOR_REQUIRE_SOLNS (comma list): strategies whose failure
+			# must abort the whole cell instead of proceeding to hours of
+			# eval phases on an incomplete comparison (the 2026-08-20 eods32
+			# fleet burned ~2h evaluating baselines after sparse died).
+			# os._exit because the callers' bare except: clauses swallow
+			# SystemExit; the queue harness records the nonzero cell exit.
+			required = {s for s in os.environ.get(
+				'SCULPTOR_REQUIRE_SOLNS', '').split(',') if s}
+			failed_required = sorted(required & set(self._failed_strategies))
+			if failed_required:
+				print("\n{0}\n[FATAL] required strategy failed: {1} — "
+					  "aborting cell (exit 43) instead of evaluating an "
+					  "incomplete comparison.\n{0}\n".format(
+						  banner, failed_required), flush=True)
+				os._exit(43)
 
 		return metrics
 

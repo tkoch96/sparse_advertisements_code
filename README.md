@@ -86,7 +86,8 @@ ray exec ray-cluster.yaml '... eval_latency_failure.py ...'
                     │  Ray actors (worker node)        │
                     │  N × Path_Distribution_Computer │
                     │  - latency_benefit calc          │
-                    │  - LP solve (persistent Gurobi) │
+                    │  - LP solve (persistent LP,    │
+                    │    HiGHS default)               │
                     │  - per-worker UG slice           │
                     └─────────────────────────────────┘
 ```
@@ -98,7 +99,7 @@ Key concepts:
   step → measure → stop-check, ~80s/iter at dpsize=25 with 32 workers.
 - **Workers** are Ray actors (`path_distribution_computer_ray.py`)
   managed by `Worker_Manager` (`worker_comms_ray.py`). Each holds a
-  persistent Gurobi model + cached deployment slice.
+  persistent LP model (HiGHS by default) + cached deployment slice.
 - **Strategies (painter, anyopt, etc.)** run concurrently as forked
   subprocesses on the head, in `compare_different_solutions`. They
   don't use Ray workers — they solve via single LPs.
@@ -122,11 +123,11 @@ Key concepts:
 | `anyopt.py` | AnyOpt baseline |
 | `optimal_adv_wrapper.py` | Base class `Optimal_Adv_Wrapper`: deployment loading, common LP helpers, `measure_ingresses` |
 | `optimal_adv_wrapper_ray.py` | Variant used by Ray-aware code paths |
-| `path_distribution_computer.py` | Worker-side LP / latency_benefit logic (LP cache, Gurobi shell). Imported by `_ray.py` for actor body |
+| `path_distribution_computer.py` | Worker-side LP / latency_benefit logic (LP cache, solver shell via `gpshim`). Imported by `_ray.py` for actor body |
 | `path_distribution_computer_ray.py` | Ray actor wrapper around the above |
 | `worker_comms.py` | Thin re-export of `worker_comms_ray` (kept for backward-compat imports) |
 | `worker_comms_ray.py` | `Worker_Manager`: spawn / fanout / tear down Ray actors |
-| `solve_lp_assignment.py` | All LP objective implementations (avg_latency, per_site_cost, joint_priority, site_failure) + the persistent-Gurobi solve loop |
+| `solve_lp_assignment.py` | All LP objective implementations (avg_latency, per_site_cost, joint_priority, site_failure) + the persistent-LP solve loop (backend via `gpshim`) |
 | `generic_objective.py` | `Generic_Objective` — runtime dispatch from objective name → LP function |
 | `deployment_setup.py` | Build synthetic + actual deployments, link capacities, user volumes |
 | `wrapper_eval.py` | Eval phase implementations (failure resilience, flash crowd, diurnal) |
@@ -207,10 +208,15 @@ pip install numpy scipy matplotlib tqdm pandas pickle5 \
             ray[default] boto3 \
             pyzmq pytest
 
-# 3. Gurobi license (academic WLS):
+# 3. LP backend: HiGHS is the DEFAULT (as of 2026-08-20) — no license
+#    needed. Gurobi is opt-in via SCULPTOR_LP_BACKEND=gurobi (required
+#    only for quadratic objectives: squaring/square_rooting). We moved
+#    off Gurobi as the default after WLS license scaling issues: on
+#    multi-node fleets, sustained sessions above the WLS baseline get
+#    license-killed after ~30 min (killed the 2026-08-20 eods32 run).
+#    If you do need Gurobi: academic WLS license from
 #    https://www.gurobi.com/academia/academic-program-and-licenses/
-#    Drop ~/gurobi.lic
-#    Confirm: python -c "import gurobipy as g; g.Model().optimize()"
+#    Drop ~/gurobi.lic; confirm: python -c "import gurobipy as g; g.Model().optimize()"
 
 # 4. Data files from Drive (https://drive.google.com/drive/folders/1PvGOPRgkvjTaeq5m2ogyh0zSZ4r6JLcJ):
 #    data/vultr_peers_inferred.csv

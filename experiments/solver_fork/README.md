@@ -6,8 +6,12 @@ As of 2026-08-17 the gurobipy-subset facade lives at the repo root
 it directly — there are no forked module copies and no sys.modules
 aliases anymore. Backend selection is one env var, everywhere:
 
-    SCULPTOR_LP_BACKEND=gurobi   # default; passthrough to gurobipy
-    SCULPTOR_LP_BACKEND=highs    # license-free HiGHS (highspy)
+    SCULPTOR_LP_BACKEND=highs    # DEFAULT (since 2026-08-20); license-free HiGHS (highspy)
+    SCULPTOR_LP_BACKEND=gurobi   # opt-in passthrough to gurobipy (quadratic objectives only)
+
+(Default flipped gurobi->highs on 2026-08-20: Gurobi had WLS scaling
+issues — multi-machine sessions sustained over the license baseline get
+killed after ~30 min, which took down the eods32 fleet run.)
 
 Extra verification machinery:
 

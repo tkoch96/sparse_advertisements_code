@@ -31,7 +31,12 @@ import os
 
 import numpy as np
 
-BACKEND = os.environ.get('SCULPTOR_LP_BACKEND', 'gurobi').lower()
+# Default flipped gurobi->highs 2026-08-20 (Tom): every campaign sets
+# highs explicitly, and the gurobi fallback is exactly what bit the
+# eods32 fleet when env didn't propagate to remote Ray actors.
+# Quadratic objectives (squaring/square_rooting) remain gurobi-only
+# and must opt in via SCULPTOR_LP_BACKEND=gurobi.
+BACKEND = os.environ.get('SCULPTOR_LP_BACKEND', 'highs').lower()
 if BACKEND not in ('gurobi', 'highs'):
     raise ValueError("SCULPTOR_LP_BACKEND must be 'gurobi' or 'highs', got %r" % BACKEND)
 

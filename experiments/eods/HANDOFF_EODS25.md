@@ -5,9 +5,11 @@ below is committed AND pushed (origin/main @ d2a2040) AND deployed to
 the head (107.22.173.189, c8g.24xlarge 96c/185G) with the bitwise
 parity gate green (experiments/desharding/prove_inert.py).
 
-## HIGH-LEVEL GOAL (Tom, 2026-08-19 late)
-Evaluation over deployment sizes AT SCALE — target: run this at
-~1000 cores. Path: valid single-deployment results at 25 then 32 on
+## HIGH-LEVEL GOAL (Tom, restated 2026-08-20)
+Demonstrate as many evals over as many random deployments as possible.
+To do that we must run lots of evals very quickly, which means lots of
+cores. The goal distills from "running lots of large evals" to
+"running these things on lots of cores." Target: ~1000 cores. Path: valid single-deployment results at 25 then 32 on
 the 96-core head, then multi-node fleet (bandwidth is per-node:
 ~96w/node for training, ~32 effective for cold phases -> ~10-12 nodes;
 serial driver floor <10-20s/iter becomes the binding constraint at
@@ -23,14 +25,42 @@ scaling model + core-seconds numbers in KNOWN NUMBERS below.
 - Belief memo WORKS in production (3 restarts at ~7min startup).
 - HOT-START now wired: SCULPTOR_EODS_HOTSTART_DIR=<run-dir name under
   ws/runs> on run_eods_cell resumes training from newest state-N.pkl
-  (popp_to_users guard makes it safe). VALIDATION SMOKE STILL PENDING
-  — do one small kill-resume test before relying on it.
-- The parallel "32 agent" cluster (3x c8g.24xlarge) launched WITHOUT
-  its valid-25 gate, stalled ~2.5h at iter 10, node went unreachable;
-  TERMINATED 2026-08-20 ~10:45Z per Tom (~$40 spent). Forensic
-  telemetry: cache/eods/eods32_live/. Lesson: 32 runs ON THE HEAD
-  (single cell, 80 workers); fleets only as deliberate gated
-  experiments.
+  (popp_to_users guard makes it safe). VALIDATED 2026-08-20 ~11:20Z:
+  actual-5 kill-resume smoke (kill -9 iter 23 -> resume state-25 ->
+  evals) clean end-to-end; guard fired and lazily rebuilt. Trusted.
+- The parallel "32 agent" fleet (3x c8g.24xlarge, ~$87): TERMINATED
+  2026-08-20 ~09:57Z per Tom. FULL FORENSICS (2026-08-20, from the
+  32-agent's session transcript c4da311e + cache/eods/eods32_live/):
+  three attempts, no valid result.
+  TIMELINE: 00:58Z start; ray up -> IAM PassRole DENIED -> manual
+  boto3 launch, 3 nodes up 01:07Z (turnup ~9min). Then ~5h lost:
+  us-east-1 arm64 apt mirror 503s + a root-owned orphan apt holding
+  worker1's lock ~2h (pkill missed the perm domain), 6.9G rsync + a
+  broken wait-loop/SSH timeout ~2.2h (session dormant til 06:06Z).
+  v1 06:10Z (250w): OOM in belief — worker RSS at 32 is ~2.2G (vs
+  1.4G at 25); 83/node x 2.2G ~ 182G on 185G nodes; raylet died,
+  worker0 wedged -> force-stop/start. v2 06:46Z (120w): INVALID —
+  v1's partial metrics pkl tripped the already-computed skip,
+  training silently skipped ("done in 612s", zero [it]). v3 07:16Z
+  (120w, pkl cleared): belief ~9min (288-core bandwidth), iters 0-10
+  at ~110s/iter (healthy), then SPARSE DIED ~07:52Z:
+  GurobiError WLS "Overage for too long, 3 active sessions, over
+  baseline for 32 minutes". MECHANISM (high confidence): launcher
+  env had SCULPTOR_LP_BACKEND=highs but multi-node Ray actors get
+  the env of each node's `ray start`, NOT the driver's — remote
+  workers silently defaulted to gurobi (gpshim selects backend at
+  import from process env). Single-node runs are immune (env
+  inherited); the current 25 log has ZERO gurobi mentions. After
+  sparse died the harness continued baselines+evals ~2h (invalid).
+  COUNTERMEASURES: (1) 32 re-runs ON THE HEAD via the queue
+  (single-node => env inherited => highs); (2) SCULPTOR_REQUIRE_SOLNS
+  env (in eods32 manifest, =sparse): required-strategy failure aborts
+  the cell (exit 43) instead of hours of baseline evals; (3) monitors
+  alert on [it]-silence >20min and on "GurobiError"; (4) FLEET
+  PREREQ for the 1000-core plan: propagate SCULPTOR_* env to remote
+  actors (ray runtime_env env_vars, or bake exports into every
+  node's ray start script) + clear stale metrics pkls before
+  relaunch + worker count from measured per-size RSS (32: ~2.2G/w).
 - CURRENT: clean 25 run (fixed code) training on the head — iter ~52
   at ~10:15Z, GT obj 7.35, ~95-120s/iter, 3+/10 probes spent, no stop
   attempts yet. Expect stop window ~iter 100-150, evals after, valid

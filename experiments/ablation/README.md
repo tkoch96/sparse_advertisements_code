@@ -214,6 +214,16 @@ propagated across agent handoffs. The facts:
   pools to RAM (target 90% utilization; ~/queue_governor.json is
   live-tunable) and cores.
 
+**Update 2026-08-20: HiGHS is now the DEFAULT backend** (gpshim falls
+back to highs, not gurobi, when SCULPTOR_LP_BACKEND is unset). The
+single-box facts above still hold, but Gurobi showed a real scaling
+limit on multi-node fleets: sessions from several machines sustained
+above the WLS baseline were license-killed after ~30 min ("Overage for
+too long", 2026-08-20 eods32 fleet — sparse strategy died mid-training;
+see experiments/eods/HANDOFF_EODS25.md). Standard campaigns run highs
+and touch Gurobi zero times; gurobi is opt-in for the quadratic
+objectives only.
+
 
 ## LB-cache A/B (2026-08-16, Tom-ratified: CACHE ON is the standard)
 

@@ -18,7 +18,8 @@ unmodified.
 # 0. Prereqs (one-time, do once per AWS account):
 #    - Create IAM user with AmazonEC2FullAccess + IAMFullAccess
 #    - aws configure on local Mac with that user's keys
-#    - Have ~/gurobi.lic (WLS, not node-locked)
+#    - LP backend is HiGHS by default (2026-08-20) — no license needed.
+#      ~/gurobi.lic (WLS, not node-locked) only if opting into gurobi
 #    - Have Drive data files in:
 #       data/vultr_peers_inferred.csv
 #       cache/vultr_ingress_latencies_by_dst.csv  (~4.5GB)
@@ -181,15 +182,24 @@ even one c7g.16xlarge (64 vCPU). Request increase to **256 or 512 vCPU**
 
 Tom's account: already at **640 vCPU** as of 2026-05-18 → 10× c7g.16xlarge.
 
-### 4. Gurobi WLS license
+### 4. LP backend (HiGHS default) / Gurobi WLS license
 
-Must be a WLS (Web License Service) file, not node-locked. Lives at
-`~/gurobi.lic` on the local Mac. Ray syncs it to `/home/ubuntu/gurobi.lic`
-on each cluster node via `file_mounts`. License is account-bound, not
-machine-bound, so the same file works on N cluster nodes.
+**HiGHS is the default LP backend as of 2026-08-20** — standard runs
+need no license at all. Gurobi is opt-in (`SCULPTOR_LP_BACKEND=gurobi`),
+needed only for the quadratic objectives (squaring/square_rooting). We
+stopped defaulting to Gurobi after scaling issues: WLS sessions from
+multiple machines sustained above the license baseline get killed after
+~30 min ("Overage for too long" — this killed the 2026-08-20 eods32
+fleet run; see experiments/eods/HANDOFF_EODS25.md). Fleet gotcha that
+caused it: remote Ray actors get each node's `ray start` env, NOT the
+driver's, so backend env must reach every node explicitly.
 
-If you have an older node-locked Gurobi license, get a WLS one from
-gurobi.com/academia.
+If opting into Gurobi: must be a WLS (Web License Service) file, not
+node-locked. Lives at `~/gurobi.lic` on the local Mac. Ray syncs it to
+`/home/ubuntu/gurobi.lic` on each cluster node via `file_mounts`.
+License is account-bound, not machine-bound, so the same file works on
+N cluster nodes. If you have an older node-locked license, get a WLS
+one from gurobi.com/academia.
 
 ---
 
