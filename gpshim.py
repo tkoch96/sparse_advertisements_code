@@ -567,6 +567,11 @@ else:
         # -- solve -------------------------------------------------------
         def optimize(self):
             self._h.run()
+            try:
+                self._last_iter_count = int(
+                    self._h.getInfo().simplex_iteration_count)
+            except Exception:
+                self._last_iter_count = -1
             st = self._h.getModelStatus()
             if st == _hp.HighsModelStatus.kOptimal:
                 self.status = 2

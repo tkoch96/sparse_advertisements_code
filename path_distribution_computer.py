@@ -113,6 +113,14 @@ TEST_BETTER_VERSION = True
 # 2000 for lots of workers / smaller VMs. 15000 for fewer workers / large VMs
 MAX_CACHE_SIZE = 8000
 
+# SCULPTOR_LP_SOLVE_DEBUG=1 (Tom 2026-08-20 'literally put print
+# statements in path_distribution_computer, stop guessing'): per-solve
+# anatomy printed by worker 0 (and driver) only —
+#   [lpdbg] w=N k=<solve#> backend=<x> paths=<active> act=+A/-D new=<vars
+#   created> simplex_iters=<I> t_prep=<s> t_opt=<s>
+# plus per-generic_benefit pattern-cache hit/miss and rti timing.
+LP_SOLVE_DEBUG = os.environ.get('SCULPTOR_LP_SOLVE_DEBUG', '0') == '1'
+
 PROB_TOLERANCE = .05 ## if probabilities differ by more than this much, we have to recalculate things
 
 def get_a_cache_rep(a):
@@ -347,6 +355,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self._last_active_vars = active_vars
 
 		self.timing['solve_unified_lp_not_optimize'] += time.time() - ts
+		_dbg_prep_t = time.time() - ts
 		ts = time.time()
 		if self._grb_dump_dir and self.worker_i == 0 and self._grb_dump_count < 3:
 			mps_path = os.path.join(
@@ -356,6 +365,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self._grb_dump_count += 1
 		self.model.optimize()
 		self.timing['optimize'] += time.time() - ts
+		if LP_SOLVE_DEBUG and getattr(self, 'worker_i', -1) in (0, 'drv'):
+			self._dbg_solve_k = getattr(self, '_dbg_solve_k', 0) + 1
+			_n_act = len(act_idx) if _incr else len(active_vars)
+			_n_deact = len(to_deact) if _incr else -1
+			print('[lpdbg] w={} k={} backend={} paths={} act=+{}/-{} '
+				  'pool={} simplex_iters={} t_prep={:.3f}s t_opt={:.3f}s'.format(
+					  getattr(self, 'worker_i', 'drv'), self._dbg_solve_k,
+					  gp.BACKEND, len(available_paths), _n_act, _n_deact,
+					  len(self.var_pool),
+					  getattr(self.model, '_last_iter_count', -1),
+					  _dbg_prep_t, time.time() - ts), flush=True)
 		if self.model.status == 2:
 			return self.model
 		return None
@@ -843,6 +863,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""Populate self.rti_data (per-(ug,prefix) ingress options + probabilities)
 		for advertisement `a`. Deterministic; pattern-cached."""
 		ts_total = time.time()
+		_dbg_pc0 = len(getattr(self, 'pattern_cache', {}))
 
 		# --- 1. Initialize Containers ---
 		# Instead of nested dicts, we build the flat lists required for vectorization directly.
@@ -969,6 +990,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.rti_data["blocks"].append((lens_e, pad_e))
 
 		self.timing['pmat_organize'] += time.time() - ts_total
+		if LP_SOLVE_DEBUG and getattr(self, 'worker_i', -1) in (0, 'drv'):
+			print('[lpdbg-pc] w={} pattern_misses={} pattern_total={} '
+				  't_scen={:.3f}s'.format(
+					  getattr(self, 'worker_i', 'drv'),
+					  len(self.pattern_cache) - _dbg_pc0,
+					  len(self.pattern_cache), time.time() - ts_total),
+				  flush=True)
 
 	def _sample_scenario_realizations(self):
 		"""Monte-carlo draw of self.MC_NUM joint route realizations from the
