@@ -76,6 +76,9 @@ class _LocalPathDistributionComputer(_BasePathDistComputer):
 		with open(log_path, 'w'):
 			pass
 
+		if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':
+			import timelog
+			timelog.activate()
 		self.init_all_vars()
 		# Note: no run() loop and no main_socket. Ray dispatches method calls.
 		# Equivalent of the ZMQ version's `worker_proc_start` mem-snapshot,

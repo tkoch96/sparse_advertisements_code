@@ -48,6 +48,9 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(args.seed)
     os.environ.setdefault('MPLBACKEND', 'Agg')
+    if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':
+        import timelog
+        timelog.activate()
 
     soln_types = [s for s in os.environ.get(
         'SCULPTOR_SOLN_TYPES', 'painter').split(',') if s]
