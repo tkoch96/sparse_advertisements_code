@@ -4,7 +4,7 @@ Written by the 2026-08-20 session ("optimization day 2"). Everything
 below is committed AND pushed (origin/main) AND deployed to the head
 (107.22.173.189) with the bitwise parity gate green (run again after
 any further code changes: experiments/desharding/prove_inert.py).
-Supersedes HANDOFF_EODS25.md (keep as history).
+Supersedes the EODS-25 handoff (archived at old_handoffs/HANDOFF_2026-08-20_EODS25_era.md).
 
 ## HIGH-LEVEL GOAL (Tom)
 Demonstrate as many evals over as many random deployments as possible.
