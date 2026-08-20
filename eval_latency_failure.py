@@ -982,6 +982,15 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			latency_increases_by_X = {}
 			m = metrics['volume_multipliers']
 			for ri in valid_iters:
+				# assess_volume_multipliers may have raised (undertrained
+				# adv strands traffic under inflation -> ValueError, by
+				# design) or never run; the entry is then the list
+				# default, not a dict. Skip cleanly instead of an
+				# AttributeError that nulls stats_volume_multipliers for
+				# the whole solution (found by the 3-iter forced-stop
+				# e2e smoke, 2026-08-20).
+				if not isinstance(m[ri].get(solution), dict):
+					continue
 				for X_val,avg_lat in m[ri][solution].items():
 					try:
 						# try:
