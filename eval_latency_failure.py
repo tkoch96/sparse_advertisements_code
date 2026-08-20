@@ -29,7 +29,14 @@ dpsizes.
 """
 from constants import *
 from helpers import *
-from sparse_advertisements_v3 import _log_mem  # eval phase RAM/timing markers (Tom 2026-08-20)
+# eval phase RAM/timing markers (Tom 2026-08-20). LAZY import: a
+# top-level 'from sparse_advertisements_v3 import _log_mem' here fires
+# the circular-import chain early and the later star-import then sees a
+# partially-initialized module (get_random_deployment NameError, found
+# on the instrumented 32 pre-flight).
+def _log_mem(*a, **k):
+	from sparse_advertisements_v3 import _log_mem as _f
+	return _f(*a, **k)
 from wrapper_eval import *
 from solve_lp_assignment import *
 
