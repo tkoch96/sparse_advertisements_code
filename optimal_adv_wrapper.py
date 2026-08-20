@@ -661,7 +661,7 @@ class Optimal_Adv_Wrapper:
 
 
 		try:
-			del self.rb_backups
+			del self.rb_backups; del self._rb_rows; del self._rb_row_of
 		except AttributeError:
 			pass
 
@@ -681,7 +681,7 @@ class Optimal_Adv_Wrapper:
 		self.compute_one_per_peering_solution()
 		
 		try:					
-			del self.rb_backups
+			del self.rb_backups; del self._rb_rows; del self._rb_row_of
 		except AttributeError:
 			pass
 		self.last_lb_calls_results = {}
@@ -957,7 +957,7 @@ class Optimal_Adv_Wrapper:
 		self.link_capacities = {self.popp_to_ind[popp]: self.link_capacities_by_popp[popp] for popp in self.popps}
 
 		try:
-			del self.rb_backups
+			del self.rb_backups; del self._rb_rows; del self._rb_row_of
 		except AttributeError:
 			pass
 
@@ -1264,7 +1264,7 @@ class Optimal_Adv_Wrapper:
 			try:
 				if np.random.random() > .9:
 					## occasionally recompute these
-					del self.rb_backups
+					del self.rb_backups; del self._rb_rows; del self._rb_row_of
 			except AttributeError:
 				pass
 			self.update_ug_ingress_decisions(ug_ingress_decisions)
@@ -1336,11 +1336,53 @@ class Optimal_Adv_Wrapper:
 						### proportional to latency difference, UG volume, ability of the backup link to handle the volume
 						self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup * self.ug_to_vol[ug] * self.link_capacities[popp2i]
 
-		self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
-		for popp1i in poppi_to_ugi:
-			for ugi in poppi_to_ugi[popp1i]:
-				for popp2i in range(self.n_popps):
-					self.rb_popp_support[popp1i,popp2i] += self.rb_backups.get((ugi,popp1i,popp2i), 0)
+		if os.environ.get('SCULPTOR_COMPACT_RB', '0') == '1':
+			# Compact RB memo (Tom 2026-08-20, painter_lab attribution: the
+			# rb_backups dict is 1.8GB at decent — 34% of painter's peak —
+			# and its ONLY reader is this fold). Memo per-(ug,p1)
+			# contribution rows once (float64 — float32 cost 5.7e-8 rel
+			# error from the large backup*vol*cap magnitudes; still ~6x
+			# smaller than the dict); fold becomes
+			# a vectorized gather-sum instead of ~n_popp^2-per-(ug,p1)
+			# python dict-gets. NOTE: numpy reorders the float adds, so
+			# rb_popp_support equals legacy to ~1e-12 relative, NOT
+			# bitwise — default-off until the paired A/B clears it.
+			try:
+				self._rb_rows
+			except AttributeError:
+				_row_of, _rows = {}, []
+				for (_ugi, _p1, _p2), _v in self.rb_backups.items():
+					try:
+						_ri = _row_of[_ugi, _p1]
+					except KeyError:
+						_ri = _row_of[_ugi, _p1] = len(_rows)
+						_rows.append(np.zeros(self.n_popps, dtype=np.float64))
+					_rows[_ri][_p2] = _v
+				self._rb_rows = (np.vstack(_rows) if _rows else
+								 np.zeros((0, self.n_popps), dtype=np.float64))
+				self._rb_row_of = _row_of
+				# dict memo now redundant; keep the attribute (build-once
+				# try/except gates on it) but drop the 1.8GB payload
+				self.rb_backups = {}
+			self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
+			_gather, _dest = [], []
+			_row_of = self._rb_row_of
+			for popp1i in poppi_to_ugi:
+				for ugi in poppi_to_ugi[popp1i]:
+					_ri = _row_of.get((ugi, popp1i))
+					if _ri is not None:
+						_gather.append(_ri)
+						_dest.append(popp1i)
+			if _gather:
+				np.add.at(self.rb_popp_support,
+						  np.asarray(_dest, dtype=np.int64),
+						  self._rb_rows[np.asarray(_gather, dtype=np.int64)])
+		else:
+			self.rb_popp_support = np.zeros((self.n_popps, self.n_popps))
+			for popp1i in poppi_to_ugi:
+				for ugi in poppi_to_ugi[popp1i]:
+					for popp2i in range(self.n_popps):
+						self.rb_popp_support[popp1i,popp2i] += self.rb_backups.get((ugi,popp1i,popp2i), 0)
 
 		self.rb_popp_support += .01
 		self.popp_backup_sample_probs = (self.rb_popp_support.T / np.sum(self.rb_popp_support, axis=1)).T
