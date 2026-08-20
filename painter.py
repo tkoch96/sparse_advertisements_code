@@ -196,6 +196,14 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		ts = time.time()
 		print("Starting painter computation")
 		while not self.stop:
+			# Cross-iteration LP-solution memos are dead weight: the adv
+			# changes every painter iteration, and linear_prog_soln_cache
+			# is never cleared anywhere else (grew unboundedly, ~2.5MB/iter
+			# at actual-10, painter_lab attribution 2026-08-20). Clearing
+			# per-iter keeps within-iteration reuse, which is all the
+			# cache ever usefully served here.
+			for _k in getattr(self, 'linear_prog_soln_cache', {}):
+				self.linear_prog_soln_cache[_k] = {}
 			# print("Measuring ingresses")
 			## conduct measurement with this advertisement strategy
 			if not self.simulated:

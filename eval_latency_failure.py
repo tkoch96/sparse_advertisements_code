@@ -29,6 +29,7 @@ dpsizes.
 """
 from constants import *
 from helpers import *
+from sparse_advertisements_v3 import _log_mem  # eval phase RAM/timing markers (Tom 2026-08-20)
 from wrapper_eval import *
 from solve_lp_assignment import *
 
@@ -157,6 +158,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			except TypeError:
 				pass
 			print("-----Deployment number = {} -------".format(random_iter))
+			_log_mem('eval_solve_strategies', ri=random_iter)
 			if save_run_dirs[random_iter] is not None:
 				print("Loading from hotstart dir")
 				deployment = pickle.load(open(os.path.join(RUN_DIR, save_run_dirs[random_iter], 'state-0.pkl'), 'rb'))['deployment']
@@ -311,6 +313,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
 			if RECALC_PCT_VOL_IN_LAT_MULTIPLIERS or havent_calced_everything:
 				print("-----Volume calc for deployment number = {} -------".format(random_iter))
+				_log_mem('eval_volume_calc', ri=random_iter)
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -358,6 +361,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 			if RECALC_FAILURE_METRICS or havent_calced_everything:
 				print("-----Failure calc for deployment number = {} -------".format(random_iter))
+				_log_mem('eval_failure_calc', ri=random_iter)
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -480,6 +484,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
 			if RECALC_VOL_MULTIPLIERS or havent_calced_everything:
 				print("-----Volume multiplier calc for deployment number = {} -------".format(random_iter))
+				_log_mem('eval_volume_multipliers', ri=random_iter)
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -538,6 +543,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
 			if RECALC_DIURNAL or havent_calced_everything:
 				print("-----Diurnal calc for deployment number = {} -------".format(random_iter))
+				_log_mem('eval_diurnal', ri=random_iter)
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -598,6 +604,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
 			if RECALC_RESILIENCE or havent_calced_everything:
 				print("-----Flash crowd calc for deployment number = {} -------".format(random_iter))
+				_log_mem('eval_flash_crowd', ri=random_iter)
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -711,6 +718,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			'stats_latency{}_thresholds_fail_pop'.format(add_str)]:
 			metrics[k] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
 	metrics['stats_resilience_to_congestion'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
+	_log_mem('eval_stats_assembly')
 	metrics['stats_volume_multipliers'] = {solution:None for solution in soln_types}
 	metrics['stats_diurnal'] = {solution: {i:{} for i in SIM_INDS_TO_PLOT} for solution in soln_types}
 
