@@ -48,9 +48,6 @@ def main():
     os.makedirs(args.out_dir, exist_ok=True)
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(args.seed)
     os.environ.setdefault('MPLBACKEND', 'Agg')
-    if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':
-        import timelog
-        timelog.activate()
 
     soln_types = [s for s in os.environ.get(
         'SCULPTOR_SOLN_TYPES', 'painter').split(',') if s]
@@ -89,6 +86,13 @@ def main():
 
     t0 = time.time()
     from eval_latency_failure import evaluate_all_metrics
+    # activate AFTER all module imports: activating earlier reorders the
+    # star-import circularity and eval_latency_failure loses
+    # get_random_deployment (NameError, found on the instrumented
+    # pre-flight relaunch 2026-08-20)
+    if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':
+        import timelog
+        timelog.activate()
     metrics = evaluate_all_metrics(dpsize_str, args.port, **kwargs)
 
     rec = {'seed': args.seed, 'rung': args.rung, 'dpsize': args.dpsize,
