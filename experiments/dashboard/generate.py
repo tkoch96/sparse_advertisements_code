@@ -1005,7 +1005,7 @@ EXPERIMENTS.append({
                     '<a href="worker_flame.svg" style="font-size:14px;'
                     'padding:2px 10px;border:1px solid #c98f1e;'
                     'border-radius:6px;text-decoration:none">'
-                    '&#9654; worker flamegraph</a>',
+                    '&#9654; worker flamegraph</a> &nbsp; <a href="eods32_tail.txt" style="font-size:14px;padding:2px 10px;border:1px solid #8f5f00;border-radius:6px;text-decoration:none">&#9654; 32 log tail</a>',
          'figures': ['figures/eods25_run.png',
                      'figures/eods25_status.png',
                      'figures/eods25_results.png'],

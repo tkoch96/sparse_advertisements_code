@@ -137,6 +137,17 @@ def main():
                                 lw=1, zorder=1)
         except Exception:
             pass
+    # EODS-32 (other agent's cluster, read-only pull) overlay
+    e32 = os.path.join(REPO, 'cache', 'eods', 'eods32_live', 'it.txt')
+    if os.path.exists(e32):
+        its32 = IT_RE.findall(open(e32, errors='replace').read())
+        if its32:
+            n32 = [int(a[0]) for a in its32]
+            ax_obj.plot(n32, [float(a[1]) for a in its32], 'x-',
+                        color='#c98f1e', ms=3, label='32: GT obj')
+            ax_obj.plot(n32, [float(a[2]) for a in its32], '+-',
+                        color='#8f5f00', ms=3, alpha=.5,
+                        label='32: believed')
     its = IT_RE.findall(txt)
     if its:
         it_n = [int(a[0]) for a in its]
