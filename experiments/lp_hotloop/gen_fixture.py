@@ -9,8 +9,8 @@ os.environ.setdefault('SCULPTOR_LP_BACKEND','highs'); os.environ.setdefault('MPL
 
 def build_worker(dpsize='decent'):
     random.seed(31415); np.random.seed(31415)
-    from deployment_setup import get_random_deployment
-    from path_distribution_computer_ray import _LocalPathDistributionComputer
+    from core.deployment_setup import get_random_deployment
+    from core.path_distribution_computer import _LocalPathDistributionComputer
     dep = get_random_deployment(dpsize, port=31601)
     return _LocalPathDistributionComputer(0, dep, {'lambduh':1.0,'gamma':0,
         'verbose':False,'n_prefixes':None,'with_capacity':False,

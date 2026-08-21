@@ -161,7 +161,7 @@ def main():
 					help='Run only the (sf,vs) cell given as "sf=1.0,vs=2.0". Smoke-test shortcut.')
 	args = ap.parse_args()
 
-	from constants import CACHE_DIR
+	from helpers.constants import CACHE_DIR
 	out_root = args.out_root or os.path.join(CACHE_DIR, 'experiments', 'painter_hypothesis_sweep')
 	os.makedirs(out_root, exist_ok=True)
 

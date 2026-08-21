@@ -1,0 +1,193 @@
+# ============================================================================
+# SCULPTOR Ray cluster on AWS
+# ============================================================================
+#
+# Prereqs (do once, see top of session for details):
+#   1. aws configure  (with an IAM user that has AmazonEC2FullAccess)
+#   2. aws sts get-caller-identity   # must succeed
+#   3. Fill in ImageId below (see "AMI lookup" comment near each occurrence)
+#
+# Usage:
+#   ray up    ray-cluster.yaml          # provision head + worker(s)
+#   ray attach ray-cluster.yaml         # SSH into head node
+#   ray submit ray-cluster.yaml <file>  # run a script on the cluster
+#   ./teardown.sh                       # tear down + verify nothing left
+#
+# Cost shape:
+#   - Head node (m7g.large on-demand): ~$0.07/hr, always-on while cluster is up
+#   - Worker (c7g.16xlarge spot): ~$0.50-1.00/hr per worker, auto-terminates
+#     when idle for >idle_timeout_minutes
+#   - With max_workers=1, worst-case running cost is ~$1.10/hr
+#   - Worst-case "forgot to teardown" cost (workers idled out, head still up):
+#     ~$1.70/day from the head node alone
+#
+# Resource tagging:
+#   All EC2 instances tagged project=sculptor for cost allocation and for the
+#   teardown script's orphan-detection query.
+# ============================================================================
+
+cluster_name: sculptor
+
+# Cap on total worker count. Start with 1 for the baseline run, bump later.
+max_workers: 1
+
+# How fast the autoscaler spins up new workers (1.0 = conservative).
+upscaling_speed: 1.0
+
+# Workers without active tasks self-terminate after this many minutes.
+# Aggressive (10) for cost control; bump if you see workers getting killed
+# mid-run because Ray didn't think they had work assigned.
+idle_timeout_minutes: 10
+
+# Don't preserve stopped nodes between sessions — truly terminate them.
+provider:
+    type: aws
+    region: us-east-1
+    cache_stopped_nodes: false
+    # No availability_zones specified — let AWS pick whichever AZ has spot capacity.
+
+auth:
+    ssh_user: ubuntu
+    # Ray auto-generates an SSH key on first `ray up`:
+    #   ~/.ssh/ray-autoscaler_us-east-1.pem
+
+available_node_types:
+
+    # ---- HEAD NODE ----
+    # Orchestration only: runs the Ray autoscaler + the SCULPTOR driver.
+    # Explicitly set CPU resource to 0 so Ray never schedules actor tasks here.
+    ray.head.default:
+        node_config:
+            InstanceType: m7g.large
+            # AMI lookup (Ubuntu 22.04 ARM64 in us-east-1):
+            #   aws ec2 describe-images --owners 099720109477 \
+            #     --filters "Name=name,Values=ubuntu/images/hvm-ssd/ubuntu-jammy-22.04-arm64-server-*" \
+            #     --query 'sort_by(Images, &CreationDate)[-1].[ImageId,Name]' \
+            #     --output text
+            # Paste the ImageId here:
+            ImageId: ami-06683ebc6ba468d04
+            BlockDeviceMappings:
+                - DeviceName: /dev/sda1
+                  Ebs:
+                      VolumeSize: 50
+                      VolumeType: gp3
+            TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                      - Key: project
+                        Value: sculptor
+                      - Key: role
+                        Value: head
+        resources: {"CPU": 0}
+        min_workers: 0
+        max_workers: 0
+
+    # ---- WORKER NODE ----
+    # 64 vCPU per node, spot pricing, auto-terminates when idle.
+    ray.worker.default:
+        node_config:
+            InstanceType: c7g.16xlarge
+            ImageId: ami-06683ebc6ba468d04
+            InstanceMarketOptions:
+                MarketType: spot
+                # No max-price — defaults to on-demand price as cap, which is
+                # what you want (spot is usually 60-70% off on-demand).
+            BlockDeviceMappings:
+                - DeviceName: /dev/sda1
+                  Ebs:
+                      VolumeSize: 50
+                      VolumeType: gp3
+            TagSpecifications:
+                - ResourceType: instance
+                  Tags:
+                      - Key: project
+                        Value: sculptor
+                      - Key: role
+                        Value: worker
+        resources: {}
+        min_workers: 0
+        max_workers: 1
+
+head_node_type: ray.head.default
+
+# ============================================================================
+# File mounts: local path -> remote absolute path
+# Synced on every `ray up`. Workers receive these too (unless head-only).
+# ============================================================================
+file_mounts:
+    /home/ubuntu/gurobi.lic: ~/gurobi.lic
+    # Worktree path — includes the in-progress SCULPTOR_MAX_ITER env-var patch
+    # that hasn't been merged back to the main repo yet.
+    /home/ubuntu/sparse_advertisements_code: /Users/tomkoch/Documents/sparse_advertisements_code/.claude/worktrees/jolly-clarke-f235f3
+
+# Don't sync these — huge, regenerable, or irrelevant on the cluster.
+rsync_exclude:
+    - "**/.git"
+    - "**/__pycache__"
+    - "**/.pytest_cache"
+    - "**/figures"
+    - "**/logs"
+    - "**/old_scripts"
+    - "**/graphs"
+    - "**/data"        # data goes via S3 sync later (task #10), not file_mount
+    - "**/.claude"
+
+# Respect .gitignore rules during rsync.
+rsync_filter:
+    - ".gitignore"
+
+# ============================================================================
+# Setup commands: run on EVERY node before Ray starts.
+# Keep idempotent — `ray up` re-runs these on existing nodes.
+# ============================================================================
+setup_commands:
+    # System packages + Python 3.12 from deadsnakes (Ubuntu 22.04 ships 3.10).
+    - sudo apt-get update -qq
+    - sudo apt-get install -y software-properties-common
+    - sudo add-apt-repository -y ppa:deadsnakes/ppa
+    - sudo apt-get update -qq
+    - sudo apt-get install -y python3.12 python3.12-venv python3.12-dev build-essential
+    # Venv at /home/ubuntu/venv312 to mirror the user's Mac layout.
+    - test -d /home/ubuntu/venv312 || python3.12 -m venv /home/ubuntu/venv312
+    - /home/ubuntu/venv312/bin/pip install --upgrade pip wheel setuptools
+    # Python deps. Note: pyzmq (not zmq), scikit-learn (not sklearn — the
+    # pip name `sklearn` is now a deprecated stub that errors).
+    - /home/ubuntu/venv312/bin/pip install
+        "ray[default]"
+        numpy
+        matplotlib
+        scipy
+        gurobipy
+        tqdm
+        geopy
+        pyzmq
+        cymruwhois
+        scikit-learn
+    # Point Gurobi at the file_mounted WLS license.
+    - echo 'export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic' >> /home/ubuntu/.bashrc
+    - echo 'export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic' >> /home/ubuntu/.profile
+
+head_setup_commands: []
+worker_setup_commands: []
+
+# ============================================================================
+# Ray start commands. ulimit bump is required at scale.
+# ============================================================================
+head_start_ray_commands:
+    - ray stop
+    - >-
+      export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic;
+      ulimit -n 65536;
+      /home/ubuntu/venv312/bin/ray start --head
+      --port=6379
+      --object-manager-port=8076
+      --autoscaling-config=~/ray_bootstrap_config.yaml
+
+worker_start_ray_commands:
+    - ray stop
+    - >-
+      export GRB_LICENSE_FILE=/home/ubuntu/gurobi.lic;
+      ulimit -n 65536;
+      /home/ubuntu/venv312/bin/ray start
+      --address=$RAY_HEAD_IP:6379
+      --object-manager-port=8076

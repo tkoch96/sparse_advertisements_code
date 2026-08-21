@@ -82,7 +82,7 @@ _OLD_DASH_ENTRIES = [
           'progress_live': False,
           'heading': 'Policy ladder v3 + LB CACHE ON — same grid, '
                      'cache A/B',
-          'figures': ['figures/policy_ladder_v3lbc_5panel_objective.png'],
+          'figures': ['figures/dashboards/ablation_v3lbc/policy_ladder_v3lbc_5panel_objective.png'],
           'refresh': {
               'pull': [('cache/ablation/policy_ladder_v3_LBCACHE/',
                         'cache/ablation/policy_ladder_v3_LBCACHE/'),
@@ -114,9 +114,9 @@ _OLD_DASH_ENTRIES = [
                             '--seeds', '1-5', '--jobs', '4']},
                   {'in': ['cache/model_error/steady/'
                           'lbc_steady_v3.json'],
-                   'out': ['figures/policy_ladder_v3lbc_5panel.png',
-                           'figures/policy_ladder_v3lbc_5panel_objective.png',
-                           'figures/policy_ladder_v3lbc_5panel_iters.png'],
+                   'out': ['figures/dashboards/ablation_v3lbc/policy_ladder_v3lbc_5panel.png',
+                           'figures/dashboards/ablation_v3lbc/policy_ladder_v3lbc_5panel_objective.png',
+                           'figures/dashboards/ablation_v3lbc/policy_ladder_v3lbc_5panel_iters.png'],
                    'always': True,
                    'env': {'POLICY_PLOT_STAT': 'mean',
                            'POLICY_PLOT_TAG_PREFIX': 'lbc',
@@ -168,8 +168,8 @@ _OLD_DASH_ENTRIES = [
                             'cache/model_error/hardB3v2_L7K3_scores.json']},
                   {'in': ['cache/model_error/hardB3v2_scores.json',
                           'cache/model_error/hardB3v2_L7K3_scores.json'],
-                   'out': ['figures/hardB3v2_ladders_incremental.png',
-                           'figures/hardB3v2_mlu_util.png'],
+                   'out': ['figures/dashboards/hardobj_v2/hardB3v2_ladders_incremental.png',
+                           'figures/dashboards/hardobj_v2/hardB3v2_mlu_util.png'],
                    'always': True,
                    'env': {'HARDB3_STORE':
                            'cache/model_error/hardB3v2_scores.json',
@@ -183,7 +183,7 @@ _OLD_DASH_ENTRIES = [
           },
           'heading': 'Hard objectives: monotone ladder + full fix stack, '
                      'all objectives',
-          'figures': ['figures/hardB3v2_ladders_incremental.png'],
+          'figures': ['figures/dashboards/hardobj_v2/hardB3v2_ladders_incremental.png'],
           'intro': 'The monotone ladder (L1 budgeted-fixed &rarr; L6 '
                    'full+smart, same semantics as policy ladder v2) '
                    'trained AND scored per hard objective under the '
@@ -209,7 +209,7 @@ _OLD_DASH_ENTRIES = [
               ('smartL7', 'full', 'smart', 'L7 bern-K3+smart'),
           ],
           'extra_store': 'cache/model_error/hardB3v2_L7K3_scores.json',
-          'figures': ['figures/hardB3v2_fracb.png'], 'fmt': '{:.3f}',
+          'figures': ['figures/dashboards/hardobj_v2/hardB3v2_fracb.png'], 'fmt': '{:.3f}',
           'intro': 'CAPABILITY metric (2026-08-16): min achievable '
                    'volume-weighted excess-ms beyond (per-UG optimal + '
                    '10ms) over the advertisement\'s ingress options '
@@ -237,8 +237,8 @@ _OLD_DASH_ENTRIES = [
               ('smartL7', 'full', 'smart', 'L7 bern-K3+smart'),
           ],
           'extra_store': 'cache/model_error/hardB3v2_L7K3_scores.json',
-          'figures': ['figures/hardB3v2_mlu_util.png',
-                      'figures/hardB3v2_mlu.png'], 'fmt': '{:.3f}',
+          'figures': ['figures/dashboards/hardobj_v2/hardB3v2_mlu_util.png',
+                      'figures/dashboards/hardobj_v2/hardB3v2_mlu.png'], 'fmt': '{:.3f}',
           'intro': 'routed_lat + P*bad_frac + alpha*(MLU + bad_frac) '
                    '(Tom 2026-08-15 late). MLU = BEST-ACHIEVABLE peak '
                    'utilization for the advertisement (min-Y LP over '
@@ -265,7 +265,7 @@ _OLD_DASH_ENTRIES = [
               ('smartL7', 'full', 'smart', 'L7 bern-K3+smart'),
           ],
           'extra_store': 'cache/model_error/hardB3v2_L7K3_scores.json',
-          'figures': ['figures/hardB3v2_prio.png'], 'fmt': '{:.2f}',
+          'figures': ['figures/dashboards/hardobj_v2/hardB3v2_prio.png'], 'fmt': '{:.2f}',
           'intro': 'Joint latency + bulk-download priority objective '
                    '(negated). CAVEAT (2026-08-16, annotated on the '
                    'panel): this metric is TWO-STAGE assignment-derived '
@@ -306,7 +306,7 @@ EXPERIMENTS = [
           'progress_manifest': 'tools/v3grid_manifest.json',
           'heading': 'Policy ladder v3 — feature ladder L1-L6, '
                      'avg_latency objective (10 deployments)',
-          'figures': ['figures/policy_ladder_v3_5panel_objective.png'],
+          'figures': ['figures/dashboards/ablation_v3/policy_ladder_v3_5panel_objective.png'],
           'refresh': {
               'pull': [('cache/ablation/policy_ladder_v3/',
                         'cache/ablation/policy_ladder_v3/'),
@@ -341,9 +341,9 @@ EXPERIMENTS = [
                             '--seeds', '1-10', '--jobs', '4']},
                   {'in': ['cache/model_error/steady/'
                           'policy_steady_v3.json'],
-                   'out': ['figures/policy_ladder_v3_5panel.png',
-                           'figures/policy_ladder_v3_5panel_objective.png',
-                           'figures/policy_ladder_v3_5panel_iters.png'],
+                   'out': ['figures/dashboards/ablation_v3/policy_ladder_v3_5panel.png',
+                           'figures/dashboards/ablation_v3/policy_ladder_v3_5panel_objective.png',
+                           'figures/dashboards/ablation_v3/policy_ladder_v3_5panel_iters.png'],
                    'always': True,
                    'argv': ['{py}', '-m',
                             'experiments.dashboard.plot_ladder_direct']},
@@ -366,7 +366,7 @@ EXPERIMENTS = [
                     '1-10, LB cache ON, adagrad, L6 = slotted WHEN. '
                     'Own-objective panels below; per-objective tabs carry '
                     'the convergence links.</p>'),
-          'figures': ['figures/hardobj_v4_3panel.png'],
+          'figures': ['figures/dashboards/hardobj_v4/hardobj_v4_3panel.png'],
           'refresh': {
               'pull': [('cache/ablation/hardobj_v3/',
                         'cache/ablation/hardobj_v3/'),
@@ -374,7 +374,7 @@ EXPERIMENTS = [
                         'cache/ablation/hardobj_v3_artifacts/figs/')],
               'steps': [
                   {'in': ['cache/ablation/hardobj_v3/*/*/N*/seed_*_*.json'],
-                   'out': ['figures/hardobj_v4_3panel.png'],
+                   'out': ['figures/dashboards/hardobj_v4/hardobj_v4_3panel.png'],
                    'always': True,
                    'argv': ['{py}', '-m',
                             'experiments.dashboard.plot_hardobj_v4']},
@@ -398,7 +398,7 @@ EXPERIMENTS = [
                'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'fracb_L6_'),
           ],
           'heading': 'Hard objective: frac_beyond_optimal — L1-L6, 10 deployments',
-          'figures': ['figures/hardobj_v4_fracb.png'],
+          'figures': ['figures/dashboards/hardobj_v4/hardobj_v4_fracb.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering.'},
          {'id': 'mlu', 'title': 'max_util v2', 'kind': 'ladder_links',
           'figs_dir': 'cache/ablation/hardobj_v3_artifacts/figs',
@@ -419,7 +419,7 @@ EXPERIMENTS = [
                'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'mlu_L6_'),
           ],
           'heading': 'Hard objective: max_util v2 — L1-L6, 10 deployments',
-          'figures': ['figures/hardobj_v4_mlu.png'],
+          'figures': ['figures/dashboards/hardobj_v4/hardobj_v4_mlu.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering.'},
          {'id': 'prio', 'title': 'joint priority', 'kind': 'ladder_links',
           'figs_dir': 'cache/ablation/hardobj_v3_artifacts/figs',
@@ -440,7 +440,7 @@ EXPERIMENTS = [
                'figs_hardv4', 'cache/ablation/hardobj_v3_artifacts/figs', 'prio_L6_'),
           ],
           'heading': 'Hard objective: joint priority — L1-L6, 10 deployments',
-          'figures': ['figures/hardobj_v4_prio.png'],
+          'figures': ['figures/dashboards/hardobj_v4/hardobj_v4_prio.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering.'},
      ]},
     {'id': 'ladder_a10', 'title': 'Ladder: actual-10',
@@ -467,7 +467,7 @@ EXPERIMENTS = [
           ],
           'heading': 'Policy ladder @ actual-10 — 1 deployment, N=10, '
                      'all cores',
-          'figures': ['figures/policy_ladder_a10_5panel_objective.png'],
+          'figures': ['figures/dashboards/ladder_a10/policy_ladder_a10_5panel_objective.png'],
           'intro': 'Follow-up: real-deployment scale (actual-10).',
           'refresh': {
               'pull': [('cache/ablation/policy_ladder_a10/',
@@ -498,7 +498,7 @@ EXPERIMENTS = [
                             '--tag', 'a10_failure_v4', '--seeds', '1',
                             '--dpsize', 'actual-10', '--jobs', '2']},
                   {'in': ['cache/model_error/steady/a10_steady_v4.json'],
-                   'out': ['figures/policy_ladder_a10_5panel_objective.png'],
+                   'out': ['figures/dashboards/ladder_a10/policy_ladder_a10_5panel_objective.png'],
                    'always': True,
                    'argv': ['{py}', '-m',
                             'experiments.dashboard.plot_ladder_direct']},
@@ -544,7 +544,7 @@ EXPERIMENTS.extend([
           'arms': _hx_arms('figs_ladderhx', _HX_LADDER_FIGS, ''),
           'heading': 'Policy ladder — NEW SOLVER (HiGHS via solver_fork) '
                      '— L1-L6, avg_latency+gamma resilience, 10 deployments',
-          'figures': ['figures/policy_ladder_highs_5panel_objective.png'],
+          'figures': ['figures/dashboards/ladder_highs/policy_ladder_highs_5panel_objective.png'],
           'refresh': {
               'pull': [('cache/ablation/policy_ladder_highs/',
                         'cache/ablation/policy_ladder_highs/'),
@@ -599,7 +599,7 @@ EXPERIMENTS.extend([
                     'prio x L1-L6 x N x seeds 1-10, same grid + settings '
                     'as Hard objectives v4; LPs via '
                     'SCULPTOR_LP_BACKEND=highs.</p>'),
-          'figures': ['figures/hardobj_highs_3panel.png'],
+          'figures': ['figures/dashboards/hardobj_highs/hardobj_highs_3panel.png'],
           'refresh': {
               'pull': [('cache/ablation/hardobj_highs/',
                         'cache/ablation/hardobj_highs/'),
@@ -607,7 +607,7 @@ EXPERIMENTS.extend([
               'steps': [
                   {'in': ['cache/ablation/hardobj_highs/*/*/N*/'
                           'seed_*_*.json'],
-                   'out': ['figures/hardobj_highs_3panel.png'],
+                   'out': ['figures/dashboards/hardobj_highs/hardobj_highs_3panel.png'],
                    'always': True,
                    'env': {'HARDOBJ_ROOT': 'cache/ablation/hardobj_highs',
                            'HARDOBJ_OUT_PREFIX': 'hardobj_highs'},
@@ -621,7 +621,7 @@ EXPERIMENTS.extend([
           'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'fracb_'),
           'heading': 'frac_beyond_optimal — NEW SOLVER (HiGHS), L1-L6, '
                      '10 deployments',
-          'figures': ['figures/hardobj_highs_fracb.png'],
+          'figures': ['figures/dashboards/hardobj_highs/hardobj_highs_fracb.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering.'},
          {'id': 'mlu', 'title': 'max_util v2', 'kind': 'ladder_links',
           'figs_dir': _HX_HARD_FIGS, 'figs_url': 'figs_hardhx',
@@ -629,7 +629,7 @@ EXPERIMENTS.extend([
           'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'mlu_'),
           'heading': 'max_util v2 — NEW SOLVER (HiGHS), L1-L6, '
                      '10 deployments',
-          'figures': ['figures/hardobj_highs_mlu.png'],
+          'figures': ['figures/dashboards/hardobj_highs/hardobj_highs_mlu.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering.'},
          {'id': 'prio', 'title': 'joint priority', 'kind': 'ladder_links',
           'figs_dir': _HX_HARD_FIGS, 'figs_url': 'figs_hardhx',
@@ -637,7 +637,7 @@ EXPERIMENTS.extend([
           'arms': _hx_arms('figs_hardhx', _HX_HARD_FIGS, 'prio_'),
           'heading': 'joint priority — NEW SOLVER (HiGHS), L1-L6, '
                      '10 deployments',
-          'figures': ['figures/hardobj_highs_prio.png'],
+          'figures': ['figures/dashboards/hardobj_highs/hardobj_highs_prio.png'],
           'intro': 'Own-objective ladder; 0 = one-per-peering. CAVEAT '
                    '(same as the gurobi-era panel): this metric is '
                    'TWO-STAGE assignment-derived — the low-latency split '
@@ -721,7 +721,7 @@ EXPERIMENTS.extend([
                     '<b>lat</b>: {lat}<br><b>fracb</b>: {fracb}<br>'
                     '<b>mlu</b>: {mlu}<br><b>prio</b>: {prio}</p>'.format(
                         **_GG_UNITS)),
-          'figures': ['figures/grid_maxhard_v2_4panel.png'],
+          'figures': ['figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_4panel.png'],
           'refresh': {
               'pull': [('cache/ablation/grid_maxhard_v2/',
                         'cache/ablation/grid_maxhard_v2/'),
@@ -729,7 +729,7 @@ EXPERIMENTS.extend([
               'steps': [
                   {'in': ['cache/ablation/grid_maxhard_v2/*/*/N*/'
                           'seed_*_*.json'],
-                   'out': ['figures/grid_maxhard_v2_4panel.png'],
+                   'out': ['figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_4panel.png'],
                    'always': True,
                    'env': {'HARDOBJ_ROOT': 'cache/ablation/grid_maxhard_v2',
                            'HARDOBJ_OUT_PREFIX': 'grid_maxhard_v2',
@@ -738,12 +738,12 @@ EXPERIMENTS.extend([
                             'experiments.dashboard.plot_hardobj_v4']},
               ]}},
          _gg_section('lat', 'latency + gamma*resilience',
-                     'figures/grid_maxhard_v2_lat.png'),
+                     'figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_lat.png'),
          _gg_section('fracb', 'frac_beyond_optimal',
-                     'figures/grid_maxhard_v2_fracb.png'),
-         _gg_section('mlu', 'max_util v2', 'figures/grid_maxhard_v2_mlu.png'),
+                     'figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_fracb.png'),
+         _gg_section('mlu', 'max_util v2', 'figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_mlu.png'),
          _gg_section('prio', 'joint priority',
-                     'figures/grid_maxhard_v2_prio.png'),
+                     'figures/dashboards/grid_maxhard_v2/grid_maxhard_v2_prio.png'),
      ]},
 ])
 
@@ -753,20 +753,20 @@ EXPERIMENTS.append({
         {'id': 'smokes', 'title': 'scoping smokes', 'kind': 'static',
          'heading': 'Scoping smokes — single-core timing/RAM/cost ladder '
                     '(a10, EODS 5-32, obj32) on a dedicated fleet VM',
-         'figures': ['figures/profiler_status.png',
-                     'figures/profiler_scaling.png',
-                     'figures/depcache_bench.png'],
+         'figures': ['figures/dashboards/profiler/profiler_status.png',
+                     'figures/dashboards/profiler/profiler_scaling.png',
+                     'figures/dashboards/depcache/depcache_bench.png'],
          'refresh': {'steps': [
-             {'in': ['figures/profiler_status.png'], 'always': True,
-              'out': ['figures/profiler_status.png'],
+             {'in': ['figures/dashboards/profiler/profiler_status.png'], 'always': True,
+              'out': ['figures/dashboards/profiler/profiler_status.png'],
               'argv': ['{py}', '-m',
                        'experiments.eods.profiler_status']},
-             {'in': ['figures/profiler_scaling.png'], 'always': True,
-              'out': ['figures/profiler_scaling.png'],
+             {'in': ['figures/dashboards/profiler/profiler_scaling.png'], 'always': True,
+              'out': ['figures/dashboards/profiler/profiler_scaling.png'],
               'argv': ['{py}', '-m',
                        'experiments.eods.profiler_plots']},
              {'in': ['cache/depcache_bench.json'], 'always': True,
-              'out': ['figures/depcache_bench.png'],
+              'out': ['figures/dashboards/depcache/depcache_bench.png'],
               'argv': ['{py}', '-m',
                        'experiments.depcache.plot_bench']}]},
          'intro': 'Left: completed picks with startup / s-per-iter / RAM '
@@ -789,7 +789,7 @@ EXPERIMENTS.append({
                    'automatically when the HiGHS sweep drains. Paired '
                    'per-seed comparison = the campaign-scale backend '
                    'A/B.</p>'),
-         'figures': ['figures/grid_maxhard_v2_gurobi_4panel.png'],
+         'figures': ['figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_4panel.png'],
          'refresh': {
              'pull': [('cache/ablation/grid_maxhard_v2_gurobi/',
                        'cache/ablation/grid_maxhard_v2_gurobi/'),
@@ -797,7 +797,7 @@ EXPERIMENTS.append({
              'steps': [
                  {'in': ['cache/ablation/grid_maxhard_v2_gurobi/*/*/N*/'
                          'seed_*_*.json'],
-                  'out': ['figures/grid_maxhard_v2_gurobi_4panel.png'],
+                  'out': ['figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_4panel.png'],
                   'always': True,
                   'env': {'HARDOBJ_ROOT':
                           'cache/ablation/grid_maxhard_v2_gurobi',
@@ -810,16 +810,16 @@ EXPERIMENTS.append({
         # "grids on the small maxhards are missing convergence over
         # iterations") — same sections as the HiGHS tab, gurobi store.
         _gg_section('lat', 'latency + gamma*resilience',
-                    'figures/grid_maxhard_v2_gurobi_lat.png',
+                    'figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_lat.png',
                     figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
         _gg_section('fracb', 'frac_beyond_optimal',
-                    'figures/grid_maxhard_v2_gurobi_fracb.png',
+                    'figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_fracb.png',
                     figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
         _gg_section('mlu', 'max_util v2',
-                    'figures/grid_maxhard_v2_gurobi_mlu.png',
+                    'figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_mlu.png',
                     figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
         _gg_section('prio', 'joint priority',
-                    'figures/grid_maxhard_v2_gurobi_prio.png',
+                    'figures/dashboards/grid_maxhard_v2_gurobi/grid_maxhard_v2_gurobi_prio.png',
                     figs=_GT_FIGS, url='figs_gridmv2g', backend='gurobi'),
     ]})
 
@@ -839,7 +839,7 @@ EXPERIMENTS.append({
          'heading': 'Policy ladder @ actual-10 — 10 deployments (seeds '
                     '1-10), N=10, 100 iters, L1-L6, HiGHS (live: VM '
                     'RAM/CPU above, per-cell convergence links below)',
-         'figures': ['figures/policy_ladder_a10x10_5panel_objective.png'],
+         'figures': ['figures/dashboards/a10x10/policy_ladder_a10x10_5panel_objective.png'],
          'intro': 'IN-RUN steady scores (objective - same-seed opp, ms); '
                   'convergence-over-iterations PDFs link in as cells '
                   'land and figures are harvested from the head.',
@@ -907,8 +907,8 @@ EXPERIMENTS.append({
          'heading': 'v5 scout — 3 arms x 4 objectives x seeds 201-205, '
                     'N=10, maxhard, HiGHS, NEW stop-v2 (honest init, '
                     '0.1% REL, trend clause) + component persistence',
-         'figures': ['figures/grid_v5scout_4panel.png',
-                     'figures/v5scout_status.png'],
+         'figures': ['figures/dashboards/v5scout/grid_v5scout_4panel.png',
+                     'figures/dashboards/v5scout/v5scout_status.png'],
          'intro': ('<p>Precursor to the v5 full panel: does rmsprop\'s '
                    'smoke win transfer to every objective family? 60 '
                    'cells on the sweep VM (NOT the head — RAM/iteration '
@@ -918,16 +918,16 @@ EXPERIMENTS.append({
                    'campaign with objective components persisted in '
                    'every cell json.</p>'),
          'refresh': {'steps': [
-             {'in': ['figures/v5scout_status.png'], 'always': True,
-              'out': ['figures/v5scout_status.png'],
+             {'in': ['figures/dashboards/v5scout/v5scout_status.png'], 'always': True,
+              'out': ['figures/dashboards/v5scout/v5scout_status.png'],
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_v5scout']},
              {'in': ['cache/ablation/grid_v5scout/*/*/N*/seed_*.json'],
-              'out': ['figures/grid_v5scout_4panel.png',
-                      'figures/grid_v5scout_lat.png',
-                      'figures/grid_v5scout_fracb.png',
-                      'figures/grid_v5scout_mlu.png',
-                      'figures/grid_v5scout_prio.png'],
+              'out': ['figures/dashboards/v5scout/grid_v5scout_4panel.png',
+                      'figures/dashboards/v5scout/grid_v5scout_lat.png',
+                      'figures/dashboards/v5scout/grid_v5scout_fracb.png',
+                      'figures/dashboards/v5scout/grid_v5scout_mlu.png',
+                      'figures/dashboards/v5scout/grid_v5scout_prio.png'],
               'always': True,
               'env': {'HARDOBJ_ROOT': 'cache/ablation/grid_v5scout',
                       'HARDOBJ_OUT_PREFIX': 'grid_v5scout',
@@ -957,8 +957,8 @@ EXPERIMENTS.append({
          'heading': 'AdaGrad transient smoke — L3/L5 stock vs L5 '
                     'warmup-skip (K=5), mlu family, maxhard, seeds '
                     '201-203, N=10',
-         'figures': ['figures/adagrad_smoke_grads.png',
-                     'figures/adagrad_smoke_obj.png'],
+         'figures': ['figures/dashboards/adagrad_smoke/adagrad_smoke_grads.png',
+                     'figures/dashboards/adagrad_smoke/adagrad_smoke_obj.png'],
          'intro': ('<p>Hypothesis chain under test: huge iter-1-5 '
                    'gradients permanently deflate AdaGrad-Norm\'s '
                    'learning rate (G never decays) → training freezes '
@@ -974,9 +974,9 @@ EXPERIMENTS.append({
                    'profiler VM in an isolated repo copy; figures '
                    'auto-refresh as cells land. Per-cell convergence PDFs: <a href="adagrad_smoke_figs/">adagrad_smoke_figs/</a> (smk_&lt;arm&gt;_dep&lt;seed&gt;.pdf).</p>'),
          'refresh': {'steps': [
-             {'in': ['figures/adagrad_smoke_grads.png'], 'always': True,
-              'out': ['figures/adagrad_smoke_grads.png',
-                      'figures/adagrad_smoke_obj.png'],
+             {'in': ['figures/dashboards/adagrad_smoke/adagrad_smoke_grads.png'], 'always': True,
+              'out': ['figures/dashboards/adagrad_smoke/adagrad_smoke_grads.png',
+                      'figures/dashboards/adagrad_smoke/adagrad_smoke_obj.png'],
               'argv': ['{py}', '-m',
                        'experiments.dashboard.plot_adagrad_smoke']},
          ]}},
@@ -1006,9 +1006,9 @@ EXPERIMENTS.append({
                     'padding:2px 10px;border:1px solid #c98f1e;'
                     'border-radius:6px;text-decoration:none">'
                     '&#9654; worker flamegraph</a> &nbsp; <a href="eods32_tail.txt" style="font-size:14px;padding:2px 10px;border:1px solid #8f5f00;border-radius:6px;text-decoration:none">&#9654; 32 log tail</a>',
-         'figures': ['figures/eods25_run.png',
-                     'figures/eods25_status.png',
-                     'figures/eods25_results.png'],
+         'figures': ['figures/dashboards/eods25/eods25_run.png',
+                     'figures/dashboards/eods25/eods25_status.png',
+                     'figures/dashboards/eods25/eods25_results.png'],
          'intro': ('<p>The v4-era trained solver scored by the CLASSICAL '
                    'paper evals: normal + link/site-failure latency '
                    'suboptimality vs one-per-peering et al. One cell = '
@@ -1028,12 +1028,12 @@ EXPERIMENTS.append({
              'pull': [('cache/eods/v1_dash/', 'cache/eods/v1_dash/')],
              'steps': [
                  {'in': ['cache/eods/v1_dash/*'], 'always': True,
-                  'out': ['figures/eods25_status.png',
-                          'figures/eods25_results.png'],
+                  'out': ['figures/dashboards/eods25/eods25_status.png',
+                          'figures/dashboards/eods25/eods25_results.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25']},
                  {'in': ['cache/eods/v1_dash/*'], 'always': True,
-                  'out': ['figures/eods25_run.png'],
+                  'out': ['figures/dashboards/eods25/eods25_run.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25_run']},
                  {'in': ['cache/eods/v1_dash/log_tails.txt'],
@@ -1060,9 +1060,9 @@ EXPERIMENTS.append({
                     'padding:2px 10px;border:1px solid #4a3aa7;'
                     'border-radius:6px;text-decoration:none">'
                     '&#9654; live log tail</a>',
-         'figures': ['figures/eods32_run.png',
-                     'figures/eods32_status.png',
-                     'figures/eods32_results.png'],
+         'figures': ['figures/dashboards/eods32/eods32_run.png',
+                     'figures/dashboards/eods32/eods32_status.png',
+                     'figures/dashboards/eods32/eods32_results.png'],
          'intro': ('<p>The dpsize-32 production cell, launched 2026-08-20 '
                    'with the startup-optimization stack: SCULPTOR_OPP_ONCE '
                    '(driver-side one-per-peering memo, ~10.7x per avoided '
@@ -1082,8 +1082,8 @@ EXPERIMENTS.append({
              'pull': [('cache/eods/v1_dash32/', 'cache/eods/v1_dash32/')],
              'steps': [
                  {'in': ['cache/eods/v1_dash32/*'], 'always': True,
-                  'out': ['figures/eods32_status.png',
-                          'figures/eods32_results.png'],
+                  'out': ['figures/dashboards/eods32/eods32_status.png',
+                          'figures/dashboards/eods32/eods32_results.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25'],
                   'env': {'EODS_DASH_DIR': 'cache/eods/v1_dash32',
@@ -1091,7 +1091,7 @@ EXPERIMENTS.append({
                           'EODS_DPSIZE': '32',
                           'EODS_LABEL': 'actual-32'}},
                  {'in': ['cache/eods/v1_dash32/*'], 'always': True,
-                  'out': ['figures/eods32_run.png'],
+                  'out': ['figures/dashboards/eods32/eods32_run.png'],
                   'argv': ['{py}', '-m',
                            'experiments.dashboard.plot_eods25_run'],
                   'env': {'EODS_DASH_DIR': 'cache/eods/v1_dash32',
@@ -1116,7 +1116,7 @@ EXPERIMENTS.append({
         {'id': 'georand', 'title': 'georand (unrounded)', 'kind': 'static',
          'heading': 'Unified grid — georand, unrounded (~290/740 cells; '
                     'killed for the obj-round falsification test)',
-         'figures': ['figures/grid_georand_4panel.png'],
+         'figures': ['figures/dashboards/grid_georand/grid_georand_4panel.png'],
          'intro': 'FROZEN. CAVEAT: fracb panel predates the hinge-scalar '
                   'overflow fix (2026-08-17) — its values use the broken '
                   'scalar and can cross opp; other families valid.'},
@@ -1124,7 +1124,7 @@ EXPERIMENTS.append({
          'heading': 'Unified grid — georand + OBJ_ROUND=4 (227/740 cells; '
                     'purpose achieved: rounding-invariance established, '
                     'jitter theory refuted)',
-         'figures': ['figures/grid_georand_r4_4panel.png'],
+         'figures': ['figures/dashboards/grid_georand/grid_georand_r4_4panel.png'],
          'intro': 'FROZEN. The falsification A/B store: ladder + probe '
                   'delivery match the unrounded run within noise.'},
         {'id': 'maxhard_r4_tainted', 'title': 'maxhard r4 (shared-RNG)',
@@ -1133,7 +1133,7 @@ EXPERIMENTS.append({
                     'world-independent RNG meant these deployments were '
                     'transforms of the SAME seeds 1-5 georand used — '
                     'Tom\'s catch 2026-08-17)',
-         'figures': ['figures/grid_maxhard_r4_4panel.png'],
+         'figures': ['figures/dashboards/grid_maxhard/grid_maxhard_r4_4panel.png'],
          'intro': 'FROZEN. Line shapes mirror georand because base '
                   'entropy was shared; superseded by maxhard v2 with '
                   'disjoint seeds 201-205.'},
@@ -1142,9 +1142,19 @@ EXPERIMENTS.append({
          'heading': 'Unified grid — maxhard, unrounded (46/740 cells; '
                     'killed in favor of georand-r4, then re-run as '
                     'maxhard-r4)',
-         'figures': ['figures/grid_maxhard_4panel.png'],
+         'figures': ['figures/dashboards/grid_maxhard/grid_maxhard_4panel.png'],
          'intro': 'FROZEN partial.'},
     ]})
+
+EXPERIMENTS.append({
+    'id': 'cost_estimator', 'title': 'Cost estimator',
+    'refresh': {'steps': [{
+        'in': ['experiments/dashboard/cost_calibration.py'],
+        'out': ['cache/dashboard/cost_calibration.json'],
+        'argv': ['{py}', '-m', 'experiments.dashboard.cost_calibration'],
+    }]},
+    'sections': [{'id': 'calc', 'title': 'calculator',
+                  'kind': 'cost_estimator'}]})
 
 EXPERIMENTS.append({'id': 'old_dash', 'title': 'Old dashboards',
                     'sections': [sec for e in _OLD_DASH_ENTRIES
@@ -1197,7 +1207,7 @@ def render_objective_ladder(exp):
     for f in exp.get('figures', []):
         if os.path.exists(os.path.join(REPO, f)):
             out.append('<img src="plots/{}" alt="{}">'.format(
-                os.path.basename(f), exp['id']))
+                _plots_rel(f), exp['id']))
     out.append('<div class="wrap"><table><thead><tr><th>arm</th>')
     out += ['<th>N={}</th>'.format(n) for n in NS]
     out.append('</tr></thead><tbody>')
@@ -1257,12 +1267,23 @@ def render_objective_ladder(exp):
 
 
 
+def _plots_rel(relpath):
+    """Path under the site's plots/ symlink (which points at figures/).
+
+    Figures used to sit flat in figures/, so basename was enough. Since the
+    2026-08-21 move into figures/dashboards/<dashboard>/ the subdirectory is
+    part of the URL -- emitting just the basename yields a 404.
+    """
+    r = relpath.replace(os.sep, '/')
+    return r[len('figures/'):] if r.startswith('figures/') else os.path.basename(r)
+
+
 def _img(relpath):
     """plots/ image tag with an mtime cache-buster (stale-browser fix)."""
     p = os.path.join(REPO, relpath)
     v = int(os.path.getmtime(p)) if os.path.exists(p) else 0
     return '<img src="plots/{}?v={}" alt="">'.format(
-        os.path.basename(relpath), v)
+        _plots_rel(relpath), v)
 
 def render_static(exp):
     out = ['<h2>{}</h2>'.format(exp.get('heading', exp['title']))]
@@ -1282,6 +1303,121 @@ def render_static(exp):
     return '\n'.join(out)
 
 
+_CE_PAGE = '''
+<h2>Cluster cost / time estimator &mdash; evaluate_over_deployment_sizes</h2>
+<p class="note" id="ce_status"></p>
+<div class="note">
+ cores <input id="ce_cores" type="number" value="512" style="width:5em">
+ iters/eval <input id="ce_iters" type="number" value="30" style="width:4em">
+ size-scaling &alpha; <input id="ce_alpha" type="number" step="0.1"
+   value="2.3" style="width:4em">
+ startup min/eval <input id="ce_start" type="number" value="10"
+   style="width:4em">
+ RSS-scaling &beta; <input id="ce_beta" type="number" step="0.1"
+   value="2.0" style="width:4em">
+ RAM headroom <input id="ce_head" type="number" step="0.05" value="0.2"
+   style="width:4em">
+</div>
+<div class="wrap"><table><thead><tr><th>size</th><th>n deployments</th>
+<th>sec/iter @64w</th><th>wall/eval</th><th>core-hr</th>
+<th>worker RSS MB @64w</th></tr></thead><tbody id="ce_rows"></tbody>
+<tfoot><tr id="ce_tot"></tr></tfoot></table></div>
+<div class="wrap"><table><thead><tr><th>family</th><th>GB/core</th>
+<th>$/core-hr</th><th>fits RSS+headroom?</th><th>total cost</th>
+<th>vs cheapest fitting</th></tr></thead>
+<tbody id="ce_fam"></tbody></table></div>
+<p class="note">Model: core-sec/iter(N) = anchor (actual-32, 64w,
+470 s/iter measured on c8g.24xl) &times; (N/32)^&alpha;; per-eval =
+iters &times; that + startup charged at 64 cores; wall = core-hr /
+cores. Worker RSS(N) = base + sharded-state(N)/64 with state
+&prop; (N/32)^&beta;. GUESSTIMATE &mdash; single measured anchor; the
+24xl smoke + an EC2 size sweep will tighten &alpha;, &beta;, startup.
+Inputs persist in localStorage (survive the 180 s self-reload).</p>
+<script>
+(function(){
+var CAL=@CALIB@;
+var SIZES=CAL.sizes;
+var LS='costEstV1';
+function el(i){return document.getElementById(i);}
+var rows=el('ce_rows');
+SIZES.forEach(function(N){
+  var tr=document.createElement('tr');
+  tr.innerHTML='<th>actual-'+N+'</th><td><input id="ce_n_'+N+
+    '" type="number" min="0" value="'+(N===32?5:10)+
+    '" style="width:4em"></td><td id="ce_ti_'+N+'"></td><td id="ce_ev_'+
+    N+'"></td><td id="ce_ch_'+N+'"></td><td id="ce_rs_'+N+'"></td>';
+  rows.appendChild(tr);
+});
+var ids=['ce_cores','ce_iters','ce_alpha','ce_start','ce_beta','ce_head']
+  .concat(SIZES.map(function(N){return 'ce_n_'+N;}));
+function fmtH(h){if(h<1)return (h*60).toFixed(0)+' min';
+  return h.toFixed(1)+' h';}
+function recalc(){
+  var C=+el('ce_cores').value||1, I=+el('ce_iters').value||1,
+      A=+el('ce_alpha').value||2.3, S=+el('ce_start').value||0,
+      B=+el('ce_beta').value||2, H=+el('ce_head').value||0;
+  var W=CAL.anchor.workers, T32=CAL.anchor.t_iter_sec;
+  var totCH=0, maxRSS=0, maxN=0;
+  SIZES.forEach(function(N){
+    var n=+el('ce_n_'+N).value||0;
+    var ti=T32*Math.pow(N/CAL.anchor.size,A);
+    var evalSec=I*ti+S*60;
+    var coreHr=n*evalSec*W/3600;
+    var rss=CAL.rss.base_mb+CAL.rss.state32_gb*1024*Math.pow(N/32,B)/W;
+    el('ce_ti_'+N).textContent=ti.toFixed(0);
+    el('ce_ev_'+N).textContent=fmtH(evalSec/3600);
+    el('ce_ch_'+N).textContent=coreHr.toFixed(0);
+    el('ce_rs_'+N).textContent=rss.toFixed(0);
+    totCH+=coreHr;
+    if(n>0&&rss>maxRSS){maxRSS=rss;maxN=N;}
+  });
+  var wallH=totCH/C;
+  el('ce_tot').innerHTML='<th>total</th><td></td><td></td><td>'+
+    fmtH(wallH)+' wall @'+C+' cores</td><td>'+totCH.toFixed(0)+
+    '</td><td>peak '+maxRSS.toFixed(0)+' MB (N='+maxN+')</td>';
+  var needGB=maxRSS*(1+H)/1024;
+  var fits=CAL.families.filter(function(f){
+    return f.ram_gb_per_core>=needGB;});
+  var best=fits.length?fits[0]:null;
+  var fb=el('ce_fam'); fb.innerHTML='';
+  CAL.families.forEach(function(f){
+    var ok=f.ram_gb_per_core>=needGB;
+    var cost=totCH*f.usd_core_hr;
+    var tgt=(f.ram_gb_per_core*1024/(1+H)).toFixed(0);
+    var d='';
+    if(best){var delta=cost-totCH*best.usd_core_hr;
+      d=delta===0?'&larr; needed':(delta>0?'+$':'save $')+
+        Math.abs(delta).toFixed(2)+
+        (ok?'':' if worker RSS driven &le;'+tgt+' MB');}
+    fb.innerHTML+='<tr><th>'+f.name+'</th><td>'+f.ram_gb_per_core+
+      '</td><td>$'+f.usd_core_hr.toFixed(4)+'</td><td>'+
+      (ok?'yes':'no &mdash; need &le;'+tgt+' MB/worker')+
+      '</td><td>$'+cost.toFixed(2)+'</td><td>'+d+'</td></tr>';
+  });
+  try{var st={};ids.forEach(function(i){st[i]=el(i).value;});
+    localStorage.setItem(LS,JSON.stringify(st));}catch(e){}
+}
+try{var st=JSON.parse(localStorage.getItem(LS)||'{}');
+  ids.forEach(function(i){if(st[i]!==undefined&&el(i))
+    el(i).value=st[i];});}catch(e){}
+ids.forEach(function(i){el(i).addEventListener('input',recalc);});
+el('ce_status').textContent=CAL.status+
+  ' (calibration '+CAL.generated_utc+')';
+recalc();
+})();
+</script>
+'''
+
+
+def render_cost_estimator(exp):
+    p = os.path.join(REPO, 'cache/dashboard/cost_calibration.json')
+    try:
+        cal = json.load(open(p))
+    except (IOError, ValueError):
+        return ('<h2>Cost estimator</h2><p class="note">no calibration '
+                'JSON yet &mdash; run python -m '
+                'experiments.dashboard.cost_calibration</p>')
+    return _CE_PAGE.replace('@CALIB@', json.dumps(cal))
 
 
 def conv_grid(url_prefix, figs_dir_abs, fname_fn, arms=ARMS,
@@ -1530,7 +1666,8 @@ def render_ladder_links(exp):
 
 RENDERERS = {'objective_ladder': render_objective_ladder,
              'static': render_static,
-             'ladder_links': render_ladder_links}
+             'ladder_links': render_ladder_links,
+             'cost_estimator': render_cost_estimator}
 
 
 def main():

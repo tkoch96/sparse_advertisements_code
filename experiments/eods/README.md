@@ -1,6 +1,6 @@
 # EODS — evaluate_over_deployment_sizes, modernized (2026-08-17)
 
-The standalone `evaluate_over_deployment_sizes.py` loop becomes
+The standalone `evaluations/evaluate_over_deployment_sizes.py` loop becomes
 queue-native cells so the grid machinery (queue, RAM governor, dash
 progress/ETA, fleet sharding) runs it unchanged:
 
@@ -32,4 +32,4 @@ runs its shard with the same command.
 STATUS: skeleton validated by import/manifest smokes; the heavy
 validation (one actual-3 cell end-to-end, then merge-vs-legacy parity
 on a small grid) is the P2 burn-in step in
-ablation_study/SCALE_500_PLAN.md.
+experiments/ablation_study/SCALE_500_PLAN.md.

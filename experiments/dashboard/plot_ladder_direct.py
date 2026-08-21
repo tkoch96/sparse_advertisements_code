@@ -99,7 +99,7 @@ def main():
                        env=env, cwd=REPO)
     else:
         render('cache/ablation/policy_ladder_v3',
-               'figures/policy_ladder_v3_5panel_objective.png',
+               'figures/dashboards/ablation_v3/policy_ladder_v3_5panel_objective.png',
                'Policy ladder v3 (10 deployments) — IN-RUN steady scores '
                '(fresh-eval composite pending Gurobi license renewal)')
     # Solver-fork (HiGHS) ladder tab (Tom 2026-08-17): same
@@ -114,7 +114,7 @@ def main():
                        env=env, cwd=REPO)
     else:
         render('cache/ablation/policy_ladder_highs',
-               'figures/policy_ladder_highs_5panel_objective.png',
+               'figures/dashboards/ladder_highs/policy_ladder_highs_5panel_objective.png',
                'Policy ladder — NEW SOLVER (HiGHS via solver_fork) — '
                'IN-RUN steady scores (fresh-eval composite pending)')
     if _store_has_data('a10'):
@@ -127,7 +127,7 @@ def main():
                        env=env, cwd=REPO)
     else:
         render('cache/ablation/policy_ladder_a10',
-               'figures/policy_ladder_a10_5panel_objective.png',
+               'figures/dashboards/ladder_a10/policy_ladder_a10_5panel_objective.png',
                'actual-10 ladder — IN-RUN steady scores (partial: '
                'license-paused)')
     # a10x10 grid (Tom 2026-08-18): direct render only — no fresh-eval
@@ -135,7 +135,7 @@ def main():
     # y-axis = the TRAINED objective (lat + 0.1*resilience), not just
     # its steady-latency component (Tom's catch 2026-08-19)
     render('cache/ablation/policy_ladder_a10x10',
-           'figures/policy_ladder_a10x10_5panel_objective.png',
+           'figures/dashboards/a10x10/policy_ladder_a10x10_5panel_objective.png',
            'actual-10 x 10 deployments — L1-L6, N=10, TRAINED objective '
            '(lat + 0.1*resilience) vs opp (mean over landed seeds)',
            field='objective',

@@ -7,14 +7,14 @@
 What the code actually does (verified 2026-08-19):
 
 1. GRADS are what's distributed. flush_latency_benefit_queue_generic
-   (sparse_advertisements_v3.py:531) splits the LB-call queue across
+   (core/sparse_advertisements_v3.py:531) splits the LB-call queue across
    workers (split_seq(lb_args_queue[1:], n_workers)) and CONCATENATES
    results — no cross-worker reduce. Each worker answers its jobs over
    the FULL deployment (whole_deployment_* attrs). Tom's mental model
    ("4k grads -> 500 workers x 8 each") matches the code.
 
 2. Nevertheless start_workers ships per-worker UG SLICES:
-   split_deployment_by_ug (helpers.py:144) slices ug_perfs / ug_to_vol /
+   split_deployment_by_ug (helpers/helpers.py:144) slices ug_perfs / ug_to_vol /
    ug_to_bulk_vol / ug_to_ip / ug_anycast_perfs / ingress_priorities per
    worker; whole_deployment_* keys ride along as replicated statics.
    The pdc's heavy arrays are built from whole_deployment_* (e.g.
@@ -22,17 +22,17 @@ What the code actually does (verified 2026-08-19):
    matrices from whole_deployment_ug_perfs) — the sliced keys look
    functionally inert for gradient compute.
 
-3. The reshard-on-resize machinery (worker_comms_ray.py request_add/
+3. The reshard-on-resize machinery (core/worker_comms.py request_add/
    remove_workers, ~150 lines) exists mainly to re-slice this data.
 
 ## Inventory of references (worker path only; fleet/shard.py and
 ## depcache lat_shards are DIFFERENT, legitimate concepts — keep):
-- helpers.py: split_deployment_by_ug, split_deployment_by_ug_separated
-- optimal_adv_wrapper.py:1019-1050 + optimal_adv_wrapper_ray.py:907-938
+- helpers/helpers.py: split_deployment_by_ug, split_deployment_by_ug_separated
+- core/optimal_adv_wrapper.py:1019-1050 + optimal_adv_wrapper_ray.py:907-938
   (send subdeployments)
-- worker_comms_ray.py: 27 refs (split, ship, reshard on pool resize)
-- path_distribution_computer_ray.py:48-74 (actor takes subdeployment)
-- path_distribution_computer.py: subset_ugs/which_ugs branches in
+- core/worker_comms.py: 27 refs (split, ship, reshard on pool resize)
+- core/path_distribution_computer.py:48-74 (actor takes subdeployment)
+- core/path_distribution_computer.py: subset_ugs/which_ugs branches in
   generic_benefit (EVAL-time flows pass explicit ug lists — verify
   before touching; flash-crowd/diurnal evals use which_ugs)
 
@@ -75,7 +75,7 @@ worker wrapper (read whole_deployment_* only) — pairs naturally with
 Patch B arrayification.
 
 ## 2026-08-19 REMOVAL EXECUTED (Tom: 'remove absolutely every reference')
-All UG-sharding removed: helpers.py splitters + _KEYS_TO_SLICE deleted;
+All UG-sharding removed: helpers/helpers.py splitters + _KEYS_TO_SLICE deleted;
 start_workers ray.puts the FULL deployment once (one plasma entry, all
 actors share the ref); actor signature (worker_i, deployment,
 init_kwargs); add/remove-workers reshard machinery deleted (grow=spawn,

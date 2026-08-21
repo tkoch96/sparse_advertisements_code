@@ -35,7 +35,7 @@ unmodified.
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   SCULPTOR_MAX_ITER=10 SCULPTOR_N_WORKERS=32 nohup /home/ubuntu/venv312/bin/python \
-    eval_latency_failure.py --port 31415 --dpsize actual-32 \
+    evaluations/eval_latency_failure.py --port 31415 --dpsize actual-32 \
     > /tmp/cluster_runs/${ts}.log 2>&1 < /dev/null &
   echo $! > /tmp/cluster_runs/${ts}.pid
   ln -sfn ${ts}.log /tmp/cluster_runs/latest.log
@@ -213,13 +213,13 @@ sparse_advertisements_code/
 ├── RESEARCH_ROADMAP.md                ← next-steps + experiment plans
 ├── ray-cluster.yaml                   ← Ray cluster config (use as-is)
 ├── teardown.sh                        ← end-of-session script (use as-is)
-├── sparse_advertisements_v3.py        ← SCULPTOR algorithm
-├── eval_latency_failure.py            ← primary driver
-├── worker_comms_ray.py                ← Ray Worker_Manager
-├── path_distribution_computer_ray.py  ← Ray actor wrapper
-├── solve_lp_assignment.py             ← LP dispatch (with headroom helper)
-├── deployment_setup.py                ← deployment builder
-├── constants.py                       ← APNIC_VOLUME=False, etc.
+├── core/sparse_advertisements_v3.py        ← SCULPTOR algorithm
+├── evaluations/eval_latency_failure.py            ← primary driver
+├── core/worker_comms.py                ← Ray Worker_Manager
+├── core/path_distribution_computer.py  ← Ray actor wrapper
+├── core/solve_lp_assignment.py             ← LP dispatch (with headroom helper)
+├── core/deployment_setup.py                ← deployment builder
+├── helpers/constants.py                       ← APNIC_VOLUME=False, etc.
 └── tests/                             ← pytest suite
 ```
 
@@ -280,8 +280,8 @@ For reference if rebuilding from scratch:
    SSH. Doesn't see venv bin even with --login. Symlink fixes it.
 5. **`ln -sfn /home/ubuntu/venv312 /home/ubuntu/venv`** and same for
    `cache`, `data`, `figures`, `logs`, `runs`. The codebase has
-   hardcoded paths (`worker_comms.py:11-16` checks specific venv paths;
-   `path_distribution_computer_ray.py:66` opens relative `logs/...`).
+   hardcoded paths (`core/worker_comms.py:11-16` checks specific venv paths;
+   `core/path_distribution_computer.py:66` opens relative `logs/...`).
    Symlinks make these resolve regardless of CWD.
 6. **`mkdir -p` runtime directories** (figures, logs, runs, cache,
    cache/deployments) and **`touch cache/addresses_violating_sol.csv`**.
@@ -322,7 +322,7 @@ to survive wifi flakes, laptop sleep, etc. The pattern we settled on:
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   <ENV_VARS> nohup /home/ubuntu/venv312/bin/python \
-    eval_latency_failure.py --port 31415 --dpsize <dpsize> \
+    evaluations/eval_latency_failure.py --port 31415 --dpsize <dpsize> \
     > /tmp/cluster_runs/${ts}_<name>.log 2>&1 < /dev/null &
   pid=$!
   echo $pid > /tmp/cluster_runs/${ts}_<name>.pid
@@ -446,20 +446,20 @@ These are non-fatal but show up in logs and confuse new readers.
 
 ### Tracebacks from SAS top-of-file diagnostic code
 
-`sparse_advertisements_v3.py:64` (`compare_estimated_actual_per_user`) and
+`core/sparse_advertisements_v3.py:64` (`compare_estimated_actual_per_user`) and
 `:1224` (`make_plots`) raise IndexError on most runs. Old code, non-fatal,
 SCULPTOR continues. Just ignore.
 
 ### Diurnal-eval np.int64 KeyError on synthetic deployments
 
-`wrapper_eval.py:741` `metro_to_diurnal_factor` tries to look up
+`evaluations/wrapper_eval.py:741` `metro_to_diurnal_factor` tries to look up
 `POP2TIMEZONE[metro]` but for synthetic dpsizes (`decent`, `med`),
 metros are np.int64 not city strings. Doesn't fire for actual-N runs
 (real city names). Non-fatal — caught somewhere upstream.
 
 ### `tuple - tuple` TypeError in flash-crowd eval
 
-`eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` raises
+`evaluations/eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` raises
 `TypeError: unsupported operand type(s) for -: 'tuple' and 'tuple'`
 repeatedly. Eval results for flash-crowd are partially lost but other
 phases continue.

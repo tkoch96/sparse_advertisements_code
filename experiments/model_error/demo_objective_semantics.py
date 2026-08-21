@@ -10,7 +10,7 @@ checked against what the implementation actually scores.
       placed; bulk latency must not matter.
   (d) lat_plus_max_util: minimize MLU (+latency).
 
-Run from repo root, georand env; writes figures/objective_semantics.png
+Run from repo root, georand env; writes figures/dashboards/misc/objective_semantics.png
 and prints a PASS/FAIL/CAVEAT report.
 """
 import json
@@ -107,7 +107,7 @@ def demo_d(ax):
 # (b) site_failure soft score: pricing sanity
 # ---------------------------------------------------------------------------
 def demo_b(ax):
-    from solve_lp_assignment import _failure_obj_split, NO_ROUTE_LATENCY
+    from core.solve_lp_assignment import _failure_obj_split, NO_ROUTE_LATENCY
 
     class FakeSas:
         whole_deployment_ug_vols = np.ones(10)
@@ -179,8 +179,8 @@ def main():
                  fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     os.makedirs('figures', exist_ok=True)
-    fig.savefig('figures/objective_semantics.png', dpi=170)
-    print('\nwrote figures/objective_semantics.png')
+    fig.savefig('figures/dashboards/misc/objective_semantics.png', dpi=170)
+    print('\nwrote figures/dashboards/misc/objective_semantics.png')
     fails = [r for r in RESULTS if not r[1]]
     print('{} checks, {} failed'.format(len(RESULTS), len(fails)))
     return 1 if fails else 0

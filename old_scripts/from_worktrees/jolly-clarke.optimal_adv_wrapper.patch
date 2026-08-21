@@ -1,0 +1,19 @@
+diff --git a/optimal_adv_wrapper.py b/optimal_adv_wrapper.py
+index ea33f9e..dcf0305 100644
+--- a/optimal_adv_wrapper.py
++++ b/optimal_adv_wrapper.py
+@@ -705,6 +705,14 @@ class Optimal_Adv_Wrapper:
+ 			self.max_n_iter = 150 # maximum number of learning iterations
+ 		else:
+ 			self.max_n_iter = 150 # maximum number of learning iterations
++		env_override = os.environ.get('SCULPTOR_MAX_ITER')
++		if env_override is not None:
++			try:
++				self.max_n_iter = int(env_override)
++				print("SCULPTOR_MAX_ITER override active: max_n_iter={}".format(self.max_n_iter))
++			except ValueError:
++				print("WARNING: SCULPTOR_MAX_ITER={!r} is not an int; keeping default {}".format(
++					env_override, self.max_n_iter))
+ 
+ 
+ 		self.dpsize = deployment['dpsize']

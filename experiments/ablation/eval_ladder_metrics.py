@@ -5,7 +5,7 @@ that produce every metric in evaluate_over_deployment_sizes:
   stats_best_latencies, stats_latency_thresholds_{normal,fail_popp,fail_pop},
   stats_{popp,pop}_failures_latency_optimal_specific  (latency deltas for the
       users OF the failed element -- the "relevant users" metrics),
-  stats_resilience_to_congestion (flash crowds), stats_volume_multipliers,
+  stats_resilience_to_congestion (flash crowds),
   stats_diurnal.
 
 NO metric logic is reimplemented. This driver only:
@@ -197,10 +197,10 @@ def main():
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
     # Isolation (same as rescore_fork): NEVER attach to a running Ray cluster.
-    # worker_comms_ray tries address='auto' first, which on a busy sweep host
+    # worker_comms tries address='auto' first, which on a busy sweep host
     # attaches to the sweep's Ray -- and dies with it when that rung ends.
     # Must be set before the first repo import below (_ensure_ray runs at
-    # worker_comms_ray import time).
+    # worker_comms import time).
     os.environ['RAY_ADDRESS'] = 'local'
     os.environ.setdefault('RAY_TMPDIR', '/tmp/ray_ladder_eval_{}'.format(os.getpid()))
 
@@ -211,22 +211,22 @@ def main():
     # partial module during its star-import and its namespace permanently
     # misses the class (NameError in every later eval phase). Production
     # drivers (evaluate_over_deployment_sizes) import this module first too.
-    from eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_latency_failure import evaluate_all_metrics
 
     # ---- register rung names in the repo's default metric templates -------
-    import wrapper_eval
+    import evaluations.wrapper_eval as wrapper_eval
     for k, per_iter in wrapper_eval.default_metrics.items():
         for i, v in per_iter.items():
             if isinstance(v, dict):
                 for sol in soln_types:
                     v.setdefault(sol, [])
 
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity, gamma, lambduh
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from worker_comms import Worker_Manager
-    from helpers import deployment_to_prefixes
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity, gamma, lambduh
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from core.worker_comms import Worker_Manager
+    from helpers.helpers import deployment_to_prefixes
 
     # ---- build the pre-populated checkpoint pickle ------------------------
     # (skipped in merged mode: per-seed workers already computed everything;

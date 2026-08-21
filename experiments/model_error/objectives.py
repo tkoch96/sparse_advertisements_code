@@ -49,7 +49,7 @@ import sys
 
 import numpy as np
 
-from solve_lp_assignment import obj_round
+from core.solve_lp_assignment import obj_round
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -148,7 +148,7 @@ def solve_lp_frac_beyond_optimal(sas, routed_through_ingress, obj, **kwargs):
     """(a) objective = volume-weighted fraction of UGs more than X ms above
     their optimal latency (lower better). lp_kwargs: frac_beyond_x
     (default 10), best_lats (default: capacity-blind per-UG floor)."""
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
     x = float(kwargs.get('frac_beyond_x', 10.0))
     steady = solve_generic_lp_with_failure_catch(
         sas, routed_through_ingress, 'avg_latency', **_inner_kwargs(kwargs))
@@ -182,7 +182,7 @@ def solve_lp_frac_beyond_optimal(sas, routed_through_ingress, obj, **kwargs):
     # thresholds. SCULPTOR_FRACB_SCALAR=assign restores the old scalar.
     if os.environ.get('SCULPTOR_FRACB_SCALAR', 'hinge') == 'hinge':
         try:
-            from solve_lp_assignment import solve_min_hinge_excess
+            from core.solve_lp_assignment import solve_min_hinge_excess
             base = np.asarray(best, dtype=float)
             if np.ndim(x):                      # REL mode: per-UG threshold
                 thr_base, thr_ms = base + np.asarray(x, dtype=float), 0.0
@@ -208,7 +208,7 @@ def _min_mlu_from_rti(sas, rti):
     place to fix bugs). See its docstring for semantics: best-achievable
     peak utilization over the adv's per-prefix ingress options, monotone,
     opp floor <= 1/scale by anycast provisioning."""
-    from solve_lp_assignment import solve_min_mlu
+    from core.solve_lp_assignment import solve_min_mlu
     mlu, _routable_frac = solve_min_mlu(sas, rti)
     return mlu
 
@@ -234,8 +234,8 @@ def solve_lp_lat_plus_max_util(sas, routed_through_ingress, obj, **kwargs):
     Net: stranding a unit of volume costs ~(P + alpha) ms-equivalent vs
     its routed latency (~15-40) -- dominant but same order of magnitude,
     so gradients stay stable."""
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
-    from constants import NO_ROUTE_LATENCY
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from helpers.constants import NO_ROUTE_LATENCY
     steady = solve_generic_lp_with_failure_catch(
         sas, routed_through_ingress, 'avg_latency', **_inner_kwargs(kwargs))
     if not steady.get('solved'):
@@ -310,9 +310,9 @@ def solve_lp_max_util(sas, routed_through_ingress, obj, **kwargs):
       stability ruling).
     v1 (force_mlu fallback Y) was a latency-greedy concentration
     artifact, gameable and quarantined -- do not resurrect."""
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
-    from solve_lp_assignment import solve_min_mlu
-    from constants import NO_ROUTE_LATENCY
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from core.solve_lp_assignment import solve_min_mlu
+    from helpers.constants import NO_ROUTE_LATENCY
     steady = solve_generic_lp_with_failure_catch(
         sas, routed_through_ingress, 'avg_latency', **_inner_kwargs(kwargs))
     if not steady.get('solved'):
@@ -356,7 +356,7 @@ def solve_lp_popp_failure_congestion(sas, routed_through_ingress, obj,
     site_failure does); without it returns the steady solve unchanged.
     lp_kwargs: popp_failure_sample_k -- deterministic stride sample of
     scenarios for tractable training (default: exhaustive)."""
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
     adv = kwargs.get('adv')
     steady = solve_generic_lp_with_failure_catch(
         sas, routed_through_ingress, 'avg_latency', **_inner_kwargs(kwargs))
@@ -403,7 +403,7 @@ def solve_lp_frozen_failure(sas, routed_through_ingress, obj, **kwargs):
     'objective' is overridden. Tunables via env (worker-safe):
     SCULPTOR_FROZEN_GAMMA (default 1.0), SCULPTOR_FROZEN_WHICH
     (popps|pops, default popps)."""
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
     from experiments.static_failure_eval import (
         assess_static_failure_resilience)
     steady = solve_generic_lp_with_failure_catch(
@@ -443,7 +443,7 @@ def register():
     """Insert these objectives into solve_lp_assignment's registry. Call at
     driver AND worker startup (workers import their own module copies) to
     make them selectable via generic_objective='<name>'."""
-    from solve_lp_assignment import generic_lp_functions
+    from core.solve_lp_assignment import generic_lp_functions
     generic_lp_functions.update(REGISTERED_OBJECTIVES)
     return sorted(REGISTERED_OBJECTIVES)
 
@@ -562,11 +562,11 @@ def main():
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(args.seed)
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from helpers.helpers import deployment_to_prefixes
 
     dep = get_random_deployment(args.dpsize)
     dep['generic_objective'] = 'avg_latency'
@@ -607,12 +607,12 @@ def prio_lex_pair(sas, routed_through_ingress, face_tol=1e-6):
     convention, obj_round'd — IDENTICAL semantics to the lat family).
     bulk_frac: fraction of total bulk volume deliverable within TRUE
     link capacities by SOME latency-optimal priority routing."""
-    from solve_lp_assignment import (solve_generic_lp_with_failure_catch,
+    from core.solve_lp_assignment import (solve_generic_lp_with_failure_catch,
                                      get_paths_by_ug, NO_PATH_INGRESS,
                                      obj_round)
-    import gpshim as gp
+    import core.gpshim as gp
     from scipy.sparse import lil_matrix
-    from constants import NO_ROUTE_LATENCY
+    from helpers.constants import NO_ROUTE_LATENCY
     steady = solve_generic_lp_with_failure_catch(
         sas, routed_through_ingress, 'avg_latency', no_persistent=True)
     if not steady.get('solved'):
@@ -640,7 +640,7 @@ def prio_lex_pair(sas, routed_through_ingress, face_tol=1e-6):
         return L_star, None
     n_ug = sas.whole_deployment_n_ug
     n_popps = sas.n_popps + 1
-    from solve_lp_assignment import _apply_capacity_headroom
+    from core.solve_lp_assignment import _apply_capacity_headroom
     caps = np.concatenate([_apply_capacity_headroom(
         sas.link_capacities_arr.flatten(), sas), np.array([0.0])])
 

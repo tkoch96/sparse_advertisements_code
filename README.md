@@ -12,14 +12,16 @@ real-deployment scenarios.
 
 | You are... | Read |
 |---|---|
-| A new contributor | This README, then [tests/README.md](tests/README.md) |
-| Picking up mid-stream | The most recent `HANDOFF_SESSION_N.md` (currently [HANDOFF_SESSION_9.md](HANDOFF_SESSION_9.md)) — earlier handoffs are kept as history |
+| A new contributor | This README, then [unit_tests/README.md](unit_tests/README.md) |
+| Picking up mid-stream | [HANDOFF_NEXT.md](HANDOFF_NEXT.md) — the canonical current handoff; earlier ones live in [old_handoffs/](old_handoffs/) |
 | Standing up the AWS cluster | [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) |
-| Looking for the research backlog | [RESEARCH_ROADMAP.md](RESEARCH_ROADMAP.md) |
+| Looking for the research backlog | [old_handoffs/RESEARCH_ROADMAP.md](old_handoffs/RESEARCH_ROADMAP.md) — stale since 2026-05-27 |
 
-Older handoffs (`HANDOFF.md`, `HANDOFF_SESSION_6/7/8.md`, `SESSION_4/5_SUMMARY.md`,
-`OVERNIGHT_SUMMARY.md`) are point-in-time snapshots — useful for archaeology,
-not authoritative for current state.
+Older handoffs and session snapshots all live in `old_handoffs/`
+(`HANDOFF_SESSION_6/7/8/9.md`, `SESSION_4/5_SUMMARY.md`, `OVERNIGHT_SUMMARY.md`,
+`RESEARCH_ROADMAP.md`) — useful for archaeology, not authoritative for current
+state. Retired code lives in `old_scripts/`; nothing there is imported by the
+running pipeline.
 
 ---
 
@@ -44,11 +46,11 @@ first import.
 ```bash
 SCULPTOR_DEPLOYMENT_SWEEP_SIZES=3,5,10 SCULPTOR_DEPLOYMENT_SWEEP_NSIM=1 \
 SCULPTOR_MAX_ITER=50 \
-python benchmarks/run_deployment_sweep.py --port 31510
+python experiments/benchmarks/run_deployment_sweep.py --port 31510
 ```
 
 Iterates `evaluate_all_metrics` over each dpsize, hot-starts from saved
-state where possible. See `benchmarks/run_deployment_sweep.py` docstring
+state where possible. See `experiments/benchmarks/run_deployment_sweep.py` docstring
 for all env vars (per-dpsize NSIM lists, headroom, etc.).
 
 ### AWS cluster
@@ -58,7 +60,7 @@ Short version:
 
 ```bash
 ray up ray-cluster.yaml -y                    # 5-30 min
-ray exec ray-cluster.yaml '... eval_latency_failure.py ...'
+ray exec ray-cluster.yaml '... evaluations/eval_latency_failure.py ...'
 ./teardown.sh                                 # ALWAYS at end of session
 ```
 
@@ -94,64 +96,72 @@ ray exec ray-cluster.yaml '... eval_latency_failure.py ...'
 
 Key concepts:
 
-- **Sparse training (SGD)** lives in `sparse_advertisements_v3.py`
+- **Sparse training (SGD)** lives in `core/sparse_advertisements_v3.py`
   (`Sparse_Advertisement_Solver`). The main loop does gradient probes →
   step → measure → stop-check, ~80s/iter at dpsize=25 with 32 workers.
-- **Workers** are Ray actors (`path_distribution_computer_ray.py`)
-  managed by `Worker_Manager` (`worker_comms_ray.py`). Each holds a
+- **Workers** are Ray actors (`core/path_distribution_computer.py`)
+  managed by `Worker_Manager` (`core/worker_comms.py`). Each holds a
   persistent LP model (HiGHS by default) + cached deployment slice.
 - **Strategies (painter, anyopt, etc.)** run concurrently as forked
   subprocesses on the head, in `compare_different_solutions`. They
   don't use Ray workers — they solve via single LPs.
 - **Objectives** are registered in `experiments/objectives.py`. New
   objectives are added by registering an `ObjectiveSpec` + an LP function
-  in `solve_lp_assignment.py`. See "Adding a new objective" below.
+  in `core/solve_lp_assignment.py`. See "Adding a new objective" below.
 - **Eval phases** are the post-training assessments (LP latencies under
   failure scenarios, percent of volume within latency targets, etc.),
-  implemented in `wrapper_eval.py` + `eval_latency_failure.py`.
+  implemented in `evaluations/wrapper_eval.py` + `evaluations/eval_latency_failure.py`.
 
 ---
 
 ## Code map
 
-### Top-level scripts
+The tree is organised into five buckets (restructured 2026-08-21). The repo
+root now holds only docs and config — no `.py` files.
+
+| directory | what lives there |
+|---|---|
+| `core/` | The algorithm and everything it needs to run: SCULPTOR's solver, the LP layer, the Ray worker/actor layer, deployment construction, and the PAINTER / AnyOpt baselines. |
+| `evaluations/` | Post-training assessment: `evaluate_all_metrics`, the eval phases, and the per-objective sweep drivers. |
+| `helpers/` | Constants and general utilities — logging, timing instrumentation, plot styling. |
+| `unit_tests/` | Fast pytest suites. `pytest` runs these by default (`testpaths`). |
+| `integration_tests/` | Standalone end-to-end checks that run the real pipeline as a subprocess. See `integration_tests/README.md`. |
+| `experiments/` | Campaign drivers — one subdirectory per investigation, plus `benchmarks/` and `ablation_study/`. |
+| `tools/` | Operational tooling and campaign manifests. |
+| `old_scripts/` | Retired code. Nothing here is imported by the running pipeline. |
+
+Imports are absolute from the repo root (`from helpers.constants import *`).
+Modules that are also run as scripts put the repo root on `sys.path`
+themselves, so `python evaluations/eval_latency_failure.py ...` works from
+anywhere.
+
+### Module inventory
 
 | File | Role |
 |---|---|
-| `sparse_advertisements_v3.py` | SCULPTOR algorithm (SGD), `Sparse_Advertisement_Solver`, `compare_different_solutions` |
-| `painter.py` | PAINTER + unicast baselines |
-| `anyopt.py` | AnyOpt baseline |
-| `optimal_adv_wrapper.py` | Base class `Optimal_Adv_Wrapper`: deployment loading, common LP helpers, `measure_ingresses` |
-| `optimal_adv_wrapper_ray.py` | Variant used by Ray-aware code paths |
-| `path_distribution_computer.py` | Worker-side LP / latency_benefit logic (LP cache, solver shell via `gpshim`). Imported by `_ray.py` for actor body |
-| `path_distribution_computer_ray.py` | Ray actor wrapper around the above |
-| `worker_comms.py` | Thin re-export of `worker_comms_ray` (kept for backward-compat imports) |
-| `worker_comms_ray.py` | `Worker_Manager`: spawn / fanout / tear down Ray actors |
-| `solve_lp_assignment.py` | All LP objective implementations (avg_latency, per_site_cost, joint_priority, site_failure) + the persistent-LP solve loop (backend via `gpshim`) |
-| `generic_objective.py` | `Generic_Objective` — runtime dispatch from objective name → LP function |
-| `deployment_setup.py` | Build synthetic + actual deployments, link capacities, user volumes |
-| `wrapper_eval.py` | Eval phase implementations (failure resilience, flash crowd, diurnal) |
-| `eval_latency_failure.py` | `evaluate_all_metrics()` — primary driver invoked by sweeps |
-| `actual_deployment_eval_latency_failure.py` | Real-deployment variant (less commonly used) |
-| `evaluate_over_deployment_sizes.py` | Sweep + plot SCULPTOR vs others as dpsize varies (paper plots) |
-| `evaluate_over_n_prefixes.py` | Sweep + plot vs number of prefixes (paper plots) |
-| `make_actual_deployment_plots.py` | Paper plots for the real-deployment results |
-| `paper_plotting_functions.py` | Plot styling primitives |
-| `graph_utils.py` | Plotting helpers (font sizes, dimensions) |
-| `realworld_measure_wrapper.py` | Real-deployment glue (RIPE Atlas, advertisement caching) |
-| `helpers.py` | Generic utilities (logging, mem snapshots, deployment splitting, etc.) |
-| `constants.py` | NO_ROUTE_LATENCY, NON_SIMULATED_LINK_CAPACITY, dpsize→n_pop mapping |
-| `testing_feature.py` | Variant of `evaluate_over_deployment_sizes.py` with a feature toggle |
-| `testing_generic_objective.py`, `testing_priorities.py`, `testing_site_costs.py` | Legacy per-objective drivers, mostly superseded by `experiments/run_objective.py` |
-| `count_solutions.py` | Count IPs / /24s / ASes covered by an emulation |
-| `get_smaller_anycast_lats.py` | Sub-sample the anycast latency CSV for faster local testing |
-| `get_apnic_pop.py` | APNIC PoP / latency data prep |
-| `weathermap_investigation.py` | OVH cloud motivation analysis |
-| `eval_modeling_assumptions.py` | (Incomplete) modeling-assumption robustness tests |
-| `gradient_descent_exploration_plot.py` | One-off plot of grad-descent trajectory |
-| `just_prior.py`, `specific_deployment.py`, `evals.py` | Older legacy drivers; superseded |
-| `test_polyphase.py` | Legacy objective method, kept for reference |
-| `killitall.py` | Kill all processes on a given port (debugging) |
+| `core/sparse_advertisements_v3.py` | SCULPTOR algorithm (SGD), `Sparse_Advertisement_Solver`, `compare_different_solutions` |
+| `core/painter.py` | PAINTER + unicast baselines |
+| `core/anyopt.py` | AnyOpt baseline |
+| `core/optimal_adv_wrapper.py` | Base class `Optimal_Adv_Wrapper`: deployment loading, common LP helpers, `measure_ingresses` |
+| `core/path_distribution_computer.py` | Worker-side LP / latency_benefit logic (LP cache, solver shell via `gpshim`). Imported by `_ray.py` for actor body |
+| `core/path_distribution_computer.py` | Ray actor wrapper around the above |
+| `core/worker_comms.py` | Thin re-export of worker_comms (kept for backward-compat imports) |
+| `core/worker_comms.py` | `Worker_Manager`: spawn / fanout / tear down Ray actors |
+| `core/solve_lp_assignment.py` | All LP objective implementations (avg_latency, per_site_cost, joint_priority, site_failure) + the persistent-LP solve loop (backend via `gpshim`) |
+| `core/generic_objective.py` | `Generic_Objective` — runtime dispatch from objective name → LP function |
+| `core/deployment_setup.py` | Build synthetic + actual deployments, link capacities, user volumes |
+| `evaluations/wrapper_eval.py` | Eval phase implementations (failure resilience, flash crowd, diurnal) |
+| `evaluations/eval_latency_failure.py` | `evaluate_all_metrics()` — primary driver invoked by sweeps |
+| `evaluations/actual_deployment_eval_latency_failure.py` | Real-deployment variant (less commonly used) |
+| `evaluations/evaluate_over_deployment_sizes.py` | Sweep + plot SCULPTOR vs others as dpsize varies (paper plots) |
+| `helpers/paper_plotting_functions.py` | Plot styling primitives |
+| `core/realworld_measure_wrapper.py` | Real-deployment glue (RIPE Atlas, advertisement caching) |
+| `helpers/helpers.py` | Generic utilities (logging, mem snapshots, deployment splitting, etc.) |
+| `helpers/constants.py` | NO_ROUTE_LATENCY, NON_SIMULATED_LINK_CAPACITY, dpsize→n_pop mapping |
+| `evaluations/testing_generic_objective.py`, `evaluations/testing_priorities.py`, `evaluations/testing_site_costs.py` | Legacy per-objective drivers, mostly superseded by `experiments/run_objective.py` |
+| `helpers/get_smaller_anycast_lats.py` | Sub-sample the anycast latency CSV for faster local testing |
+| `evaluations/evals.py` | Legacy eval driver; superseded (not imported by anything) |
+| `core/test_polyphase.py` | **Not a test despite the name** — star-imported by `core/path_distribution_computer.py:31`, so it is a hard runtime dependency of the solver |
 
 ### `experiments/`
 
@@ -165,19 +175,19 @@ Newer per-objective + per-experiment drivers. Each script has its own docstring.
 | `experiments/static_failure_eval.py` | BGP-fallback failure eval phase shared by site_failure |
 | `experiments/painter_hypothesis_sweep.py` | 2D sweep of (scale_factor, vol_spread) testing the painter-degradation hypothesis |
 
-### `benchmarks/`
+### `experiments/benchmarks/`
 
 Sweep + perf-investigation harnesses with structured output.
 
 | File | Role |
 |---|---|
-| `benchmarks/run_deployment_sweep.py` | Cluster-friendly sweep over dpsizes with per-size NSIM, hot-start, env-var config |
-| `benchmarks/eval_phase_baseline.py` | Per-phase timing + crash diagnostics for `evaluate_all_metrics` |
+| `experiments/benchmarks/run_deployment_sweep.py` | Cluster-friendly sweep over dpsizes with per-size NSIM, hot-start, env-var config |
+| `experiments/benchmarks/eval_phase_baseline.py` | Per-phase timing + crash diagnostics for `evaluate_all_metrics` |
 
-### `tests/`
+### `unit_tests/`
 
 12 pytest files covering LP correctness, worker behaviour, convergence, perf
-sweep. See [tests/README.md](tests/README.md) for fixtures + markers.
+sweep. See [unit_tests/README.md](unit_tests/README.md) for fixtures + markers.
 
 ### Directories
 
@@ -258,7 +268,7 @@ in `os.environ` from a launcher.
 | `SCULPTOR_CAPACITY_HEADROOM` | 0.0 | Multiplier `cap × (1+h)` applied during training only (relaxes the LP cap constraint to give SGD slack); restored to true cap for eval |
 | `SCULPTOR_DISABLE_PARALLEL_STRATEGIES` | unset | Run painter / anyopt / etc. serially after sparse instead of concurrently in subprocesses |
 | `SCULPTOR_DEPLOYMENT_SEED` | unset | Pin the deployment RNG for reproducible smoke tests |
-| `SCULPTOR_DEPLOYMENT_SWEEP_SIZES` | `3,5,10,15,20,25,<n_vultr>` | Comma-separated dpsize list for `benchmarks/run_deployment_sweep.py` |
+| `SCULPTOR_DEPLOYMENT_SWEEP_SIZES` | `3,5,10,15,20,25,<n_vultr>` | Comma-separated dpsize list for `experiments/benchmarks/run_deployment_sweep.py` |
 | `SCULPTOR_DEPLOYMENT_SWEEP_NSIM` | `1` | Single int OR comma list parallel to SIZES (per-dpsize random_iter count) |
 | `SCULPTOR_DEPLOYMENT_SWEEP_TAG` | `dep_sweep` | Suffix on per-dpsize eval pickles |
 | `SCULPTOR_RUN_TAG` | unset | Tag for the per-dpsize eval pickle within `evaluate_all_metrics` |
@@ -303,7 +313,7 @@ register(ObjectiveSpec(
     gamma=0, using_resilience_benefit=True,
 ))
 
-# 2. In solve_lp_assignment.py: add a function
+# 2. In core/solve_lp_assignment.py: add a function
 def solve_lp_assignment_my_new_objective(sas, routed_through_ingress, obj, **kwargs):
     """Return dict with keys:
         objective: float (final LP value)
@@ -326,14 +336,14 @@ generic_lp_functions['my_new_objective'] = solve_lp_assignment_my_new_objective
 ### A new strategy
 
 Add a `solve_<name>` method to `Sparse_Advertisement_Wrapper` (in
-`sparse_advertisements_v3.py`) that populates `self.solutions[name]` with
+`core/sparse_advertisements_v3.py`) that populates `self.solutions[name]` with
 the same dict shape as the existing strategies (see `solve_painter` for
 the simplest reference). Add the name to `solution_types` and, if it
 should run concurrently with sparse, to `_PARALLEL_STRATEGY_NAMES`.
 
 ### A new eval phase
 
-Add a function to `wrapper_eval.py` that takes `(sas, metrics, …)` and
+Add a function to `evaluations/wrapper_eval.py` that takes `(sas, metrics, …)` and
 populates `metrics[<phase_name>][random_iter][solution_type]`. Add the
 phase name to the relevant `ObjectiveSpec.eval_phases` tuple. Implement
 the same shape as the existing phases (e.g. `assess_failure_resilience`).
@@ -347,12 +357,12 @@ the same shape as the existing phases (e.g. `assess_failure_resilience`).
   Throttling shows up as "Overage for too long" warnings and silently
   slows things down. Avoid running local Gurobi while a cluster sweep
   is active.
-- **`actual_deployment_eval_latency_failure.py`** is the real-deployment
+- **`evaluations/actual_deployment_eval_latency_failure.py`** is the real-deployment
   path (RIPE Atlas measurements, actual BGP advertisements). It's the
-  same shape as `eval_latency_failure.py` but with real-world measurement
+  same shape as `evaluations/eval_latency_failure.py` but with real-world measurement
   glue. Most active development uses the simulated path.
 - **dpsize naming.** Synthetic deployments use names like `small` /
-  `decent` / `med` (defined in `constants.py`). Actual deployments use
+  `decent` / `med` (defined in `helpers/constants.py`). Actual deployments use
   `actual-N` where N is the number of PoPs (e.g. `actual-25` = use real
   latencies for 25 randomly-chosen Vultr PoPs).
 - **State pickle growth.** `runs/<ts>-*/state-N.pkl` checkpoints grow

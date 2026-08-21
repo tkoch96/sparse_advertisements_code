@@ -59,8 +59,8 @@ def _aggregate_paper_metrics(metrics, soln_types):
                            `100 - 100*np.mean(...)` formula make_paper_plots
                            applies to stats_latency_thresholds_fail_pop.
     """
-    from helpers import get_cdf_xy
-    from constants import NO_ROUTE_LATENCY
+    from helpers.helpers import get_cdf_xy
+    from helpers.constants import NO_ROUTE_LATENCY
 
     key = 'pop_failures_latency_optimal_specific'
     sims = metrics.get(key, {})
@@ -202,7 +202,7 @@ def run_one_config(args):
     os.environ['SCULPTOR_RUN_TAG'] = args.tag
 
     # Late import so env vars are honoured by initializers
-    from eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_latency_failure import evaluate_all_metrics
 
     soln_types = args.solns.split(',')
 

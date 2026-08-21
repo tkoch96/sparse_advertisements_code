@@ -1,6 +1,6 @@
 # fleet — SCALE-500 multi-VM machinery (2026-08-17, P0/P1 skeleton)
 
-Share-nothing fleet per ablation_study/SCALE_500_PLAN.md: each VM runs
+Share-nothing fleet per experiments/ablation_study/SCALE_500_PLAN.md: each VM runs
 the standard single-node queue on a manifest SHARD; this package only
 provisions, shards, monitors, collects, tears down.
 

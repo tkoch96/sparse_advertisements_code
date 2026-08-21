@@ -107,7 +107,7 @@ def main():
     args = ap.parse_args()
     pops = args.pops.split(',')
 
-    import deployment_setup as ds
+    import core.deployment_setup as ds
     real_cache = ds.CACHE_DIR
     sb = _sandbox(real_cache)
     ds.CACHE_DIR = sb

@@ -78,7 +78,7 @@ register(ObjectiveSpec(
 	description='Minimize traffic-weighted average user latency. Baseline objective.',
 	eval_phases=(
 		'strategy_compare', 'pct_volume_within_latency',
-		'failure_resilience', 'volume_multipliers',
+		'failure_resilience',
 		'diurnal', 'flash_crowd',
 	),
 ))

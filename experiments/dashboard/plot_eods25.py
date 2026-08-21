@@ -6,10 +6,10 @@ by experiments.eods.dash_harvest via remote_harvest + pulled by
 refresh.py — the raw per-cell pickles never leave the head).
 
 Renders:
-  figures/eods25_status.png   cell board (done/running/pending, wall,
+  figures/dashboards/eods25/eods25_status.png   cell board (done/running/pending, wall,
                               iter progress, driver RSS + sys-avail —
                               RAM is THE failure mode at dpsize 25)
-  figures/eods25_results.png  per-strategy classical metrics across
+  figures/dashboards/eods25/eods25_results.png  per-strategy classical metrics across
                               completed sims (only once >=1 cell done)
 """
 import glob
@@ -22,6 +22,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # dashboard figures -> figures/dashboards/<dashboard>/
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -129,7 +130,7 @@ def status_fig():
     if mem:
         axm.legend(fontsize=7, ncol=4)
     f.tight_layout()
-    out = os.path.join(FIG_DIR, PREFIX + '_status.png')
+    out = fig_path(PREFIX + '_status.png')
     f.savefig(out, dpi=110); plt.close(f)
     print('[plot_eods25] wrote', out)
 
@@ -159,7 +160,7 @@ def results_fig():
         ax.text(.5, .5, 'classical eval results appear here when the '
                 'cell completes its eval battery', ha='center', va='center')
         ax.axis('off')
-        f.savefig(os.path.join(FIG_DIR, PREFIX + '_results.png'), dpi=110)
+        f.savefig(fig_path(PREFIX + '_results.png'), dpi=110)
         plt.close(f)
         return
     panels = [
@@ -189,7 +190,7 @@ def results_fig():
     f.suptitle('EODS {} — classical eval, sims completed so far '
                '(dots = per-sim)'.format(LABEL))
     f.tight_layout()
-    out = os.path.join(FIG_DIR, PREFIX + '_results.png')
+    out = fig_path(PREFIX + '_results.png')
     f.savefig(out, dpi=110); plt.close(f)
     print('[plot_eods25] wrote', out)
 

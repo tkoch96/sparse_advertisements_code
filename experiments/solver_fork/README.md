@@ -1,8 +1,8 @@
 # solver_fork — backend equivalence harness (shim now MAINLINE)
 
 As of 2026-08-17 the gurobipy-subset facade lives at the repo root
-(`gpshim.py`) and the core LP callers (`solve_lp_assignment.py`,
-`path_distribution_computer.py`, `sparse_advertisements_v3.py`) import
+(`core/gpshim.py`) and the core LP callers (`core/solve_lp_assignment.py`,
+`core/path_distribution_computer.py`, `core/sparse_advertisements_v3.py`) import
 it directly — there are no forked module copies and no sys.modules
 aliases anymore. Backend selection is one env var, everywhere:
 

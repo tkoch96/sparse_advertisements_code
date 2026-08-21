@@ -4,7 +4,7 @@ what i want to measure before the absolute full panel').
 
 Pulls store + harvested convergence figs from the sweep VM
 (SCULPTOR_SMOKE_HOST, default 32.197.41.137, ~/smoke_repo), renders
-figures/v5scout_bars.png: one panel per objective family, three bars
+figures/dashboards/v5scout/v5scout_bars.png: one panel per objective family, three bars
 per seed (dObj vs same-seed opp, lower better).
 """
 import glob
@@ -16,6 +16,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -24,7 +25,7 @@ KEY = os.path.expanduser('~/.ssh/ray-autoscaler_us-east-1.pem')
 STORE = os.path.join(REPO, 'cache', 'ablation', 'grid_v5scout')
 FIGS_DIR = os.path.join(REPO, 'cache', 'ablation',
                         'grid_v5scout_artifacts', 'figs')
-OUT = os.path.join(REPO, 'figures', 'v5scout_bars.png')
+OUT = fig_path('v5scout_bars.png')
 LOGS_DIR = os.path.join(REPO, 'cache', 'ablation', 'grid_v5scout_logs')
 FAMS = [('lat', 'latency + gamma*resilience'),
         ('fracb', 'frac_beyond_optimal (hinge)'),
@@ -130,7 +131,7 @@ def main():
         len(cells)), fontsize=11)
     f3.tight_layout(rect=[0, 0, 1, 0.92])
     if cells:
-        f3.savefig(os.path.join(REPO, 'figures', 'v5scout_status.png'),
+        f3.savefig(fig_path('v5scout_status.png'),
                    dpi=150)
         print('wrote v5scout_status.png ({} cells)'.format(len(cells)))
     plt.close(f3)

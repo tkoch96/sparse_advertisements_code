@@ -4,7 +4,7 @@ formats, iteration, convergence — a dash to inspect the run').
 
 Inputs: cache/eods/v1_dash/{sys_samples.csv, timing_lines.txt,
 mem_iter.txt} (head-side dash_harvest, pulled by refresh.py).
-Output: figures/eods25_run.png — one multi-panel board.
+Output: figures/dashboards/eods25/eods25_run.png — one multi-panel board.
 """
 import os
 import re
@@ -13,6 +13,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -23,7 +24,7 @@ DASH = os.path.join(REPO, os.environ.get(
 PREFIX = os.environ.get('EODS_FIG_PREFIX', 'eods25')
 TITLE = os.environ.get(
     'EODS_RUN_TITLE', 'EODS-25 run inspection — 96w, incremental LP, MC=1')
-OUT = os.path.join(REPO, 'figures', PREFIX + '_run.png')
+OUT = fig_path(PREFIX + '_run.png')
 
 SOLVE_RE = re.compile(r'([0-9.]+)ms per iter')
 GRAD_RE = re.compile(r'(latency|resilience) benefit grad took ([0-9.]+)s')

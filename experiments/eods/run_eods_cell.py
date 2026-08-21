@@ -66,13 +66,56 @@ def main():
     _hs = os.environ.get('SCULPTOR_EODS_HOTSTART_DIR')
     if _hs:
         print('[eods] HOTSTART from run dir: {}'.format(_hs), flush=True)
+        # Fail loud BEFORE evaluate_all_metrics: its strategy loop wraps
+        # everything in a bare except that prints and continues, so a
+        # broken hot-start silently degrades to a 6-second no-op that
+        # exits 0 -- which makes the queue treat it as success and rmtree
+        # the run dir, destroying the very checkpoints we're resuming
+        # from (lost 11h of actual-32 training this way, 2026-08-21).
+        from helpers.constants import RUN_DIR
+        _hs_dir = os.path.join(RUN_DIR, _hs)
+        _base = os.path.join(_hs_dir, 'state-0.pkl')
+        try:
+            if 'deployment' not in pickle.load(open(_base, 'rb')):
+                raise KeyError("no 'deployment' key in {}".format(_base))
+        except Exception as e:
+            sys.exit('[eods] FATAL hotstart: {} unusable ({}: {}). '
+                     'state-0.pkl holds the deployment and is required; '
+                     'never prune it.'.format(_base, type(e).__name__, e))
+        import re as _re
+        _states = {}
+        for _f in os.listdir(_hs_dir):
+            _m = _re.match(r'state-(\d+)\.pkl$', _f)
+            if _m and _f != 'state-0.pkl':
+                _states[int(_m.group(1))] = _f
+        if not _states:
+            sys.exit('[eods] FATAL hotstart: {} has no state-N.pkl beyond '
+                     'state-0 -- nothing to resume from.'.format(_hs_dir))
+        # load_optimization_state() resumes from the HIGHEST-numbered
+        # state, so that is the one that must actually be readable --
+        # counting filenames is not enough. A disk that fills mid-
+        # pickle.dump leaves it truncated, and UnpicklingError is not a
+        # ValueError, so _solve_setup's cold-start handler does not catch
+        # it: it lands in the same bare except -> rc=0 -> queue rmtree.
+        _newest = _states[max(_states)]
+        _newest_fn = os.path.join(_hs_dir, _newest)
+        try:
+            pickle.load(open(_newest_fn, 'rb'))
+        except Exception as e:
+            sys.exit('[eods] FATAL hotstart: newest checkpoint {} is '
+                     'unreadable ({}: {}) -- it is the one the solver '
+                     'resumes from. Move/delete it and retry; the run '
+                     'then resumes from the next-newest.'.format(
+                         _newest_fn, type(e).__name__, e))
+        print('[eods] hotstart base OK, {} resumable checkpoint(s), '
+              'newest={}'.format(len(_states), _newest), flush=True)
         kwargs['save_run_dir'] = _hs
 
     if mode == 'prefixes':
         # the queue's swept N value = prefix count for this cell
         prefix_num = int(os.environ['SCULPTOR_ABLATION_PROBE_N'])
         dpsize_str = 'actual-{}'.format(n_sites)
-        from constants import CACHE_DIR
+        from helpers.constants import CACHE_DIR
         base = pickle.load(open(os.path.join(
             CACHE_DIR,
             'popp_failure_latency_comparison_actual-{}.pkl'.format(
@@ -85,13 +128,13 @@ def main():
         unit = 'sim={}'.format(args.seed)
 
     t0 = time.time()
-    from eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_latency_failure import evaluate_all_metrics
     # activate AFTER all module imports: activating earlier reorders the
     # star-import circularity and eval_latency_failure loses
     # get_random_deployment (NameError, found on the instrumented
     # pre-flight relaunch 2026-08-20)
     if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':
-        import timelog
+        import helpers.timelog as timelog
         timelog.activate()
     metrics = evaluate_all_metrics(dpsize_str, args.port, **kwargs)
 

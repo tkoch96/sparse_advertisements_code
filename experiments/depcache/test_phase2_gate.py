@@ -16,7 +16,7 @@ if _REPO_ROOT not in sys.path:
 
 
 def main():
-    from helpers import parse_lat
+    from helpers.helpers import parse_lat
     from experiments.depcache.shard_loader import (
         build_ug_perfs, build_ug_perfs_min)
     ap = argparse.ArgumentParser()

@@ -5,7 +5,7 @@ rung, with painter and one-per-peering reference bands.
 Inputs: cache/ablation/mesh_georand (rescored solver JSONs),
 cache/model_error/rerank/mesh_N*/seed_*.json (LP-scored pfail),
 cache/model_error/opp_ref_georand.json.
-Output: figures/mesh_georand_overN.png (+ .pdf)
+Output: figures/dashboards/misc/mesh_georand_overN.png (+ .pdf)
 """
 import glob
 import json

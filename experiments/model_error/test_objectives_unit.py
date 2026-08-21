@@ -73,7 +73,7 @@ def patched_lp(monkeypatch):
         assert obj == 'avg_latency', 'objectives must compose the steady LP'
         return state['queue'].pop(0) if state['queue'] else steady_ret([1, 2, 3, 4])
 
-    import solve_lp_assignment
+    import core.solve_lp_assignment as solve_lp_assignment
     monkeypatch.setattr(
         solve_lp_assignment, 'solve_generic_lp_with_failure_catch', fake_lp)
     return state
@@ -249,7 +249,7 @@ def test_popp_failure_sample_k_stride(patched_lp):
 
 
 def test_register_inserts_into_registry():
-    import solve_lp_assignment
+    import core.solve_lp_assignment as solve_lp_assignment
     names = O.register()
     assert names == sorted(O.REGISTERED_OBJECTIVES)
     for name, fn in O.REGISTERED_OBJECTIVES.items():

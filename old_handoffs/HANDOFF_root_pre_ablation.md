@@ -52,11 +52,11 @@ Workers (computing latency benefit and LP solutions) come in two flavors:
 - **ZMQ subprocess workers (original):** `worker_comms.py` (`Worker_Manager`) +
   `path_distribution_computer.py` (`Path_Distribution_Computer`). The driver
   spawns N subprocesses and talks to them over `tcp://localhost:<port>`.
-- **Ray actor workers (this session's addition):** `worker_comms_ray.py` +
-  `path_distribution_computer_ray.py`. Same public API; Ray underneath.
+- **Ray actor workers (this session's addition):** `worker_comms.py` +
+  `path_distribution_computer.py`. Same public API; Ray underneath.
 
 A tiny launcher `run_ray.py` aliases `sys.modules['worker_comms']` to
-`worker_comms_ray` and `runpy`s the requested driver, so existing scripts
+worker_comms and `runpy`s the requested driver, so existing scripts
 work under Ray without edits:
 
 ```
@@ -98,14 +98,14 @@ Markers in `pytest.ini`: `unit`, `integration`, `gurobi`, `slow`, `benchmark`.
 
 ## Things this session changed and why
 
-1. **`worker_comms_ray.py`, `path_distribution_computer_ray.py`** — Ray-actor
+1. **`worker_comms.py`, `path_distribution_computer.py`** — Ray-actor
    replacements for the ZMQ workers. Public API matches the originals so
    `sparse_advertisements_v3.py` doesn't need edits. The actor wraps a
    `_LocalPathDistributionComputer` that tests can instantiate directly
    without Ray.
 2. **`run_ray.py`** — module-aliasing launcher. Picks the Ray backend without
    touching driver scripts.
-3. **`_ActorSocketShim` in `worker_comms_ray.py`** — exposes `.send(msg)` /
+3. **`_ActorSocketShim` in `worker_comms.py`** — exposes `.send(msg)` /
    `.recv()` on top of a Ray actor handle, since
    `sparse_advertisements_v3.py` calls those directly in `stop_tracker` and
    `set_iter` loops.
@@ -232,7 +232,7 @@ ordered by what each can deliver:
    The 140s unattributed needs explanation -- likely modeled_objective
    evaluations across many advertisements during gradient calc.
 
-4. **Worker saturation check.** Add a counter in `worker_comms_ray.py:_fanout`
+4. **Worker saturation check.** Add a counter in `worker_comms.py:_fanout`
    for time-waiting on Ray refs vs scheduling. If utilization is <60% on
    a big-core machine, the bottleneck is task distribution, not compute.
 
@@ -324,9 +324,9 @@ sparse_advertisements_code/
 ├── eval_latency_failure.py          <- primary driver
 ├── optimal_adv_wrapper.py           <- parent class for workers
 ├── path_distribution_computer.py    <- ZMQ worker (original)
-├── path_distribution_computer_ray.py <- Ray actor wrapper (this session)
+├── path_distribution_computer.py <- Ray actor wrapper (this session)
 ├── worker_comms.py                  <- ZMQ Worker_Manager (original)
-├── worker_comms_ray.py              <- Ray Worker_Manager (this session)
+├── worker_comms.py              <- Ray Worker_Manager (this session)
 ├── solve_lp_assignment.py           <- LP dispatch + scipy paths
 ├── deployment_setup.py              <- random deployment builder
 ├── generic_objective.py             <- objective-fn wrapper

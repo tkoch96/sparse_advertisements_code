@@ -65,13 +65,13 @@ def run_child(seed, port, dpsize, iters=0):
         os.environ['SCULPTOR_MIN_ITER'] = str(iters)
 
     import numpy as np
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity, gamma as EVAL_GAMMA
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import (
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity, gamma as EVAL_GAMMA
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import (
         Sparse_Advertisement_Eval, Sparse_Advertisement_Solver)
-    from worker_comms import Worker_Manager
-    from helpers import deployment_to_prefixes
+    from core.worker_comms import Worker_Manager
+    from helpers.helpers import deployment_to_prefixes
 
     use_res = os.environ.get('SCULPTOR_USE_RESILIENCE', '1') == '1'
     # default matches the ladder/N-sweep studies (gamma=0.1), not
@@ -160,7 +160,7 @@ def run_child(seed, port, dpsize, iters=0):
                 'lb_std_believed': lb_std,
             })
 
-        from helpers import threshold_a
+        from helpers.helpers import threshold_a
         drift = None
         if iters > 0 and solver.metrics.get('advertisements'):
             first = threshold_a(np.asarray(solver.metrics['advertisements'][0]))

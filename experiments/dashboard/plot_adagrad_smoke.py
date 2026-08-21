@@ -3,10 +3,10 @@
 Pulls logs + results from the profiler VM (env SCULPTOR_SMOKE_HOST,
 default 32.197.41.137, ~/smoke_repo + ~/adagrad_smoke_ws), then renders:
 
-  figures/adagrad_smoke_grads.png   per-arm |g| and alpha_t vs gradient
+  figures/dashboards/adagrad_smoke/adagrad_smoke_grads.png   per-arm |g| and alpha_t vs gradient
                                     call (log y) — the transient and
                                     whether warmup-skip un-freezes alpha
-  figures/adagrad_smoke_obj.png     final objective - same-seed opp per
+  figures/dashboards/adagrad_smoke/adagrad_smoke_obj.png     final objective - same-seed opp per
                                     arm x seed + iters-at-exit
 
 Arms: smk_L3_stock / smk_L5_stock / smk_L5_wskip (WARMUP_SKIP=5).
@@ -21,6 +21,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -109,7 +110,7 @@ def main():
                  '201-203)', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
     if drawn:
-        fig.savefig(os.path.join(FIGS, 'adagrad_smoke_grads.png'), dpi=150)
+        fig.savefig(fig_path('adagrad_smoke_grads.png'), dpi=150)
         print('wrote adagrad_smoke_grads.png')
     plt.close(fig)
 
@@ -153,7 +154,7 @@ def main():
     a2.grid(alpha=.25, axis='y')
     fig.tight_layout()
     if got:
-        fig.savefig(os.path.join(FIGS, 'adagrad_smoke_obj.png'), dpi=150)
+        fig.savefig(fig_path('adagrad_smoke_obj.png'), dpi=150)
         print('wrote adagrad_smoke_obj.png')
     plt.close(fig)
     if not (drawn or got):

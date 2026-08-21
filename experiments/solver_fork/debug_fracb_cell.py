@@ -25,15 +25,14 @@ def main():
     os.environ.setdefault('RAY_ADDRESS', 'local')
     os.environ.setdefault('RAY_TMPDIR', '/tmp/ray_dbg_fracb')
 
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from helpers.helpers import deployment_to_prefixes
     from experiments.model_error.objectives import (
         register, solve_lp_frac_beyond_optimal)
-    import gpshim
-
+    import core.gpshim as gpshim
     register()
     dep = get_random_deployment('small')
     dep['generic_objective'] = 'avg_latency'

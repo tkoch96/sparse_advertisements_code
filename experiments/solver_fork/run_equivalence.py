@@ -31,7 +31,7 @@ def install_aliases():
     """No-op since the 2026-08-17 mainline merge: core modules import
     gpshim directly, so backend selection is purely the
     SCULPTOR_LP_BACKEND env var. Kept for callers' backward compat."""
-    import gpshim
+    import core.gpshim as gpshim
     want = os.environ.get('SCULPTOR_LP_BACKEND', 'gurobi')
     assert gpshim.BACKEND == want, (gpshim.BACKEND, want)
 
@@ -51,7 +51,7 @@ def one_cell(args):
     os.environ['SCULPTOR_LP_BACKEND'] = args.backend
     install_aliases()
     from experiments.ablation.run_fork_ladder import run_one
-    import gpshim
+    import core.gpshim as gpshim
     print('[solver-fork] cell start backend={} seed={} (gpshim={})'.format(
         args.backend, args.seed, gpshim.BACKEND), flush=True)
     out_fn = run_one(args.seed, 'full', args.port, args.max_iter,

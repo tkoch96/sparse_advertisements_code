@@ -23,9 +23,9 @@ import time
 
 import numpy as np
 
-from helpers import (MIN_LATENCY, MAX_LATENCY, get_intersection,
+from helpers.helpers import (MIN_LATENCY, MAX_LATENCY, get_intersection,
                      get_difference, parse_lat)
-from constants import POP_TO_LOC
+from helpers.constants import POP_TO_LOC
 
 STAGE_T = {}
 
@@ -43,7 +43,7 @@ def _seg_starts(sorted_keys):
 def load_actual_perfs_arrays(considering_pops, **kwargs):
     """Array-native equivalent of deployment_setup.load_actual_perfs
     (shard-backed path). Returns (anycast_latencies, ug_perfs)."""
-    import deployment_setup as ds
+    import core.deployment_setup as ds
     STAGE_T.clear()
     t0 = time.time()
     print("Loading performances, only considering pops: {}".format(

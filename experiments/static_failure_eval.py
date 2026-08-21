@@ -19,8 +19,8 @@ This module converts via `sas.popp_to_ind` where indices are needed.
 """
 import numpy as np
 
-from constants import NO_ROUTE_LATENCY
-from helpers import threshold_a
+from helpers.constants import NO_ROUTE_LATENCY
+from helpers.helpers import threshold_a
 
 
 def _pin_user_to_prefix(sas, adv):

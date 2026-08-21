@@ -13,7 +13,7 @@ Two figures + a quantile table from trusted rescore JSONs:
      percentage of the painter-OPP per-scenario gap closed.
 
     python -m experiments.ablation.cdf_fork --in-dir cache/ablation/fork_5x200 \
-        --gamma 0.1 [--out figures/fork_5x200_cdf.pdf]
+        --gamma 0.1 [--out figures/dashboards/misc/fork_5x200_cdf.pdf]
 """
 import argparse
 import glob

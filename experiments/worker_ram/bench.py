@@ -18,11 +18,11 @@ os.environ.setdefault('SCULPTOR_DEPLOYMENT_SEED', '1')
 os.environ.setdefault('SCULPTOR_LP_BACKEND', 'highs')
 os.environ.setdefault('SCULPTOR_MC_NUM', '1')
 
-import deployment_setup
-from path_distribution_computer_ray import _LocalPathDistributionComputer
-from path_distribution_computer import get_a_cache_rep
-from constants import ADVERTISEMENT_THRESHOLD
-from helpers import threshold_a
+import core.deployment_setup as deployment_setup
+from core.path_distribution_computer import _LocalPathDistributionComputer
+from core.path_distribution_computer import get_a_cache_rep
+from helpers.constants import ADVERTISEMENT_THRESHOLD
+from helpers.helpers import threshold_a
 
 
 def deep_sz(o, seen=None):

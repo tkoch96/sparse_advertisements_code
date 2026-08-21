@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # dashboard figures -> figures/dashboards/<dashboard>/
 
 REPO = os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__))))
@@ -264,8 +265,7 @@ def main():
                 a3.set_title('BULK (lexicographic secondary; higher '
                              'better)', fontsize=10)
                 f2.tight_layout()
-                f2.savefig(os.path.join(
-                    FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
+                f2.savefig(fig_path('{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
                 plt.close(f2)
                 continue
         if obj == 'mlu':
@@ -300,15 +300,14 @@ def main():
                 a3.grid(alpha=.25)
                 a2.legend(fontsize=8, frameon=False)
                 f2.tight_layout()
-                f2.savefig(os.path.join(
-                    FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
+                f2.savefig(fig_path('{}_{}.png'.format(OUT_PREFIX, obj)), dpi=150)
             plt.close(f2)
             continue
         f2, a2 = plt.subplots(figsize=(7.5, 4.6))
         if panel(a2, obj, title):
             a2.legend(fontsize=8, frameon=False)
             f2.tight_layout()
-            f2.savefig(os.path.join(FIGS, '{}_{}.png'.format(OUT_PREFIX, obj)),
+            f2.savefig(fig_path('{}_{}.png'.format(OUT_PREFIX, obj)),
                        dpi=150)
         plt.close(f2)
     axes[0].legend(fontsize=8, frameon=False)
@@ -318,8 +317,7 @@ def main():
         '(0 = one-per-peering; lower = better)'), fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
     if any_drawn:
-        fig.savefig(os.path.join(
-            FIGS, '{}_{}panel.png'.format(OUT_PREFIX, len(OBJS))), dpi=150)
+        fig.savefig(fig_path('{}_{}panel.png'.format(OUT_PREFIX, len(OBJS))), dpi=150)
         print('wrote hardobj_v4 figures')
     else:
         print('no hardobj_v3 data yet')

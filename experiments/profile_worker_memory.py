@@ -80,12 +80,12 @@ def main():
 
     # ---------------- phase 1: in-process worker census ----------------
     os.environ.setdefault('MPLBACKEND', 'Agg')
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes
-    from path_distribution_computer_ray import _LocalPathDistributionComputer
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from helpers.helpers import deployment_to_prefixes
+    from core.path_distribution_computer import _LocalPathDistributionComputer
 
     dep = get_random_deployment(args.dpsize)
     sas = Sparse_Advertisement_Eval(

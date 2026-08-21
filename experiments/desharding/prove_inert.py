@@ -51,8 +51,8 @@ if os.environ.get('PYTHONHASHSEED') != '0':
 def main():
     random.seed(31415)
     np.random.seed(31415)
-    from deployment_setup import get_random_deployment
-    from path_distribution_computer_ray import _LocalPathDistributionComputer
+    from core.deployment_setup import get_random_deployment
+    from core.path_distribution_computer import _LocalPathDistributionComputer
 
     dep = get_random_deployment('really_friggin_small', port=31600)
     w = _LocalPathDistributionComputer(

@@ -19,6 +19,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # dashboard figures -> figures/dashboards/<dashboard>/
 
 _STAT = st.mean if os.environ.get('POLICY_PLOT_STAT', 'median') == 'mean' \
     else st.median
@@ -257,10 +258,9 @@ def main():
         '{}s of 5 deployments; dashed=one-per-peering, dotted=painter)'
         .format(sname.upper()), fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    os.makedirs('figures', exist_ok=True)
     for ext in ('png', 'pdf'):
-        fig.savefig('figures/{}.{}'.format(_OUT, ext), dpi=170)
-    print('wrote figures/{}.png'.format(_OUT))
+        fig.savefig(fig_path('{}.{}'.format(_OUT, ext)), dpi=170)
+    print('wrote', fig_path('{}.png'.format(_OUT)))
 
     # BIG single-panel objective figure (Tom 2026-08-16: "I care about
     # the objective -- make that the only plot, big enough to see"):
@@ -295,9 +295,9 @@ def main():
         axO.set_ylim(lo - pad, hi + pad)
     axO.legend(fontsize=11, frameon=False)
     figO.tight_layout()
-    figO.savefig('figures/{}_objective.png'.format(_OUT), dpi=170)
+    figO.savefig(fig_path('{}_objective.png'.format(_OUT)), dpi=170)
     plt.close(figO)
-    print('wrote figures/{}_objective.png'.format(_OUT))
+    print('wrote', fig_path('{}_objective.png'.format(_OUT)))
 
     # Companion figure (Tom, 2026-08-14): how long each arm actually
     # trains and how much of the budget it actually spends — mean
@@ -329,8 +329,8 @@ def main():
     fig2.suptitle('Training length and budget spend over N', fontsize=10)
     fig2.tight_layout(rect=[0, 0, 1, 0.93])
     for ext in ('png', 'pdf'):
-        fig2.savefig('figures/{}_iters.{}'.format(_OUT, ext), dpi=170)
-    print('wrote figures/{}_iters.png'.format(_OUT))
+        fig2.savefig(fig_path('{}_iters.{}'.format(_OUT, ext)), dpi=170)
+    print('wrote', fig_path('{}_iters.png'.format(_OUT)))
 
 
 if __name__ == '__main__':

@@ -1,0 +1,16 @@
+diff --git a/optimal_adv_wrapper.py b/optimal_adv_wrapper.py
+index dcf0305..86cd059 100644
+--- a/optimal_adv_wrapper.py
++++ b/optimal_adv_wrapper.py
+@@ -1583,7 +1583,10 @@ class Optimal_Adv_Wrapper:
+ 		if kwargs.get('save_run_dir', None) is None:
+ 			## initialize save dir
+ 			t_start = int(time.time())
+-			self.save_run_dir = os.path.join(RUN_DIR, '{}-{}-sparse'.format(t_start, self.dpsize))
++			# Disambiguate concurrent trials that share an epoch second; otherwise
++			# two processes silently share a dir and overwrite each other's state-N.pkl.
++			suffix = os.environ.get('SCULPTOR_RUN_TAG', '') or str(os.getpid())
++			self.save_run_dir = os.path.join(RUN_DIR, '{}-{}-{}-sparse'.format(t_start, suffix, self.dpsize))
+ 			if not os.path.exists(self.save_run_dir):
+ 				call("mkdir {}".format(self.save_run_dir), shell=True)
+ 			if not self.simulated:

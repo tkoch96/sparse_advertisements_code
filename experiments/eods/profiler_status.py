@@ -21,6 +21,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 from experiments.fleet import registry
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 KEY = os.path.expanduser('~/.ssh/ray-autoscaler_us-east-1.pem')
 SSH = ['ssh', '-i', KEY, '-o', 'StrictHostKeyChecking=no',
@@ -116,7 +117,7 @@ def main():
     fig.suptitle(title + '  ({}Z)'.format(
         time.strftime('%H:%M', time.gmtime())), fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.93])
-    out_fn = os.path.join(_REPO_ROOT, 'figures', 'profiler_status.png')
+    out_fn = fig_path('profiler_status.png')
     os.makedirs(os.path.dirname(out_fn), exist_ok=True)
     fig.savefig(out_fn, dpi=140)
     print('wrote', out_fn)

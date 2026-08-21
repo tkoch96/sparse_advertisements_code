@@ -76,7 +76,7 @@ def main():
     r0 = rss_gb()
     snap0 = tracemalloc.take_snapshot()
 
-    from deployment_setup import get_random_deployment
+    from core.deployment_setup import get_random_deployment
     report['phases'].append({'phase': 'imports',
                              'wall_s': round(time.time() - t0, 1),
                              'rss_delta_gb': round(rss_gb() - r0, 2)})
@@ -106,9 +106,9 @@ def main():
         snap2 = tracemalloc.take_snapshot()
         t3 = time.time()
         r3 = rss_gb()
-        from wrapper_eval import gamma, capacity, lambduh
-        from constants import DEFAULT_EXPLORE
-        from sparse_advertisements_v3 import Sparse_Advertisement_Eval
+        from evaluations.wrapper_eval import gamma, capacity, lambduh
+        from helpers.constants import DEFAULT_EXPLORE
+        from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
         sas = Sparse_Advertisement_Eval(
             deployment, verbose=False, lambduh=lambduh,
             with_capacity=capacity, explore=DEFAULT_EXPLORE,

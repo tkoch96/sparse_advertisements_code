@@ -3,7 +3,7 @@
 Feature-by-feature ablation of SCULPTOR's methodological leaps, run as
 env-flag overrides on a fork of the REAL production solver, now extended
 with a **measurement-policy axis** (how/when the solver spends real
-measurements). Companion docs: `ablation_study/HANDOFF.md` (live status)
+measurements). Companion docs: `experiments/ablation_study/HANDOFF.md` (live status)
 and `experiments/model_error/DIMENSIONS.md` (the variable-space card +
 dated findings log — read it first for what has been measured).
 
@@ -95,7 +95,7 @@ freezes beliefs between measurements — calibration poison, but also a
 gradient stabilizer; cache-off did NOT improve outcomes) · world knobs
 (`SCULPTOR_LAT_MODEL=geo`, `SCULPTOR_PREF_MODEL=random`,
 `SCULPTOR_GEO_NOISE`, `SCULPTOR_VOL_SPREAD`, `SCULPTOR_SCALE_FACTOR`)
-live in deployment_setup.py.
+live in core/deployment_setup.py.
 
 ## Scripts (current, post-cleanup 2026-08-12)
 

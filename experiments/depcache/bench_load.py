@@ -21,7 +21,7 @@ if _REPO_ROOT not in sys.path:
 
 
 def csv_arm(csv_fn, pops):
-    from helpers import parse_lat
+    from helpers.helpers import parse_lat
     keep = set(pops)
     up = {}
     for row in open(csv_fn):

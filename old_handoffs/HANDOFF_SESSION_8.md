@@ -80,7 +80,7 @@ with its own `main()`).
 
 **Generic_Objective** now forwards `lp_kwargs` and passes `adv=a` to LP calls
 (was: discarded everything except routed_through_ingress). Both worker code
-paths (`path_distribution_computer.py:814` and `path_distribution_computer_ray.py:138`)
+paths (`path_distribution_computer.py:814` and `path_distribution_computer.py:138`)
 now pass `adv` through — **this was the silent bug** that broke gradient flow
 for static_failure and backup_capacity objectives.
 
@@ -162,7 +162,7 @@ workers in parallel).
 ### 6. Lighter-touch worker-init staggering
 
 `SCULPTOR_WORKER_INIT_STAGGER_SEC` env var added to both
-`worker_comms.py` and `worker_comms_ray.py`. When set >0, adds `time.sleep(N)`
+`worker_comms.py` and `worker_comms.py`. When set >0, adds `time.sleep(N)`
 between worker spawn calls in the start_workers loop. Workers still init in
 parallel (no ACK blocking), only their start times are offset so memory
 peaks don't perfectly overlap. Default 0 = preserves original behavior.
@@ -340,9 +340,9 @@ This is a clean local-only experiment; no cluster needed.
 ```
 solve_lp_assignment.py                  # +site_failure LP, -dead LPs, +_failure_obj_split
 path_distribution_computer.py           # +adv kwarg, +_log_mem_worker, +mem logging
-path_distribution_computer_ray.py       # +adv kwarg
+path_distribution_computer.py       # +adv kwarg
 worker_comms.py                         # +SCULPTOR_N_WORKERS env, +stagger
-worker_comms_ray.py                     # +stagger
+worker_comms.py                     # +stagger
 generic_objective.py                    # +lp_kwargs forwarding, +adv=a passthrough
 experiments/__init__.py                 # new (empty)
 experiments/objectives.py               # new — registry

@@ -16,7 +16,7 @@ from experiments.depsetup_fork.gate_5pop import (_sandbox, _reset_violate,
 
 def main():
     pops = sys.argv[1].split(',') if len(sys.argv) > 1 else POPS5
-    import deployment_setup as ds
+    import core.deployment_setup as ds
     real_cache = ds.CACHE_DIR
     sb = _sandbox(real_cache)
     ds.CACHE_DIR = sb

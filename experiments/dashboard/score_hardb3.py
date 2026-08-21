@@ -80,12 +80,12 @@ def child(world, seed, todo_keys):
         from experiments.model_error import worlds
         worlds.apply('georand')
     import numpy as np
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes
-    from solve_lp_assignment import solve_generic_lp_with_failure_catch
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from helpers.helpers import deployment_to_prefixes
+    from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
 
     dep = get_random_deployment('small')
     dep['generic_objective'] = 'avg_latency'

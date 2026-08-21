@@ -17,6 +17,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 LOGS = os.path.expanduser('~/sculptor_dashboard/prof_logs')
@@ -116,7 +117,7 @@ def main():
     fig.suptitle('Scoping smokes — scaling profile (first iteration '
                  'excluded)', fontsize=11)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    out = os.path.join(_REPO_ROOT, 'figures', 'profiler_scaling.png')
+    out = fig_path('profiler_scaling.png')
     fig.savefig(out, dpi=140)
     print('wrote', out)
 

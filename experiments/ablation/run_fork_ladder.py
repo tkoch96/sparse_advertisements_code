@@ -62,12 +62,12 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     os.environ['SCULPTOR_DISABLE_PARALLEL_STRATEGIES'] = '1'
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from worker_comms import Worker_Manager
-    from helpers import deployment_to_prefixes, threshold_a
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from core.worker_comms import Worker_Manager
+    from helpers.helpers import deployment_to_prefixes, threshold_a
 
     # resilience config follows the pipeline default (SCULPTOR_USE_RESILIENCE,
     # now default-on with wrapper_eval's gamma=4); set =0 for pure latency
@@ -107,7 +107,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # stock workers. sculptor_fork._abl_assert_mc verifies the injection
     # actually took (a stock worker answers 'ERROR' to the stats RPC).
     import ray
-    import worker_comms_ray
+    import core.worker_comms as worker_comms
     _stock_actor_cls = worker_comms_ray.ACTOR_CLS
     if os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0':
         from experiments.ablation.mc_off_worker import Abl_MC_Off_Worker
@@ -138,7 +138,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             # 2026-08-12). path_measures is recorded either way.
             _pb = os.environ.get('SCULPTOR_ABLATION_PAINTER_BUDGET')
             if _pb:
-                from painter import Painter_Adv_Solver as _PAS
+                from core.painter import Painter_Adv_Solver as _PAS
                 _orig_init = _PAS.__init__
 
                 def _budget_init(self, *a, **kw):
@@ -192,7 +192,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             try:
                 _objname = os.environ.get('SCULPTOR_ABLATION_OBJECTIVE',
                                           'avg_latency')
-                from solve_lp_assignment import generic_lp_functions
+                from core.solve_lp_assignment import generic_lp_functions
                 _fn = generic_lp_functions.get(_objname)
                 _rti = None
                 if _fn is not None:

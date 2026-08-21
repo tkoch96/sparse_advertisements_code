@@ -23,7 +23,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from path_distribution_computer import Path_Distribution_Computer  # noqa: E402
+from core.path_distribution_computer import Path_Distribution_Computer  # noqa: E402
 from experiments.ablation.mc_off_worker import Abl_MC_Off_Worker  # noqa: E402
 
 

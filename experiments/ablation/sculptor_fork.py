@@ -128,9 +128,9 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from sparse_advertisements_v3 import Sparse_Advertisement_Solver, _log_mem  # noqa: E402
-from constants import ADVERTISEMENT_THRESHOLD  # noqa: E402
-from helpers import threshold_a  # noqa: E402
+from core.sparse_advertisements_v3 import Sparse_Advertisement_Solver, _log_mem  # noqa: E402
+from helpers.constants import ADVERTISEMENT_THRESHOLD  # noqa: E402
+from helpers.helpers import threshold_a  # noqa: E402
 
 
 class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):

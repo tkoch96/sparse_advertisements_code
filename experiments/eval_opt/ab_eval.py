@@ -20,7 +20,7 @@ WS = os.getcwd()
 FIX = os.path.join(WS, 'fixture_metrics.pkl')
 
 EVAL_KEYS = [
-    'diurnal', 'volume_multipliers', 'resilience_to_congestion',
+    'diurnal', 'resilience_to_congestion',
     'pct_volume_within_latency',
     'popp_failures_latency_optimal_specific',
     'popp_failures_latency_before', 'popp_failures_latency_optimal',
@@ -37,12 +37,11 @@ EVAL_KEYS = [
     'pop_failures_high_cap_latency_optimal',
     'pop_failures_high_cap_latency_optimal_specific',
     'latency_penalty_thresholds_normal',
-    'latency_lagrange_thresholds_normal',
 ]
 
 
 def run_evals(metrics_fn):
-    from eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_latency_failure import evaluate_all_metrics
     t0 = time.time()
     m = evaluate_all_metrics('small', int(os.environ.get('ABPORT', '41900')),
                              nsim=1, use_performance_metrics_fn=metrics_fn,

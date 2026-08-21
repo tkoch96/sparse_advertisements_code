@@ -1,0 +1,22 @@
+diff --git a/benchmarks/sculptor_3way_runner.sh b/benchmarks/sculptor_3way_runner.sh
+index c706158..29d0fe6 100755
+--- a/benchmarks/sculptor_3way_runner.sh
++++ b/benchmarks/sculptor_3way_runner.sh
+@@ -46,12 +46,17 @@ run_one() {
+     echo "${logname}"
+ }
+ 
++# Clear per-condition metrics caches so we don't short-circuit training.
++rm -f "${REPO}"/cache/popp_failure_latency_comparison_${DPSIZE}_3way_*.pkl
++
+ # Sequential. (Parallel risks Gurobi WLS contention.)
+ A_LOG=$(run_one A "")
+ C_LOG=$(run_one C "SCULPTOR_CAPACITY_HEADROOM=${HEADROOM} SCULPTOR_SKIP_RB_GRAD=1")
+ D_LOG=$(run_one D "SCULPTOR_USE_STOCHASTIC_LP_GRAD=1 SCULPTOR_STOCHASTIC_LP_K=${K_STOCH}")
++E_LOG=$(run_one E "SCULPTOR_USE_STOCHASTIC_LP_GRAD=1 SCULPTOR_STOCHASTIC_LP_K=${K_STOCH} SCULPTOR_STOCHASTIC_LP_IMPORTANCE=1")
+ 
+ echo "ALL RUNS DONE"
+ echo "A_LOG=${A_LOG}"
+ echo "C_LOG=${C_LOG}"
+ echo "D_LOG=${D_LOG}"
++echo "E_LOG=${E_LOG}"

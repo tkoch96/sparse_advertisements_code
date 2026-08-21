@@ -144,12 +144,12 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 		seed=31415, save_run_dir=None, out_dir=None, extra_evals=()):
 	# Imports deferred so `--list` works in a fresh checkout without firing
 	# the heavy SAS / Gurobi import chain.
-	from constants import CACHE_DIR, DEFAULT_EXPLORE
-	from wrapper_eval import capacity  # module-level True; matches existing testing_*.py
-	from deployment_setup import get_random_deployment
-	from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-	from worker_comms import Worker_Manager
-	from helpers import deployment_to_prefixes
+	from helpers.constants import CACHE_DIR, DEFAULT_EXPLORE
+	from evaluations.wrapper_eval import capacity  # module-level True; matches existing testing_*.py
+	from core.deployment_setup import get_random_deployment
+	from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+	from core.worker_comms import Worker_Manager
+	from helpers.helpers import deployment_to_prefixes
 
 	spec = get_spec(spec_name)
 

@@ -50,11 +50,11 @@ def _rss_mb():
 
 def main():
     dpsize = sys.argv[1] if len(sys.argv) > 1 else 'testing_feature-actual-10'
-    from deployment_setup import get_random_deployment
-    from constants import DEFAULT_EXPLORE
-    from helpers import deployment_to_prefixes
+    from core.deployment_setup import get_random_deployment
+    from helpers.constants import DEFAULT_EXPLORE
+    from helpers.helpers import deployment_to_prefixes
     dep = get_random_deployment(dpsize)
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
     sas = Sparse_Advertisement_Eval(
         dep, verbose=False, lambduh=0, with_capacity=False,
         explore=DEFAULT_EXPLORE, using_resilience_benefit=False, gamma=0,
@@ -63,7 +63,7 @@ def main():
     sas.update_deployment(dep)
     sas.solutions = {}
 
-    import painter as painter_mod
+    import core.painter as painter_mod
     solver_holder = []
 
     # find the painter solver object: solve_painter constructs it; easiest

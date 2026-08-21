@@ -42,7 +42,7 @@ def build_ug_perfs(shard_dir, considering_pops, ignore_popps,
         # shards store raw float seconds; parse_lat = *1000 + clamp
         lat_f = lat_s[keep] * 1000.0
         uniq, inv = np.unique(lat_f, return_inverse=True)
-        from helpers import MIN_LATENCY, MAX_LATENCY
+        from helpers.helpers import MIN_LATENCY, MAX_LATENCY
         parsed = [min(max(u, MIN_LATENCY), MAX_LATENCY) for u in uniq]
         kip = ip_id[keep]
         kpeer = peer_id[keep]
@@ -106,7 +106,7 @@ def build_ug_perfs_min(shard_dir, considering_pops, ignore_popps,
     idempotent: np.min(scalar) == scalar). Equivalent to
     build_ug_perfs + the line-912 reduction; gated in
     experiments/depcache/test_phase2_gate.py."""
-    from helpers import MIN_LATENCY, MAX_LATENCY
+    from helpers.helpers import MIN_LATENCY, MAX_LATENCY
     ug_perfs = {} if ug_perfs is None else ug_perfs
     violate_ips = {ug[1] for ug, v in violate_sol.items() if v}
     jobs = []

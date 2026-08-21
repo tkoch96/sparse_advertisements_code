@@ -34,7 +34,7 @@ import time
 
 import numpy as np
 
-from helpers import MIN_LATENCY, MAX_LATENCY
+from helpers.helpers import MIN_LATENCY, MAX_LATENCY
 
 STAGE_T = {}
 

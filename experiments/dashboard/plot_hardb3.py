@@ -12,6 +12,7 @@ import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
 import numpy as np
+from helpers.figpaths import fig_path  # dashboard figures -> figures/dashboards/<dashboard>/
 
 REPO = '/Users/tomkoch/Documents/sparse_advertisements_code'
 # Env-overridable for variant datasets (hardB3v2 etc.):
@@ -203,8 +204,7 @@ def main():
         '(150 iters; seed 1 bold, seeds 2-5 faint; INCREMENTAL — lines '
         'extend as VM cells land)', fontsize=10)
     fig.tight_layout(rect=[0, 0, 1, 0.92])
-    os.makedirs(os.path.join(REPO, 'figures'), exist_ok=True)
-    out = os.path.join(REPO, 'figures', FIG_PREFIX + '_ladders_incremental.png')
+    out = fig_path(FIG_PREFIX + '_ladders_incremental.png')
     fig.savefig(out, dpi=170)
     print('wrote', out, '({} points)'.format(n_pts))
     # per-objective single panels for the dashboard tabs
@@ -244,8 +244,7 @@ def main():
         ax.set_title(title, fontsize=10)
         ax.grid(True, alpha=0.25); ax.legend(fontsize=7, frameon=False)
         f1.tight_layout()
-        f1.savefig(os.path.join(REPO, 'figures',
-                                FIG_PREFIX + '_{}.png'.format(o)), dpi=150)
+        f1.savefig(fig_path(FIG_PREFIX + '_{}.png'.format(o)), dpi=150)
         plt.close(f1)
     print('wrote per-objective panels')
 
@@ -325,8 +324,7 @@ def main():
     axu.grid(True, alpha=0.25)
     axu.legend(fontsize=7, frameon=False)
     fu.tight_layout()
-    fu.savefig(os.path.join(REPO, 'figures',
-                            FIG_PREFIX + '_mlu_util.png'), dpi=150)
+    fu.savefig(fig_path(FIG_PREFIX + '_mlu_util.png'), dpi=150)
     plt.close(fu)
     print('wrote mlu utilization figure ({} points)'.format(n_u))
 

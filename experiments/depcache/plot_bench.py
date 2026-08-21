@@ -1,4 +1,4 @@
-"""Render figures/depcache_bench.png from cache/depcache_bench.json
+"""Render figures/dashboards/depcache/depcache_bench.png from cache/depcache_bench.json
 (load time vs n_pops, CSV vs shards). Run by the dash refresh loop."""
 import json
 import os
@@ -6,6 +6,7 @@ import os
 import matplotlib
 matplotlib.use('Agg')
 import matplotlib.pyplot as plt
+from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -34,7 +35,7 @@ def main():
     ax.grid(alpha=.25)
     ax.legend(frameon=False)
     fig.tight_layout()
-    out = os.path.join(_REPO_ROOT, 'figures', 'depcache_bench.png')
+    out = fig_path('depcache_bench.png')
     fig.savefig(out, dpi=140)
     print('wrote', out)
 

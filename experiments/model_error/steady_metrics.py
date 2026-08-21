@@ -35,11 +35,11 @@ SENTINEL_CUT = 15000.0
 def child(seed, dirs, dpsize):
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
     os.environ.setdefault('MPLBACKEND', 'Agg')
-    from constants import DEFAULT_EXPLORE
-    from wrapper_eval import capacity
-    from deployment_setup import get_random_deployment
-    from sparse_advertisements_v3 import Sparse_Advertisement_Eval
-    from helpers import deployment_to_prefixes
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from helpers.helpers import deployment_to_prefixes
 
     dep = get_random_deployment(dpsize)
     dep['generic_objective'] = 'avg_latency'

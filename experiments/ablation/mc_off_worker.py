@@ -38,7 +38,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-from path_distribution_computer_ray import _LocalPathDistributionComputer  # noqa: E402
+from core.path_distribution_computer import _LocalPathDistributionComputer  # noqa: E402
 
 
 class Abl_MC_Off_Worker(_LocalPathDistributionComputer):

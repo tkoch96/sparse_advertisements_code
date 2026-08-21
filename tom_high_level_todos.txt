@@ -1,0 +1,15 @@
+High-level todo
+1. run evaluate_over_deployment_sizes with lots of simulations (20 each size)
+2. run ablation on size actual-10 over many random deployments (10 each "L")
+3. run every single objective on actual-32 random sub-deployments at least 10 times
+4. do the modeling assumptions one
+
+
+Some lower-level todos
+1. dashboarding -- making it so that I don't need to ask the agent to implement dashboards or refresh them. I just want to be able to say "add a dashboard to this task" , and the agent cooks up some useful ideas with autorefresh
+2. smoke run through evaluate over deployment sizes to get timing information. use that timing information to seed our pricing dashboard
+3. based on the pricing findings, try and reduce per-process RAM to reduce overall VM cost
+4. remove (or incorporate) all old experiments
+5. after every training iteration, check space and smart-remove. exit gracefully if still no space
+6. add an addendum to "starting a VM" to instantly resize the disc/make it larger (if it's not an egregious cost)
+7. come up with a better ablation between painter and L2 to demonstrate the value of not venturing far down one belief whole before measuringw

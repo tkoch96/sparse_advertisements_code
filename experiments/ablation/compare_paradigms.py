@@ -10,7 +10,7 @@ constant, so new alpha grids reuse this plotter instead of forking it:
     python -m experiments.ablation.compare_paradigms \
         --ws-root /path/to/stepalpha --json-root cache/ablation/step_alpha_v3 \
         --arms auto:auto-scale\\ (stock) a005:fixed\\ alpha=0.05 \
-        --seeds 1,2,3 --out figures/step_alpha_v3.png
+        --seeds 1,2,3 --out figures/dashboards/misc/step_alpha_v3.png
 
 Per-arm workspace layout: <ws-root>/<arm>/runs/<run-dir>/state-*.pkl (the
 solver's own per-iteration metrics); scores: <json-root>/<arm>/seed_<s>_full.json.
@@ -32,7 +32,7 @@ SP = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(os.path.dirname(SP))
 if REPO not in sys.path:
     sys.path.insert(0, REPO)
-from helpers import threshold_a  # noqa: E402
+from helpers.helpers import threshold_a  # noqa: E402
 
 # legacy default: the 2026-08-14 A/B (single seed, ws dirs next to this file)
 DEFAULT_ARMS = ['auto:auto-scale (stock)', 'fixed001:fixed alpha=0.01',
