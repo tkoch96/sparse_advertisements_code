@@ -5,65 +5,81 @@ what it produced. Unit tests live in `unit_tests/` and run under pytest; these
 run standalone.
 
 ```bash
-python integration_tests/verify_e2e_eval.py           # small@100, actual-5@50
-python integration_tests/verify_e2e_eval.py --quick   # both at 3 iters (~1 min for small)
-python integration_tests/verify_e2e_eval.py --only small
+~/Documents/venv312/bin/python integration_tests/verify_e2e_eval.py
+~/Documents/venv312/bin/python integration_tests/verify_e2e_prefixes.py
+~/Documents/venv312/bin/python integration_tests/verify_e2e_dpsizes.py
+~/Documents/venv312/bin/python integration_tests/verify_e2e_objectives.py
 ```
 
-## `verify_e2e_eval.py`
+Each takes `--quick` (3 iters, half the sweep points), `--iters N` and
+`--keep`. **Defaults are 5 iterations** — these check the pipeline *runs*, not
+that it converges. Pass `--iters` when you want convergence.
 
-Runs `evaluations/eval_latency_failure.py` at two deployment sizes and asserts
-the evaluation actually happened.
+| file | what it verifies |
+|---|---|
+| `verify_e2e_eval.py` | `evaluate_all_metrics` at `small` and `actual-5`: all six solution types solved, per-UG latency vectors populated and finite. |
+| `verify_e2e_prefixes.py` | `evaluate_over_n_prefixes.py` at `small` over four prefix budgets, with `--plot`. |
+| `verify_e2e_dpsizes.py` | `evaluate_over_deployment_sizes.py` over 3/4/5/6 PoPs, with `--plot`. |
+| `verify_e2e_objectives.py` | One evaluation per objective at `small`: `avg_latency`, `per_site_cost`, `max_util`, `frac_beyond_optimal`. |
+| `_common.py` | Shared workspace/env/scan/collect machinery. |
 
-**It deliberately does not trust the exit code.** `evaluate_all_metrics` wraps
-its strategy loop in a bare `except:` that prints a traceback and continues, so
-a run whose solver died in the first second still reaches the plotting section,
-still returns a metrics dict, and still exits 0. On 2026-08-21 that cost ~11h
-of actual-32 training: a broken hot-start exited 0 after six seconds, the queue
-read rc=0 as success, and its harvest step deleted the run directory.
+All four drive the real `evaluations/` drivers rather than reimplementing their
+loops, so the figures are the ones the paper sweeps produce. Artifacts land in
+`figures/integration_tests/<case>/` — deliberately separate from real sweep
+output, so a test run can never be mistaken for one of your evaluations.
 
-So each case is judged on the metrics pickle it produced — all six strategies
-solved, `failed_strategies` empty, per-UG latency vectors populated and finite —
-plus a log scan for the failure markers the bare except would have hidden.
+The drivers themselves take `--figures-subdir` for the same reason: a real
+`evaluate_over_deployment_sizes.py` run can put its figures under
+`figures/<whatever>/` and keep them together. Both routes go through
+`SCULPTOR_FIG_SUBDIR`, which `helpers.save_fig` honours — no plotting call
+needs to know about it.
 
-Two traps the harness itself had to be fixed for, both worth knowing:
+## Why none of them trust the exit code
 
-- **Stale artifacts.** The workspace cache is symlinked to the repo, so a
-  previous run's `popp_failure_latency_comparison_<dpsize>.pkl` would satisfy
-  every content check. Worse, `evaluate_all_metrics` *resume-skips* a
-  simulation whose `n_advs` is already populated — so the run became a 9-second
-  no-op that passed. The workspace now symlinks cache inputs but excludes the
-  result pickles, and the pickle's mtime must post-date the run start.
-- **`RAY_TMPDIR` length.** Ray sockets are AF_UNIX, capped at 103 bytes. A
-  `tempfile.mkdtemp()` root under `/var/folders/...` blows the cap on macOS, so
-  the harness puts Ray's tmpdir under `/tmp/rt_*`.
+`evaluate_all_metrics` wraps its strategy loop in a bare `except:` that prints
+and continues, so a run whose solver died in the first second still reaches
+plotting, returns a metrics dict, and exits 0. On 2026-08-21 the queue read
+exactly that as success and its harvest step deleted 11h of actual-32 training.
+Each case is judged on the artifacts instead.
 
-### Known non-fatal condition
+## Traps the harness itself had to be fixed for
 
-`assess_volume_multipliers` (`evaluations/wrapper_eval.py`) raises `ValueError`
-whenever any UG hits `NO_ROUTE_LATENCY` at an inflated volume. On `small` this
-fires ~6 times per run, even at the lowest multiplier (X≈10.7), which should
-not congest. It is swallowed by the bare except. The harness reports it as a
-WARN rather than failing, and fails on any traceback signature *not* on that
-list — so this stays visible without blocking, and a new failure mode is caught.
+Worth knowing, because each one made a broken run look green:
 
-### Ray, and the `--port` red herring
+- **Stale artifacts.** The workspace cache symlinks the repo, so a previous
+  run's result pickle satisfied every content check. Worse,
+  `evaluate_all_metrics` *resume-skips* a sim whose `n_advs` is populated, so
+  the run became a 9-second no-op that passed. `_common.workspace()` symlinks
+  cache inputs but excludes result pickles, and pickle mtimes must post-date
+  the run start.
+- **`SCULPTOR_RUN_TAG` renames the pickle.** The objectives case was looking
+  for the untagged filename, finding nothing, and skipping every content check
+  while reporting PASS.
+- **`RAY_TMPDIR` length.** Ray sockets are AF_UNIX, capped at 103 bytes; a
+  `tempfile.mkdtemp()` root under `/var/folders/...` blows the cap on macOS.
+- **Cross-contamination.** A second case attached to the first's
+  still-draining Ray cluster and died ~2s in, which reads like a code bug.
+  `RAY_ADDRESS=local` forces a private cluster per case.
 
-Every case spawns Ray actors — Ray is not the default backend, it is the only
-one (`core/worker_comms.py` is a re-export; the ZMQ path was deleted in the
-mid-2026 migration). Cases are isolated by `RAY_ADDRESS=local`, which forces a
-private cluster each time. Without it the second case attaches to the first
-case's still-draining cluster and dies ~2s in, which reads like a code bug.
+The failure paths were verified against six synthetic cases, so this is not a
+suite that only ever passes.
 
-`--port` is vestigial. `eval_latency_failure.py` requires it, but nothing binds
-it under Ray — `path_distribution_computer.py (actor layer)` literally sets
-`self.port = 0  # unused under Ray`. Its only effect is avoiding the 5-second
-`NO PORT SPECIFIED` sleep in `core/optimal_adv_wrapper.py:936`. Any value works;
-distinct values per case isolate nothing.
+## Constraints these tests discovered
 
-### Timing
+- **`n_prefixes >= n_pops + 1`.** `init_advertisement` gives prefix 0 to
+  anycast and one prefix per PoP. `small` has 3 PoPs, so budgets below 4 make
+  sparse fail — as a swallowed IndexError before 2026-08-21, as a clear
+  `ValueError` since. Default budgets are `[4, 6, 8, 10]`.
+- **`actual-5` is slow.** 2831s at *three* iterations on a laptop; it rebuilds
+  from the 4.2 GB CSV and carries 2567 UGs. Its default is 3 iters for that
+  reason — 50 is a cluster setting.
 
-`small` is ~1 min at 3 iters. `actual-5` is much slower on a laptop — it parses
-the 4.2 GB measurement CSV on every run and did not finish 3 iterations in 15
-minutes. Use `--only small` for a quick gate; run the full default where you
-have cores.
+## Environment
+
+Use `~/Documents/venv312/bin/python`. `~/Documents/venv` is Python 3.14 without
+`highspy`, and `gpshim` defaults `SCULPTOR_LP_BACKEND` to `highs`. Each script
+preflights and fails in under a second on the wrong interpreter, printing the
+correct re-run command.
+
+`--port` is not passed by any of these: nothing binds it under Ray
+(`path_distribution_computer` sets `self.port = 0` outright).

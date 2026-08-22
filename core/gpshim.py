@@ -1,5 +1,5 @@
 """gurobipy-subset facade with pluggable LP backends (Tom 2026-08-17;
-MAINLINE since the solver_fork merge the same day).
+MAINLINE since the gpshim merge the same day).
 
 Core LP callers (solve_lp_assignment, path_distribution_computer) do
 `import gpshim as gp` instead of `import gurobipy as gp`. Backend
@@ -9,7 +9,7 @@ selected ONCE at import via SCULPTOR_LP_BACKEND:
                          objects; zero behavioral change vs mainline.
     highs             -- license-free HiGHS (highspy) implementation of the
                          exact gurobipy subset the repo uses (inventoried
-                         2026-08-17; see experiments/solver_fork/README.md).
+                         2026-08-17; see old_handoffs/SOLVER_FORK_MIGRATION.md).
 
 Scope (Tom-ratified): the highs backend supports every LINEAR objective
 (avg_latency / per_site_cost / mlu / joint_priority via the soft-bounded

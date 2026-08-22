@@ -2,14 +2,14 @@
 
 Generates the paper figures for the real-Internet-deployment results
 (actual BGP advertisements, RIPE Atlas measurements). Reads the metrics
-pickles produced by `actual_deployment_eval_latency_failure.py` runs and
+pickles produced by `actual_deployment_eval_all_solution_types.py` runs and
 emits the per-figure PDFs into `figures/paper/`.
 
 Pure plotting — no training. Assumes evaluations have already been run.
 """
 from constants import *
 from helpers import *
-from eval_latency_failure import evaluate_all_metrics
+from evaluations.eval_all_solution_types import evaluate_all_metrics
 import numpy as np, os, pickle
 np.random.seed(31701)
 import matplotlib

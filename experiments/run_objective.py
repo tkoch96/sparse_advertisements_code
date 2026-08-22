@@ -11,7 +11,7 @@ one_per_pop, one_per_peering) via compare_different_solutions, and dumps:
   - a markdown table (per-strategy latency/congestion/objective-specific cols)
 
 Stays narrow on purpose: doesn't run the heavy eval phases (failure
-resilience, diurnal, flash crowd). Those still live in eval_latency_failure
+resilience, diurnal, flash crowd). Those still live in eval_all_solution_types
 and can be invoked separately when wanted.
 """
 import argparse
@@ -252,7 +252,7 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 		# Extra eval phases beyond strategy_compare are dispatched here.
 		# 'strategy_compare' itself is already done above; this loop runs any
 		# additional named phases. Stays narrow: silent skip for unknown phases
-		# (existing eval files like eval_latency_failure.py handle them).
+		# (existing eval files like eval_all_solution_types.py handle them).
 		# Caller can append phases via extra_evals (e.g., to run
 		# static_failure_resilience against a non-static_failure trained adv
 		# for apples-to-apples comparison).
@@ -262,7 +262,7 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 				continue
 			if phase == 'static_failure_resilience':
 				print("[eval] static_failure_resilience: per-popp BGP-fallback ...")
-				from experiments.static_failure_eval import assess_static_failure_resilience
+				from core.static_failure_eval import assess_static_failure_resilience
 				phase_out = {}
 				for sname, entry in per_strategy.items():
 					try:
@@ -281,7 +281,7 @@ def run(spec_name, dpsize, port, max_iter=None, n_workers=None,
 			# Other named phases (e.g., 'failure_resilience', 'diurnal',
 			# 'flash_crowd', 'priority_bulk_sweep', 'site_cost_summary') can
 			# be added here in time; they would call into the existing eval
-			# code in eval_latency_failure.py / testing_*.py.
+			# code in eval_all_solution_types.py / testing_*.py.
 
 	finally:
 		try:

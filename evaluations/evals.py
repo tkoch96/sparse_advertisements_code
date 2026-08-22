@@ -1,7 +1,7 @@
-"""LEGACY: pre-`eval_latency_failure.py` driver.
+"""LEGACY: pre-`eval_all_solution_types.py` driver.
 
 An earlier monolithic eval driver. Mostly superseded by
-`eval_latency_failure.py` + `wrapper_eval.py`. Kept because some older
+`eval_all_solution_types.py` + `wrapper_eval.py`. Kept because some older
 paper-plot pipelines reference output pickles produced by this script.
 Don't extend.
 """

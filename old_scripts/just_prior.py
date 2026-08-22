@@ -8,7 +8,7 @@ a paper plot).
 import pickle
 from constants import *
 from deployment_setup import *
-from eval_latency_failure import evaluate_all_metrics
+from evaluations.eval_all_solution_types import evaluate_all_metrics
 
 def eval_just_prior_metrics():
 	# for each deployment, get different advertisement strategies

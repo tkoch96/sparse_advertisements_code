@@ -31,7 +31,7 @@ under load and changes IP).
   `logs/hb3v3_driver.log`; target 540 JSONs; ETA ~13:00-16:00Z.
   Chain script archived at `tools/chain_hb3v3.sh`.
 - **Mac dashboard refresh loop** (nohup, `pgrep -f
-  experiments.dashboard.refresh`, log /private/tmp/dashboard_refresh.log)
+  dashboard.refresh`, log /private/tmp/dashboard_refresh.log)
   — THE one updater: pulls, evals, figures, site, all self-healing.
 - **Session monitor** (30-min beats) watches the chain; the Mac cron
   notifiers (below) text Tom regardless of any agent.
@@ -40,7 +40,7 @@ under load and changes IP).
 
 1. Audit by COUNT (540) + per-queue rc lines; never trust exit codes.
 2. Evals/scoring flow automatically; verify the hard-objectives tab.
-3. EMAIL Tom results: `python tools/send_report.py "<subject>"
+3. EMAIL Tom results: `python cluster/send_report.py "<subject>"
    <body.txt> [figures...]` (Gmail app-password inside; attachments
    supported). Include per-objective tables + figures.
 4. Teardown per standing policy: pull everything, STOP the instance
@@ -212,7 +212,7 @@ MC_NUM_EXPLORE=5 (worker RPC set_mc_num, restored after).
 ###   MORNING DECISION for Tom: (a) redefine prio to a jointly-linear
 ###   co-optimizable objective (exact floor), or (b) keep + documented
 ###   exemption.
-### - sanity gate: experiments/dashboard/sanity.py
+### - sanity gate: dashboard/sanity.py
 ###   assert_not_better_than_opp wired into plot_hardb3 (popfail
 ###   globally exempt — legitimately beats opp; prio temporarily).
 ###   Violations now CRASH the figure step loudly.
@@ -415,10 +415,10 @@ noise-axis-vs-coupling-axis 2x2 the ladder decomposition predicts.
 
 ### INFRASTRUCTURE (dashboards, email, SMS — the support system)
 
-- **Dashboard** (`experiments/dashboard/`, served localhost:8643 via
+- **Dashboard** (`dashboard/`, served localhost:8643 via
   launch.json 'hardb3-dash', site dashboard_site/): TWO tabs — policy
   ladder + hard objectives. ONE updater:
-  `python -m experiments.dashboard.refresh --loop 180`. Registry-driven
+  `python -m dashboard.refresh --loop 180`. Registry-driven
   `steps` per experiment: in-globs -> out-paths; expensive evals
   staleness-gated (mtime + input-set FINGERPRINT so deletions/
   quarantines propagate), cheap plots `'always': True` every cycle
@@ -427,7 +427,7 @@ noise-axis-vs-coupling-axis 2x2 the ladder decomposition predicts.
   reload (importlib), ssh/rsync StrictHostKeyChecking=accept-new.
   Eval steps declare `'world':` resolved from worlds.py. Figures shown
   on tabs MUST be pinned step outputs (env POLICY_PLOT_OUT etc).
-  Full contract: experiments/dashboard/README.md.
+  Full contract: dashboard/README.md.
 - **Sanity machinery** (do not remove): plot_policy5 hard-asserts any
   arm's STEADY objective below per-seed one-per-peering (always an
   eval bug — caught the congestion-blind primary LP); opp/painter refs
@@ -438,7 +438,7 @@ noise-axis-vs-coupling-axis 2x2 the ladder decomposition predicts.
   avg_latency at generic/bulk primaries — hard objectives keep their
   own model.objVal).
 - **Email** (standing Tom request — progress reports w/ figures):
-  `tools/send_report.py <subject> <body_file> [attachments...]`
+  `cluster/send_report.py <subject> <body_file> [attachments...]`
   (Gmail SMTP, app password embedded, from/to tomkoch123@gmail.com).
 - **SMS/texting** (system-level, survives agents): Mac cron —
   `~/.sculptor_cluster_alert/liveness_check.py` every 10 min (texts on

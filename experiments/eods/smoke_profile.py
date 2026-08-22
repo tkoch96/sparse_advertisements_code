@@ -13,7 +13,7 @@ sys_avail_mb) + wall clock:
                    start — approximates driver + all ray workers
   wall_s, iters, and $ at --spot-rate per vCPU-hour
 
-    python -m experiments.eods.smoke_profile --manifest tools/eods_manifest.json \
+    python -m experiments.eods.smoke_profile --manifest cluster/manifests/eods_manifest.json \
         --picks eods_a5:1,eods_a10:1 --workers 60 --out cache/eods/profiles
 """
 import argparse

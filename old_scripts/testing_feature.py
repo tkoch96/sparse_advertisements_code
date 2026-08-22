@@ -11,7 +11,7 @@ Newer per-objective experiments should go through
 because some paper-plot scripts read its outputs.
 """
 from constants import *
-from eval_latency_failure import evaluate_all_metrics
+from evaluations.eval_all_solution_types import evaluate_all_metrics
 import numpy as np, os, pickle
 np.random.seed(37000)
 import matplotlib

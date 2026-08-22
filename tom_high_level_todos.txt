@@ -12,4 +12,7 @@ Some lower-level todos
 4. remove (or incorporate) all old experiments
 5. after every training iteration, check space and smart-remove. exit gracefully if still no space
 6. add an addendum to "starting a VM" to instantly resize the disc/make it larger (if it's not an egregious cost)
-7. come up with a better ablation between painter and L2 to demonstrate the value of not venturing far down one belief whole before measuringw
+7. come up with a better ablation between painter and L2 to demonstrate the value of not venturing far down one belief whole before measuring
+8. don't just not route capacity on any eval
+9. fix startup cost. basically it's calculating actual modeled resilience benefit which takes forever since you can't cache anything.
+10. add measurement budget from the ablation fork

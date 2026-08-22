@@ -7,7 +7,7 @@ and prints, per arm x N: median/per-seed combined score, healthy counts,
 median exit iteration, pooled probe-reason attribution. When the
 LP-scored sidecars exist (cache/model_error/rerank/policy_* and
 cache/model_error/steady/policy_steady.json, produced by
-experiments.model_error.rerank_ladder / steady_metrics), also prints
+core.rerank_ladder / steady_metrics), also prints
 steady congestion, clean routed latency, and failure congestion medians.
 
     python -m experiments.ablation.policy_table [--root ...]

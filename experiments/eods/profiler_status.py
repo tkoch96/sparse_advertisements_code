@@ -20,7 +20,7 @@ _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__f
 if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
-from experiments.fleet import registry
+from cluster.fleet import registry
 from helpers.figpaths import fig_path  # -> figures/dashboards/<dashboard>/
 
 KEY = os.path.expanduser('~/.ssh/ray-autoscaler_us-east-1.pem')

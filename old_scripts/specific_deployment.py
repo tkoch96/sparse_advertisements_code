@@ -1,6 +1,6 @@
 """Run the key evaluations on a specific (named / cached) deployment.
 
-Variant of `eval_latency_failure.py` that loads a specific pre-built
+Variant of `eval_all_solution_types.py` that loads a specific pre-built
 deployment from `cache/` instead of generating a random one. Useful for
 reproducing exact paper figures or debugging a specific deployment that
 exposes a bug.
@@ -9,7 +9,7 @@ import pickle
 from wrapper_eval import *
 from constants import *
 from deployment_setup import *
-from eval_latency_failure import evaluate_all_metrics
+from evaluations.eval_all_solution_types import evaluate_all_metrics
 
 def eval_specific_deployment(hotstart_dir):
 	# deployment = pickle.load(open(os.path.join(RUN_DIR, hotstart_dir, 'state-0.pkl'),'rb'))['deployment']

@@ -25,8 +25,8 @@ mechanics. Current single source of truth for live state:
   audit + trusted rescore built in. Out: `cache/ablation/policy_ladder_v2`.
 - **Dashboard refresh loop** on the MAC (survives session end): nohup
   pid recorded in `/tmp/dashboard_refresh.log` era — `pgrep -f
-  "experiments.dashboard.refresh"`; runs
-  `python -m experiments.dashboard.refresh --loop 180 --heavy-every 4`.
+  "dashboard.refresh"`; runs
+  `python -m dashboard.refresh --loop 180 --heavy-every 4`.
   Kill/restart with the same command. Serves localhost:8643 via the
   `hardb3-dash` launch.json entry (python http.server on
   `dashboard_site/`).
@@ -214,9 +214,9 @@ filename, so the v2 figure sat stale while the bad-grads figure got
 silently overwritten with v2 data (caught + fixed; bad-grads figure
 re-rendered from the BADGRADS_ERA quarantine, mean stat). v2 + hardB3
 entries converted; `evals`/`heavy` are legacy. Loop relaunched with
-logging: `nohup python -m experiments.dashboard.refresh --loop 180 >>
+logging: `nohup python -m dashboard.refresh --loop 180 >>
 /private/tmp/dashboard_refresh.log 2>&1` (log lines only when steps
-actually run). Contract documented in experiments/dashboard/README.md.
+actually run). Contract documented in dashboard/README.md.
 
 ### Wrong-world eval incident (2026-08-14 18:15Z, caught by Tom)
 
@@ -237,7 +237,7 @@ and make plots refuse mismatched worlds.
 
 ### Dashboard system (cross-project abstraction — Tom's design rule)
 
-`experiments/dashboard/`: generate.py (registry EXPERIMENTS: left pane
+`dashboard/`: generate.py (registry EXPERIMENTS: left pane
 = experiments, middle tabs = sub-experiments; renderers
 objective_ladder/static/ladder_links; conv-figure link grids on every
 tab), refresh.py (THE ONLY refresh mechanism: registry-driven

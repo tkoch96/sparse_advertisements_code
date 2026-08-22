@@ -11,11 +11,11 @@ Modes:
              r-family VMs — dpsize 25 OOM'd a 64G head pre-packing.
 
     python -m experiments.eods.build_manifest --mode sizes \
-        --out tools/eods_manifest.json --soln-types sparse,painter,anycast
+        --out cluster/manifests/eods_manifest.json --soln-types sparse,painter,anycast
     python -m experiments.eods.build_manifest --mode prefixes --dpsizes 20 \
-        --out tools/eonp_manifest.json
+        --out cluster/manifests/eonp_manifest.json
     python -m experiments.eods.build_manifest --mode obj32 --seeds 1-3 \
-        --out tools/obj32_manifest.json
+        --out cluster/manifests/obj32_manifest.json
 """
 import argparse
 import json

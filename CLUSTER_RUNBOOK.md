@@ -1,5 +1,18 @@
 # Cluster runbook: SCULPTOR on AWS Ray
 
+> **2026-08-21 — read `cluster/README.md` first.** The day-to-day loop is
+> now four commands (`vmctl start` / `expctl push` / `expctl launch` /
+> `expctl watch` / `vmctl stop`), and they do not use Ray's autoscaler at
+> all: they start an existing stopped instance over boto3 and talk to it
+> by plain SSH. They also grow the disk on start and refuse to stop a box
+> whose logs have not been pulled.
+>
+> Everything below still applies to the **`ray up` fleet path** and to the
+> background on AWS prereqs, the yaml's eight gotchas, the env vars and
+> the known-issues list — all of which are still accurate and still worth
+> reading. Where the two disagree about the day-to-day loop,
+> `cluster/README.md` is current.
+
 Operational reference for getting SCULPTOR running on AWS via Ray, end-to-end.
 Written 2026-05-19 after the overnight session that stood up the first
 working setup. Every step below is what we actually did and verified —
@@ -7,7 +20,7 @@ nothing aspirational.
 
 If you're a new Claude agent picking this up: read this file, then
 `OVERNIGHT_SUMMARY.md`, then `RESEARCH_ROADMAP.md`. The cluster yaml and
-teardown script are ready to use — `ray up ray-cluster.yaml -y` works
+teardown script are ready to use — `ray up cluster/ray-cluster.yaml -y` works
 unmodified.
 
 ---
@@ -28,14 +41,14 @@ unmodified.
 #    - pip install "ray[default]" boto3 in your local venv
 
 # 1. Spin cluster (5-30 min depending on whether 4.5GB rsync is fresh)
-~/Documents/venv312/bin/ray up ray-cluster.yaml -y
+~/Documents/venv312/bin/ray up cluster/ray-cluster.yaml -y
 
 # 2. Run something
-~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml '
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   SCULPTOR_MAX_ITER=10 SCULPTOR_N_WORKERS=32 nohup /home/ubuntu/venv312/bin/python \
-    evaluations/eval_latency_failure.py --port 31415 --dpsize actual-32 \
+    evaluations/eval_all_solution_types.py --port 31415 --dpsize actual-32 \
     > /tmp/cluster_runs/${ts}.log 2>&1 < /dev/null &
   echo $! > /tmp/cluster_runs/${ts}.pid
   ln -sfn ${ts}.log /tmp/cluster_runs/latest.log
@@ -43,11 +56,11 @@ unmodified.
 '
 
 # 3. Watch progress (any of):
-~/Documents/venv312/bin/ray exec ray-cluster.yaml 'tail -30 /tmp/cluster_runs/latest.log'
-~/Documents/venv312/bin/ray exec ray-cluster.yaml 'ray status'
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml 'tail -30 /tmp/cluster_runs/latest.log'
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml 'ray status'
 
 # 4. Tear down (UNCONDITIONAL AT END OF EACH SESSION)
-./teardown.sh
+./cluster/teardown.sh
 ```
 
 ## 📊 Local timing dashboard
@@ -56,15 +69,15 @@ A cron job (every 10 min) pulls the cluster logs to the laptop, persists timing
 stats into a local SQLite DB (so they survive teardown), and regenerates a
 refreshing dashboard. Set up session 10 (2026-05-28).
 
-- **Tool:** [tools/cluster_dashboard.py](tools/cluster_dashboard.py) — pull → ingest → plot → html.
-- **Wrapper / cron entry:** `tools/sculptor_dashboard_refresh.sh`, run by
+- **Tool:** [cluster/cluster_dashboard.py](cluster/cluster_dashboard.py) — pull → ingest → plot → html.
+- **Wrapper / cron entry:** `cluster/sculptor_dashboard_refresh.sh`, run by
   `*/10 * * * *`.
 - **State dir:** `~/sculptor_dashboard/` — `sculptor_timings.db` (SQLite),
   `raw/` (mirrored logs, never-lose), `plots/*.png`, `index.html`.
 - **View:** `open ~/sculptor_dashboard/index.html` (auto-refreshes every 60s).
 - **What it tracks:**
   - Driver per-iter phase timing (grad/measure/stop) for the active run, via the
-    reused [tools/plot_phase_timings.py](tools/plot_phase_timings.py) parser.
+    reused [cluster/plot_phase_timings.py](cluster/plot_phase_timings.py) parser.
   - **Per-worker (worker 0) per-computation LP timing over time** — parsed from
     the `Worker N timing summary` blocks the actor prints each gradient batch
     (`solve_generic_lp_persistent`, `sim_rti`, `total_rti_calc`, …). Each block
@@ -84,7 +97,7 @@ refreshing dashboard. Set up session 10 (2026-05-28).
   dpsize 3-20) into `~/sculptor_dashboard/extra_logs/*.log` — they're ingested
   on every refresh, so the cross-size view isn't limited to what's on the live
   head (which only carries the current dpsize 25/32 sweeps).
-- Manual: `python tools/cluster_dashboard.py --plot-only` (replot from DB),
+- Manual: `python cluster/cluster_dashboard.py --plot-only` (replot from DB),
   `--no-pull` (re-ingest mirrored logs), `--ingest LOG` (one local log).
 
 ## 📡 Local liveness monitoring
@@ -211,10 +224,10 @@ sparse_advertisements_code/
 ├── OVERNIGHT_SUMMARY.md               ← what session-2 (this one) did
 ├── CLUSTER_RUNBOOK.md                 ← this file
 ├── RESEARCH_ROADMAP.md                ← next-steps + experiment plans
-├── ray-cluster.yaml                   ← Ray cluster config (use as-is)
+├── cluster/ray-cluster.yaml                   ← Ray cluster config (use as-is)
 ├── teardown.sh                        ← end-of-session script (use as-is)
 ├── core/sparse_advertisements_v3.py        ← SCULPTOR algorithm
-├── evaluations/eval_latency_failure.py            ← primary driver
+├── evaluations/eval_all_solution_types.py            ← primary driver
 ├── core/worker_comms.py                ← Ray Worker_Manager
 ├── core/path_distribution_computer.py  ← Ray actor wrapper
 ├── core/solve_lp_assignment.py             ← LP dispatch (with headroom helper)
@@ -236,7 +249,7 @@ Source: shared Google Drive folder. README.md mentions the link.
 
 ---
 
-## ray-cluster.yaml: what's in it and why
+## cluster/ray-cluster.yaml: what's in it and why
 
 The yaml in the repo is already validated. **Don't rewrite it from scratch
 without reading this section** — there are 8 distinct gotchas baked in that
@@ -317,12 +330,12 @@ Paste new ImageId into yaml at TWO places (head + worker definitions).
 to survive wifi flakes, laptop sleep, etc. The pattern we settled on:
 
 ```bash
-~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml '
   mkdir -p /tmp/cluster_runs
   ts=$(date +%Y%m%d_%H%M%S)
   cd ~/sparse_advertisements_code
   <ENV_VARS> nohup /home/ubuntu/venv312/bin/python \
-    evaluations/eval_latency_failure.py --port 31415 --dpsize <dpsize> \
+    evaluations/eval_all_solution_types.py --port 31415 --dpsize <dpsize> \
     > /tmp/cluster_runs/${ts}_<name>.log 2>&1 < /dev/null &
   pid=$!
   echo $pid > /tmp/cluster_runs/${ts}_<name>.pid
@@ -353,7 +366,7 @@ Key elements:
 
 **Quick status:**
 ```bash
-~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml '
   pid=$(cat /tmp/cluster_runs/latest.pid)
   if ps -p $pid > /dev/null; then echo RUNNING; else echo STOPPED; fi
   ray status | head -20
@@ -363,7 +376,7 @@ Key elements:
 
 **Iter timing extraction:**
 ```bash
-~/Documents/venv312/bin/ray exec ray-cluster.yaml '
+~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml '
   grep -E "Timer: grads|LEARNING ITERATION|Calcing.*grad took" /tmp/cluster_runs/latest.log
 '
 ```
@@ -393,11 +406,11 @@ it was 100% complete and the next phase had started.
 discipline. Do not trust yourself to remember.
 
 ```
-./teardown.sh
+./cluster/teardown.sh
 ```
 
 What it does:
-1. `ray down -y ray-cluster.yaml` (terminates head; workers cascade)
+1. `ray down -y cluster/ray-cluster.yaml` (terminates head; workers cascade)
 2. Verifies no project=sculptor EC2 instances are still running
 3. Checks for unattached EBS volumes
 4. Checks for orphan Elastic IPs
@@ -459,7 +472,7 @@ metros are np.int64 not city strings. Doesn't fire for actual-N runs
 
 ### `tuple - tuple` TypeError in flash-crowd eval
 
-`evaluations/eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` raises
+`evaluations/eval_all_solution_types.py:480` `assess_resilience_to_flash_crowds_mp` raises
 `TypeError: unsupported operand type(s) for -: 'tuple' and 'tuple'`
 repeatedly. Eval results for flash-crowd are partially lost but other
 phases continue.

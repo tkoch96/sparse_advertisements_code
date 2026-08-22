@@ -12,7 +12,7 @@ Modes (SCULPTOR_EODS_MODE):
       popp_failure_latency_comparison_<dpsize>.pkl (same as the
       standalone script).
 
-Both modes call eval_latency_failure.evaluate_all_metrics (the module
+Both modes call eval_all_solution_types.evaluate_all_metrics (the module
 BOTH standalone sweeps use) with nsim=1 and a per-cell resumable pickle
 (use_performance_metrics_fn). Strategies via SCULPTOR_SOLN_TYPES.
 Merge with experiments.eods.merge_eods.
@@ -128,9 +128,9 @@ def main():
         unit = 'sim={}'.format(args.seed)
 
     t0 = time.time()
-    from evaluations.eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_all_solution_types import evaluate_all_metrics
     # activate AFTER all module imports: activating earlier reorders the
-    # star-import circularity and eval_latency_failure loses
+    # star-import circularity and eval_all_solution_types loses
     # get_random_deployment (NameError, found on the instrumented
     # pre-flight relaunch 2026-08-20)
     if os.environ.get('SCULPTOR_STARTUP_TIMELOG') == '1':

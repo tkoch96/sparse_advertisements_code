@@ -222,7 +222,7 @@ When the sweep finishes:
    uses a freshly-generated `testing_feature-actual-32` deployment
    via `get_random_deployment`).
 
-4. **Tear down the cluster** — `ray down -y ray-cluster.yaml`. Verify
+4. **Tear down the cluster** — `ray down -y cluster/ray-cluster.yaml`. Verify
    no leftover EC2 instances tagged `project=sculptor`.
 
 ## 🚨 KEY NEXT GOAL: run the sweep at nsim > 1 for paper-quality figures
@@ -276,7 +276,7 @@ The recommended way to scale up:
   pings.
 - **Per-trial PDFs in `figures/` get RACED by concurrent trials**;
   use the per-seed metrics pickles in `cache/`, not the PDFs.
-- **`ray-cluster.yaml` has `min_workers: 1`** (temporarily set this
+- **`cluster/ray-cluster.yaml` has `min_workers: 1`** (temporarily set this
   session). Revert to `0` before tear-down so future `ray up`s start
   with the autoscaler-on-demand default.
 

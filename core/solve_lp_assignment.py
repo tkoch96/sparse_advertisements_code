@@ -933,7 +933,7 @@ def solve_min_mlu(sas, routed_through_ingress):
 	prefix are excluded here; callers charge them separately (bounded
 	stranding penalty, never the 30s sentinel).
 	Returns (mlu, routable_vol_frac); mlu is None if nothing routes.
-	Consumers: experiments/model_error/objectives.py lat_plus_max_util."""
+	Consumers: core/hard_objectives.py lat_plus_max_util."""
 	from scipy.sparse import lil_matrix
 	cand = {}
 	for _pref, ug_to_popp in routed_through_ingress.items():
@@ -1743,7 +1743,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 		# "routed_through_ingress": routed_through_ingress,
 	}
 
-# Optional extension objectives (experiments/model_error/objectives.py):
+# Optional extension objectives (core/hard_objectives.py):
 # SCULPTOR_XOBJS=1 registers them into generic_lp_functions at import
 # time -- in EVERY process importing this module (driver AND Ray
 # workers), which the runtime register() alone cannot guarantee. Module
@@ -1751,7 +1751,7 @@ def solve_lp_assignment(sas, adv, verb=False, **kwargs):
 # resolves against a fully-initialized namespace.
 if _os.environ.get('SCULPTOR_XOBJS', '0') == '1':
 	try:
-		from experiments.model_error import objectives as _xobjs
+		from core import hard_objectives as _xobjs
 		_xobjs.register()
 		print('[xobjs] extension objectives registered: {}'.format(
 			sorted(_xobjs.REGISTERED_OBJECTIVES)))

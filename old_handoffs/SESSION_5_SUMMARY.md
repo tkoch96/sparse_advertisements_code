@@ -118,7 +118,7 @@ Correctness fingerprint matches in every config.
    fields?** Strategy-compare + pct_volume_within_latency completed
    (data present), but assess_failure_resilience for both popp and pop
    failures wrote no rows for any of the 6 strategies. The
-   try/except at eval_latency_failure.py:325-328 catches per-strategy
+   try/except at eval_all_solution_types.py:325-328 catches per-strategy
    exceptions and continues silently. The cluster log was lost when
    sshd wedged before we could grep for tracebacks. Could be: Ray
    serialization size limits on the per-popp call_args list, OOM
@@ -170,7 +170,7 @@ Correctness fingerprint matches in every config.
 - With the new commits in place (Step 1 + per-strategy checkpoint),
   per-trial cost should be ~7-10h instead of 10-12h
 - 3 trials in parallel × 7h × $0.85/hr ≈ $20
-- Need to bring up cluster again (`ray up ray-cluster.yaml`). Be wary
+- Need to bring up cluster again (`ray up cluster/ray-cluster.yaml`). Be wary
   of painter at actual-32 — it adds hours. Maybe skip painter from
   soln_types for now and add it back when investigating fig 6.
 
@@ -207,13 +207,13 @@ Correctness fingerprint matches in every config.
 | `tests/test_worker_perf.py` | Parametrized scaffold with correctness gate |
 | `tests/test_worker_perf_sweep.py` | ON/OFF sweep for any toggleable optimization |
 | `path_distribution_computer.py` | The worker; has the env-var `SCULPTOR_DISABLE_RAW_X_BATCH` toggle |
-| `eval_latency_failure.py` | The eval driver; checkpoint hook + per-strategy save on crash |
+| `eval_all_solution_types.py` | The eval driver; checkpoint hook + per-strategy save on crash |
 
 ## Operational notes that bit prior agents (mostly unchanged from session 4)
 
 - Cluster yaml file_mount source is `~/Documents/sparse_advertisements_code` (main branch), not the worktree. FF-merge before `ray rsync-up`
 - `ray rsync-up` syncs to head only, NOT to running worker nodes — to push code changes to workers, either terminate the worker (it'll re-spawn with fresh code from head's file_mount) or use `ray rsync-up --all-nodes` if Ray supports it on your version
-- Tear down EVERY session that brings up the cluster. `./teardown.sh`. Verify with `aws ec2 describe-instances --filters Name=tag:project,Values=sculptor`
+- Tear down EVERY session that brings up the cluster. `./cluster/teardown.sh`. Verify with `aws ec2 describe-instances --filters Name=tag:project,Values=sculptor`
 - `painter` is slow at actual-32 (5-10 min/iter × 30 iters = 2-5 hours alone). Consider dropping it from soln_types if you don't need that specific baseline for your figure
 - The deployment dict has SOME fields per-UG (`ug_perfs`, `ug_to_vol`, etc.) and SOME static (`popps`, `link_capacities`, `whole_deployment_*`). The session-5 `ray.put`-static refactor exploits this; helpers.py:split_deployment_by_ug_separated returns them separately for actor init.
 - The new `SCULPTOR_GRB_DUMP=<dir>` env var (uncommitted) instruments worker 0 to write its first 3 LP solves as .mps files + a Gurobi log file. Useful for sending to Gurobi support.

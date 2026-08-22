@@ -12,7 +12,7 @@ session (Claude or human) to scale workers up.
 ## TL;DR for whoever reads this next
 
 **What's working now (as of end-of-session 2026-05-19):**
-- AWS Ray cluster fully operational. `ray-cluster.yaml` + `teardown.sh` in
+- AWS Ray cluster fully operational. `cluster/ray-cluster.yaml` + `teardown.sh` in
   the repo work as-is. See `CLUSTER_RUNBOOK.md` for the cookbook.
 - `actual-10` and `actual-32` both run end-to-end on cluster.
 - Per-iter timing baselines: ~3 min/iter at actual-10 (8 workers),
@@ -40,7 +40,7 @@ session (Claude or human) to scale workers up.
 
 ## Cluster shape used
 
-- Yaml: `ray-cluster.yaml` in repo root.
+- Yaml: `cluster/ray-cluster.yaml` in repo root.
 - Region: `us-east-1`
 - Head: `m7g.large` on-demand, CPU=0 resource (no actor work scheduled there)
 - Workers: `c7g.16xlarge` spot, max_workers=1, idle_timeout=10 min
@@ -83,7 +83,7 @@ Six independent failures hit between "first ray up" and "first SCULPTOR run":
    4.5GB latency CSV in cache/ never made it to the cluster. Fix: removed
    `rsync_filter` block from yaml entirely. Rely on explicit rsync_exclude.
 
-All seven now baked into [`ray-cluster.yaml`](ray-cluster.yaml). A fresh
+All seven now baked into [`cluster/ray-cluster.yaml`](cluster/ray-cluster.yaml). A fresh
 `ray up` from scratch should hit zero of these next time.
 
 ## Tests that pass on cluster
@@ -262,7 +262,7 @@ in setup_commands.
 
 ### Issue F: bug in flash crowd evaluator (NON-FATAL)
 
-`eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` raises
+`eval_all_solution_types.py:480` `assess_resilience_to_flash_crowds_mp` raises
 `TypeError: unsupported operand type(s) for -: 'tuple' and 'tuple'`
 repeatedly. Caught in some upstream try/except, doesn't kill the run, but
 loses the flash crowd evaluation results. Pre-existing bug; not blocking
@@ -408,7 +408,7 @@ These are pre-existing bugs that the user has been ignoring. Worth a
 cleanup pass:
 - `wrapper_eval.py:741` `metro_to_diurnal_factor` — guard against
   non-string metros for synthetic deployments
-- `eval_latency_failure.py:480` `assess_resilience_to_flash_crowds_mp` —
+- `eval_all_solution_types.py:480` `assess_resilience_to_flash_crowds_mp` —
   the `tuple - tuple` TypeError needs an actual debug
 - `sparse_advertisements_v3.py:64, 1224` — old diagnostic code that emits
   noisy tracebacks; remove

@@ -79,7 +79,7 @@ autoscaler-era code supports it; per-node plasma dedupe already in).
 ONE deployment at actual-25 (seed 1), then ONE at actual-32 — through
 run_eods_cell -> eval_latency_failure.evaluate_all_metrics (classical
 paper metrics). NOT the 10-sim campaign; NOT ablation-ladder semantics.
-Manifests: tools/eods25_manifest.json, tools/eods32_manifest.json
+Manifests: cluster/manifests/eods25_manifest.json, cluster/manifests/eods32_manifest.json
 (1 cell each). Launchers on head: ~/eods25_launch_full.sh (96w),
 ~/eods32_launch_full.sh (96w) — both carry the full env.
 

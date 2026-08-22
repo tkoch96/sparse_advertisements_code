@@ -8,7 +8,7 @@ This is the core of the codebase. The class hierarchy:
             └─ Sparse_Advertisement_Eval    (this file, near end) — eval entry
 
 `Sparse_Advertisement_Eval` is the public entry-point used by drivers
-(`eval_latency_failure.evaluate_all_metrics`, `experiments.run_objective`).
+(`eval_all_solution_types.evaluate_all_metrics`, `experiments.run_objective`).
 It instantiates a `Sparse_Advertisement_Solver`, calls `compare_different_solutions`
 to run sparse + the baseline strategies (painter, anyopt, anycast, etc.),
 and exposes the solved advertisement matrices to downstream eval phases.
@@ -98,7 +98,7 @@ from core.worker_comms import Worker_Manager
 from core.generic_objective import Generic_Objective
 
 try:
-	from evaluations.eval_latency_failure import plot_lats_from_adv
+	from evaluations.eval_all_solution_types import plot_lats_from_adv
 except ImportError:
 	pass
 
@@ -288,6 +288,15 @@ def _solve_one_strategy_in_subprocess(strategy_name, deployment, init_kwa,
 	# Defensive: never recurse into parallel mode inside a subprocess.
 	_os.environ['SCULPTOR_DISABLE_PARALLEL_STRATEGIES'] = '1'
 
+	# Bind this pid to its strategy, ONCE, on the child's first line. The
+	# five non-sparse strategies write [mem] markers into the same log as
+	# the driver, and nothing previously tied a pid to a name -- so their
+	# phase timings were unattributable (and, worse, painter's markers were
+	# briefly mistaken for sparse's on 2026-08-21). One print is enough:
+	# every later marker carries pid=, so the mapping is recoverable.
+	print('[parallel] strategy={} pid={} started t={:.2f}'.format(
+		strategy_name, _os.getpid(), time.time()), flush=True)
+
 	# Re-import inside the fork-child to make sure we hit the module-state-
 	# fresh code path. With fork start method this is essentially a no-op
 	# since the imports are inherited, but it shields against spawn fallback.
@@ -462,6 +471,14 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			'n_prefixes': self.n_prefixes,
 			'save_run_dir': self.save_run_dir,
 		}
+		# Carried in init_kwa, NOT read from the env in the actor: Ray
+		# workers are pre-started by the raylet and do NOT inherit env
+		# changes the driver makes after ray.init(), so SCULPTOR_MC_NUM set
+		# by a driver reached the actors as None (verified 2026-08-21 --
+		# the actor printed env=None while the driver had set 5). init_kwa
+		# IS pickled to every actor, so it is the channel that works, on
+		# one node or many.
+		kwa['mc_num'] = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		kwa['generic_objective'] = self.generic_objective.obj
 		return kwa
 
@@ -671,6 +688,20 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			### so number of entries on should be (MAX_LATENCY - MIN_LATENCY) / 2 out of lambduh * n_popp * (n_pref - 2)
 			### max of .05
 
+
+			# This initialisation needs one prefix for anycast plus one per PoP,
+			# so n_prefixes must be at least n_pops + 1. Below that, the
+			# a[these_popps, i+1] write below runs off the end and IndexErrors
+			# -- which compare_different_solutions' bare except swallows, so
+			# the run reports "[INCOMPLETE] sparse" with no cause. Say it
+			# plainly instead (Tom 2026-08-21, found by the prefix-budget
+			# integration test at budget 3 on `small`, which has 3 PoPs).
+			if self.n_prefixes < self.n_pops + 1:
+				raise ValueError(
+					"n_prefixes={} is too small for this deployment: "
+					"init_advertisement assigns prefix 0 to anycast and one "
+					"prefix per PoP, so it needs at least n_pops + 1 = {}."
+					.format(self.n_prefixes, self.n_pops + 1))
 
 			# everything off, to start, with some jitter
 			a = .35 * np.ones((self.n_popp, self.n_prefixes)) + (.2 * (np.random.uniform(size=(self.n_popp, self.n_prefixes)) - .5 ))
@@ -1394,7 +1425,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		try:
 			_mc = int(os.environ.get(
 				'SCULPTOR_MC_NUM_EXPLORE' if getattr(self, '_abl_sigma_refresh_iter', False)
-				else 'SCULPTOR_MC_NUM', '5'))
+				else 'SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 			_stats = {}
 			for _i, (_ind, _bta) in enumerate(calls):
 				_var, _means = 0.0, []
@@ -1466,7 +1497,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		signed raw = failed_off - failed_on."""
 		MC_NUM = int(os.environ.get(
 			'SCULPTOR_MC_NUM_EXPLORE' if getattr(self, '_abl_sigma_refresh_iter', False)
-			else 'SCULPTOR_MC_NUM', '5'))
+			else 'SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		store = {}
 		ind = 0
 		for coord in calls_advs:
@@ -2440,8 +2471,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			_cand = self._decision_probe_target()
 			if _cand is not None:
 				return _cand
-		explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
-		base_mc = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
+		explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE',
+									   DEFAULT_MC_NUM_EXPLORE))
+		# MUST match what the workers were built with, or the restore
+		# broadcast below silently overwrites their configured MC_NUM.
+		base_mc = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		if explore_mc == base_mc:
 			return self._solve_max_information_body(current_advertisement)
 		self._broadcast_mc_num(explore_mc)
@@ -2915,6 +2949,12 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			'n_prefixes': self.n_prefixes,
 			'save_run_dir': self.save_run_dir,
 		}
+		# Third near-identical copy of get_init_kwa in this tree (the other
+		# two are Sparse_Advertisement_Wrapper and Optimal_Adv_Wrapper);
+		# this one shadows them for the Solver, so a knob added to only the
+		# others silently does nothing here. Worth collapsing to a super()
+		# call, but not while a run is in flight.
+		kwa['mc_num'] = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		kwa['generic_objective'] = self.generic_objective.obj
 		return kwa
 
@@ -3037,7 +3077,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		spec = dict(dpsize=str(getattr(self, 'dpsize', '?')),
 					seed=_os.environ.get('SCULPTOR_DEPLOYMENT_SEED', ''),
 					adv=hashlib.sha1(adv.tobytes()).hexdigest(),
-					mc=int(getattr(self, 'worker_manager', None) and 0 or 0) or _os.environ.get('SCULPTOR_MC_NUM', '5'),
+					mc=int(getattr(self, 'worker_manager', None) and 0 or 0) or _os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM),
 					gamma=float(getattr(self, 'gamma', 0)),
 					obj=str(getattr(self.generic_objective, 'obj', 'avg_latency')),
 					n_pref=int(getattr(self, 'n_prefixes', 0) or 0),
@@ -3274,7 +3314,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				timers.append(time.time() - t_last)
 				t_last = time.time()
 
-				if self.probe_mode in ('scheduled', 'slotted'):
+				if self.probe_mode in ('scheduled', 'slotted', 'gated',
+									   'smart'):
 					# WHEN-probing (merged from the ablation fork L2/L6,
 					# Tom 2026-08-17): measure-XOR-step under a TOTAL
 					# budget of SCULPTOR_PROBE_N groundings over a
@@ -3288,9 +3329,22 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 					# advertisement (WHAT targeting retired 2026-08-17:
 					# the current point is the finite-difference hub).
 					# Budget exhaustion stops MEASURING, never TRAINING.
-					probe = (self._probe_slotted_decision()
-							 if self.probe_mode == 'slotted'
-							 else self._probe_scheduled_decision())
+					if self.probe_mode == 'smart':
+						# belief bookkeeping must run EVERY iteration, not
+						# only on probe iterations: criteria (b) plateau and
+						# (c) predicted-vs-realized are built from the
+						# per-iteration belief series.
+						self._probe_track_belief()
+						probe = self._probe_smart_decision(grads)
+					elif self.probe_mode == 'gated':
+						probe = self._probe_gated_decision(grads)
+					elif self.probe_mode == 'slotted':
+						probe = self._probe_slotted_decision()
+					else:
+						probe = self._probe_scheduled_decision()
+					_a_before = (np.array(self.optimization_advertisement,
+										  dtype=float)
+								 if self.probe_mode == 'smart' else None)
 					if not (probe and self._probe_ground_current()):
 						# step iteration. Preserve stock's
 						# uncertainty_factor decay invariant: stock
@@ -3301,6 +3355,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 						self.uncertainty_factor = max(
 							1.0, self.uncertainty_factor * (1 - .25))
 						self._solve_apply_step(grads)
+						if _a_before is not None:
+							# (c) raw material: first-order predicted change
+							# in the believed objective from this step.
+							_da = (np.asarray(self.optimization_advertisement,
+											  dtype=float) - _a_before)
+							self._probe_pending_pred = float(np.dot(
+								np.asarray(grads).flatten(), _da.flatten()))
 
 					## measure
 					timers.append(time.time() - t_last)
@@ -3374,21 +3435,282 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							  os.environ.get('SCULPTOR_ABLATION_' + name,
 											 default))
 
+	PROBE_MODES = ('post_step', 'scheduled', 'slotted', 'gated', 'smart')
+
 	def _probe_framework_init(self):
-		self.probe_mode = self._probe_env('PROBE_MODE', 'post_step')
-		if self.probe_mode not in ('post_step', 'scheduled', 'slotted'):
-			# other modes (gated/smart/adaptive/fixed) are ablation-fork
-			# experiments, not production capabilities
-			self.probe_mode = 'post_step'
-		self.probe_n = int(self._probe_env('PROBE_N', '10'))
+		self.probe_mode = self._probe_env('PROBE_MODE', DEFAULT_PROBE_MODE)
+		if self.probe_mode not in self.PROBE_MODES:
+			print('[probe-gate] unknown SCULPTOR_PROBE_MODE={!r}; falling '
+				  'back to {}'.format(self.probe_mode, DEFAULT_PROBE_MODE),
+				  flush=True)
+			self.probe_mode = DEFAULT_PROBE_MODE
+		# PROBE_N accepts the literal 'prefixes': budget = this deployment's
+		# prefix count. The prefix count varies per deployment
+		# (deployment_to_prefixes scales with |popps|), so a fixed int
+		# cannot express "one measurement per prefix" across a size sweep --
+		# it has to be resolved here, where n_prefixes is known.
+		# Shared resolver, so painter's cap and this budget cannot drift
+		# apart (helpers.constants.resolve_probe_budget).
+		self.probe_n = int(resolve_probe_budget(
+			getattr(self, 'n_prefixes', None)) or DEFAULT_PROBE_N)
+		if str(self._probe_env('PROBE_N', '')).strip().lower() in (
+				'prefixes', 'n_prefixes', 'prefix'):
+			print('[probe-gate] PROBE_N=prefixes -> budget {}'.format(
+				self.probe_n), flush=True)
 		self.probe_tconv = int(self._probe_env(
-			'PROBE_TCONV', str(getattr(self, 'max_n_iter', 100) or 100)))
+			'PROBE_TCONV',
+			str(getattr(self, 'max_n_iter', DEFAULT_PROBE_TCONV)
+				or DEFAULT_PROBE_TCONV)))
 		self.probes_spent = 0
 		self._probe_last_iter = -10 ** 9
 		self._probe_last_attempt = -10 ** 9
 		self._probe_surprise_pending = None
 		self._probe_last_surprise_val = None
 		self._probe_last_surprise = None
+		# --- uncertainty-gated (gated/smart) state -----------------------
+		# The sigma/RB-stat plumbing these consume is ALREADY in this file
+		# (_abl_grad_sigma at the gradient seam, _abl_capture_rb, the
+		# _abl_var_ewma sigma refresh); only the DECISION lived in the
+		# fork. Ported 2026-08-21.
+		self.probe_c = float(self._probe_env('PROBE_C', DEFAULT_PROBE_C))
+		self.probe_frac = float(self._probe_env('PROBE_FRAC',
+												DEFAULT_PROBE_FRAC))
+		self.probe_auto_c = self._probe_env('PROBE_AUTO_C', '1') != '0'
+		self.u_ent_w = float(self._probe_env('U_ENT_W', DEFAULT_U_ENT_W))
+		self._probe_U_history = []
+		self._probe_U = None
+		self._probe_c_now = None
+		self._probe_c_mult = 1.0
+		self._probe_ent_anchor = None
+		self._probe_ent_ratio = 0.0
+		self._belief_hist = []
+		self._probe_predreal = []
+		self._probe_pending_pred = None
+		self._probe_preprobe_belief = None
+		self._probe_skips = 0
+		if self.probe_mode in ('gated', 'smart'):
+			# The fork starts both probe clocks at 0, so the (b) staleness
+			# and (s) backstop criteria measure from iteration 0 rather
+			# than from -inf. Left at -10**9 the backstop fires on the
+			# very first iteration -- an extra attempt the fork never
+			# makes. Scoped to the new modes so slotted/scheduled, which
+			# have shipped with the sentinel, are untouched.
+			self._probe_last_iter = 0
+			self._probe_last_attempt = 0
+
+	# ------------------------------------------------------------------
+	# Uncertainty-gated probing (gated + smart), ported verbatim in
+	# behaviour from experiments/ablation/sculptor_fork.py 2026-08-21.
+	# The fork remains the reference implementation and its assertions
+	# still gate the ablation ladder; integration_tests/test_probe_merge.py
+	# checks the two agree.
+	# ------------------------------------------------------------------
+
+	def _probe_uncertainty(self, g):
+		"""U = g^2-weighted mean P(sign error) over probed coordinates.
+
+		Sign-error damage on a coordinate scales with displacement x
+		gradient, so g^2 weighting makes the near-zero-gradient explore
+		tail (sign genuinely 50/50 but harmless) self-discount
+		quadratically instead of needing an arbitrary top-k cutoff.
+		LB and RB probes are independent: raw deltas add with the
+		objective's term weights, variances with the squared weights.
+		"""
+		from math import erfc, sqrt
+		gamma = float(self.get_gamma())
+		w_L, w_R = (1.0, gamma) if gamma <= 1 else (1.0 / gamma, 1.0)
+		alpha = float(os.environ.get('SCULPTOR_ALPHA_POP', '0'))
+		combined = {}
+		for ind, (delta, sg) in (getattr(self, '_abl_grad_sigma', {}) or {}).items():
+			combined[ind] = [w_L * delta, (w_L * sg) ** 2]
+		for src, w in ((getattr(self, '_abl_rb_stats_popp', {}) or {}, w_R),
+					   (getattr(self, '_abl_rb_stats_pop', {}) or {},
+						w_R * alpha)):
+			if w == 0.0:
+				continue
+			for ind, (raw, var) in src.items():
+				c = combined.setdefault(ind, [0.0, 0.0])
+				c[0] += w * raw
+				c[1] += (w ** 2) * var
+		entries = []
+		for ind, (raw, var) in combined.items():
+			gv = float(np.asarray(g)[ind])
+			if gv != 0.0:
+				entries.append((abs(gv), abs(raw), var ** 0.5))
+		if not entries:
+			return 0.0, 0.0, 0
+		wsum, num, d2, s2 = 0.0, 0.0, 0.0, 0.0
+		ratios, sigmas = [], []
+		for gmag, delta, sg in entries:
+			p_err = 0.5 * erfc(delta / (sg * sqrt(2.0))) if sg > 0 else 0.0
+			w = gmag * gmag
+			num += w * p_err
+			wsum += w
+			d2 += delta * delta
+			s2 += sg * sg
+			ratios.append(delta / sg if sg > 0 else float('inf'))
+			sigmas.append(sg)
+		self._probe_med_snr = float(np.median(ratios)) if ratios else float('inf')
+		self._probe_med_sigma = float(np.median(sigmas)) if sigmas else 0.0
+		u_sig = num / wsum
+		u_ent = self.u_ent_w * min(2.0, self._probe_ent_ratio)
+		self._probe_U_sig, self._probe_U_ent = float(u_sig), float(u_ent)
+		return (u_sig + u_ent,
+				(s2 / d2 if d2 > 0 else float('inf')), len(entries))
+
+	def _probe_current_c(self):
+		"""Auto-learned threshold: anneal from the initial (high) c toward
+		the target quantile of the U history. The post-probe doubling is
+		REFRACTORY, not a ratchet -- a permanent multiplier locked spending
+		at ~2 probes regardless of budget."""
+		if not self.probe_auto_c:
+			return self.probe_c, float('nan'), float('nan')
+		tau_default = max(2.0, 0.5 * self.probe_frac * self.probe_tconv
+						  / max(1, self.probe_n))
+		tau = float(self._probe_env('PROBE_MULT_TAU', str(tau_default)))
+		self._probe_c_mult = 1.0 + (self._probe_c_mult - 1.0) * float(
+			np.exp(-1.0 / tau))
+		rate = self.probe_n / max(1.0, self.probe_frac * self.probe_tconv)
+		aggr = float(self._probe_env('PROBE_Q_AGGR', '0'))
+		q_target = max(0.4, min(0.999, 1.0 - rate) - aggr)
+		if len(self._probe_U_history) >= 1:
+			_uw = int(self._probe_env('U_WINDOW',
+									  str(max(10, self.probe_tconv // 2))))
+			_hist = self._probe_U_history[-_uw:] if _uw > 0 \
+				else self._probe_U_history
+			q_hat = float(np.quantile(np.asarray(_hist), q_target))
+		else:
+			q_hat = self.probe_c
+		_atau = float(self._probe_env('PROBE_ANNEAL_TAU', '1.5'))
+		anneal = float(np.exp(-self.iter / _atau))
+		c = (q_hat + (self.probe_c - q_hat) * anneal) * self._probe_c_mult
+		return c, q_hat, anneal
+
+	def _probe_track_belief(self):
+		"""Per-iteration belief bookkeeping for the smart gate: append the
+		believed objective, pair the last step's predicted delta with what
+		the belief actually did, and apply the surprise adjustment after a
+		probe."""
+		b = getattr(self, 'current_pseudo_objective', None)
+		if b is None or not np.isfinite(b):
+			return
+		prev = self._belief_hist[-1] if self._belief_hist else None
+		self._belief_hist.append(float(b))
+		if prev is None:
+			return
+		realized = float(b) - prev
+		if self._probe_pending_pred is not None:
+			self._probe_predreal.append((self._probe_pending_pred, realized))
+			self._probe_pending_pred = None
+		if self._probe_preprobe_belief is not None:
+			scale = max(max(self._belief_hist) - min(self._belief_hist), 1e-9)
+			surprise = abs(float(b) - self._probe_preprobe_belief) / scale
+			rel = float(self._probe_env('SMART_SURPRISE_REL',
+										DEFAULT_SMART_SURPRISE_REL))
+			fac = float(self._probe_env('SMART_SURPRISE_FACTOR',
+										DEFAULT_SMART_SURPRISE_FACTOR))
+			if surprise > rel:
+				self._probe_c_mult *= fac
+			else:
+				self._probe_c_mult *= 2.0
+			self._probe_preprobe_belief = None
+
+	def _probe_gated_decision(self, grads):
+		"""gated: probe when U exceeds the (auto-learned) threshold."""
+		U, nsr, k = self._probe_uncertainty(grads)
+		self._probe_U = U
+		self._probe_U_history.append(U)
+		c, q_hat, anneal = self._probe_current_c()
+		self._probe_c_now = c
+		want = U > c
+		can = self.probes_spent < self.probe_n
+		decision = want and can
+		print('[probe-gate] iter={} mode=gated U={:.4f} nsr={:.3f} k={} '
+			  'c={:.4f} spent={}/{} -> {}'.format(
+				  self.iter, U, nsr, k, c, self.probes_spent, self.probe_n,
+				  'PROBE' if decision else
+				  ('step (budget exhausted, U high)' if want else 'step')),
+			  flush=True)
+		if decision:
+			self._probe_last_attempt = self.iter
+		return decision
+
+	def _probe_smart_decision(self, grads):
+		"""smart: probe when ANY of
+		  (a) U > c                  -- the model admits uncertainty
+		  (b) stale AND believed objective plateaued -- quiet but
+		      ungrounded, so verify before trusting convergence
+		  (c) sign-disagreement of predicted-vs-realized belief deltas
+		      above threshold -- the local model cannot predict itself
+		  (s) scheduled backstop -- never let self-assessment starve the
+		      budget.
+		Budget-capped; a MIN-GAP guard holds (a)/(b)/(c) below a fraction
+		of the scheduled spacing so the gate biases toward the schedule."""
+		U, nsr, k = self._probe_uncertainty(grads)
+		self._probe_U = U
+		self._probe_U_history.append(U)
+		c, q_hat, anneal = self._probe_current_c()
+		self._probe_c_now = c
+		fire_a = U > c
+
+		stale_frac = float(self._probe_env('SMART_STALE_FRAC',
+										   DEFAULT_SMART_STALE_FRAC))
+		stale_gap = max(2, int(round(stale_frac * self.probe_tconv
+									 / max(1, self.probe_n))))
+		stale = (self.iter - self._probe_last_iter) >= stale_gap
+		hist = list(self._belief_hist)
+		plateau_w = int(self._probe_env('SMART_PLATEAU_W',
+										DEFAULT_SMART_PLATEAU_W))
+		plateau_eps = float(self._probe_env('SMART_PLATEAU_EPS',
+											DEFAULT_SMART_PLATEAU_EPS))
+		plateau = False
+		if len(hist) >= plateau_w + 1:
+			deltas = np.abs(np.diff(hist[-(plateau_w + 1):]))
+			scale = max(max(hist) - min(hist), 1e-9)
+			plateau = float(np.mean(deltas)) < plateau_eps * scale
+		fire_b = stale and plateau
+
+		sign_w = int(self._probe_env('SMART_SIGN_W', DEFAULT_SMART_SIGN_W))
+		sign_rate = float(self._probe_env('SMART_SIGN_RATE',
+										  DEFAULT_SMART_SIGN_RATE))
+		fire_c = False
+		if len(self._probe_predreal) >= sign_w:
+			dis = [1.0 if (abs(r) > 1e-12 and np.sign(p) != np.sign(r))
+				   else 0.0 for p, r in self._probe_predreal]
+			fire_c = float(np.mean(dis)) >= sign_rate
+
+		sched_gap = max(2, int(round(
+			float(self._probe_env('SCHED_FALLBACK_MULT',
+								  DEFAULT_SCHED_FALLBACK_MULT))
+			* self.probe_tconv / max(1, self.probe_n))))
+		fire_s = (self.iter - self._probe_last_iter) >= sched_gap
+
+		reasons = ''.join(tag for tag, f in
+						  (('a', fire_a), ('b', fire_b), ('c', fire_c),
+						   ('s', fire_s)) if f)
+		mingap = int(round(
+			float(self._probe_env('SMART_MINGAP_FRAC',
+								  DEFAULT_PROBE_MINGAP_FRAC))
+			* self.probe_tconv / max(1, self.probe_n)))
+		if reasons and not fire_s and \
+				(self.iter - self._probe_last_iter) < mingap:
+			reasons = ''
+		can = self.probes_spent < self.probe_n
+		retry_ok = (self.iter - self._probe_last_attempt
+					>= min(3, sched_gap))
+		decision = bool(reasons) and can and retry_ok
+		print('[probe-gate] iter={} mode=smart U={:.4f} c={:.4f} '
+			  'stale={}/{} plateau={} signrate_n={} reasons={} '
+			  'spent={}/{} -> {}'.format(
+				  self.iter, U, c, self.iter - self._probe_last_iter,
+				  stale_gap, plateau, len(self._probe_predreal),
+				  reasons or '-', self.probes_spent, self.probe_n,
+				  'PROBE' if decision else 'step'), flush=True)
+		if decision:
+			self._probe_last_attempt = self.iter
+			self._probe_preprobe_belief = (self._belief_hist[-1]
+										   if self._belief_hist else None)
+		return decision
 
 	def _probe_resolve_surprise(self):
 		"""Realized belief surprise of the LAST grounding: how much the
@@ -3493,6 +3815,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			return False
 		self._solve_post_step_measure()
 		if int(getattr(self, 'path_measures', 0)) == pm_before:
+			# SILENT no-op path, now logged (2026-08-21). _solve_post_step_-
+			# measure only measures when the THRESHOLDED advertisement
+			# changed; a probe fired before the adv moved therefore spends
+			# nothing and previously said nothing. At PROBE_N=20 over a
+			# 60-iteration horizon probes land ~3 iterations apart, which
+			# is often too soon for the threshold to flip, so ~2.5 probes
+			# per run vanished here and the budget looked like it leaked
+			# (19.5 decisions -> 16.1 spent). Counting it makes the gap
+			# visible instead of mysterious.
+			self._probe_skips = 1 + getattr(self, '_probe_skips', 0)
+			print('[probe-gate] iter={} probe SKIPPED (advertisement '
+				  'unchanged since last measurement; {} skips)'.format(
+					  self.iter, self._probe_skips), flush=True)
 			return False
 		self.probes_spent += 1
 		self._probe_last_iter = self.iter
@@ -3564,7 +3899,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self._abl_sigma_refresh_iter = ((not _mc_off)
 			and (self.iter % max(1, _refresh_every) == 0))
 		_explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
-		_base_mc = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
+		_base_mc = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		if self._abl_sigma_refresh_iter and _explore_mc != _base_mc:
 			self._broadcast_mc_num(_explore_mc)
 			try:
@@ -3698,6 +4033,19 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(
 				self.iter, round(self.t_per_iter,2), self.path_measures, 
 				self.current_pseudo_objective, self.rolling_delta, self.rolling_delta_eff))
+		# ALWAYS report the measurement budget when one is in force -- the
+		# line above is verbose-gated, so a budgeted run previously left no
+		# evidence that its budget bound. This is the line to grep for.
+		if getattr(self, 'probe_mode', 'post_step') != 'post_step':
+			_spent = int(getattr(self, 'probes_spent', 0) or 0)
+			_skips = int(getattr(self, '_probe_skips', 0) or 0)
+			_setup = int(self.path_measures) - _spent
+			print("[probe-budget] EXITING on {} path measures "
+				  "(= {} setup grounding + {} probes) | budget N={} "
+				  "mode={} skipped={} iters={}".format(
+					  int(self.path_measures), _setup, _spent,
+					  int(getattr(self, 'probe_n', -1)), self.probe_mode,
+					  _skips, int(self.iter)), flush=True)
 		self.metrics['t_per_iter'] = self.t_per_iter
 
 

@@ -15,7 +15,7 @@ Two kinds of tests live here:
 		Worker_Manager and runs a handful of iterations of SAS.solve(),
 		asserting the final objective is at most the initial objective.
 		Slow (seconds to a minute) and depends on Ray + the full stack being
-		healthy -- so it doubles as a smoke test for `eval_latency_failure`.
+		healthy -- so it doubles as a smoke test for `eval_all_solution_types`.
 
 Markers (from pytest.ini):
   unit         -- in-process, no Ray.
@@ -156,7 +156,7 @@ def test_sas_solve_converges_end_to_end():
 	  * the Worker_Manager dispatch is broken (e.g., Ray ActorHandle.send),
 		or
 	  * Ray itself isn't initialised cleanly.
-	Any of these would also break `python eval_latency_failure.py --dpsize small`.
+	Any of these would also break `python eval_all_solution_types.py --dpsize small`.
 	"""
 	# Lazy imports so this file still parses if Ray isn't installed.
 	ray = pytest.importorskip("ray")
@@ -195,7 +195,7 @@ def test_sas_solve_converges_end_to_end():
 		n_prefixes=n_prefixes_safe, with_capacity=False,
 	)
 
-	# Wire up workers exactly the way eval_latency_failure.py does (line 129).
+	# Wire up workers exactly the way eval_all_solution_types.py does (line 129).
 	# SAS.solve() depends on `self.worker_manager` being set; the import
 	# alias above ensures `Worker_Manager` here is the Ray-backed version.
 	from core.worker_comms import Worker_Manager  # resolved via the sys.modules alias

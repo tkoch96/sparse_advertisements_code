@@ -30,14 +30,14 @@ RESEARCH_ROADMAP.md.
   `actual-10` × 150 iter, with the cache fix. ETA ~45 min from launch
   (relaunched 02:44 UTC).
 - **No teardown yet** — cluster still has head + (until Phase B finishes)
-  one spot worker. Tear down at end with `./teardown.sh`.
+  one spot worker. Tear down at end with `./cluster/teardown.sh`.
 
 ## What's working
 
 - Code state on `main` is at HEAD with all session-4 commits (no
   uncommitted changes).
 - 19/19 unit tests pass (`pytest tests/test_stochastic_lp.py -m "unit and not slow"`).
-- Cluster operational; `ray up ray-cluster.yaml` from scratch works in one
+- Cluster operational; `ray up cluster/ray-cluster.yaml` from scratch works in one
   shot.
 - New runner script: `benchmarks/headroom_n_trials.sh <dpsize> <max_iter> <max_concurrent> <seeds...>`.
 - Cross-seed plotter: `benchmarks/cross_seed_phase_a_plot.py`.
@@ -263,7 +263,7 @@ table is overstated by ~2×.
    Find the lowest headroom that still beats painter on normal load.
    Cheap (~30 min wall on cluster).
 
-5. **Tear down cluster** (`./teardown.sh`).
+5. **Tear down cluster** (`./cluster/teardown.sh`).
 
 ## Known issues / caveats
 
@@ -302,7 +302,7 @@ ca2ec97  One-seed slim follow-up dispatcher with ntfy.sh push   <-- last session
   swap + the `verbose_workers` fix in `stop_tracker`
 - `benchmarks/headroom_n_trials.sh` — the runner used for phase A & B
 - `benchmarks/out/phase_a_pdfs/` — Phase A outputs
-- `ray-cluster.yaml` — `max_workers: 5` from session 3
+- `cluster/ray-cluster.yaml` — `max_workers: 5` from session 3
 
 ## How to read the current Phase B results when it finishes
 

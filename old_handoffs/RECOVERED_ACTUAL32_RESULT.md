@@ -17,7 +17,7 @@ SCULPTOR re-converged to iter 202 (which is past MAX_ITER=200, hit the
 RD<epsilon stopping condition). All 6 strategies in
 `compare_different_solutions` completed successfully — including painter,
 which took ~30 min at actual-32. The eval pickle was written at line
-152 of eval_latency_failure.py after the strategy loop finished.
+152 of eval_all_solution_types.py after the strategy loop finished.
 
 The failure-eval / sub-eval phases (volume-multiplier, diurnal,
 flash-crowd, popp/pop-failure-Δ) had not yet completed when the head

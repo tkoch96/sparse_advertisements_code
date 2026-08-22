@@ -144,10 +144,10 @@ count-verified; VM stopped.
 
 ### INFRASTRUCTURE MAP
 
-- **Dash** localhost:8643: server = experiments/dashboard/serve.py
+- **Dash** localhost:8643: server = dashboard/serve.py
   (no-store headers; NOT bare http.server), generator registry in
   generate.py (tabs: policy ladder / hard objectives v4 / actual-10 /
-  Old dashboards). Refresh loop `python -m experiments.dashboard.refresh
+  Old dashboards). Refresh loop `python -m dashboard.refresh
   --loop 180` (Mac, nohup; RESTART IT after editing the registry — it
   holds the step list in memory). 30s ticker progress_tick.py writes
   progress.json (iterations + VM RAM/CPU; head-live via ssh). Figures
@@ -155,8 +155,8 @@ count-verified; VM stopped.
   results (license-outage lesson).
 - **Queue** run_n_sweep_queue: manifest mode, deployment-major, RAM
   governor, SCULPTOR_QUEUE_PASSES re-scans, .inprog markers,
-  SCULPTOR_CELL_TIMEOUT. Manifests: tools/v3grid_manifest.json (1440),
-  tools/a10_manifest.json.
+  SCULPTOR_CELL_TIMEOUT. Manifests: cluster/manifests/v3grid_manifest.json (1440),
+  cluster/manifests/a10_manifest.json.
 - **Diagnostics per run**: convergence_over_iterations.pdf now carries
   the adaptive-WHEN row (K + surprise-vs-theta); companion
   model_error_over_iterations.pdf (belief vs GT + per-probe WHY

@@ -1,5 +1,5 @@
 """Score the fork-ladder advertisements with the REPO's full evaluation
-pipeline (eval_latency_failure.evaluate_all_metrics) -- the same functions
+pipeline (eval_all_solution_types.evaluate_all_metrics) -- the same functions
 that produce every metric in evaluate_over_deployment_sizes:
 
   stats_best_latencies, stats_latency_thresholds_{normal,fail_popp,fail_pop},
@@ -204,14 +204,14 @@ def main():
     os.environ['RAY_ADDRESS'] = 'local'
     os.environ.setdefault('RAY_TMPDIR', '/tmp/ray_ladder_eval_{}'.format(os.getpid()))
 
-    # IMPORTANT: import eval_latency_failure BEFORE any module that imports
+    # IMPORTANT: import eval_all_solution_types BEFORE any module that imports
     # sparse_advertisements_v3. sparse_advertisements_v3:93 imports from
-    # eval_latency_failure while Sparse_Advertisement_Eval is defined much
-    # later (line ~640); importing sparse first hands eval_latency_failure a
+    # eval_all_solution_types while Sparse_Advertisement_Eval is defined much
+    # later (line ~640); importing sparse first hands eval_all_solution_types a
     # partial module during its star-import and its namespace permanently
     # misses the class (NameError in every later eval phase). Production
     # drivers (evaluate_over_deployment_sizes) import this module first too.
-    from evaluations.eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_all_solution_types import evaluate_all_metrics
 
     # ---- register rung names in the repo's default metric templates -------
     import evaluations.wrapper_eval as wrapper_eval

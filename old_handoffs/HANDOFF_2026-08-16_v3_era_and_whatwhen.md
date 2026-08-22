@@ -14,12 +14,12 @@ Single source of live state: `~/.sculptor_cluster_alert/active_cluster.json`
   `cache/ablation/policy_ladder_v3/` — no errors, budgets respected,
   L1 exits at iter N, L7's min-gap guard held. Visible on the dash
   (policy-ladder tab, big objective-only figure).
-- **READY TO LAUNCH**: `tools/chain_v3.sh` + `tools/v3_full_manifest.json`
+- **READY TO LAUNCH**: `cluster/chain_v3.sh` + `cluster/manifests/v3_full_manifest.json`
   (28 specs, 840 cells: {classic g=.1, fracb, mlu, prio} x L1-L7 x
   seeds 1-5 x N{1,2,5,10,20,50}, 100 iters, deployment-major across all
   lanes). Deploy both to the head (~/), then:
   `setsid nohup bash chain_v3.sh > /dev/null 2>&1 &`
-  Verdicts in logs/v3_driver.log; watcher `tools/watch_v3.sh`
+  Verdicts in logs/v3_driver.log; watcher `cluster/watch_v3.sh`
   (session Monitor, 30-min beats). Est ~12-16h on the governed pool.
   The 7 smoke cells are reused (queue skips existing JSONs; identical
   config).
@@ -100,8 +100,8 @@ its flag stack (SCULPTOR_ABLATION_GRAD_BASE/_K) remains in the fork.
   2 sessions yet 20-48+ sustain fine empirically; oversubscription just
   waits. See WLS policy note in experiments/ablation/README.md). Proven
   overnight including throttle/recover cycles at 91-92%.
-- **Dashboard** (`experiments/dashboard/`, localhost:8643, refresh
-  loop `python -m experiments.dashboard.refresh --loop 180`, log
+- **Dashboard** (`dashboard/`, localhost:8643, refresh
+  loop `python -m dashboard.refresh --loop 180`, log
   /private/tmp/dashboard_refresh.log): policy-ladder v3 tab (big
   objective-only figure `policy_ladder_v3_5panel_objective.png` + 7-arm
   conv-link grid with per-arm L<k>_ filename prefixes) + hard-objectives
@@ -117,14 +117,14 @@ its flag stack (SCULPTOR_ABLATION_GRAD_BASE/_K) remains in the fork.
   1. SURVIVES SESSIONS: the Mac cron notifiers
      (`~/.sculptor_cluster_alert/liveness_check.py` every 10 min +
      `heartbeat.py` every 3h -> SMS) and the Mac dashboard refresh loop
-     (nohup; check `pgrep -f experiments.dashboard.refresh`, restart
-     per experiments/dashboard/README.md if dead). Head-side setsid
+     (nohup; check `pgrep -f dashboard.refresh`, restart
+     per dashboard/README.md if dead). Head-side setsid
      chains also survive (verdicts in their driver logs).
   2. SESSION-BOUND (dies with the agent): the Monitor wrapping
-     `tools/watch_v3.sh` on 30-min beats. A NEW AGENT MUST RE-ARM THIS
+     `cluster/watch_v3.sh` on 30-min beats. A NEW AGENT MUST RE-ARM THIS
      FIRST, before any other work:
        Monitor(persistent) running:
-       `while true; do tools/watch_v3.sh; sleep 1800; done`
+       `while true; do cluster/watch_v3.sh; sleep 1800; done`
      watch_v3.sh re-resolves the head IP from the alert JSON per beat;
      verdict lines are COMPLETE / FAILED / SSH_ERROR / RUNNING. During
      heavy pools also watch memfree in the beat (the governor protects,
@@ -135,7 +135,7 @@ its flag stack (SCULPTOR_ABLATION_GRAD_BASE/_K) remains in the fork.
      reliable as the sole watchdog for dormant sessions (memory);
      update the alert JSON on EVERY lifecycle event or the SMS crons
      false-alarm.
-- **Email**: `python tools/send_report.py "<subject>" <body.txt>
+- **Email**: `python cluster/send_report.py "<subject>" <body.txt>
   [figures...]`.
 - **v3 eval stores**: tags policy_{steady,failure}_v3. v2-era ladder
   stores quarantined in `cache/model_error/V2_ERA/` — their L1/L2 dir

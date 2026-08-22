@@ -250,7 +250,7 @@ class Worker_Manager:
 
 		# Every worker computes gradient jobs over the ENTIRE deployment
 		# (grads are what's distributed across workers, not UGs — proven
-		# bitwise in experiments/desharding, Tom 2026-08-19). ray.put the
+		# bitwise in old_handoffs/UG_DESHARDING_SURVEY.md, Tom 2026-08-19). ray.put the
 		# full deployment ONCE; every actor constructor receives the same
 		# ObjectRef (auto-dereferenced from one shared plasma entry), so
 		# nothing is pickled per actor.

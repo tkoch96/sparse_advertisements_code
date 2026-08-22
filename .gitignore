@@ -146,4 +146,4 @@ dashboard_site/
 hardb3_dash/
 __pycache__/
 *.pyc
-figures/evaluations/
+figures/integration_tests/

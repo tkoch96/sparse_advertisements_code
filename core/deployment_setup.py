@@ -842,21 +842,57 @@ def cluster_actual_users(**kwargs):
 def characterize_measurements_from_deployment(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	load_actual_perfs(considering_pops, do_plot=False, **kwargs)
 
+def _resolve_lat_shard_dir():
+	"""Where the per-PoP latency shards live, or None.
+
+	ON BY DEFAULT as of 2026-08-21 (Tom). Previously this was opt-in via
+	SCULPTOR_LAT_SHARDS, and grepping the tree showed the only things that
+	ever set it were a unit test and an archived debug script -- so every
+	production run silently re-parsed the 65M-row, 4.5 GB latency CSV in a
+	SERIAL Python loop, once per deployment size, while a byte-exact
+	array path sat unused next to it. (Measured on the 08-21 sweep: 73% of
+	actual-5's wall clock, 26% of actual-10's.) A validated speedup that
+	nothing switches on is the same as no speedup; the seam had the same
+	shape as the GRAD_SCALE dead-code seam.
+
+	Precedence:
+	  SCULPTOR_LAT_SHARDS=<dir>  explicit, wins
+	  SCULPTOR_LAT_SHARDS=''     explicitly disabled -> legacy loop
+	  unset                      -> cache/lat_shards if it is usable
+	SCULPTOR_DEPSETUP_ARRAYS=0 still pins the legacy loop outright, which
+	is what the gate uses for its baseline.
+	"""
+	env = os.environ.get('SCULPTOR_LAT_SHARDS')
+	if env is not None:
+		return env or None                 # empty string = deliberately off
+	default_dir = os.path.join(CACHE_DIR, 'lat_shards')
+	try:
+		from core import shard_loader as _shl
+		if _shl.available(default_dir):
+			return default_dir
+	except Exception:
+		pass
+	return None
+
+
 def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
-	# ARRAY-NATIVE FAST PATH (experiments/depsetup_fork, merged 2026-08-18
+	# ARRAY-NATIVE FAST PATH (core/fork_load.py, merged 2026-08-18
 	# Tom-ratified): keeps parse/min/filters/SOL/quota as numpy arrays and
 	# materializes dicts only for the final survivor set. Byte-exact gated
 	# against this function at 5/10/16/20/26 pops (values bitwise, key
 	# ORDER, RNG stream; ~5x at production sizes — see the fork README for
-	# the CPython set-presize war story). Requires the depcache lat shards;
+	# the CPython set-presize war story). Requires the lat shards (core/convert_latencies.py);
 	# SCULPTOR_DEPSETUP_ARRAYS=0 restores the loop below unconditionally.
 	if os.environ.get('SCULPTOR_DEPSETUP_ARRAYS', '1') != '0':
-		_shdir = os.environ.get('SCULPTOR_LAT_SHARDS')
+		_shdir = _resolve_lat_shard_dir()
 		if _shdir:
 			try:
-				from experiments.depcache import shard_loader as _shl
+				from core import shard_loader as _shl
 				if _shl.available(_shdir):
-					from experiments.depsetup_fork import fork_load as _fl
+					from core import fork_load as _fl
+					print('[depsetup] array fast path, shards={} '
+						'({} pops)'.format(_shdir, len(considering_pops)),
+						flush=True)
 					return _fl.load_actual_perfs_arrays(
 						considering_pops, **kwargs)
 			except Exception as _e:
@@ -894,13 +930,15 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	cp_dict = {pop:None for pop in considering_pops}
 	# SCULPTOR_LAT_SHARDS=<dir>: load per-pop binary shards instead of
 	# re-parsing the 4.3GB CSV per pop-combination (Tom 2026-08-17,
-	# experiments/depcache). Byte-exactness gated: 0 mismatches over
+	# core/shard_loader.py). Byte-exactness gated: 0 mismatches over
 	# 793706 ugs vs the CSV loop. Falls through to the CSV when shards
 	# are absent.
+	print('[depsetup] LEGACY serial CSV loop ({} pops) -- this re-parses '
+		'the 4.5GB latency file'.format(len(considering_pops)), flush=True)
 	_lat_rows_src = open(lat_fn, 'r')
-	_lat_shards = os.environ.get('SCULPTOR_LAT_SHARDS')
+	_lat_shards = _resolve_lat_shard_dir()
 	if _lat_shards:
-		from experiments.depcache import shard_loader as _shl
+		from core import shard_loader as _shl
 		if _shl.available(_lat_shards):
 			_shl.build_ug_perfs(_lat_shards, considering_pops,
 				ignore_popps, violate_sol, parse_lat, ug_perfs=ug_perfs)

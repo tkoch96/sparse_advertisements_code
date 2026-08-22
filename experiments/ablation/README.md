@@ -4,7 +4,7 @@ Feature-by-feature ablation of SCULPTOR's methodological leaps, run as
 env-flag overrides on a fork of the REAL production solver, now extended
 with a **measurement-policy axis** (how/when the solver spends real
 measurements). Companion docs: `experiments/ablation_study/HANDOFF.md` (live status)
-and `experiments/model_error/DIMENSIONS.md` (the variable-space card +
+and `old_handoffs/MODEL_UNCERTAINTY_DIMENSIONS.md` (the variable-space card +
 dated findings log — read it first for what has been measured).
 
 Tom's non-negotiables:
@@ -121,7 +121,7 @@ Score/analyze (trusted, driver-side LP):
   excess vs one-per-peering; 30 000 ms no-route sentinel).
 - `policy_table.py` — the policy-ladder table (combined, healthy counts,
   exit iters, probe reasons, + LP sidecars when present).
-- `experiments/model_error/{rerank_ladder,steady_metrics,plot_mesh}.py` —
+- `old_handoffs/MODEL_UNCERTAINTY_DIMENSIONS.md/{rerank_ladder,steady_metrics,plot_mesh}.py` —
   interpretable metrics (failure congestion, steady congestion, clean
   routed latency) and the three-panel over-N figures.
 - `table_fork.py`, `cdf_fork.py` (+`plot_normalized.py`) — fixed-mode-era
@@ -192,7 +192,7 @@ never timestamp-named in-flight dirs):
   (fixed mode: `..._<rung>-dep<seed>-fixed.pdf`; painter runs emit NO
   convergence figure)
 - logs -> `<artifacts>/logs/[<wslabel>_]N<n>_s<seed>_<rung>.log.gz`
-The dashboard (experiments/dashboard/) consumes exactly these names --
+The dashboard (dashboard/) consumes exactly these names --
 keep them stable or update its `conv_grid` patterns.
 
 

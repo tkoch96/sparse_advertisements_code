@@ -3,7 +3,7 @@
 Written by the 2026-08-20 session ("optimization day 2"). Everything
 below is committed AND pushed (origin/main) AND deployed to the head
 (107.22.173.189) with the bitwise parity gate green (run again after
-any further code changes: experiments/desharding/prove_inert.py).
+any further code changes: old_handoffs/UG_DESHARDING_SURVEY.md/prove_inert.py).
 Supersedes the EODS-25 handoff (archived at old_handoffs/HANDOFF_2026-08-20_EODS25_era.md).
 
 ## HIGH-LEVEL GOAL (Tom)
@@ -48,8 +48,8 @@ metric redesign is a Tom-level paper decision.
     just skip the worker-side compute — check what workers actually
     consume from it: likely only the driver's copy is ever used).
 (b) Verify the fix on a local Mac smoke (the queue-harness recipe or
-    experiments/painter_lab/attribute.py-style direct construction;
-    bench pattern in experiments/eval_opt/ab_eval.py).
+    old_scripts/attribute.py-style direct construction;
+    bench pattern in experiments/freezing_prefix_assignments_investigation/ab_eval.py).
 (c) Verify on the pre-flight VM at actual-32 with IMMEDIATE EXIT and
     incredibly verbose logging ON:
     SCULPTOR_STARTUP_TIMELOG=1 SCULPTOR_LP_SOLVE_DEBUG=1 (+
@@ -65,7 +65,7 @@ metric redesign is a Tom-level paper decision.
     the actual-32 on the HEAD: 64 workers (NOT 80 — 80w OOM'd a
     192GB box during belief; worker RSS ~2.2GB at 32), via
     ~/eods32_launch_full.sh pattern BUT direct-invoke or queue with
-    tools/eods32_manifest.json env (already carries VOLSCEN,
+    cluster/manifests/eods32_manifest.json env (already carries VOLSCEN,
     COMPACT_RB, PAINTER_MEASURE_CAP, REQUIRE_SOLNS). Add
     SCULPTOR_LP_INCR_MLU=1 SCULPTOR_LP_ADAPTIVE_MLU=1 (validated
     2.05x, bit-identical on Mac; NOT yet validated at 32 — the (c)
@@ -142,7 +142,7 @@ GOTCHAS for your shell plumbing (cost this session real time):
   /proc/PID/environ, not by assumption).
 - rsync file lists: destination paths are FLAT unless you use -R or
   per-file destinations (a run_eods_cell.py once landed at repo root).
-- eval_latency_failure import order is circular-import-fragile: only
+- eval_all_solution_types import order is circular-import-fragile: only
   LAZY imports of sparse_advertisements_v3 symbols (see _log_mem shim).
 
 ## VALIDITY CRITERIA + PLAYBOOK (unchanged from EODS-25 handoff)

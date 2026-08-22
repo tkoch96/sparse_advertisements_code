@@ -220,7 +220,7 @@ Files affected: `path_distribution_computer.py:66`,
 
 Three known bugs that produce log noise and partial result loss:
 
-- **`eval_latency_failure.py:480`** `assess_resilience_to_flash_crowds_mp`
+- **`eval_all_solution_types.py:480`** `assess_resilience_to_flash_crowds_mp`
   raises `TypeError: unsupported operand type(s) for -: 'tuple' and 'tuple'`
   repeatedly. Flash-crowd eval results partially lost.
 
@@ -250,7 +250,7 @@ aws s3 cp cache/vultr_provider_popps.csv s3://sculptor-tom-data/
 aws s3 cp data/vultr_peers_inferred.csv s3://sculptor-tom-data/data/
 ```
 
-Add to `ray-cluster.yaml` setup_commands:
+Add to `cluster/ray-cluster.yaml` setup_commands:
 ```yaml
 - aws s3 sync s3://sculptor-tom-data /home/ubuntu/sparse_advertisements_code/cache
 - aws s3 sync s3://sculptor-tom-data/data /home/ubuntu/sparse_advertisements_code/data
@@ -305,7 +305,7 @@ opportunistically:
 - `path_distribution_computer.py:66` `summarize_timing` `return` (#4 above).
 - All `os.path.join` calls in driver/worker code paths should use
   `__file__`-based absolute paths (#7 above).
-- `eval_latency_failure.py` and `wrapper_eval.py` eval bugs (#8 above).
+- `eval_all_solution_types.py` and `wrapper_eval.py` eval bugs (#8 above).
 - `sparse_advertisements_v3.py:64, 1224` old diagnostic code (#8 above).
 - `SCULPTOR_MAX_ITER` is off-by-2 — actual-10 with MAX_ITER=3 runs 5 iters,
   with MAX_ITER=5 runs 7 iters. Inner loop probably counts differently. Worth
@@ -330,7 +330,7 @@ Based on the session-2 experience:
 - **For A/B experiments**: agent writes the dispatcher, you decide
   cost/parallelism. Agent should NOT spin clusters > $30 spot/day without
   explicit OK.
-- **End every cluster session with `./teardown.sh`.** Hard-code this into
+- **End every cluster session with `./cluster/teardown.sh`.** Hard-code this into
   the agent's workflow.
 - **Use actual-10 as the iteration harness** for ALL algorithmic
   experiments. ~5 min/run with cached deployment. Don't iterate on

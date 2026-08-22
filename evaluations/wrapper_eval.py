@@ -292,7 +292,7 @@ def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **k
 		## q: what is latency experienced for these ugs compared to optimal?
 		if use_penalty:
 			# Legacy two-call-per-scenario penalty path. Not used by the
-			# failure-eval phase loop in eval_latency_failure.py.
+			# failure-eval phase loop in eval_all_solution_types.py.
 			opt_adv = np.eye(sas.n_popps)
 			if which == 'popps':
 				opt_adv[sas.popp_to_ind[iteri],:] = 0

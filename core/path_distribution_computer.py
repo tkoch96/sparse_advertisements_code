@@ -107,6 +107,162 @@ def _log_mem_worker(worker_i, tag, **extra):
 		pass
 
 
+def _deep_size(obj, _seen=None, _budget=None, _stats=None):
+	"""Approximate bytes held by `obj`, following containers.
+
+	numpy arrays report `.nbytes` (getsizeof sees only a ~112-byte header,
+	which is how a multi-GB shard looked tiny).
+
+	LARGE CONTAINERS ARE SAMPLED, not truncated. The previous version
+	walked up to a fixed node budget and then simply stopped, which
+	silently halved every big dict: a 3173-ug x 40-popp ug_perfs measured
+	11.3 MB against a true 22.1 MB, and because the cut-off is
+	deterministic every worker reported the identical total -- 158 MB
+	against a real 1074 MB RSS (2026-08-21). Sampling K entries and
+	scaling by len() keeps the cost bounded AND the estimate unbiased for
+	the homogeneous containers this code holds.
+	"""
+	import sys as _s
+	if _seen is None:
+		_seen = set()
+		_budget = [int(os.environ.get('SCULPTOR_OBJSIZE_BUDGET', '20000000'))]
+		_stats = {'sampled': 0, 'truncated': 0}
+	if _budget[0] <= 0:
+		if _stats is not None:
+			_stats['truncated'] += 1
+		return 0
+	oid = id(obj)
+	if oid in _seen:
+		return 0
+	_seen.add(oid)
+	_budget[0] -= 1
+	try:
+		if hasattr(obj, 'nbytes'):          # numpy / anything array-like
+			return int(obj.nbytes)
+		total = _s.getsizeof(obj)
+	except (TypeError, AttributeError):
+		return 0
+
+	sample_min = int(os.environ.get('SCULPTOR_OBJSIZE_SAMPLE_MIN', '5000'))
+	sample_k = int(os.environ.get('SCULPTOR_OBJSIZE_SAMPLE_K', '1000'))
+	try:
+		if isinstance(obj, dict):
+			n = len(obj)
+			if n > sample_min:
+				# STRIDE across the container, never the first K. A head
+				# sample is catastrophically wrong when large entries are
+				# clustered early: a 40k dict with its big values first
+				# measured 417 MB against a true 16.5 MB (+2418%). Walking
+				# the keys is a cheap C-level loop; only the sampled
+				# entries pay for a deep walk.
+				stride = max(1, n // sample_k)
+				acc, seen_n = 0, 0
+				for j, (k, v) in enumerate(obj.items()):
+					if j % stride:
+						continue
+					acc += _deep_size(k, _seen, _budget, _stats)
+					acc += _deep_size(v, _seen, _budget, _stats)
+					seen_n += 1
+				if seen_n:
+					total += int(acc * (float(n) / seen_n))
+					if _stats is not None:
+						_stats['sampled'] += 1
+			else:
+				for k, v in obj.items():
+					total += _deep_size(k, _seen, _budget, _stats)
+					total += _deep_size(v, _seen, _budget, _stats)
+		elif isinstance(obj, (list, tuple, set, frozenset)):
+			n = len(obj)
+			if n > sample_min:
+				stride = max(1, n // sample_k)
+				acc, seen_n = 0, 0
+				for j, x in enumerate(obj):
+					if j % stride:
+						continue
+					acc += _deep_size(x, _seen, _budget, _stats)
+					seen_n += 1
+				if seen_n:
+					total += int(acc * (float(n) / seen_n))
+					if _stats is not None:
+						_stats['sampled'] += 1
+			else:
+				for x in obj:
+					total += _deep_size(x, _seen, _budget, _stats)
+	except RuntimeError:                    # mutated while we walked it
+		pass
+	return total
+
+
+def _proc_rss_mb():
+	try:
+		with open('/proc/self/status') as f:
+			for line in f:
+				if line.startswith('VmRSS:'):
+					return int(line.split()[1]) // 1024
+	except (FileNotFoundError, PermissionError):
+		pass
+	return -1
+
+
+def _log_objsize_worker(worker_i, tag, obj, top_n=12):
+	"""Per-worker object-size census: which attributes hold the memory.
+
+	`[mem-worker]` already answers "how much RSS"; this answers "held by
+	what", which is the question you actually need when deciding whether a
+	deployment size fits in a given instance family. Off unless
+	SCULPTOR_LOG_OBJSIZE=1, because a full census walks the shard.
+
+	Emits one line per big attribute into the same per-worker log file the
+	driver already collects via the `dump_mem_log` RPC, so nothing new is
+	needed on the collection side:
+	    [objsize idx=N] tag=TAG attr=ATTR mb=M n=LEN
+	"""
+	if os.environ.get('SCULPTOR_LOG_OBJSIZE', '0') != '1':
+		return
+	t0 = time.time()
+	rows = []
+	try:
+		for name in dir(obj):
+			if name.startswith('__'):
+				continue
+			try:
+				val = getattr(obj, name)
+			except Exception:
+				continue
+			if callable(val):
+				continue
+			nbytes = _deep_size(val)
+			if nbytes < 1024 * 1024:        # skip anything under 1 MB
+				continue
+			try:
+				n = len(val)
+			except (TypeError, AttributeError):
+				n = ''
+			rows.append((nbytes, name, n))
+	except Exception:
+		return
+	rows.sort(reverse=True)
+	lines = ['[objsize idx={}] tag={} attr={} mb={:.1f} n={} t={:.2f}'.format(
+		worker_i, tag, name, nbytes / 1048576.0, n, time.time())
+		for nbytes, name, n in rows[:top_n]]
+	census_mb = sum(r[0] for r in rows) / 1048576.0
+	rss_mb = _proc_rss_mb()
+	lines.append('[objsize idx={}] tag={} TOTAL_mb={:.1f} attrs={} '
+	             'rss_mb={} unattributed_mb={:.1f} coverage_pct={:.1f} '
+	             'census_s={:.2f} t={:.2f}'.format(
+	                 worker_i, tag, census_mb, len(rows), rss_mb,
+	                 (rss_mb - census_mb) if rss_mb > 0 else -1,
+	                 (100.0 * census_mb / rss_mb) if rss_mb > 0 else -1,
+	                 time.time() - t0, time.time()))
+	for line in lines:
+		print(line, flush=True)
+	try:
+		with open(_get_worker_mem_log_path(worker_i), 'a') as f:
+			f.write('\n'.join(lines) + '\n')
+	except Exception:
+		pass
+
+
 remeasure_a = None
 try:
 	remeasure_a = pickle.load(open('remeasure_a.pkl','rb'))
@@ -161,7 +317,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# SCULPTOR_MC_NUM: monte carlo simulations to determine distributions
 		# (default 5, the original hardcoded value; 1 = single-draw noisy
 		# estimator, for model-uncertainty experiments)
-		self.MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', '5'))
+		self.MC_NUM = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 
 		if kwargs.get('debug', False):
 			self.n_prefixes = None
@@ -176,12 +332,72 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			"Path_Distribution_Computer must be constructed via the Ray actor "
 			"(use worker_comms.Worker_Manager). Pass debug=True for unit tests.")
 
+	# Which timing keys are measured INSIDE which others. The counters are
+	# nested, not siblings: solve_generic_lp_persistent wraps
+	# get_paths_by_ug and solve_unified_lp, and solve_unified_lp wraps
+	# lp_feed / optimize / organizing_results. Summing them all as one
+	# denominator double-counts the inner work, so "lp_persistent=38%" was
+	# never 38% of wall clock (Tom spotted the inconsistency 2026-08-21).
+	_TIMING_CHILDREN = {
+		'solve_generic_lp_persistent': ['get_paths_by_ug',
+										'solve_unified_lp_not_optimize',
+										'optimize', 'organizing_results'],
+		'sim_rti': ['total_rti_calc'],
+		'total_rti_calc': ['pmat_organize'],
+	}
+
+	def _mark_init(self, key, seconds):
+		"""Accumulate ONE-TIME startup cost, reported separately from the
+		per-batch [wt] line.
+
+		The first gradient batch is several times more expensive than every
+		later one, and until now that spike was a single opaque bar: the
+		per-batch counters are reset each batch, so whatever the worker
+		does once -- receiving the deployment, building rb_backups,
+		standing up the persistent LP, the first path enumeration -- was
+		folded into batch #1 with no way to separate it. This makes the
+		startup decomposable instead of merely visible.
+		"""
+		try:
+			self.init_timing[key] = self.init_timing.get(key, 0.0) + seconds
+		except AttributeError:
+			self.init_timing = {key: seconds}
+
+	def summarize_init_timing(self, tag=''):
+		it = getattr(self, 'init_timing', None)
+		if not it:
+			return
+		total = sum(it.values())
+		if total < 1e-6:
+			return
+		parts = ' '.join('{}={:.2f}s'.format(k, v)
+						 for k, v in sorted(it.items(), key=lambda kv: -kv[1]))
+		print('[{}] [wt-init] w={} tag={} total={:.2f}s {}'.format(
+			time.strftime('%H:%M:%SZ', time.gmtime()),
+			self.worker_i, tag or 'startup', total, parts), flush=True)
+
+	def _self_timing(self):
+		"""Exclusive (self) time per key: total minus its children.
+
+		Values can go slightly negative from clock jitter across nested
+		counters; clamped at zero rather than hidden, since a large
+		negative would mean the nesting map is wrong.
+		"""
+		self_t = {}
+		for k, v in self.timing.items():
+			child = sum(self.timing.get(c, 0.0)
+						for c in self._TIMING_CHILDREN.get(k, []))
+			self_t[k] = max(0.0, v - child)
+		return self_t
+
 	def summarize_timing(self):
 		# Print per-key cumulative LP-solve timings (optimize / get_paths_by_ug /
 		# organizing_results / solve_unified_lp_not_optimize, etc.). Called every
 		# 50 latency_benefit calls in the worker batch loop. Useful for
 		# identifying which sub-step inside the LP solve dominates at scale.
-		total_time = sum(list(self.timing.values()))
+		self_t = self._self_timing()
+		total_time = sum(self_t.values())      # exclusive: real wall, no
+		                                       # double counting
 		if total_time < 1e-6:
 			return
 		# ONE compact parseable line per batch (Tom 2026-08-19: informative,
@@ -194,15 +410,20 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 								 .replace('get_ingress_probabilities_by_dict_generic', 'ing_prob')
 								 .replace('get_paths_by_ug', 'paths')
 								 .replace('organizing_results', 'organize'),
-							   100.0 * self.timing[k] / total_time)
-			for k in sorted(self.timing, key=lambda el: -self.timing[el])
-			if self.timing[k] / total_time >= 0.01)
-		print("[{}] [wt] w={} total={:.1f}s {}".format(
-			time.strftime('%H:%M:%SZ', time.gmtime()),
-			self.worker_i, total_time, parts), flush=True)
+							   100.0 * self_t[k] / total_time)
+			for k in sorted(self_t, key=lambda el: -self_t[el])
+			if self_t[k] / total_time >= 0.01)
+		incl = self.timing.get('solve_generic_lp_persistent', 0.0)
+		n_lp = getattr(self, 'n_lp_solves', 0)
+		print("[{}] [wt] w={} total={:.1f}s mc={} lp_solves={} lp_incl={:.0f}% {}"
+			  .format(time.strftime('%H:%M:%SZ', time.gmtime()),
+					  self.worker_i, total_time, self.MC_NUM, n_lp,
+					  100.0 * incl / total_time if total_time else 0,
+					  parts), flush=True)
 
 	def init_persistent_lp(self):
 		"""Sets up the persistent Gurobi shell with static Volumes and Capacities."""
+		_t_init0 = time.time()
 		self.model = gp.Model(f"Worker_{self.worker_i}_Persistent")
 		# fresh model => no vars are active; incremental trackers
 		self._last_active_vars = None
@@ -250,6 +471,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.cap_constrs[pi] = self.model.addLConstr(0.0, gp.GRB.LESS_EQUAL, target_cap, name=f"cap_{pi}")
 
 		self.var_pool = {} # Key: (ug, poppi) -> Gurobi Var Object
+		self._mark_init('init_persistent_lp', time.time() - _t_init0)
 
 	def _compute_static_caps(self):
 		# Headroom is gated on _in_training so the eval phase always sees full
@@ -464,7 +686,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# LP is infeasible (e.g. failure scenario removed the last route
 			# for some users). Used to call exit(0), which killed the Ray
 			# actor and propagated as RayActorError -> caught silently by
-			# the per-strategy try/except in eval_latency_failure ->
+			# the per-strategy try/except in eval_all_solution_types ->
 			# strategy's failure-mode fields stayed empty for every
 			# strategy. Suspected root cause of the actual-32 failure-eval
 			# data loss called out in HANDOFF_SESSION_6.md.
@@ -1156,6 +1378,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				ts = time.time()
 				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
 				self.timing['solve_generic_lp_persistent'] += time.time() - ts
+				# COUNT, not just time. MC_NUM being set on the actor proves
+				# only that an attribute holds a number; this proves the MC
+				# loop actually runs that many LP solves per benefit call.
+				self.n_lp_solves = getattr(self, 'n_lp_solves', 0) + 1
 			else:
 				ts = time.time()
 				# Pass the adv matrix `a` through so multi-LP objectives
@@ -1433,7 +1659,30 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 			'solve_generic_lp_persistent',
 			'solve_generic_lp_not_persistent']}
 		self.rti_data = {}
-		self.MC_NUM = 5  ## monte carlo simulations to determine distributions
+		# SCULPTOR_MC_NUM was DEAD on this path until 2026-08-21: this class
+		# replicates the base __init__ rather than calling it (it goes
+		# straight to Optimal_Adv_Wrapper.__init__), so the env read at the
+		# top of Path_Distribution_Computer.__init__ never ran for the
+		# production Ray actor. cluster/chain_v3.sh has been passing
+		# SCULPTOR_MC_NUM=1 into runs that silently used 5. Same shape as
+		# the GRAD_SCALE dead seam.
+		#
+		# Default is now 1 (Tom, 2026-08-21). NOTE this is not only a speed
+		# knob: MC_NUM is the number of Monte-Carlo draws of the routing
+		# distribution, so 1 is a single-draw noisy estimator, not a
+		# cheaper way to compute the same number.
+		# init_kwargs wins over the env -- see the note in get_init_kwa:
+		# the env does not survive the driver -> Ray actor boundary.
+		self.MC_NUM = int(init_kwargs.pop(
+			'mc_num', os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM)))
+		if worker_i == 0:
+			# Announce the value the ACTOR actually uses. The env read used
+			# to live only in the base __init__, which this class bypasses,
+			# so SCULPTOR_MC_NUM silently had no effect -- printing it is
+			# how an A/B can prove the knob is live rather than assuming it.
+			print('[mc] worker {} MC_NUM={} (env SCULPTOR_MC_NUM={!r})'.format(
+				worker_i, self.MC_NUM,
+				os.environ.get('SCULPTOR_MC_NUM')), flush=True)
 
 		# Construct the optimization wrapper directly with the deployment
 		# and init kwargs supplied by Worker_Manager (no ZMQ handshake).
@@ -1698,10 +1947,21 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 		deployment, kwargs = data
 		_log_mem_worker(self.worker_i, 'update_deployment_enter',
 		                dpsize=deployment.get('dpsize', '?'))
+		_t_ud = time.time()
 		self.update_deployment(deployment, **kwargs)
+		self._mark_init('update_deployment', time.time() - _t_ud)
 		_log_mem_worker(self.worker_i, 'update_deployment_done',
 		                dpsize=deployment.get('dpsize', '?'))
+		# Right after the shard lands is the moment worth measuring: the
+		# per-size state is fully built and nothing transient is inflating
+		# it. No-op unless SCULPTOR_LOG_OBJSIZE=1.
+		_log_objsize_worker(self.worker_i, 'post_update_deployment_dp{}'.format(
+			deployment.get('dpsize', '?')), self)
 		self.dump_mem_components('post_update_deployment')
+		# Emit the one-time accounting here: by this point the deployment
+		# has landed and any lazily-built state (rb_backups, persistent LP)
+		# has been charged to init_timing rather than to batch #1.
+		self.summarize_init_timing('post_update_deployment')
 		return "ACK"
 
 	def _cmd_dump_mem_log(self, _data=None):

@@ -37,7 +37,7 @@ failure_latency_comparison_actual-32.pkl`) but the failure-eval fields
 sub-eval fields) are **empty** for every strategy. The strategy-compare
 phase completed (all 6 strategies' advertisements + normal-LP latencies
 are there) but `assess_failure_resilience` either crashed silently
-(try/except at eval_latency_failure.py:325-328 swallows per-strategy
+(try/except at eval_all_solution_types.py:325-328 swallows per-strategy
 exceptions) or never ran. The cluster log was lost when sshd wedged.
 
 **eval_latency_failure has a check_calced_everything resume mechanism.**
@@ -93,7 +93,7 @@ numbers so the comparison to the paper is complete.
 (1) Cross-seed actual-32 (N=3 trials, seeds 1/2/3) — match the
     actual-10 phase B protocol. With Step 1 in place and per-strategy
     checkpoint (5b349be), per-trial cost ~7-10h. 3-trial parallel ~$20.
-    Bring up cluster (`ray up ray-cluster.yaml`), launch via
+    Bring up cluster (`ray up cluster/ray-cluster.yaml`), launch via
     `benchmarks/headroom_n_trials.sh actual-32 200 3 1 2 3`. Be wary
     of painter — slow at actual-32. Consider skipping painter from
     soln_types if you don't need that specific baseline. Tear down

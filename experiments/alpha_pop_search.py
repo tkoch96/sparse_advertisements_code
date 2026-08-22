@@ -47,7 +47,7 @@ LAT_THRESHOLDS = [-10, -50, -100]   # paper plot thresholds (ms below optimal)
 
 
 def _aggregate_paper_metrics(metrics, soln_types):
-    """Mirror of `get_failure_metric_arr` in eval_latency_failure.py, scoped
+    """Mirror of `get_failure_metric_arr` in eval_all_solution_types.py, scoped
     to the pop-failure key. Returns the same paper-plot numbers
     make_paper_plots() consumes, but per-strategy.
 
@@ -202,7 +202,7 @@ def run_one_config(args):
     os.environ['SCULPTOR_RUN_TAG'] = args.tag
 
     # Late import so env vars are honoured by initializers
-    from evaluations.eval_latency_failure import evaluate_all_metrics
+    from evaluations.eval_all_solution_types import evaluate_all_metrics
 
     soln_types = args.solns.split(',')
 

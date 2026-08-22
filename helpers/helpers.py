@@ -279,10 +279,25 @@ class Calc_Cache():
 
 
 def save_fig(fn, lgd=None, abs_path=False):
+	"""Write a figure under figures/, or under figures/<SCULPTOR_FIG_SUBDIR>/.
+
+	SCULPTOR_FIG_SUBDIR (2026-08-21) namespaces a whole run's output without
+	every plotting call having to know about it. Integration tests set it to
+	`integration_tests/<case>` so their throwaway figures never mix with real
+	sweep output; a real sweep can set it to anything (`--figures-subdir` on
+	the evaluate_over_* drivers) to keep that run's figures together.
+
+	Unset -> figures/<fn>, exactly as before.
+	"""
 	if abs_path:
 		save_fn = fn
 	else:
-		save_fn = os.path.join("figures", fn)
+		subdir = os.environ.get('SCULPTOR_FIG_SUBDIR', '')
+		save_fn = os.path.join("figures", subdir, fn) if subdir \
+			else os.path.join("figures", fn)
+		_d = os.path.dirname(save_fn)
+		if _d and not os.path.exists(_d):
+			os.makedirs(_d, exist_ok=True)
 	if lgd is None:
 		plt.savefig(save_fn, bbox_inches='tight')
 	else:

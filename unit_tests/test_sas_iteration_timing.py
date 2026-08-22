@@ -58,7 +58,7 @@ _RESULTS = OrderedDict()
 
 def _build_sas(size):
 	"""Build a Sparse_Advertisement_Solver + a running Worker_Manager. Same
-	wiring `eval_latency_failure.py` and the convergence test use."""
+	wiring `eval_all_solution_types.py` and the convergence test use."""
 	import random
 	import core.worker_comms as worker_comms
 	sys.modules['worker_comms'] = worker_comms

@@ -28,7 +28,7 @@ from helpers.helpers import *
 from subprocess import call, check_output
 from core.generic_objective import Generic_Objective
 # Worker_Manager is set on instances externally via set_worker_manager()
-# from the driver (e.g. eval_latency_failure, experiments.run_objective).
+# from the driver (e.g. eval_all_solution_types, experiments.run_objective).
 # Importing it here would create a worker_comms ->
 # path_distribution_computer ->
 # optimal_adv_wrapper cycle; this module only needs the *instance* on
@@ -163,6 +163,14 @@ class Optimal_Adv_Wrapper:
 			'with_capacity': self.with_capacity,
 			'save_run_dir': self.save_run_dir,
 		}
+		# Carried in init_kwa, NOT read from the env in the actor: Ray
+		# workers are pre-started by the raylet and do NOT inherit env
+		# changes the driver makes after ray.init(), so SCULPTOR_MC_NUM set
+		# by a driver reached the actors as None (verified 2026-08-21 --
+		# the actor printed env=None while the driver had set 5). init_kwa
+		# IS pickled to every actor, so it is the channel that works, on
+		# one node or many.
+		kwa['mc_num'] = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		kwa['generic_objective'] = self.generic_objective.obj
 		return kwa
 
@@ -915,10 +923,12 @@ class Optimal_Adv_Wrapper:
 		# to every worker as one plasma-shared numpy buffer.
 		self._incoming_dep = deployment
 		self.simulated = deployment.get('simulated', True)
-		if deployment.get('port') is None:
-			print("\n\nWARNING ---- NO PORT SPECIFIED\n\n")
-			time.sleep(5)
-		self.port = deployment.get('port', 31415)
+		# `port` is vestigial: nothing binds it under Ray
+		# (path_distribution_computer sets self.port = 0 outright). It used to
+		# print a warning and sleep(5) when unset, which was a 5-second tax for
+		# no reason. Kept as an attribute only because save/load_optimization_state
+		# round-trips it. (Tom 2026-08-21: prune port plumbing.)
+		self.port = deployment.get('port', DEFAULT_PORT)
 		if deployment.get('dpsize') == 'small':
 			self.max_n_iter = 20
 		elif self.simulated:
@@ -1405,6 +1415,7 @@ class Optimal_Adv_Wrapper:
 			self.rb_backups
 		except AttributeError:
 			### Resilience benefit backup pre-calcs
+			_t_rb = time.time()
 			self.rb_backups = {}
 			for ug in tqdm.tqdm(self.ug_perfs,desc="Calculating RB backups"):
 				for popp1 in self.ug_perfs[ug]:
@@ -1431,6 +1442,12 @@ class Optimal_Adv_Wrapper:
 						popp2i = self.popp_to_ind[popp2]
 						### proportional to latency difference, UG volume, ability of the backup link to handle the volume
 						self.rb_backups[self.ug_to_ind[ug],popp1i,popp2i] = backup * self.ug_to_vol[ug] * self.link_capacities[popp2i]
+			# One-time on this actor; charged to startup rather than to
+			# whichever gradient batch happened to trigger it.
+			if hasattr(self, '_mark_init'):
+				self._mark_init('rb_backups_build', time.time() - _t_rb)
+			print('[wt-init-part] rb_backups_build={:.2f}s ugs={} t={:.2f}'.format(
+				time.time() - _t_rb, len(self.ug_perfs), time.time()), flush=True)
 
 		if os.environ.get('SCULPTOR_COMPACT_RB', '0') == '1':
 			# Compact RB memo (Tom 2026-08-20, painter_lab attribution: the

@@ -46,11 +46,11 @@ first import.
 ```bash
 SCULPTOR_DEPLOYMENT_SWEEP_SIZES=3,5,10 SCULPTOR_DEPLOYMENT_SWEEP_NSIM=1 \
 SCULPTOR_MAX_ITER=50 \
-python experiments/benchmarks/run_deployment_sweep.py --port 31510
+python experiments/deployment_sizes_full_timing_investigation/run_deployment_sweep.py --port 31510
 ```
 
 Iterates `evaluate_all_metrics` over each dpsize, hot-starts from saved
-state where possible. See `experiments/benchmarks/run_deployment_sweep.py` docstring
+state where possible. See `experiments/deployment_sizes_full_timing_investigation/run_deployment_sweep.py` docstring
 for all env vars (per-dpsize NSIM lists, headroom, etc.).
 
 ### AWS cluster
@@ -59,9 +59,9 @@ See [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) for full setup.
 Short version:
 
 ```bash
-ray up ray-cluster.yaml -y                    # 5-30 min
-ray exec ray-cluster.yaml '... evaluations/eval_latency_failure.py ...'
-./teardown.sh                                 # ALWAYS at end of session
+ray up cluster/ray-cluster.yaml -y                    # 5-30 min
+ray exec cluster/ray-cluster.yaml '... evaluations/eval_all_solution_types.py ...'
+./cluster/teardown.sh                                 # ALWAYS at end of session
 ```
 
 ---
@@ -110,7 +110,7 @@ Key concepts:
   in `core/solve_lp_assignment.py`. See "Adding a new objective" below.
 - **Eval phases** are the post-training assessments (LP latencies under
   failure scenarios, percent of volume within latency targets, etc.),
-  implemented in `evaluations/wrapper_eval.py` + `evaluations/eval_latency_failure.py`.
+  implemented in `evaluations/wrapper_eval.py` + `evaluations/eval_all_solution_types.py`.
 
 ---
 
@@ -132,7 +132,7 @@ root now holds only docs and config — no `.py` files.
 
 Imports are absolute from the repo root (`from helpers.constants import *`).
 Modules that are also run as scripts put the repo root on `sys.path`
-themselves, so `python evaluations/eval_latency_failure.py ...` works from
+themselves, so `python evaluations/eval_all_solution_types.py ...` works from
 anywhere.
 
 ### Module inventory
@@ -151,8 +151,8 @@ anywhere.
 | `core/generic_objective.py` | `Generic_Objective` — runtime dispatch from objective name → LP function |
 | `core/deployment_setup.py` | Build synthetic + actual deployments, link capacities, user volumes |
 | `evaluations/wrapper_eval.py` | Eval phase implementations (failure resilience, flash crowd, diurnal) |
-| `evaluations/eval_latency_failure.py` | `evaluate_all_metrics()` — primary driver invoked by sweeps |
-| `evaluations/actual_deployment_eval_latency_failure.py` | Real-deployment variant (less commonly used) |
+| `evaluations/eval_all_solution_types.py` | `evaluate_all_metrics()` — primary driver invoked by sweeps |
+| `evaluations/actual_deployment_eval_all_solution_types.py` | Real-deployment variant (less commonly used) |
 | `evaluations/evaluate_over_deployment_sizes.py` | Sweep + plot SCULPTOR vs others as dpsize varies (paper plots) |
 | `helpers/paper_plotting_functions.py` | Plot styling primitives |
 | `core/realworld_measure_wrapper.py` | Real-deployment glue (RIPE Atlas, advertisement caching) |
@@ -175,14 +175,14 @@ Newer per-objective + per-experiment drivers. Each script has its own docstring.
 | `experiments/static_failure_eval.py` | BGP-fallback failure eval phase shared by site_failure |
 | `experiments/painter_hypothesis_sweep.py` | 2D sweep of (scale_factor, vol_spread) testing the painter-degradation hypothesis |
 
-### `experiments/benchmarks/`
+### `experiments/deployment_sizes_full_timing_investigation/`
 
 Sweep + perf-investigation harnesses with structured output.
 
 | File | Role |
 |---|---|
-| `experiments/benchmarks/run_deployment_sweep.py` | Cluster-friendly sweep over dpsizes with per-size NSIM, hot-start, env-var config |
-| `experiments/benchmarks/eval_phase_baseline.py` | Per-phase timing + crash diagnostics for `evaluate_all_metrics` |
+| `experiments/deployment_sizes_full_timing_investigation/run_deployment_sweep.py` | Cluster-friendly sweep over dpsizes with per-size NSIM, hot-start, env-var config |
+| `experiments/deployment_sizes_full_timing_investigation/eval_phase_baseline.py` | Per-phase timing + crash diagnostics for `evaluate_all_metrics` |
 
 ### `unit_tests/`
 
@@ -242,14 +242,14 @@ python -m experiments.run_objective --obj avg_latency --dpsize small \
 ### AWS cluster
 
 See [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) for the IAM perms,
-`ray-cluster.yaml` walkthrough, and the standard tear-down ritual. Short
+`cluster/ray-cluster.yaml` walkthrough, and the standard tear-down ritual. Short
 checklist:
 
 - IAM user with `AmazonEC2FullAccess` + `IAMFullAccess`
 - `aws configure` locally
 - `~/gurobi.lic` (WLS academic; official baseline 2 concurrent sessions -- but see the WLS policy note in experiments/ablation/README.md: empirically 20-48+ sessions sustain fine; size pools to RAM, not sessions)
 - `pip install "ray[default]" boto3` in the local venv
-- `ray up ray-cluster.yaml -y`
+- `ray up cluster/ray-cluster.yaml -y`
 
 ---
 
@@ -268,7 +268,7 @@ in `os.environ` from a launcher.
 | `SCULPTOR_CAPACITY_HEADROOM` | 0.0 | Multiplier `cap × (1+h)` applied during training only (relaxes the LP cap constraint to give SGD slack); restored to true cap for eval |
 | `SCULPTOR_DISABLE_PARALLEL_STRATEGIES` | unset | Run painter / anyopt / etc. serially after sparse instead of concurrently in subprocesses |
 | `SCULPTOR_DEPLOYMENT_SEED` | unset | Pin the deployment RNG for reproducible smoke tests |
-| `SCULPTOR_DEPLOYMENT_SWEEP_SIZES` | `3,5,10,15,20,25,<n_vultr>` | Comma-separated dpsize list for `experiments/benchmarks/run_deployment_sweep.py` |
+| `SCULPTOR_DEPLOYMENT_SWEEP_SIZES` | `3,5,10,15,20,25,<n_vultr>` | Comma-separated dpsize list for `experiments/deployment_sizes_full_timing_investigation/run_deployment_sweep.py` |
 | `SCULPTOR_DEPLOYMENT_SWEEP_NSIM` | `1` | Single int OR comma list parallel to SIZES (per-dpsize random_iter count) |
 | `SCULPTOR_DEPLOYMENT_SWEEP_TAG` | `dep_sweep` | Suffix on per-dpsize eval pickles |
 | `SCULPTOR_RUN_TAG` | unset | Tag for the per-dpsize eval pickle within `evaluate_all_metrics` |
@@ -357,9 +357,9 @@ the same shape as the existing phases (e.g. `assess_failure_resilience`).
   Throttling shows up as "Overage for too long" warnings and silently
   slows things down. Avoid running local Gurobi while a cluster sweep
   is active.
-- **`evaluations/actual_deployment_eval_latency_failure.py`** is the real-deployment
+- **`evaluations/actual_deployment_eval_all_solution_types.py`** is the real-deployment
   path (RIPE Atlas measurements, actual BGP advertisements). It's the
-  same shape as `evaluations/eval_latency_failure.py` but with real-world measurement
+  same shape as `evaluations/eval_all_solution_types.py` but with real-world measurement
   glue. Most active development uses the simulated path.
 - **dpsize naming.** Synthetic deployments use names like `small` /
   `decent` / `med` (defined in `helpers/constants.py`). Actual deployments use

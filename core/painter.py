@@ -102,7 +102,20 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		# parity with sparse (PROBE_N grounded probes) the loop must exit
 		# once it has spent N measurements. Unset = legacy unbounded
 		# behavior (stop only on max_n_iter/epsilon convergence).
+		# Default to the SAME budget SCULPTOR is held to (Tom 2026-08-21).
+		# Painter measures the live deployment every iteration, so without
+		# this a budgeted sweep caps sparse and lets painter measure
+		# freely -- the per-measurement comparison would be meaningless.
+		# SCULPTOR_PAINTER_MEASURE_CAP still overrides; unset + unbudgeted
+		# probing (PROBE_MODE=post_step) restores legacy unbounded painter.
 		_cap = os.environ.get('SCULPTOR_PAINTER_MEASURE_CAP', '')
+		if not _cap:
+			_b = resolve_probe_budget(getattr(self, 'n_prefixes', None))
+			_cap = str(_b) if _b else ''
+			if _cap and self.iter == 0:
+				print("PAINTER measurement budget = {} (from the probe "
+					  "budget; set SCULPTOR_PAINTER_MEASURE_CAP to "
+					  "override)".format(_cap))
 		if _cap and self.iter + 1 >= int(_cap):
 			print("PAINTER measurement cap hit ({} iters = {} measurements)"
 				  " -- stopping for budget parity".format(self.iter + 1, _cap))

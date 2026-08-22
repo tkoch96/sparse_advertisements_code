@@ -6,7 +6,7 @@ issues BGP advertisements via the external `Advertisement_Experiments`
 helper, schedules RIPE Atlas traceroutes against the advertised
 prefixes, parses the measurement results, and caches them.
 
-Used by `actual_deployment_eval_latency_failure.py`. Most simulated runs
+Used by `actual_deployment_eval_all_solution_types.py`. Most simulated runs
 don't touch this file — `Optimal_Adv_Wrapper.simulated=True` short-
 circuits the wrappers.
 

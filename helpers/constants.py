@@ -238,3 +238,78 @@ POP2TIMEZONE = {  # GMT
     'vtrosaka': 9
 }
 
+# ---------------------------------------------------------------------------
+# Monte-Carlo draws of the joint routing distribution, per latency-benefit
+# evaluation (path_distribution_computer._sample_scenario_realizations runs
+# MC_NUM x solve_generic_lp_persistent). THIS IS THE ONLY DEFAULT -- before
+# 2026-08-21 the value 5 was written in five places, two of which were
+# unreachable and one of which (_solve_max_information) would broadcast its
+# own default back onto the workers and silently undo the others.
+#
+# 1 is a single-draw noisy estimator. It is ~5x cheaper per job and NOT a
+# cheaper way to compute the same number; see experiments/mc_ab/ for the
+# paired A/B measuring what the noise costs.
+DEFAULT_MC_NUM = 1
+# The max-information (explore) phase deliberately uses MORE draws: it is
+# choosing what to measure from the belief DISTRIBUTION, where single-draw
+# noise is most damaging. Restored to DEFAULT_MC_NUM afterwards.
+DEFAULT_MC_NUM_EXPLORE = 5
+
+# ---------------------------------------------------------------------------
+# WHEN-probing: measure-XOR-step under a TOTAL measurement budget.
+# Merged from experiments/ablation/sculptor_fork.py (slotted/scheduled
+# 2026-08-17; gated/smart 2026-08-21). Probing is grounding at the CURRENT
+# advertisement; budget exhaustion stops MEASURING, never TRAINING.
+#
+# THE measurement budget for a solve() run. Every mode caps total
+# path_measures growth at this. Override per-run with SCULPTOR_PROBE_N.
+DEFAULT_PROBE_N = 10
+# Assumed convergence horizon the budget is spread over (slot tiling and
+# the smart gate's spacing targets both derive from it). Falls back to the
+# run's max_n_iter when that is known.
+DEFAULT_PROBE_TCONV = 100
+# post_step = stock (measure after every step that moved the advertisement,
+# no budget). scheduled/slotted/gated/smart are budgeted.
+DEFAULT_PROBE_MODE = 'smart'
+# smart-gate shape (see _probe_smart_decision). Defaults reproduce the
+# ablation fork's validated values.
+DEFAULT_PROBE_C = 1.0            # initial (high) uncertainty threshold
+DEFAULT_PROBE_FRAC = 0.75        # budget spread over this fraction of TCONV
+DEFAULT_PROBE_MINGAP_FRAC = 0.7  # self-assessed criteria held below this gap
+DEFAULT_SCHED_FALLBACK_MULT = 1.25   # backstop spacing multiplier
+DEFAULT_SMART_STALE_FRAC = 1.0       # (b) staleness gap, x TCONV/N
+DEFAULT_SMART_PLATEAU_W = 5          # (b) plateau window
+DEFAULT_SMART_PLATEAU_EPS = 0.01     # (b) plateau tolerance, x belief span
+DEFAULT_SMART_SIGN_W = 6             # (c) predicted-vs-realized window
+DEFAULT_SMART_SIGN_RATE = 0.5        # (c) sign-disagreement rate to fire
+DEFAULT_SMART_SURPRISE_REL = 0.05    # (d) surprise threshold, x belief span
+DEFAULT_SMART_SURPRISE_FACTOR = 0.5  # (d) c multiplier on a surprising probe
+DEFAULT_U_ENT_W = 0.0                # weight of the adjacency-entropy term in U
+
+
+def resolve_probe_budget(n_prefixes=None):
+    """The measurement budget in force, resolving the 'prefixes' sentinel.
+
+    SCULPTOR_PROBE_N may be an int or the literal 'prefixes' (each
+    deployment's own prefix count, which varies with size). Both SCULPTOR
+    and painter must resolve it identically or a "budget-fair" comparison
+    silently is not; this is the single place that does it.
+
+    Returns None when probing is unbudgeted (PROBE_MODE=post_step).
+    """
+    import os as _os
+    mode = _os.environ.get('SCULPTOR_PROBE_MODE',
+                           _os.environ.get('SCULPTOR_ABLATION_PROBE_MODE',
+                                           DEFAULT_PROBE_MODE))
+    if mode == 'post_step':
+        return None
+    raw = str(_os.environ.get('SCULPTOR_PROBE_N',
+                              _os.environ.get('SCULPTOR_ABLATION_PROBE_N',
+                                              DEFAULT_PROBE_N))).strip().lower()
+    if raw in ('prefixes', 'n_prefixes', 'prefix'):
+        n = int(n_prefixes or 0)
+        return n if n > 0 else int(DEFAULT_PROBE_N)
+    try:
+        return int(raw)
+    except ValueError:
+        return int(DEFAULT_PROBE_N)

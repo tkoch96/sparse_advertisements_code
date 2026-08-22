@@ -209,7 +209,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 # 2026-08-18: priority strictly first, bulk best-effort
                 # over the latency-optimal FACE; a PAIR, never summed)
                 if _objname == 'joint_latency_bulk_download':
-                    from experiments.model_error.objectives import \
+                    from core.hard_objectives import \
                         prio_lex_pair
                     if _rti is None:
                         _rti, _ = sas.calculate_ground_truth_ingress(adv)

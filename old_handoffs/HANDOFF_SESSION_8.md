@@ -30,7 +30,7 @@ Cluster boost is running. **Don't blow it away.** Status check command (works
 post stop+start since the IP changed):
 
 ```bash
-~/Documents/venv312/bin/ray exec ~/Documents/sparse_advertisements_code/ray-cluster.yaml \
+~/Documents/venv312/bin/ray exec ~/Documents/sparse_advertisements_code/cluster/ray-cluster.yaml \
     'ps -eo pid,etime,cmd | awk "/[r]un_deployment_sweep.py/ && /python/" | head -3; echo ---; \
      grep -E "^\[sweep\]|Stopped train loop|Traceback|GurobiError|Overage|Killed" \
        /home/ubuntu/sweep_latest.log | tail -10; echo ---; \
@@ -215,7 +215,7 @@ When it finishes:
    Output: `figures/paper/average_latency_over_deployment_size_{normal,fail_ingress_mlu,fail_site_mlu}.pdf`
    and the percent-within-X-ms variants.
 
-3. **Tear down cluster** when done: `ray down -y ray-cluster.yaml`. Confirm
+3. **Tear down cluster** when done: `ray down -y cluster/ray-cluster.yaml`. Confirm
    no leftover EC2 instances with `aws ec2 describe-instances --filters
    "Name=tag:project,Values=sculptor" "Name=instance-state-name,Values=running"`.
 
@@ -259,7 +259,7 @@ Existing rough edges worth fixing for the next objectives:
   `run_objective.py` would let you sweep params from the shell.
 - **Legacy `testing_*.py` files still exist** (`testing_site_costs.py`,
   `testing_priorities.py`, `testing_generic_objective.py`,
-  `eval_latency_failure.py`). They work but duplicate the registry. Low-prio
+  `eval_all_solution_types.py`). They work but duplicate the registry. Low-prio
   consolidation.
 - **`backup_capacity` failed; consider reviving with a smarter formulation**.
   See "tests/test_lp_correctness.py git history" for the original tests, but
@@ -305,10 +305,10 @@ This is a clean local-only experiment; no cluster needed.
 
 | action | command |
 |---|---|
-| Bring cluster up (after stop or after `ray down`) | `~/Documents/venv312/bin/ray up -y ray-cluster.yaml` |
-| Tear down (terminates instances, destroys EBS — logs are lost) | `~/Documents/venv312/bin/ray down -y ray-cluster.yaml` |
+| Bring cluster up (after stop or after `ray down`) | `~/Documents/venv312/bin/ray up -y cluster/ray-cluster.yaml` |
+| Tear down (terminates instances, destroys EBS — logs are lost) | `~/Documents/venv312/bin/ray down -y cluster/ray-cluster.yaml` |
 | Hard restart (preserves EBS!) | `aws ec2 stop-instances --instance-ids i-09a6ff2823b0bb304 --force` then wait for stopped, then `aws ec2 start-instances --instance-ids i-09a6ff2823b0bb304`. **IP changes after start.** |
-| Run a one-shot command on head | `~/Documents/venv312/bin/ray exec ray-cluster.yaml '<cmd>'` |
+| Run a one-shot command on head | `~/Documents/venv312/bin/ray exec cluster/ray-cluster.yaml '<cmd>'` |
 | AWS state check | `~/Documents/venv312/bin/aws ec2 describe-instances --filters "Name=tag:project,Values=sculptor" --query 'Reservations[].Instances[].[InstanceId,State.Name,PublicIpAddress]' --output table` |
 
 ## Hazards & gotchas

@@ -1,0 +1,20 @@
+{
+  "_comment": [
+    "Friendly names for the boxes, so the tools read `vmctl start head`",
+    "instead of `vmctl start i-0428c395787bc3ca0`. Two of the instances",
+    "share the Name tag 'ray-sculptor-head', which is why an alias file",
+    "exists at all -- resolution by tag was ambiguous.",
+    "Add a line when you create a box; nothing here is discovered."
+  ],
+  "aliases": {
+    "head": "i-0428c395787bc3ca0",
+    "bighead": "i-0428c395787bc3ca0",
+    "oldhead": "i-09a6ff2823b0bb304",
+    "preflight": "i-04d7439fa93efaf2a"
+  },
+  "notes": {
+    "i-0428c395787bc3ca0": "c8g.24xlarge, 96 vCPU. THE working box: carries the repo, the 4.5GB vultr_ingress_latencies_by_dst.csv, the eods25 results and harvested figures. Has ELASTIC IP 107.22.173.189, so its address survives stop/start (and the Apache dash at http://107.22.173.189/ keeps working). The EIP bills ~$0.005/hr (~$3.60/mo) while the box is stopped -- that is the price of the stable address, and it is worth it.",
+    "i-09a6ff2823b0bb304": "m7g.4xlarge, 16 vCPU / 64 GB. The original small head. Too small for actual-25+ drivers (OOM), fine for cheap smoke work.",
+    "i-04d7439fa93efaf2a": "c8g.24xlarge, 200 GB disk, untagged (no project=sculptor tag -- teardown.sh will NOT see it). Was the preflight32 box."
+  }
+}

@@ -20,13 +20,13 @@ progress/ETA, fleet sharding) runs it unchanged:
 
 Run (single VM):
 
-    python -m experiments.eods.build_manifest --out tools/eods_manifest.json \
+    python -m experiments.eods.build_manifest --out cluster/manifests/eods_manifest.json \
         --soln-types sparse,painter,anycast,one_per_pop,one_per_peering
     python -m experiments.ablation.run_n_sweep_queue \
-        --manifest tools/eods_manifest.json --ws-root ~/eods_ws \
+        --manifest cluster/manifests/eods_manifest.json --ws-root ~/eods_ws \
         --slots <N> --workers-per-run <W> --port0 52000 --no-rescore
 
-Fleet run: shard the manifest with experiments/fleet/shard.py; each VM
+Fleet run: shard the manifest with cluster/fleet/shard.py; each VM
 runs its shard with the same command.
 
 STATUS: skeleton validated by import/manifest smokes; the heavy

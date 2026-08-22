@@ -16,7 +16,7 @@ below have now landed or been superseded by better paths.
 
 1. **[CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md)** — How to operate the AWS
    Ray cluster (which is now fully set up). Covers prereqs, the `ray up`
-   command, monitoring patterns, teardown. Use as-is — `ray-cluster.yaml`
+   command, monitoring patterns, teardown. Use as-is — `cluster/ray-cluster.yaml`
    in this repo is ready to run.
 2. **[OVERNIGHT_SUMMARY.md](OVERNIGHT_SUMMARY.md)** — Empirical results
    from the cluster bring-up + first SCULPTOR runs on real hardware. Has
@@ -46,7 +46,7 @@ couple of hours instead of a day or more.
 Working dir: `/Users/tomkoch/Documents/sparse_advertisements_code/`.
 
 The SCULPTOR algorithm lives in `sparse_advertisements_v3.py` (~2150 lines).
-The main entry point users invoke is `eval_latency_failure.py`.
+The main entry point users invoke is `eval_all_solution_types.py`.
 
 Workers (computing latency benefit and LP solutions) come in two flavors:
 - **ZMQ subprocess workers (original):** `worker_comms.py` (`Worker_Manager`) +
@@ -266,11 +266,11 @@ ordered by what each can deliver:
 
 1. **Cluster scale-out on AWS spot.** With the Ray backend in place, the
    missing piece is a cluster config:
-   - `ray-cluster.yaml` specifying head + worker node types (e.g.,
+   - `cluster/ray-cluster.yaml` specifying head + worker node types (e.g.,
      `c7g.16xlarge` for cost/efficiency on ARM).
    - `setup_commands` that install your venv + Gurobi + the codebase.
    - Spot instances; head node on-demand.
-   Then `ray up`, `ray submit eval_latency_failure.py --dpsize actual-32`.
+   Then `ray up`, `ray submit eval_all_solution_types.py --dpsize actual-32`.
    Cost: roughly $0.05–0.10 per core-hour on spot. 100 cores × 2 hours ≈
    $10–20 per actual-32 run.
 2. **Algorithmic improvements**, in rough order of expected payoff:
@@ -321,7 +321,7 @@ sparse_advertisements_code/
 ├── pytest.ini
 ├── run_ray.py                       <- Ray-backend launcher
 ├── sparse_advertisements_v3.py      <- SCULPTOR algorithm
-├── eval_latency_failure.py          <- primary driver
+├── eval_all_solution_types.py          <- primary driver
 ├── optimal_adv_wrapper.py           <- parent class for workers
 ├── path_distribution_computer.py    <- ZMQ worker (original)
 ├── path_distribution_computer.py <- Ray actor wrapper (this session)

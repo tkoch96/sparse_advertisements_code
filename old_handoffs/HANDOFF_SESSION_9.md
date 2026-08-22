@@ -232,9 +232,9 @@ pushed to head via scp during the session; they'll be redeployed via
 
 | action | command |
 |---|---|
-| Resume cluster (provisions fresh worker, rsyncs code, restores from EBS on head) | `~/Documents/venv312/bin/ray up -y ray-cluster.yaml` |
+| Resume cluster (provisions fresh worker, rsyncs code, restores from EBS on head) | `~/Documents/venv312/bin/ray up -y cluster/ray-cluster.yaml` |
 | Status check after resume | See "status one-liner" template in HANDOFF_SESSION_8.md (replace IP) |
-| Tear down (destroys EBS — would lose head state) | `~/Documents/venv312/bin/ray down -y ray-cluster.yaml` |
+| Tear down (destroys EBS — would lose head state) | `~/Documents/venv312/bin/ray down -y cluster/ray-cluster.yaml` |
 | AWS state | `~/Documents/venv312/bin/aws ec2 describe-instances --filters "Name=tag:project,Values=sculptor" --query 'Reservations[].Instances[].[InstanceId,InstanceType,State.Name,PublicIpAddress]' --output table` |
 | Console output (post-OOM forensics) | `~/Documents/venv312/bin/aws ec2 get-console-output --instance-id <head-id> --latest --output text \| tail -40` |
 | CloudWatch CPU history | See `aws cloudwatch get-metric-statistics` call in session 9 transcript |
