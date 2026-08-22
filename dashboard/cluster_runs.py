@@ -25,6 +25,7 @@ from __future__ import annotations
 import html
 import json
 import os
+import re
 import time
 
 REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -270,6 +271,138 @@ def _progress_table(m):
         out.append('<p class="note">sweep finished: {}/{} sizes ok in {}'
                    '.</p>'.format(p.get('n_ok', '?'), p.get('n_total', '?'),
                                   _fmt_dt(p.get('wall_s'))))
+    return '\n'.join(out)
+
+
+_SIM_SIZE_RE = re.compile(r'\[sweep\] === dpsize=(\w+) ')
+_SIM_POPS_RE = re.compile(r"Considering pops : \[(.*?)\], deployment size:")
+_SIM_BUDGET_RE = re.compile(r'\[probe-gate\] PROBE_N=prefixes -> budget (\d+)')
+_SIM_EXIT_RE = re.compile(
+    r'\[probe-budget\] EXITING on (\d+) path measures '
+    r'\(= (\d+) setup grounding \+ (\d+) probes\) \| budget N=(\d+) '
+    r'mode=(\w+) skipped=(\d+) iters=(\d+)')
+_SIM_FAIL_RE = re.compile(r'Strategy sparse failed')
+# Per-learner accounting (Tom 2026-08-22): measurements conducted by EACH
+# learner + iterations to convergence + deployment dims, per sim.
+_SIM_OPT_RE = re.compile(r'Optimizing over (\d+) peers and (\d+) ugs')
+_SIM_PAINTER_RE = re.compile(r'PAINTER ITER (\d+)')
+_SIM_PCAP_RE = re.compile(r'PAINTER measurement cap hit')
+_SIM_ANYOPT_RE = re.compile(r'Measuring anyopt providers\.: 100%.*?\| (\d+)/\d+')
+
+
+def _sim_table(m):
+    """Per-sim rows parsed from the harvested log: with nsim>1 each size is
+    MANY deployments (a fresh random PoP draw per sim -- the thing the
+    2026-08-22 worker-rebirth bug broke), and the per-size progress table
+    hides that entirely. One <details> block per size: sim #, the drawn
+    pops, the per-deployment probe budget (PROBE_N=prefixes resolves per
+    draw), spend/skips/iters, and whether sparse survived."""
+    txt = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log'))
+    if not txt:
+        return ''
+    # Judge the CURRENT segment only (resumes append; same convention as
+    # expctl.verdict).
+    i = txt.rfind('[expctl] run_id=')
+    if i > 0:
+        txt = txt[i:]
+    sizes = {}          # size -> [sim dicts]
+    order = []
+    cur_size, cur = None, None
+    for line in txt.splitlines():
+        mm = _SIM_SIZE_RE.search(line)
+        if mm:
+            cur_size = mm.group(1)
+            if cur_size not in sizes:
+                sizes[cur_size] = []
+                order.append(cur_size)
+            cur = None
+            continue
+        if cur_size is None:
+            continue
+        mm = _SIM_POPS_RE.search(line)
+        if mm:
+            pops = mm.group(1).replace("'", '').replace('vtr', '')
+            cur = {'pops': ' '.join(pops.split()), 'budget': None,
+                   'probes': None, 'skipped': None, 'iters': None,
+                   'popps': None, 'ugs': None, 'painter_it': None,
+                   'painter_cap': False, 'anyopt_meas': None,
+                   'state': 'running'}
+            sizes[cur_size].append(cur)
+            continue
+        if cur is None:
+            continue
+        mm = _SIM_BUDGET_RE.search(line)
+        if mm and cur['budget'] is None:
+            cur['budget'] = mm.group(1)
+            continue
+        mm = _SIM_EXIT_RE.search(line)
+        if mm:
+            cur['probes'], cur['budget'] = mm.group(3), mm.group(4)
+            cur['skipped'], cur['iters'] = mm.group(6), mm.group(7)
+            cur['state'] = 'ok'
+            continue
+        if _SIM_FAIL_RE.search(line):
+            cur['state'] = 'FAILED'
+            continue
+        mm = _SIM_OPT_RE.search(line)
+        if mm and cur['popps'] is None:
+            cur['popps'], cur['ugs'] = mm.group(1), mm.group(2)
+            continue
+        mm = _SIM_PAINTER_RE.search(line)
+        if mm:
+            cur['painter_it'] = max(int(mm.group(1)),
+                                    cur['painter_it'] or 0)
+            continue
+        if _SIM_PCAP_RE.search(line):
+            cur['painter_cap'] = True
+            continue
+        mm = _SIM_ANYOPT_RE.search(line)
+        if mm:
+            cur['anyopt_meas'] = mm.group(1)
+    if not order:
+        return ''
+    out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">deployments '
+           'per size <small class="mut">(each sim is a fresh random PoP '
+           'draw; budget resolves per draw)</small></h3>']
+    for sz in order:
+        sims = sizes[sz]
+        n_ok = sum(1 for x in sims if x['state'] == 'ok')
+        n_bad = sum(1 for x in sims if x['state'] == 'FAILED')
+        summ = 'actual-{} &mdash; {} sim(s): {} sparse-ok'.format(
+            sz, len(sims), n_ok)
+        if n_bad:
+            summ += ', <b style="color:#c2544d">{} FAILED</b>'.format(n_bad)
+        is_last = (sz == order[-1])
+        out.append('<details{}><summary>{}</summary>'.format(
+            ' open' if (is_last or n_bad) else '', summ))
+        out.append('<div class="wrap"><table><thead><tr><th>#</th>'
+                   '<th>pops</th><th>popps</th><th>ugs</th>'
+                   '<th>prefixes</th>'
+                   '<th>sculptor meas</th><th>sculptor iters</th>'
+                   '<th>painter meas=iters</th><th>anyopt meas</th>'
+                   '<th>sparse</th></tr></thead><tbody>')
+        for j, x in enumerate(sims):
+            color = {'ok': 'var(--go)', 'FAILED': '#c2544d'}.get(
+                x['state'], 'var(--acc)')
+            # measures = probes + 1 setup grounding (the EXITING contract)
+            sc_meas = ('{}/{}'.format(int(x['probes']) + 1, x['budget'])
+                       if x['probes'] is not None and x['budget']
+                       else (x['budget'] and '?/{}'.format(x['budget'])) or '-')
+            p_it = x['painter_it']
+            painter = '-' if p_it is None else '{}{}'.format(
+                p_it + 1, ' (cap)' if x['painter_cap'] else '')
+            out.append(
+                '<tr><th>{}</th><td>{}</td><td class="c">{}</td>'
+                '<td class="c">{}</td><td class="c">{}</td>'
+                '<td class="c">{}</td><td class="c">{}</td>'
+                '<td class="c">{}</td><td class="c">{}</td>'
+                '<td style="color:{}">{}</td></tr>'.format(
+                    j, html.escape(x['pops']), x['popps'] or '-',
+                    x['ugs'] or '-', x['budget'] or '-',
+                    sc_meas, x['iters'] or '-',
+                    painter, x['anyopt_meas'] or '-',
+                    color, x['state']))
+        out.append('</tbody></table></div></details>')
     return '\n'.join(out)
 
 
@@ -538,6 +671,7 @@ def render(exp):
         _card(m, state, headline, details),
         '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress</h3>',
         _progress_table(m),
+        _sim_table(m),
         _phase_table(m),
         _init_table(m),
         _ram_table(m),
