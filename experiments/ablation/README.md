@@ -1,5 +1,24 @@
 # Ablation study: PAINTER → SCULPTOR, and measurement policies (agent notes)
 
+> **FORK REMOVED 2026-08-22.** Every L6 ("full"-rung) feature — the WHEN
+> probing framework (scheduled/slotted/gated/smart), the measurement
+> budget + `[probe-budget] EXITING` accounting, the smart/surprise knob
+> family, sigma refresh, grad/RB sigma capture, stop-v2, adagrad, and the
+> painter measurement cap — is incorporated into mainline
+> `core/sparse_advertisements_v3.py` (merges of 2026-08-16/18/21/22; the
+> `SCULPTOR_ABLATION_*` env names still work as fallbacks via
+> `_probe_env`). `sculptor_fork.py`, `mc_off_worker.py`,
+> `run_fork_ladder.py`, `run_n_sweep_queue.py` and their tests were
+> deleted (Tom's call; `git log -- experiments/ablation` recovers them).
+> **This also removes the ability to RUN the degraded L1–L5 arms**
+> (MEMORY/DIRECTION/EXPLORE/MC-off, GRAD_BASE, fixed-budget) — those
+> switches were never merged, by design. The analysis scripts below
+> (`eval_ladder_metrics.py`, `plot_normalized.py`, `policy_table.py`,
+> `cdf_fork.py`, `rescore_fork.py`, `table_fork.py`,
+> `compare_paradigms.py`) survive: they read the stored campaign result
+> pickles and import nothing from the fork. The notes below are kept for
+> interpreting those results.
+
 Feature-by-feature ablation of SCULPTOR's methodological leaps, run as
 env-flag overrides on a fork of the REAL production solver, now extended
 with a **measurement-policy axis** (how/when the solver spends real
