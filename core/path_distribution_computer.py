@@ -638,7 +638,24 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				obj_coeffs.append(NO_ROUTE_LATENCY)
 			else:
 				if obj == "avg_latency":
-					obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
+					try:
+						obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
+					except KeyError:
+						# TEMP DIAGNOSTIC (2026-08-22 stale-state hunt)
+						popp = self.popps[poppi]
+						prios = getattr(self, 'whole_deployment_ground_truth_ingress_priorities', {})
+						print('[staledump] w={} ug={} poppi={} popp={} '
+							  'popp_in_popps={} ug_in_perfs={} n_perfs_ug={} '
+							  'popp_in_prios_ug={} sample_perf_keys={} '
+							  'n_popps={} dpsize={}'.format(
+							self.worker_i, ug, poppi, popp,
+							popp in self.popp_to_ind,
+							ug in self.whole_deployment_ug_perfs,
+							len(self.whole_deployment_ug_perfs.get(ug, {})),
+							popp in prios.get(ug, {}),
+							list(self.whole_deployment_ug_perfs.get(ug, {}).keys())[:3],
+							self.n_popp, self.dpsize), flush=True)
+						raise
 				elif obj == "per_site_cost":
 					pop, _ = self.popps[poppi]
 					site_cost = self.site_costs[pop]
@@ -1673,6 +1690,10 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 		# cheaper way to compute the same number.
 		# init_kwargs wins over the env -- see the note in get_init_kwa:
 		# the env does not survive the driver -> Ray actor boundary.
+		# Saved for the full-rebirth path in _cmd_update_deployment (before
+		# the pop below mutates it). _cmd_update_kwa refreshes it, so a
+		# rebirth always uses the newest kwa the driver has sent.
+		self._saved_init_kwa = copy.deepcopy(init_kwargs)
 		self.MC_NUM = int(init_kwargs.pop(
 			'mc_num', os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM)))
 		if worker_i == 0:
@@ -1948,7 +1969,32 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 		_log_mem_worker(self.worker_i, 'update_deployment_enter',
 		                dpsize=deployment.get('dpsize', '?'))
 		_t_ud = time.time()
-		self.update_deployment(deployment, **kwargs)
+		if kwargs.get('quick_update', False):
+			self.update_deployment(deployment, **kwargs)
+		else:
+			# FULL REBIRTH. The base update_deployment refreshes the
+			# deployment dicts but not the derived state: the persistent
+			# Gurobi LP (vol_constrs keyed by the OLD ug set, var_pool by
+			# the OLD popp indices), the lbx grids sized to the OLD n_ug,
+			# and every hasattr-guarded lazy cache (_uipop_csr, _pt_csr,
+			# rti_data, parent_tracker, ...). Sim 0 of a multi-sim eval is
+			# consistent because the actor is CONSTRUCTED with its
+			# deployment; sims 1+ came through this path and dereferenced
+			# the new deployment through old structures (KeyError in
+			# _path_obj_coeffs / IndexError in _compute_scenario_options ->
+			# 'worker N returned error' -> strategy sparse dropped, 19/20
+			# sims on 2026-08-22; nsim=1 everywhere is why no smoke caught
+			# it). Rebuilding piecemeal is how the bug regenerates -- the
+			# only future-proof update is the same code path as
+			# construction: wipe the instance and re-run __init__.
+			wi = self.worker_i
+			ikw = copy.deepcopy(self._saved_init_kwa)
+			try:
+				self.model.dispose()  # else one leaked Gurobi env per sim
+			except Exception:
+				pass
+			self.__dict__.clear()
+			self.__init__(wi, deployment, ikw)
 		self._mark_init('update_deployment', time.time() - _t_ud)
 		_log_mem_worker(self.worker_i, 'update_deployment_done',
 		                dpsize=deployment.get('dpsize', '?'))
@@ -1979,6 +2025,13 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 		return self.get_node_mem_avail_mb()
 
 	def _cmd_update_kwa(self, new_kwa):
+		# Keep the rebirth snapshot current: _cmd_update_deployment re-runs
+		# __init__ with _saved_init_kwa, and the driver sends update_kwa
+		# immediately before update_deployment each sim.
+		try:
+			self._saved_init_kwa.update(copy.deepcopy(new_kwa))
+		except AttributeError:
+			self._saved_init_kwa = copy.deepcopy(new_kwa)
 		if new_kwa.get('n_prefixes') is not None:
 			self.n_prefixes = new_kwa.get('n_prefixes')
 		if new_kwa.get('gamma') is not None:

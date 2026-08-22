@@ -164,6 +164,40 @@ a FAILURE, so it must be run at an iteration count where the budget binds.
 
 ---
 
+## The nsim>1 worker-staleness bug (fixed 2026-08-22)
+
+Until 2026-08-22, any size with `--nsim > 1` silently dropped the sparse
+strategy on every sim after the first: `Strategy sparse failed` +
+`KeyError: (<pop>, '<peer>')` (or an IndexError in
+`_compute_scenario_options`) from every worker, at the very first LB
+flush. Root cause: `_cmd_update_deployment` refreshed the worker actor's
+deployment dicts but not the DERIVED state -- the persistent Gurobi LP
+(constraints/var_pool keyed by the old ug/popp universe), the lbx grids,
+and every `hasattr`-guarded lazy cache (`_uipop_csr`, `_pt_csr`,
+`rti_data`, `parent_tracker`). Sim 0 was consistent because the actor is
+*constructed* with its deployment; sims 1+ dereferenced the new
+deployment through the old structures. Every smoke and e2e test ran
+nsim=1, which is exactly the blind spot.
+
+The fix makes a full (non-`quick_update`) worker deployment update a
+**rebirth**: dispose the Gurobi model, `self.__dict__.clear()`, re-run
+`__init__` with the new deployment -- the same code path as
+construction, so a new lazy cache added later cannot re-introduce the
+bug. `_cmd_solve_lp`'s inline `quick_update=True` swaps are untouched.
+
+Two guards now exist:
+* `expctl launch --preset dpsweep` sets `SCULPTOR_REQUIRE_SOLNS=sparse`,
+  so a sparse failure aborts the cell instead of burning eval phases on a
+  baselines-only comparison. `--env SCULPTOR_REQUIRE_SOLNS=` disables.
+* A failed strategy leaves `failed_strategies` in the metrics pickle and
+  an empty `(0,)` adv under its key -- detectable, but check for it
+  before aggregating old pickles.
+
+The 2026-08-22 morning run (`20260822_072429-prefixbudget`) predates the
+fix: its actual-3 pickle has 20 sims of baselines and ONE sparse sim.
+
+---
+
 ## How long will this take? (do this arithmetic BEFORE launching)
 
 Measured on `head` (c7g.16xlarge, 64 vCPU, $2.32/hr) 2026-08-21, the full
