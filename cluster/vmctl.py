@@ -515,6 +515,47 @@ def cmd_ssh(a):
     return subprocess.call(V.ssh_argv(inst['ip']))
 
 
+def cmd_open_port(a):
+    """Open a TCP port on the instance's security group (idempotent).
+    Added for the published dashboard (2026-08-22); the token-path serves
+    as the access control, the SG rule just makes the port reachable."""
+    inst = V.resolve(a.ref)
+    ec2 = V.ec2()
+    r = ec2.describe_instances(InstanceIds=[inst['id']])
+    sg = r['Reservations'][0]['Instances'][0]['SecurityGroups'][0]['GroupId']
+    try:
+        ec2.authorize_security_group_ingress(GroupId=sg, IpPermissions=[{
+            'IpProtocol': 'tcp', 'FromPort': a.port, 'ToPort': a.port,
+            'IpRanges': [{'CidrIp': a.cidr,
+                          'Description': a.reason or 'vmctl open-port'}]}])
+        print('opened tcp/{} on {} ({})'.format(a.port, sg, a.cidr))
+    except Exception as e:
+        if 'Duplicate' in str(e):
+            print('tcp/{} already open on {} ({})'.format(a.port, sg, a.cidr))
+        else:
+            raise
+    return 0
+
+
+def cmd_close_port(a):
+    """Revoke a TCP ingress rule opened with open-port."""
+    inst = V.resolve(a.ref)
+    ec2 = V.ec2()
+    r = ec2.describe_instances(InstanceIds=[inst['id']])
+    sg = r['Reservations'][0]['Instances'][0]['SecurityGroups'][0]['GroupId']
+    try:
+        ec2.revoke_security_group_ingress(GroupId=sg, IpPermissions=[{
+            'IpProtocol': 'tcp', 'FromPort': a.port, 'ToPort': a.port,
+            'IpRanges': [{'CidrIp': a.cidr}]}])
+        print('closed tcp/{} on {} ({})'.format(a.port, sg, a.cidr))
+    except Exception as e:
+        if 'NotFound' in str(e) or 'does not exist' in str(e):
+            print('tcp/{} was not open ({})'.format(a.port, a.cidr))
+        else:
+            raise
+    return 0
+
+
 def cmd_df(a):
     inst = V.resolve(a.ref)
     print(_df(inst['ip']))
@@ -630,6 +671,15 @@ def main(argv=None):
     p.add_argument('ref'); p.add_argument('--gb', type=int, required=True)
     p.set_defaults(fn=cmd_grow)
 
+    p = sub.add_parser('open-port', help='open a TCP port on the security group')
+    p.add_argument('ref'); p.add_argument('port', type=int)
+    p.add_argument('--cidr', default='0.0.0.0/0')
+    p.add_argument('--reason', default=None)
+    p.set_defaults(fn=cmd_open_port)
+    p = sub.add_parser('close-port', help='revoke a TCP ingress rule')
+    p.add_argument('ref'); p.add_argument('port', type=int)
+    p.add_argument('--cidr', default='0.0.0.0/0')
+    p.set_defaults(fn=cmd_close_port)
     p = sub.add_parser('ssh', help='interactive shell, or -- <cmd>')
     p.add_argument('ref')
     p.add_argument('cmd', nargs='*')

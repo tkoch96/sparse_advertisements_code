@@ -21,6 +21,8 @@ SSH = ['ssh', '-i', KEY, '-o', 'StrictHostKeyChecking=no',
 SCP = ['scp', '-i', KEY, '-o', 'StrictHostKeyChecking=no',
        '-o', 'BatchMode=yes']
 
+# NOTE 2026-08-22: run_n_sweep_queue was REMOVED with the ablation fork;
+# this campaign-era launcher cannot run until pointed at a new queue.
 LAUNCH = ('cd ~/sparse_advertisements_code && nohup setsid env {env} '
           '~/venv/bin/python -u -m experiments.ablation.run_n_sweep_queue '
           '--manifest tools/{mf} --ws-root ~/fleet_ws --slots {slots} '

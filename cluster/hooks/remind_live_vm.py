@@ -121,6 +121,11 @@ def main():
                 continue
             if m.get('state') not in ('launched', 'running', 'killed'):
                 continue
+            if m.get('state') == 'killed' and m.get('finished_epoch'):
+                # killed AND finished: expctl finish has stamped it after a
+                # complete harvest -- same carve-out as vmlib.live_runs
+                # (2026-08-22), else a dead run nags forever.
+                continue
             live.append(m)
             age = None
             if os.path.exists(hp):

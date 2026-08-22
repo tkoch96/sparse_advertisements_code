@@ -261,9 +261,22 @@ def all_runs():
 
 
 def live_runs(instance_id=None):
-    """Runs not yet marked finished/harvested-final."""
+    """Runs not yet marked finished/harvested-final.
+
+    'killed' counts as live ONLY until `expctl finish` stamps
+    finished_epoch -- cmd_finish treats 'killed' as terminal (it never
+    overwrites it), so without this carve-out a killed+harvested run
+    blocked `push` forever and the guard taught people to type --force
+    (hit 2026-08-22)."""
+    def _is_live(m):
+        st = m.get('state')
+        if st in (None, 'launched', 'running'):
+            return True
+        if st == 'killed' and not m.get('finished_epoch'):
+            return True
+        return False
     return [m for m in all_runs()
-            if m.get('state') in (None, 'launched', 'running', 'killed')
+            if _is_live(m)
             and (instance_id is None or m.get('instance_id') == instance_id)]
 
 

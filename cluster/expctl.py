@@ -103,6 +103,13 @@ def preset_dpsweep(a, run_id):
         'PYTHONUNBUFFERED': '1',
         'SCULPTOR_SWEEP_PROGRESS_JSON':
             '{}/{}/progress.json'.format(V.REMOTE_RUNS, run_id),
+        # A sweep whose sparse solve dies is a ladder of baselines with the
+        # system under evaluation missing -- abort the cell loudly instead
+        # of spending the eval phases on it (the 2026-08-22 nsim=20 run
+        # burned ~50 min producing 19/20 sparse-less sims before the log
+        # was read). Override with --env SCULPTOR_REQUIRE_SOLNS= to allow
+        # baseline-only runs.
+        'SCULPTOR_REQUIRE_SOLNS': 'sparse',
     }
     if a.nocache:
         # SCULPTOR_RUN_TAG namespaces wrapper_eval's per-size metrics
@@ -147,6 +154,14 @@ def preset_dpsweep(a, run_id):
     pulls = [
         'cache/cluster_runs/{}/'.format(run_id),
         'figures/cluster/{}/'.format(run_id),
+        # The per-size checkpoint pickles -- metrics['adv'] (every solved
+        # advertisement) and metrics['deployment'] per sim live in these,
+        # and they are written after EVERY strategy/eval phase. They land
+        # in cache/ (outside the run dir), so without this entry they were
+        # never harvested and a stopped box silently ate them
+        # (Tom 2026-08-22: losing these = the run's money wasted).
+        'cache/popp_failure_latency_comparison_*{}*.pkl'.format(
+            '_' + run_id.replace('-', '_') if a.nocache else ''),
     ]
     return argv, env, pulls
 
@@ -459,7 +474,15 @@ def harvest(m, ip, verbose=True):
         src = rel if rel.startswith('/') else \
             os.path.join(m.get('remote_repo', V.REMOTE_REPO), rel)
         dst = os.path.join(d, 'results', rel.rstrip('/').replace('/', '__'))
-        if rel.endswith('/'):
+        if '*' in rel or '?' in rel:
+            # Glob entry: the remote shell expands it, so the local target
+            # must be a directory that can hold several matches.
+            dst = os.path.join(d, 'results',
+                               re.sub(r'[*?]', '', rel.rstrip('/'))
+                               .replace('/', '__').rstrip('_'))
+            os.makedirs(dst, exist_ok=True)
+            dst += '/'
+        elif rel.endswith('/'):
             os.makedirs(dst, exist_ok=True)
             dst += '/'
         rc, out, err = V.rsync(V.remote(ip, src), dst)
