@@ -155,7 +155,10 @@ def pull_results_new(cache_fn, port=None, dpsizes=None, n_sim_by_dpsize=None,
 			dp_start = time.time()
 			_log_mem('dpsize_start', dpsize=dpsize, nsim=nsim)
 			print("Evaluating over deployment size {} Sites".format(dpsize))
-			dpsize_str = "testing_feature-actual-{}".format(dpsize)
+			# Non-numeric tokens (e.g. 'small') are named deployments and
+			# pass through as-is; ints keep the testing_feature mapping.
+			dpsize_str = (dpsize if isinstance(dpsize, str)
+						  else "testing_feature-actual-{}".format(dpsize))
 			# Exact wording matters: cluster/plot_phase_timings.py's SWEEP_RE
 			# keys its per-phase timing off this line.
 			print("[sweep] === dpsize={} dpsize_str={} nsim={} ===".format(
@@ -544,7 +547,8 @@ def _cli():
 	print('[sweep] probing: mode={} budget={}'.format(
 		os.environ.get('SCULPTOR_PROBE_MODE', 'post_step (stock)'),
 		os.environ.get('SCULPTOR_PROBE_N', 'n/a')), flush=True)
-	dpsizes = [int(x) for x in a.dpsizes.split(',')] if a.dpsizes else None
+	dpsizes = ([int(x) if x.strip().isdigit() else x.strip()
+				for x in a.dpsizes.split(',')] if a.dpsizes else None)
 	nsim = None
 	if a.nsim:
 		nsim = [int(x) for x in a.nsim.split(',')] if ',' in a.nsim else int(a.nsim)

@@ -635,11 +635,40 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		# is a training-time approximation only.
 		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
 			return (0, None) if with_lb else 0
+		# SCULPTOR_STARTUP_RB (Tom 2026-08-22): the FIRST flush of this
+		# fan-out runs against cold workers (empty persistent-LP columns,
+		# empty caches) and measured 24-28 MINUTES at dpsize=20/25 on the
+		# 2026-08-21 ladder -- ~9x a steady-state iteration. Only the
+		# startup call (init_optimization_vars passes startup_rb=True) is
+		# affected; per-iteration RB is untouched.
+		#   full          stock behavior (default)
+		#   sample:<f>    deterministic every-k-th popp subset (k=1/f),
+		#                 benefit scaled by n_popps/len(subset). Chosen
+		#                 deterministic, not random, so A/B arms share the
+		#                 training RNG stream.
+		#   skip          no RB at startup (base-adv LB job only); the
+		#                 first in-training flush then pays the warm-cache
+		#                 price, which is the 'defer' arm of the A/B.
+		_startup = bool(kwargs.pop('startup_rb', False))
+		_mode = os.environ.get('SCULPTOR_STARTUP_RB', 'full') if _startup else 'full'
+		popps_to_fail = list(self.popps)
+		_scale = 1.0
+		if _mode.startswith('sample'):
+			try:
+				_frac = float(_mode.split(':', 1)[1])
+			except (IndexError, ValueError):
+				_frac = 0.1
+			_k = max(1, int(round(1.0 / max(_frac, 1e-6))))
+			popps_to_fail = popps_to_fail[::_k]
+			_scale = float(len(self.popps)) / max(len(popps_to_fail), 1)
+		elif _mode == 'skip':
+			popps_to_fail = []
 		tmp = np.ones(a.shape)
 		cpkwargs = copy.deepcopy(kwargs)
 		cpkwargs['retnow'] = False
+		_t_rb = time.time()
 		self.latency_benefit_fn(a, **cpkwargs)
-		for popp in self.popps:
+		for popp in popps_to_fail:
 			# we don't know for sure where users are going
 			# so we have to compute over all users
 			tmp[self.popp_to_ind[popp],:] = 0
@@ -651,6 +680,12 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		benefit = 0
 		for b,_ in rets[1:]:
 			benefit += b
+		benefit *= _scale
+		if _startup:
+			print('[startup-rb] mode={} popps={}/{} scale={:.2f} '
+				  'benefit={:.3f} took={:.1f}s'.format(
+					  _mode, len(popps_to_fail), len(self.popps), _scale,
+					  benefit, time.time() - _t_rb), flush=True)
 
 		if with_lb:
 			return benefit, rets[0]
@@ -732,12 +767,16 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			print("Calculating modeled objective")
 		norm_penalty = self.advertisement_cost(a)
 		latency_benefit = None
+		# popped here so it never leaks into worker job kwa on the
+		# gamma==0 / no-resilience paths
+		_startup_rb = kwargs.pop('startup_rb', False)
 		if self.using_resilience_benefit:
 			# combined flush: the base-adv LB rides as job 0 of the
 			# resilience fan-out (it was already queued and discarded there)
 			# instead of a separate 1-job flush that serializes on a single
 			# worker while the rest of the pool idles
-			resilience_benefit, _base = self.resilience_benefit_fn(a, with_lb=True, **kwargs)
+			resilience_benefit, _base = self.resilience_benefit_fn(
+				a, with_lb=True, startup_rb=_startup_rb, **kwargs)
 			if _base is not None:
 				latency_benefit, u = _base
 		else:
@@ -3206,8 +3245,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.current_resilience_benefit = self.get_ground_truth_resilience_benefit(self.optimization_advertisement, store_metrics=True)
 		_log_mem('iov_post_gt_resilience_benefit')
 
-		self.current_pseudo_objective = self.modeled_objective(self.optimization_advertisement)
-		self.current_effective_objective = self.modeled_objective(threshold_a(self.optimization_advertisement))
+		# Both flushes here are the COLD-START fan-outs measured at 24-28
+		# min for dpsize>=20 -- the startup_rb flag lets SCULPTOR_STARTUP_RB
+		# approximate them (see resilience_benefit).
+		self.current_pseudo_objective = self.modeled_objective(
+			self.optimization_advertisement, startup_rb=True)
+		self.current_effective_objective = self.modeled_objective(
+			threshold_a(self.optimization_advertisement), startup_rb=True)
 		self.last_objective = self.current_pseudo_objective
 		self.last_effective_objective = self.current_effective_objective
 		self.rolling_delta = 10

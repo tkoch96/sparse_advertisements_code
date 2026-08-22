@@ -158,7 +158,11 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	sas = None
 
 	performance_metrics_fn = kwargs.get('use_performance_metrics_fn', global_performance_metrics_fn(dpsize))
-	soln_types = kwargs.get('soln_types', global_soln_types)
+	# SCULPTOR_SOLN_TYPES: comma list overriding the default strategy set
+	# (same convention as experiments/eods/run_eods_cell.py). Lets an A/B
+	# run sparse-only without paying for the baselines + their evals.
+	_env_solns = [t for t in os.environ.get('SCULPTOR_SOLN_TYPES', '').split(',') if t]
+	soln_types = kwargs.get('soln_types', _env_solns or global_soln_types)
 	if 'soln_types' in kwargs:
 		del kwargs['soln_types']
 

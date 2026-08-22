@@ -76,10 +76,16 @@ def deployment_to_prefixes(deployment):
 	elif deployment['dpsize'] == 'actual_third_prototype':
 		return 12
 
-	n_prefixes = np.maximum(4,2 * int(np.log2(len(deployment['popps']))))
-	n_prefixes = np.minimum(len(deployment['popps'])//3,n_prefixes)
-	n_prefixes = 3*n_prefixes
-	n_prefixes = np.maximum(int(len(deployment['popps'])/10), n_prefixes)
+	# Prefix budget ~ 1.5*sqrt(|popps|), capped at |popps|//3, floor 4.
+	# (Tom 2026-08-22: the old 3*2*log2 form was too generous -- ~100 popps
+	# got 36 prefixes; targets are ~100->10-20, ~300->20-30, ~500->30-40.
+	# This gives 100->15, 300->26, 500->34.)
+	# Old form, for provenance: 3 * clamp(2*log2(P), ..., P//3), then
+	# max with P/10 -- i.e. 36 across the whole P in [64,127] band.
+	P = len(deployment['popps'])
+	n_prefixes = int(np.round(1.5 * np.sqrt(P)))
+	n_prefixes = min(P // 3, n_prefixes)
+	n_prefixes = max(4, n_prefixes)
 
 	return n_prefixes
 
