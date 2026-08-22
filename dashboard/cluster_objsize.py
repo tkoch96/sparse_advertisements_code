@@ -37,9 +37,19 @@ RUNS_DIR = os.path.join(REPO, 'cache', 'cluster_runs')
 _ATTR = re.compile(
     r'\[objsize idx=(?P<idx>\d+)\] tag=(?P<tag>\S+) attr=(?P<attr>\S+) '
     r'mb=(?P<mb>[\d.]+) n=(?P<n>\S*)')
+# TOLERATE BOTH CENSUS FORMATS. The improved sizer inserts
+# rss_mb/unattributed_mb/coverage_pct between attrs= and census_s=, so a
+# regex pinned to the old field order silently matched NOTHING on the new
+# lines -- actual-32 reported "0 workers seen" and fell back to summing
+# attributes (2026-08-22). Optional groups, not a second regex, so a run
+# that spans a code change (as timing_smoke3 did mid-actual-25) parses.
 _TOTAL = re.compile(
     r'\[objsize idx=(?P<idx>\d+)\] tag=(?P<tag>\S+) TOTAL_mb=(?P<mb>[\d.]+) '
-    r'attrs=(?P<attrs>\d+) census_s=(?P<cs>[\d.]+)')
+    r'attrs=(?P<attrs>\d+)'
+    r'(?: rss_mb=(?P<rss>-?[\d.]+))?'
+    r'(?: unattributed_mb=(?P<unattr>-?[\d.]+))?'
+    r'(?: coverage_pct=(?P<cov>-?[\d.]+))?'
+    r' census_s=(?P<cs>[\d.]+)')
 _SIZE_IN_TAG = re.compile(r'actual-(\d+)')
 
 
@@ -58,7 +68,7 @@ def parse(run_id):
     if not files:
         return {}
     # {size: {attr: {worker_idx: max_mb}}} and {size: {worker_idx: max_total}}
-    attrs, totals, ns = {}, {}, {}
+    attrs, totals, ns, rss = {}, {}, {}, {}
     for fp in files:
         try:
             txt = open(fp, errors='replace').read().replace('\r', '\n')
@@ -83,6 +93,9 @@ def parse(run_id):
             size, idx = int(k.group(1)), int(m.group('idx'))
             t = totals.setdefault(size, {})
             t[idx] = max(t.get(idx, 0.0), float(m.group('mb')))
+            if m.group('rss') is not None:
+                r = rss.setdefault(size, {})
+                r[idx] = max(r.get(idx, 0.0), float(m.group('rss')))
 
     by_size = {}
     for size in sorted(set(list(attrs) + list(totals))):
@@ -96,12 +109,21 @@ def parse(run_id):
                          'workers': len(vals),
                          'n': ns.get(size, {}).get(attr, '')})
         tv = list(per_worker.values())
+        rv = list((rss.get(size) or {}).values())
+        census = max(tv) if tv else (sum(r['max_mb'] for r in rows)
+                                     if rows else 0.0)
+        peak_rss = max(rv) if rv else None
         by_size[size] = {
             'attrs': rows,
             'n_workers_seen': len(tv),
-            'worker_total_max_mb': max(tv) if tv else
-                (sum(r['max_mb'] for r in rows) if rows else 0.0),
+            'worker_total_max_mb': census,
             'worker_total_mean_mb': (sum(tv) / len(tv)) if tv else 0.0,
+            # None on runs from before the census reported its own coverage;
+            # the table shows '-' rather than implying the census is the
+            # whole process.
+            'worker_rss_max_mb': peak_rss,
+            'coverage_pct': (100.0 * census / peak_rss) if peak_rss else None,
+            'unattributed_mb': (peak_rss - census) if peak_rss else None,
         }
     return {'by_size': by_size, 'source': source}
 

@@ -424,9 +424,32 @@ def _ram_table(m):
                 else '<span class="mut">-</span>'))
         out.append('<tr><th class="c">{}</th>{}</tr>'.format(
             html.escape(attr), ''.join(cells)))
-    out.append('<tr><th>peak worker TOTAL</th>{}</tr>'.format(
+    out.append('<tr><th>census TOTAL (attributed)</th>{}</tr>'.format(
         ''.join('<td class="c"><b>{:.1f} MB</b></td>'.format(
             by[s]['worker_total_max_mb']) for s in sizes)))
+    # RSS and coverage, so the census can never again read as if it were
+    # the whole process. A census covering 24% of RSS with no such row is
+    # how "158 MB per worker" stood next to a real 1074 MB.
+    if any(by[s].get('worker_rss_max_mb') for s in sizes):
+        out.append('<tr><th>peak worker RSS</th>{}</tr>'.format(
+            ''.join('<td class="c">{}</td>'.format(
+                '{:.0f} MB'.format(by[s]['worker_rss_max_mb'])
+                if by[s].get('worker_rss_max_mb')
+                else '<span class="mut">-</span>') for s in sizes)))
+        out.append('<tr><th class="mut">unattributed (RSS - census)</th>'
+                   '{}</tr>'.format(
+                       ''.join('<td class="c mut">{}</td>'.format(
+                           '{:.0f} MB'.format(by[s]['unattributed_mb'])
+                           if by[s].get('unattributed_mb')
+                           else '-') for s in sizes)))
+        out.append('<tr><th>coverage</th>{}</tr>'.format(
+            ''.join('<td class="c" style="color:{}">{}</td>'.format(
+                'var(--go)' if (by[s].get('coverage_pct') or 0) >= 50
+                else '#c9862b',
+                '{:.0f}%'.format(by[s]['coverage_pct'])
+                if by[s].get('coverage_pct')
+                else '<span class="mut">not reported</span>')
+                for s in sizes)))
     out.append('<tr><th class="mut">workers observed</th>{}</tr>'.format(
         ''.join('<td class="c mut">{}</td>'.format(by[s]['n_workers_seen'])
                 for s in sizes)))
@@ -454,8 +477,14 @@ def _ram_table(m):
                    'a size fits.</p>'.format(
                        biggest, len(dupes),
                        ', '.join(p for _a, p, _m in dupes), tot))
-    out.append('<p class="note">Source: {}. Peak = the largest census seen '
-               'for any worker at that size.</p>'.format(
+    out.append('<p class="note">Source: {}. Peak = the largest value seen '
+               'for any worker at that size. <b>Coverage is census / RSS</b> '
+               '&mdash; it will never reach 100%: RSS also holds the '
+               'interpreter, numpy/Ray/HiGHS native allocations and '
+               'allocator fragmentation. Watch the unattributed row: if it '
+               'stays near a constant baseline while the census grows, the '
+               'accounting is sound. Sizes showing &ldquo;not reported&rdquo; '
+               'predate the census measuring its own coverage.</p>'.format(
                    html.escape(d.get('source', '?'))))
     return '\n'.join(out)
 
