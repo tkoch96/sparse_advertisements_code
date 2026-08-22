@@ -90,9 +90,6 @@ def run_pick(sp, seed, args):
         # CLI budget and the min-iter floor some specs pin via env.
         env['SCULPTOR_MAX_ITER'] = str(args.max_iter)
         env['SCULPTOR_ABLATION_MIN_ITER'] = str(args.max_iter)
-    # NOTE 2026-08-22: the default runner (ablation fork ladder) was
-    # REMOVED with the fork -- specs must now name a 'runner' explicitly
-    # or this exits with ModuleNotFoundError.
     runner = sp.get('runner', 'experiments.ablation.run_fork_ladder')
     rung = sp['rungs'].split(',')[0]
     cmd = [sys.executable, '-u', '-m', runner, '--seed', str(seed),
