@@ -529,6 +529,16 @@ def _cli():
 	ap.add_argument('--figures-subdir', default=None,
 					help="namespace this run's figures: figures/<subdir>/... (e.g. --figures-subdir real_sweep_2026_08). Sets SCULPTOR_FIG_SUBDIR.")
 	a = ap.parse_args()
+	# SCULPTOR_EVAL_SEED: seed the global numpy RNG so different arms of an
+	# A/B draw IDENTICAL random deployments per sim (2026-08-22: unseeded,
+	# the 4 startup-RB arms each drew different sim-0 deployments -- an
+	# unpaired comparison at nsim=5 is noise). Deliberately env-gated:
+	# production sweeps stay unseeded.
+	_es = os.environ.get('SCULPTOR_EVAL_SEED')
+	if _es:
+		import numpy as _np
+		_np.random.seed(int(_es))
+		print('[sweep] SCULPTOR_EVAL_SEED={} -- deployment draws pinned'.format(_es), flush=True)
 	if a.figures_subdir:
 		os.environ['SCULPTOR_FIG_SUBDIR'] = a.figures_subdir
 	# Measurement budget. Set in the environment because the solver reads it
