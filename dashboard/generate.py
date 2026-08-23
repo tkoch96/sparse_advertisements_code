@@ -1438,11 +1438,30 @@ function recalc(){
   el('pt_out').textContent=' -> '+ptCH.toFixed(0)+' core-hr';
   var allCH=ladCH+abCH+ptCH;
   var tb=el('ce_ttc'); tb.innerHTML='';
-  [['Ladder (todo 1)',ladCH],['Ablation (todo 2)',abCH],
-   ['Paper table (todo 3)',ptCH],['ALL',allCH]].forEach(function(r){
+  // wall floor: cores parallelize ACROSS evals (each eval is pinned at
+  // 64 workers), so wall never drops below the longest single eval
+  function oneEvalH(N,I,ovh){return (I*tIter(N,A).v+ovh*60)/3600;}
+  var floors={lad:0,ab:oneEvalH(+el('ab_size').value||10,
+      +el('ab_iters').value||1,O),
+    pt:oneEvalH(+el('pt_size').value||32,+el('pt_iters').value||1,
+      +el('pt_ovh').value||0)};
+  SIZES.forEach(function(N){if((+el('ce_n_'+N).value||0)>0)
+    floors.lad=Math.max(floors.lad,oneEvalH(N,I,O));});
+  var W=CAL.anchor.workers;
+  function wall(ch,fl){return Math.max(ch/C,fl);}
+  [['Ladder (todo 1)',ladCH,floors.lad],['Ablation (todo 2)',abCH,floors.ab],
+   ['Paper table (todo 3)',ptCH,floors.pt],
+   ['ALL',allCH,Math.max(floors.lad,floors.ab,floors.pt)]]
+   .forEach(function(r){
+    var wh=wall(r[1],r[2]);
     tb.innerHTML+='<tr><th>'+r[0]+'</th><td>'+r[1].toFixed(0)+
-      '</td><td>'+fmtH(r[1]/C)+'</td><td>'+fmtCal(r[1]/C)+'</td></tr>';
+      '</td><td>'+fmtH(wh)+(wh>r[1]/C+1e-9?' (floor)':'')+
+      '</td><td>'+fmtCal(wh)+'</td></tr>';
   });
+  tb.innerHTML+='<tr><td colspan=4 class="note">'+C+' cores = '+
+    (C/W).toFixed(1)+' boxes of '+W+' workers; evals run concurrently '+
+    'across boxes, one eval never spans boxes. Longest single eval: '+
+    fmtH(Math.max(floors.lad,floors.ab,floors.pt))+'</td></tr>';
   var needGB=maxRSS*(1+H)/1024;
   var fb=el('ce_fam'); fb.innerHTML='';
   CAL.families.forEach(function(f){
