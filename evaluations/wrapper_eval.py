@@ -905,3 +905,77 @@ def get_diurnal_deployments(sas, diurnal_intensities):
 			ret[intensity][hour]['None'] = quick_deployment
 	return ret
 
+
+
+def bisect_critical_intensities(sas, adv_by_key, make_deps, lo, hi,
+                                rel_tol=0.05, max_rounds=12,
+                                cong_eps=1e-4,
+                                cong_key='fraction_congested_volume'):
+    """Parallel-friendly bisection for critical congestion intensity
+    (Tom 2026-08-23: the fixed grid snapped every solution to the same
+    grid point -- flash 35.79, diurnal floor 25 -- so the blowup columns
+    could not discriminate).
+
+    Binary search is serial PER SEARCH, but the searches for every
+    (solution, ...) key are independent: each ROUND gathers the midpoint
+    of every unresolved bracket and evaluates them all in ONE
+    solve_lp_with_failure_catch_mp mega-batch, so the pool stays busy at
+    (n_unresolved x n_scenarios) width while the serial depth is only
+    ~log2((hi-lo)/tol) rounds.
+
+    adv_by_key: {key: advertisement}
+    make_deps(v): list of scenario deployments at intensity v (metros for
+        flash surge, hours for a diurnal multiplier)
+    Returns {key: critical_intensity} with floor/ceiling semantics:
+    congested already at lo -> lo; never congested at hi -> hi.
+    """
+    keys = list(adv_by_key)
+    bracket = {k: [float(lo), float(hi)] for k in keys}
+    resolved = {}
+
+    def _batch(points):
+        # points: [(key, v)] -> {(key, v): congested_bool}
+        call_args = []
+        spans = []
+        for k, v in points:
+            deps = make_deps(v)
+            a = threshold_a(adv_by_key[k])
+            start = len(call_args)
+            call_args.extend((a, d, True) for d in deps)
+            spans.append((k, v, start, len(call_args)))
+        rets = sas.solve_lp_with_failure_catch_mp(call_args)
+        out = {}
+        for k, v, i0, i1 in spans:
+            fr = 0.0
+            for r in rets[i0:i1]:
+                try:
+                    fr = max(fr, float(r.get(cong_key) or 0.0))
+                except (TypeError, AttributeError):
+                    pass
+            out[(k, v)] = fr > cong_eps
+        return out
+
+    # round 0: endpoints for every key, one batch
+    ends = _batch([(k, lo) for k in keys] + [(k, hi) for k in keys])
+    for k in keys:
+        if ends[(k, float(lo))] if (k, float(lo)) in ends else ends[(k, lo)]:
+            resolved[k] = float(lo)      # congested at the floor
+        elif not (ends[(k, float(hi))] if (k, float(hi)) in ends else ends[(k, hi)]):
+            resolved[k] = float(hi)      # never congests in range
+    for r in range(max_rounds):
+        todo = [k for k in keys if k not in resolved
+                and bracket[k][1] - bracket[k][0] >
+                rel_tol * max(abs(bracket[k][0]), 1e-9)]
+        if not todo:
+            break
+        mids = [(k, 0.5 * (bracket[k][0] + bracket[k][1])) for k in todo]
+        res = _batch(mids)
+        for k, v in mids:
+            if res[(k, v)]:
+                bracket[k][1] = v
+            else:
+                bracket[k][0] = v
+    for k in keys:
+        if k not in resolved:
+            resolved[k] = 0.5 * (bracket[k][0] + bracket[k][1])
+    return resolved
