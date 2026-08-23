@@ -43,6 +43,11 @@ global_performance_metrics_fn =  lambda dps : os.path.join(CACHE_DIR, 'popp_fail
 
 ### Default metrics for performance evaluations
 default_metrics = {
+	# bisected critical intensities (per sim: {solution: value}). MUST be in
+	# this schema: the loader in eval_all_solution_types deletes any pickle
+	# key not listed here, which silently ate the 2026-08-23 bisect results.
+	'bisect_critical_flash': {i:{} for i in range(N_TO_SIM)},
+	'bisect_critical_diurnal': {i:{} for i in range(N_TO_SIM)},
 	'save_run_dir': {i:None for i in range(N_TO_SIM)},
 	'compare_rets': {i:None for i in range(N_TO_SIM)},
 	'adv': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
@@ -908,31 +913,32 @@ def get_diurnal_deployments(sas, diurnal_intensities):
 
 
 def bisect_critical_intensities(sas, adv_by_key, make_deps, lo, hi,
-                                rel_tol=0.05, max_rounds=12,
+                                rel_tol=0.05, abs_tol=0.1, max_rounds=12,
                                 cong_eps=1e-4,
-                                cong_key='fraction_congested_volume'):
-    """Parallel-friendly bisection for critical congestion intensity
-    (Tom 2026-08-23: the fixed grid snapped every solution to the same
-    grid point -- flash 35.79, diurnal floor 25 -- so the blowup columns
-    could not discriminate).
+                                cong_key='fraction_congested_volume',
+                                reference_key='one_per_peering',
+                                label='bisect'):
+    """Reference-first parallel bisection for critical congestion
+    intensity (Tom 2026-08-23, v2 of his 2026-08-23 grid complaint):
 
-    Binary search is serial PER SEARCH, but the searches for every
-    (solution, ...) key are independent: each ROUND gathers the midpoint
-    of every unresolved bracket and evaluates them all in ONE
-    solve_lp_with_failure_catch_mp mega-batch, so the pool stays busy at
-    (n_unresolved x n_scenarios) width while the serial depth is only
-    ~log2((hi-lo)/tol) rounds.
+      (a) bisect the REFERENCE (one-per-peering, the optimal routing)
+          alone over [lo, hi] -- each round is one midpoint, i.e. one
+          batch of n_scenarios LPs (24 hours for diurnal);
+      (b) opp's critical is an upper bound for every other solution, so
+          the rest bisect over [lo, opp_crit] -- first midpoint is
+          ~opp_crit/2 -- with every unresolved solution's midpoint
+          batched into one solve_lp_with_failure_catch_mp call per
+          round. The halved range plus the shared bound lands the whole
+          thing in ~10 rounds.
 
     adv_by_key: {key: advertisement}
-    make_deps(v): list of scenario deployments at intensity v (metros for
-        flash surge, hours for a diurnal multiplier)
-    Returns {key: critical_intensity} with floor/ceiling semantics:
-    congested already at lo -> lo; never congested at hi -> hi.
+    make_deps(v): list of scenario deployments at intensity v (metros
+        for a flash surge, hours for a diurnal multiplier)
+    Returns {key: critical_intensity}. Floor/ceiling semantics:
+    congested already at lo -> lo; never congested at hi -> hi; a
+    non-reference solution that survives opp_crit returns opp_crit
+    (a tie with optimal at this tolerance).
     """
-    keys = list(adv_by_key)
-    bracket = {k: [float(lo), float(hi)] for k in keys}
-    resolved = {}
-
     def _batch(points):
         # points: [(key, v)] -> {(key, v): congested_bool}
         call_args = []
@@ -953,29 +959,75 @@ def bisect_critical_intensities(sas, adv_by_key, make_deps, lo, hi,
                 except (TypeError, AttributeError):
                     pass
             out[(k, v)] = fr > cong_eps
+        for k, v, i0, i1 in spans:
+            frs = []
+            for r in rets[i0:i1]:
+                try:
+                    frs.append(float(r.get(cong_key) or 0.0))
+                except (TypeError, AttributeError):
+                    frs.append(-1.0)
+            print('[{}] eval {} @ {:.3f}: max_cong={:.4f} over {} scenarios -> {}'.format(
+                label, k, v, max(frs) if frs else -1.0, i1 - i0,
+                'CONGESTED' if out[(k, v)] else 'ok'), flush=True)
         return out
 
-    # round 0: endpoints for every key, one batch
-    ends = _batch([(k, lo) for k in keys] + [(k, hi) for k in keys])
-    for k in keys:
-        if ends[(k, float(lo))] if (k, float(lo)) in ends else ends[(k, lo)]:
-            resolved[k] = float(lo)      # congested at the floor
-        elif not (ends[(k, float(hi))] if (k, float(hi)) in ends else ends[(k, hi)]):
-            resolved[k] = float(hi)      # never congests in range
-    for r in range(max_rounds):
-        todo = [k for k in keys if k not in resolved
-                and bracket[k][1] - bracket[k][0] >
-                rel_tol * max(abs(bracket[k][0]), 1e-9)]
-        if not todo:
-            break
-        mids = [(k, 0.5 * (bracket[k][0] + bracket[k][1])) for k in todo]
-        res = _batch(mids)
-        for k, v in mids:
-            if res[(k, v)]:
-                bracket[k][1] = v
-            else:
-                bracket[k][0] = v
-    for k in keys:
-        if k not in resolved:
-            resolved[k] = 0.5 * (bracket[k][0] + bracket[k][1])
-    return resolved
+    def _run(keys, k_lo, k_hi, probe_hi=True):
+        print('[{}] search over [{:.3f}, {:.3f}] for {}'.format(
+            label, float(k_lo), float(k_hi), keys), flush=True)
+        bracket = {k: [float(k_lo), float(k_hi)] for k in keys}
+        resolved = {}
+        # probe_hi=False in phase B: congested-at-opp_crit is the trivial
+        # expected result for a suboptimal solution, so skip that batch and
+        # go straight to the opp_crit/2 midpoint (Tom 2026-08-23). A
+        # solution that in fact never congests converges to ~k_hi anyway.
+        probes = [(k, float(k_lo)) for k in keys]
+        if probe_hi:
+            probes += [(k, float(k_hi)) for k in keys]
+        ends = _batch(probes)
+        for k in keys:
+            if ends[(k, float(k_lo))]:
+                resolved[k] = float(k_lo)   # congested at the floor
+                print('[{}] {} congested at floor {:.3f} -> floor'.format(
+                    label, k, float(k_lo)), flush=True)
+            elif probe_hi and not ends[(k, float(k_hi))]:
+                resolved[k] = float(k_hi)   # never congests in range
+                print('[{}] {} never congests up to {:.3f} -> ceiling'.format(
+                    label, k, float(k_hi)), flush=True)
+        for _round in range(max_rounds):
+            # stop width: max(abs_tol, rel_tol*lo) -- no point resolving
+            # an intensity multiplier below +/-0.25 absolute (Tom 2026-08-23)
+            todo = [k for k in keys if k not in resolved
+                    and bracket[k][1] - bracket[k][0] >
+                    max(abs_tol, rel_tol * max(abs(bracket[k][0]), 1e-9))]
+            if not todo:
+                break
+            mids = [(k, 0.5 * (bracket[k][0] + bracket[k][1]))
+                    for k in todo]
+            print('[{}] round {}: midpoints {}'.format(label, _round + 1,
+                {k: round(v, 3) for k, v in mids}), flush=True)
+            res = _batch(mids)
+            for k, v in mids:
+                if res[(k, v)]:
+                    bracket[k][1] = v
+                else:
+                    bracket[k][0] = v
+                print('[{}]   {} bracket -> [{:.3f}, {:.3f}]'.format(
+                    label, k, bracket[k][0], bracket[k][1]), flush=True)
+        for k in keys:
+            if k not in resolved:
+                resolved[k] = 0.5 * (bracket[k][0] + bracket[k][1])
+        return resolved
+
+    keys = list(adv_by_key)
+    if reference_key not in adv_by_key or len(keys) == 1:
+        return _run(keys, lo, hi)
+    print('[{}] PHASE A: bisect reference {} alone'.format(
+        label, reference_key), flush=True)
+    ref_crit = _run([reference_key], lo, hi)[reference_key]
+    print('[{}] PHASE A done: {} critical = {:.3f}; PHASE B caps everyone at it'.format(
+        label, reference_key, ref_crit), flush=True)
+    others = [k for k in keys if k != reference_key]
+    out = _run(others, lo, max(ref_crit, float(lo) * (1 + rel_tol)),
+               probe_hi=False)
+    out[reference_key] = ref_crit
+    return out

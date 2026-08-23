@@ -15,8 +15,8 @@ import os
 
 import numpy as np
 
-from evaluations._objective_eval_base import (
-    score_all_strategies, bar_comparison, announce)
+from evaluations.objectives._objective_eval_base import (
+    score_all_strategies, bar_comparison, announce, objective_value_scorer)
 from evaluations.eval_all_solution_types import calc_pct_volume_within_latency
 
 OBJECTIVES = ('frac_beyond_optimal',)
@@ -38,6 +38,8 @@ def run(ctx):
     announce(ctx, 'evaluations_for_frac_beyond_optimal',
              'fraction of traffic within {:.0f}ms of optimal'.format(THRESHOLD_MS))
     score_all_strategies(ctx, _frac_within, 'frac_within_threshold_by_strategy')
+    score_all_strategies(ctx, objective_value_scorer('frac_beyond_optimal'),
+                         'objective_value_by_strategy')
     bar_comparison(ctx, 'frac_within_threshold_by_strategy',
                    ylabel='fraction of volume within {:.0f}ms'.format(THRESHOLD_MS),
                    title='Traffic within {:.0f}ms of optimal'.format(THRESHOLD_MS),

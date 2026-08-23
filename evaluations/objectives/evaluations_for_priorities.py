@@ -21,7 +21,7 @@ the paper-plot output shape.
 """
 import numpy as np
 
-from evaluations._objective_eval_base import (
+from evaluations.objectives._objective_eval_base import (
     score_all_strategies, bar_comparison, announce, objective_value_scorer)
 
 OBJECTIVES = ('joint_priority',)

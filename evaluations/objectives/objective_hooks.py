@@ -74,11 +74,11 @@ _ROUTES = {
     'frac_beyond_optimal': 'evaluations_for_frac_beyond_optimal',
 }
 
-DEFAULT_ROUTE = 'evaluations_for_latency_plus_resilience'
-
-
 def module_name_for(objective):
-    return _ROUTES.get(objective, DEFAULT_ROUTE)
+    try:
+        return _ROUTES[objective]
+    except KeyError:
+        raise KeyError("No set of evaluations for objective {} are registered in objective hooks".format(objective))
 
 
 def for_objective(objective):
@@ -94,7 +94,7 @@ def for_objective(objective):
               "objective {!r}; falling back to {} -- its phases are written "
               "for latency + resilience, so read the numbers with that in "
               "mind.".format(objective, name))
-    return importlib.import_module('evaluations.' + name)
+    return importlib.import_module('evaluations.objectives.' + name)
 
 
 def resolve_objective(explicit=None):

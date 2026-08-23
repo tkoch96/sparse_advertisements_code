@@ -33,10 +33,31 @@ def score_all_strategies(ctx, score_one, metric_key):
     """
     metrics = ctx.metrics
     metrics.setdefault(metric_key, {})
+    _sim_sas_cache = getattr(ctx, '_per_sim_sas', None)
+    if _sim_sas_cache is None:
+        _sim_sas_cache = ctx._per_sim_sas = {}
     for sim in range(ctx.N_TO_SIM):
         rets = (metrics.get('compare_rets') or {}).get(sim) or {}
         advs = rets.get('adv_solns') or {}
         metrics[metric_key].setdefault(sim, {})
+        # THE SIM'S OWN deployment, not ctx.sas's (2026-08-23): ctx.sas is
+        # whichever object was current when the hook ran -- the LAST
+        # sim's. Scoring sim 0's advs against sim 2's caps/priorities gave
+        # anycast MLU 2.82 where the cap-sizing math says 0.91 (nsim=1
+        # runs, which cannot cross sims, scored exactly 0.91). Fourth
+        # instance of the cross-sim staleness family. Driver-side LPs
+        # only, so no worker pool is attached.
+        sas = _sim_sas_cache.get(sim)
+        if sas is None:
+            dep = (metrics.get('deployment') or {}).get(sim)
+            if dep is not None:
+                from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+                kwa = dict(ctx.sas.get_init_kwa()) if ctx.sas is not None else {}
+                kwa.pop('save_run_dir', None)
+                sas = Sparse_Advertisement_Eval(dep, **kwa)
+            else:
+                sas = ctx.sas   # single-sim / legacy pickles
+            _sim_sas_cache[sim] = sas
         for strategy in ctx.soln_types:
             try:
                 adv = advs[strategy][0]
@@ -45,7 +66,7 @@ def score_all_strategies(ctx, score_one, metric_key):
                 metrics[metric_key][sim][strategy] = None
                 continue
             try:
-                metrics[metric_key][sim][strategy] = float(score_one(ctx.sas, adv))
+                metrics[metric_key][sim][strategy] = float(score_one(sas, adv))
             except Exception:
                 print("[{}] scoring failed for {}".format(metric_key, strategy))
                 traceback.print_exc()
@@ -96,3 +117,24 @@ def announce(ctx, module_name, what):
     print('{} -- objective={} dpsize={}'.format(module_name, ctx.objective, ctx.dpsize))
     print(what)
     print('=' * 66)
+
+
+def objective_value_scorer(objective):
+    """score_one that RE-EVALUATES the objective function itself on a
+    stored advertisement (Tom 2026-08-23: the solve-time 'objective' was
+    recorded under per-strategy code paths -- e.g. Unicast's stranding
+    was free under min-MLU's exclusion -- so Obj columns compare apples
+    to oranges. One LP evaluation per adv, identical function for every
+    strategy, on the sim's own deployment). Dispatches through the same
+    registry the solver uses, so stranded pseudo-paths carry
+    NO_ROUTE_LATENCY inside the model."""
+    def _x(sas, adv):
+        from helpers.helpers import threshold_a
+        from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
+        a = threshold_a(adv)
+        rti, _ = sas.calculate_ground_truth_ingress(a)
+        ret = solve_generic_lp_with_failure_catch(sas, rti, objective, adv=a)
+        if not ret.get('solved'):
+            raise ValueError('objective LP unsolved for this advertisement')
+        return float(ret['objective'])
+    return _x

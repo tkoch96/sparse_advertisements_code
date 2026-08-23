@@ -70,7 +70,7 @@ def _log_mem(*a, **k):
 	from core.sparse_advertisements_v3 import _log_mem as _f
 	return _f(*a, **k)
 from evaluations.wrapper_eval import *
-from evaluations import objective_hooks
+from evaluations.objectives import objective_hooks
 from core.solve_lp_assignment import *
 
 import pickle, numpy as np, matplotlib.pyplot as plt, copy, itertools, time
@@ -212,8 +212,22 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 				deployment = kwargs.get('prefix_deployment')
 				deployment['port'] = port
 			else:
+				# SCULPTOR_EVAL_SEED: pair A/B arms on identical per-sim
+				# deployments by driving SCULPTOR_DEPLOYMENT_SEED (which
+				# reseeds INSIDE get_random_deployment, immune to upstream
+				# RNG drift -- a main()-level np.random.seed was not: arms
+				# consume different amounts of RNG before each draw). Seed
+				# varies per sim AND per attempt: the <20-popps filter
+				# below redraws, and a fixed seed would redraw the same
+				# rejected deployment forever.
+				_es = os.environ.get('SCULPTOR_EVAL_SEED')
+				_attempt = 0
 				while True:
 					try:
+						if _es:
+							os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(
+								int(_es) + 1000 * random_iter + _attempt)
+						_attempt += 1
 						deployment = get_random_deployment(dpsize, **kwargs)
 						deployment['port'] = port
 						if len(deployment['popps']) < 20:
@@ -370,6 +384,18 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	hooks = objective_hooks.for_objective(objective)
 	print('[eval] objective={} -> {}'.format(objective, hooks.__name__))
 	metrics = hooks.run(ctx) or metrics
+	# Persist what the hook scored. The latency suite checkpoints
+	# internally, but the thin objective modules (mlu, site-cost,
+	# frac-beyond) only mutate ctx.metrics in memory -- without this dump
+	# their *_by_strategy keys never reached the pickle and the paper
+	# table read '-' for every cell (2026-08-22).
+	try:
+		pickle.dump(metrics, open(performance_metrics_fn, 'wb'))
+		print("[ckpt] saved metrics after objective hook -> {}".format(
+			performance_metrics_fn))
+	except Exception:
+		import traceback
+		traceback.print_exc()
 
 	return metrics
 

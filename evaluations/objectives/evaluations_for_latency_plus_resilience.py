@@ -82,6 +82,17 @@ OBJECTIVES = ('avg_latency',)
 
 
 def run(ctx):
+	# uniform objective-value column (Tom 2026-08-23): one LP evaluation
+	# of THE objective per stored advertisement, same function for every
+	# strategy, per-sim deployment (see _objective_eval_base).
+	try:
+		from evaluations.objectives._objective_eval_base import (
+			score_all_strategies, objective_value_scorer)
+		score_all_strategies(ctx, objective_value_scorer('avg_latency'),
+							 'objective_value_by_strategy')
+	except Exception:
+		import traceback
+		traceback.print_exc()
 	"""Run the latency+resilience phases and draw the comparison figure.
 
 	The body below moved verbatim out of evaluate_all_metrics on 2026-08-21;
@@ -105,7 +116,15 @@ def run(ctx):
 	X_vals = ctx.X_vals
 	Y_vals = ctx.Y_vals
 
-	RECALC_PCT_VOL_IN_LAT_MULTIPLIERS = False
+	# SCULPTOR_RECALC: comma list of metric families to force-recompute
+	# against the CACHED solutions (Tom 2026-08-23: "precisely target
+	# which thing you want to recompute without custom scripts").
+	# Families: pct_vol, failure, volume, diurnal, flash,
+	# diurnal_bisect, flash_bisect (bisections only, grids untouched) (or 'all').
+	# Everything else keeps the load->skip-if-computed contract.
+	_recalc = {x.strip() for x in os.environ.get('SCULPTOR_RECALC', '').split(',') if x.strip()}
+	_force = lambda fam: 'all' in _recalc or fam in _recalc
+	RECALC_PCT_VOL_IN_LAT_MULTIPLIERS = _force('pct_vol')
 	try:
 		for random_iter in range(N_TO_SIM):
 			k_of_interest = 'pct_volume_within_latency'
@@ -113,6 +132,13 @@ def run(ctx):
 			if RECALC_PCT_VOL_IN_LAT_MULTIPLIERS or havent_calced_everything:
 				print("-----Volume calc for deployment number = {} -------".format(random_iter))
 				_log_mem('eval_volume_calc', ri=random_iter)
+				# fresh eval object per sim (2026-08-22): reusing one sas via
+				# update_deployment left stale driver-side derived state across
+				# differently-sized deployments (IndexError inside
+				# compute_one_per_peering_solution; the stats TypeErrors were
+				# downstream of the unfilled defaults). Construction is the only
+				# safe cross-deployment update; the worker pool alone is reused.
+				sas = None
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -151,7 +177,7 @@ def run(ctx):
 
 	if sas is not None: sas.clear_lp_caches()
 
-	RECALC_FAILURE_METRICS = False
+	RECALC_FAILURE_METRICS = _force('failure')
 	try:
 		changed=False
 		for random_iter in range(N_TO_SIM):
@@ -161,23 +187,28 @@ def run(ctx):
 			if RECALC_FAILURE_METRICS or havent_calced_everything:
 				print("-----Failure calc for deployment number = {} -------".format(random_iter))
 				_log_mem('eval_failure_calc', ri=random_iter)
-				if sas is None:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
-
-					n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
-					sas = Sparse_Advertisement_Eval(deployment, verbose=True,
-						lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
-						using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
-					if wm is None:
-						wm = Worker_Manager(sas.get_init_kwa(), deployment)
-						wm.start_workers()
-					sas.set_worker_manager(wm)
-					sas.update_deployment(deployment)
-				else:
-					deployment = metrics['deployment'][random_iter]
-					deployment['port'] = port
-					sas.update_deployment(deployment)
+				# FRESH driver-side eval object per sim (2026-08-22).
+				# Reusing one sas across sims via update_deployment left
+				# driver-side derived state keyed to the PREVIOUS sim's
+				# deployment -- compute_one_per_peering_solution inside
+				# update_deployment then indexed a 122-popp array with a
+				# 128-popp index (IndexError) and the phase silently
+				# produced empty failure metrics for every sim. Same
+				# disease as the worker-side nsim>1 rebirth bug, driver
+				# edition: the only safe update across differently-sized
+				# deployments is construction. The worker pool IS reused
+				# (workers rebirth correctly on the update push).
+				deployment = metrics['deployment'][random_iter]
+				deployment['port'] = port
+				n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
+				sas = Sparse_Advertisement_Eval(deployment, verbose=True,
+					lambduh=lambduh,with_capacity=capacity,explore=DEFAULT_EXPLORE, 
+					using_resilience_benefit=(os.environ.get('SCULPTOR_USE_RESILIENCE','1')=='1'), gamma=gamma, n_prefixes=n_prefixes)
+				if wm is None:
+					wm = Worker_Manager(sas.get_init_kwa(), deployment)
+					wm.start_workers()
+				sas.set_worker_manager(wm)
+				sas.update_deployment(deployment)
 				changed=True
 
 				# Compute one-per-peering reference LPs once and share across
@@ -274,20 +305,28 @@ def run(ctx):
 
 	if sas is not None: sas.clear_lp_caches()
 
-	RECALC_VOL_MULTIPLIERS = False
+	RECALC_VOL_MULTIPLIERS = _force('volume')
 
 	if sas is not None: sas.clear_lp_caches()
 
-	RECALC_DIURNAL = False
+	RECALC_DIURNAL = _force('diurnal')
+	RECALC_DIURNAL_BISECT = _force('diurnal_bisect')
 	diurnal_multipliers = [25,50,65,70,75,85,95,105,115,125,150]
 	try:
 		changed=False
 		for random_iter in range(N_TO_SIM):
 			k_of_interest = 'diurnal'
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-			if RECALC_DIURNAL or havent_calced_everything:
+			if RECALC_DIURNAL or RECALC_DIURNAL_BISECT or havent_calced_everything:
 				print("-----Diurnal calc for deployment number = {} -------".format(random_iter))
 				_log_mem('eval_diurnal', ri=random_iter)
+				# fresh eval object per sim (2026-08-22): reusing one sas via
+				# update_deployment left stale driver-side derived state across
+				# differently-sized deployments (IndexError inside
+				# compute_one_per_peering_solution; the stats TypeErrors were
+				# downstream of the unfilled defaults). Construction is the only
+				# safe cross-deployment update; the worker pool alone is reused.
+				sas = None
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -329,6 +368,48 @@ def run(ctx):
 						import traceback
 						traceback.print_exc()
 
+				# Per-sim, ALL-solutions batched bisection of the critical
+				# diurnal multiplier (same rationale as the flash version;
+				# the Y grid floor-clipped everyone to its lowest point).
+				try:
+					_have_bisect = (metrics.get('bisect_critical_diurnal') or {}).get(random_iter)
+					if _have_bisect and not (RECALC_DIURNAL or RECALC_DIURNAL_BISECT):
+						raise StopIteration   # already bisected this sim; caught below
+					_advs = {}
+					for _sol in soln_types:
+						try:
+							_advs[_sol] = ret['adv_solns'][_sol][0]
+						except (KeyError, IndexError):
+							pass
+					if _advs:
+						def _mk_diur(v, _sas=sas):
+							# hour entries are wrapped one level deeper
+							# ({hour: {'None': deployment}}) -- flatten, or
+							# the worker receives the wrapper dict and dies
+							# with KeyError 'dpsize' (caught by the small
+							# nsim=3 smoke, 2026-08-23)
+							_d = get_diurnal_deployments(_sas, [v])
+							return [dep for h in sorted(_d[v])
+									for dep in _d[v][h].values()]
+						_lo = 1.0
+						_hi = float(max(diurnal_multipliers)) if len(diurnal_multipliers) else 100.0
+						_res = bisect_critical_intensities(
+							sas, _advs, _mk_diur, _lo, _hi, rel_tol=0.05,
+							label='bisect-diurnal sim={}'.format(random_iter))
+						metrics.setdefault('bisect_critical_diurnal', {})[
+							random_iter] = {k: float(v) for k, v in _res.items()}
+						print('[bisect-diurnal] sim={} {}'.format(random_iter,
+							{k: round(v, 2) for k, v in _res.items()}), flush=True)
+						changed=True
+						# checkpoint per sim: the family-end dump lost sims 0-1
+						# when the 2026-08-23 GCS death killed sim 2 mid-flight
+						pickle.dump(metrics, open(performance_metrics_fn,'wb'))
+				except StopIteration:
+					pass
+				except Exception:
+					import traceback
+					traceback.print_exc()
+
 		if changed:
 			pickle.dump(metrics, open(performance_metrics_fn,'wb'))
 	except:
@@ -340,15 +421,23 @@ def run(ctx):
 
 	### Calculates some measure of practical resilience for each strategy
 	### current resilience measure is flash crowd / DDoS attack in a region
-	RECALC_RESILIENCE = False
+	RECALC_RESILIENCE = _force('flash')
+	RECALC_FLASH_BISECT = _force('flash_bisect')
 	try:
 		changed=False
 		for random_iter in range(N_TO_SIM):
 			k_of_interest = 'resilience_to_congestion'
 			havent_calced_everything = check_calced_everything(metrics, random_iter, k_of_interest)
-			if RECALC_RESILIENCE or havent_calced_everything:
+			if RECALC_RESILIENCE or RECALC_FLASH_BISECT or havent_calced_everything:
 				print("-----Flash crowd calc for deployment number = {} -------".format(random_iter))
 				_log_mem('eval_flash_crowd', ri=random_iter)
+				# fresh eval object per sim (2026-08-22): reusing one sas via
+				# update_deployment left stale driver-side derived state across
+				# differently-sized deployments (IndexError inside
+				# compute_one_per_peering_solution; the stats TypeErrors were
+				# downstream of the unfilled defaults). Construction is the only
+				# safe cross-deployment update; the worker pool alone is reused.
+				sas = None
 				if sas is None:
 					deployment = metrics['deployment'][random_iter]
 					deployment['port'] = port
@@ -392,6 +481,44 @@ def run(ctx):
 					except:
 						import traceback
 						traceback.print_exc()
+
+				# Per-sim, ALL-solutions batched bisection of the critical
+				# surge (Tom 2026-08-23: each deployment/solution has its
+				# OWN critical value; the fixed grid snapped them all to
+				# one point). Runs at the COMPUTE site -- correct sas and
+				# deployment for THIS sim -- batching every solution's
+				# midpoint into one LP fan-out per round.
+				try:
+					_have_bisect = (metrics.get('bisect_critical_flash') or {}).get(random_iter)
+					if _have_bisect and not (RECALC_RESILIENCE or RECALC_FLASH_BISECT):
+						raise StopIteration
+					_advs = {}
+					for _sol in soln_types:
+						try:
+							_advs[_sol] = ret['adv_solns'][_sol][0]
+						except (KeyError, IndexError):
+							pass
+					if _advs:
+						_Y0 = Y_vals[len(Y_vals) // 2] if Y_vals else 1.3
+						def _mk_flash(v, _sas=sas, _Y=_Y0):
+							_d = get_inflated_metro_deployments(_sas, [v], [_Y])
+							return list(_d[_Y][v].values())
+						_lo = float(min(X_vals)) if len(X_vals) else 1.0
+						_hi = float(max(X_vals)) if len(X_vals) else 100.0
+						_res = bisect_critical_intensities(
+							sas, _advs, _mk_flash, _lo, _hi, rel_tol=0.05,
+							label='bisect-flash sim={}'.format(random_iter))
+						metrics.setdefault('bisect_critical_flash', {})[
+							random_iter] = {k: float(v) for k, v in _res.items()}
+						print('[bisect-flash] sim={} {}'.format(random_iter,
+							{k: round(v, 2) for k, v in _res.items()}), flush=True)
+						changed=True
+						pickle.dump(metrics, open(performance_metrics_fn,'wb'))
+				except StopIteration:
+					pass
+				except Exception:
+					import traceback
+					traceback.print_exc()
 
 		if changed:
 			pickle.dump(metrics, open(performance_metrics_fn,'wb'))
@@ -674,7 +801,9 @@ def run(ctx):
 					except IndexError:
 						## either never or always is congested
 						critical_X = X_vals[0]
-					metrics['stats_resilience_to_congestion'][solution][ri] = critical_X
+					_b = (metrics.get('bisect_critical_flash') or {}).get(ri, {}).get(solution)
+					metrics['stats_resilience_to_congestion'][solution][ri] = \
+						float(_b) if _b is not None else critical_X
 
 
 				latency_delta_meds = np.array(latency_delta_meds)
@@ -747,7 +876,9 @@ def run(ctx):
 				except IndexError:
 					## either never or always is congested
 					critical_Y = diurnal_multipliers[0]
-				metrics['stats_diurnal'][solution][ri] = critical_Y
+				_b = (metrics.get('bisect_critical_diurnal') or {}).get(ri, {}).get(solution)
+				metrics['stats_diurnal'][solution][ri] = \
+					float(_b) if _b is not None else critical_Y
 		except:
 			import traceback
 			traceback.print_exc()
