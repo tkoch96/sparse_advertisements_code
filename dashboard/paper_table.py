@@ -132,12 +132,24 @@ def render(exp):
     for name, p in dirs:
         out.append('<h3 style="font-size:.95rem;margin:1.4rem 0 .3rem">{}'
                    '</h3>'.format(html.escape(name)))
+        # key-metrics table first when the emitter wrote one (Tom
+        # 2026-08-23: the condensed version is what goes in the paper)
+        keyp = os.path.join(os.path.dirname(p), 'paper_table_key.csv')
+        if os.path.exists(keyp):
+            out.append('<h4 class="note" style="margin:.4rem 0 .2rem">'
+                       'key metrics</h4>')
+            out.append(_render_csv(keyp))
+            out.append('<h4 class="note" style="margin:.8rem 0 .2rem">'
+                       'full table</h4>')
         out.append(_render_csv(p))
         # the literal LaTeX, copy-pasteable into the paper (Tom 2026-08-23)
-        texp = os.path.join(os.path.dirname(p), 'paper_table.tex')
-        if os.path.exists(texp):
-            out.append('<details><summary class="note">LaTeX source</summary>'
-                       '<pre style="font-size:.72rem;overflow-x:auto;'
+        for texname in ('paper_table_key.tex', 'paper_table.tex'):
+            texp = os.path.join(os.path.dirname(p), texname)
+            if not os.path.exists(texp):
+                continue
+            out.append('<details><summary class="note">LaTeX source '
+                       '({})</summary>'.format(html.escape(texname))
+                       + '<pre style="font-size:.72rem;overflow-x:auto;'
                        'background:var(--bg2,#00000010);padding:.6rem;'
                        'border-radius:6px">{}</pre></details>'.format(
                            html.escape(open(texp).read())))
