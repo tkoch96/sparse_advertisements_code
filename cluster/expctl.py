@@ -166,7 +166,45 @@ def preset_dpsweep(a, run_id):
     return argv, env, pulls
 
 
-PRESETS = {'dpsweep': preset_dpsweep}
+def preset_papertable(a, run_id):
+    """evaluations/generate_paper_table.py -- every objective at one size.
+
+    --dpsizes carries the (single) size, --nsim the number of deployments,
+    --max-iter the training iters; the driver then runs one training+eval
+    cell per objective (avg_latency, per_site_cost, max_util,
+    frac_beyond_optimal, joint_priority) and emits the two tables.
+    """
+    dpsize = (a.dpsizes or '32')
+    if ',' in dpsize:
+        raise SystemExit('papertable takes ONE size (got {})'.format(dpsize))
+    tag = run_id.replace('-', '_')
+    argv = [V.REMOTE_PY, '-u', 'evaluations/generate_paper_table.py',
+            '--dpsize', dpsize,
+            '--number_of_deployments', str(a.nsim or 1),
+            '--num_training_iter', str(a.max_iter or 150),
+            '--run_id', tag,
+            '--out', 'figures/cluster/{}/paper_table'.format(run_id)]
+    env = {
+        'PYTHONUNBUFFERED': '1',
+        'SCULPTOR_REQUIRE_SOLNS': 'sparse',
+        # per-worker mem logs into the run dir (same rationale as dpsweep)
+        'SCULPTOR_WORKER_MEM_LOG_DIR': '{}/{}/workers'.format(
+            V.REMOTE_RUNS, run_id),
+    }
+    pulls = [
+        'figures/cluster/{}/'.format(run_id),
+        # per-objective cell logs + sweep caches (cache/, outside run dir)
+        'cache/table_generate_{}*'.format(tag),
+        # the L1 checkpoint pickles: solved advertisements + metrics per
+        # objective -- losing these wastes the run (same as dpsweep)
+        'cache/popp_failure_latency_comparison_*{}*.pkl'.format(tag),
+        'cache/paper_table_condensed_*{}*.pkl'.format(tag),
+    ]
+    return argv, env, pulls
+
+
+PRESETS = {'dpsweep': preset_dpsweep,
+           'papertable': preset_papertable}
 
 
 # --------------------------------------------------------------- push --

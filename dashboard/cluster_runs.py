@@ -487,6 +487,121 @@ def _phase_table(m):
     return '\n'.join(out)
 
 
+# ------------------------------------------------- papertable renderer --
+
+_PT_OBJECTIVES = ['avg_latency', 'per_site_cost', 'max_util',
+                  'frac_beyond_optimal', 'joint_priority']
+_PT_ITER_RE = re.compile(r'\[mem\] tag=iter_start .*? iter=(\d+)')
+
+
+def _pt_tag(m, obj):
+    """The SCULPTOR_RUN_TAG generate_paper_table gives this objective."""
+    cmd = m.get('cmd') or []
+    base = None
+    for i, tok in enumerate(cmd):
+        if tok == '--run_id' and i + 1 < len(cmd):
+            base = cmd[i + 1]
+    if not base:
+        base = m['run_id'].replace('-', '_')
+    return base if obj == 'avg_latency' else '{}_{}'.format(base, obj)
+
+
+def _pt_cell_log(m, obj):
+    """Harvested cell log: repo cache/ (glob pulls) or run results/."""
+    fn = 'table_generate_{}.log'.format(_pt_tag(m, obj))
+    for cand in (os.path.join(REPO, 'cache', fn),
+                 os.path.join(RUNS_DIR, m['run_id'], 'results', fn),
+                 os.path.join(RUNS_DIR, m['run_id'], 'results', 'cache', fn)):
+        if os.path.exists(cand):
+            return cand
+    return None
+
+
+def _objective_table(m):
+    """Per-OBJECTIVE rows for preset=papertable runs -- the analogue of
+    _sim_table where the unit of work is an objective function, not a
+    deployment size. Parsed from the driver log (cell status) + each
+    objective's harvested cell log (iters, budget, popps, sparse)."""
+    drv = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = drv.rfind('[expctl] run_id=')
+    if i > 0:
+        drv = drv[i:]
+    out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">objectives'
+           '</h3>',
+           '<div class="wrap"><table><thead><tr><th>objective</th>'
+           '<th>state</th><th>wall</th><th>iters</th><th>popps/ugs</th>'
+           '<th>probes / budget</th><th>skipped</th><th>sparse</th>'
+           '</tr></thead><tbody>']
+    for obj in _PT_OBJECTIVES:
+        state, wall = 'pending', ''
+        mm = re.search(r'\[{}\] DONE in ([\d.]+) min'.format(
+            re.escape(obj)), drv)
+        if mm:
+            state, wall = 'done', '{} min'.format(mm.group(1))
+        elif re.search(r'\[{}\] NO COMPLETION BANNER'.format(
+                re.escape(obj)), drv):
+            state = 'FAILED'
+        elif re.search(r'\[{}\] running'.format(re.escape(obj)), drv):
+            state = 'running'
+        elif re.search(r'\[{}\] covered'.format(re.escape(obj)), drv):
+            state, wall = 'cached', '-'
+        iters = popps = ugs = probes = budget = skipped = ''
+        sparse = ''
+        log = _pt_cell_log(m, obj)
+        if log:
+            txt = _read(log) or ''
+            it = _PT_ITER_RE.findall(txt)
+            if it:
+                iters = it[-1]
+            mm = _SIM_OPT_RE.search(txt)
+            if mm:
+                popps, ugs = mm.group(1), mm.group(2)
+            mm = _SIM_BUDGET_RE.search(txt)
+            if mm:
+                budget = mm.group(1)
+            mm = _SIM_EXIT_RE.search(txt)
+            if mm:
+                probes, budget = mm.group(3), mm.group(4)
+                skipped = mm.group(6)
+            if 'ALL DONE' in txt:
+                sparse = ('FAILED' if _SIM_FAIL_RE.search(txt)
+                          else 'ok')
+        color = {'done': 'var(--ok,#2c7a2c)', 'cached': 'var(--ok,#2c7a2c)',
+                 'running': 'var(--warn,#c9862b)',
+                 'FAILED': 'var(--bad,#c0392b)'}.get(state, 'var(--ink)')
+        out.append('<tr><th>{}</th><td style="color:{}">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td></tr>'.format(
+                       html.escape(obj), color, state, wall, iters,
+                       '{}/{}'.format(popps, ugs) if popps else '',
+                       '{} / {}'.format(probes, budget) if probes
+                       else (budget or ''), skipped, sparse))
+    out.append('</tbody></table></div>')
+    return '\n'.join(out)
+
+
+def _pt_table(m):
+    """Render the emitted paper table (key + full) if harvested."""
+    base = os.path.join(RUNS_DIR, m['run_id'], 'results', 'figures',
+                        'cluster', m['run_id'], 'paper_table')
+    alt = os.path.join(REPO, 'figures', 'cluster', m['run_id'],
+                       'paper_table')
+    d = base if os.path.isdir(base) else alt
+    if not os.path.isdir(d):
+        return ''
+    from dashboard import paper_table as _pt
+    out = []
+    for name, title in (('paper_table_key.csv', 'key metrics'),
+                        ('paper_table.csv', 'full table')):
+        fn = os.path.join(d, name)
+        if os.path.exists(fn):
+            out.append('<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">'
+                       '{}</h3>'.format(title))
+            out.append(_pt._render_csv(fn))
+    return '\n'.join(out)
+
+
 def _init_table(m):
     """sparse init, decomposed. See plot_cluster_timing._INIT_LABELS."""
     from dashboard import cluster_phases as cp
@@ -629,13 +744,22 @@ def _figures(m):
     if not os.path.isdir(d):
         return ''
     imgs = []
-    for fn in sorted(os.listdir(d)):
+    # ladder_* (the evaluate_over_deployment_sizes paper figures) go LAST
+    # -- they are many and noisy next to the run's own timing plots
+    # (Tom 2026-08-23)
+    for fn in sorted(os.listdir(d),
+                     key=lambda f: (f.startswith('ladder_'), f)):
         if not fn.endswith('.png'):
             continue
         p = os.path.join(d, fn)
-        imgs.append('<img src="plots/dashboards/cluster/{}/{}?v={}" alt="{}">'
+        # ladder figures render two-up at ~50% width (Tom 2026-08-23);
+        # the run's own timing plots keep full width
+        _style = (' style="width:49%;display:inline-block;'
+                  'vertical-align:top"' if fn.startswith('ladder_') else '')
+        imgs.append('<img src="plots/dashboards/cluster/{}/{}?v={}" '
+                    'alt="{}"{}>'
                     .format(m['run_id'], fn, int(os.path.getmtime(p)),
-                            html.escape(fn)))
+                            html.escape(fn), _style))
     return '\n'.join(imgs)
 
 
@@ -665,6 +789,19 @@ def render(exp):
                     html.escape(exp.get('title', 'run')),
                     html.escape(str(exp.get('run_id')))))
     state, headline, details, _log = _status_of(m)
+    if m.get('preset') == 'papertable':
+        # objective-keyed run: the size-keyed progress/sim/phase tables
+        # would all render empty -- the unit of work here is an objective
+        return '\n'.join([
+            '<h2>{} <small>{}</small></h2>'.format(
+                html.escape(m.get('label', m['run_id'])), m['run_id']),
+            _card(m, state, headline, details),
+            _objective_table(m),
+            _pt_table(m),
+            _ram_table(m),
+            '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">log</h3>',
+            _log_tail(m),
+        ])
     return '\n'.join([
         '<h2>{} <small>{}</small></h2>'.format(
             html.escape(m.get('label', m['run_id'])), m['run_id']),
