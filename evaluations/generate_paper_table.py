@@ -577,6 +577,11 @@ def build_table(cov):
         best = None
         if len(finite) > 1:
             best = (min if dirs[lab] == '<' else max)(finite, key=finite.get)
+            # ties go to SCULPTOR (Tom 2026-08-23: an all-equal column,
+            # e.g. everyone at 0, should color SCULPTOR as the winner)
+            if ('SCULPTOR' in finite and best != 'SCULPTOR'
+                    and finite['SCULPTOR'] == finite[best]):
+                best = 'SCULPTOR'
         for _key, disp in METHODS:
             vals = raw.get(lab, {}).get(disp, [])
             rows[disp].append((
