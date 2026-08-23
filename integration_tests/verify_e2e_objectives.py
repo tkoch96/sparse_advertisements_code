@@ -41,9 +41,9 @@ METHODS = ['One-per-peering', 'SCULPTOR', 'PAINTER', 'AnyOpt',
            'Anycast', 'Unicast']
 
 
-def run_case(root, iters, ndeps, dpsize):
-    res = C.Result('paper table ({}, {} deployment(s), {} iters)'.format(
-        dpsize, ndeps, iters))
+def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
+    res = C.Result('paper table ({}, {} deployment(s), {} iters{})'.format(
+        dpsize, ndeps, iters, ', NO CACHE' if force_env else ''))
     ws = C.workspace(root, 'paper_table')
     log = os.path.join(root, 'paper_table.log')
     t0 = time.time()
@@ -53,9 +53,9 @@ def run_case(root, iters, ndeps, dpsize):
                 '--dpsize', dpsize,
                 '--number_of_deployments', str(ndeps),
                 '--num_training_iter', str(iters),
-                '--run_id', RUN_ID,
+                '--run_id', run_id,
                 '--out', table_out],
-               ws, C.env_for(iters, label=_LABEL), log)
+               ws, C.env_for(iters, force_env or {}, label=_LABEL), log)
     res.wall_s = time.time() - t0
     res.check(rc == 0, 'exit 0', 'rc={}'.format(rc))
     text = C.scan_log(log, res)
@@ -81,7 +81,7 @@ def run_case(root, iters, ndeps, dpsize):
         # cannot collide with real results
         pkl = os.path.join(C.REPO, 'cache',
                            'popp_failure_latency_comparison_{}_{}{}.pkl'.format(
-                               dp_str, RUN_ID, suffix))
+                               dp_str, run_id, suffix))
         C.check_metrics(pkl, res, prefix='{}: '.format(obj),
                         started_at=t0 if attempted[obj] else None)
 
@@ -118,6 +118,11 @@ def main():
     ap.add_argument('--ndeps', type=int, default=1)
     ap.add_argument('--iters', type=int, default=None)
     ap.add_argument('--quick', action='store_true', help='5 iters')
+    ap.add_argument('--no-cache', action='store_true',
+                    help='force a cold run: timestamped run_id (no result '
+                         'pickle can be reused) + FORCE_RESOLVE/'
+                         'FORCE_RECOMPUTE_METRICS=all/FORCE_REAGGREGATE, so '
+                         'every cell must actually solve and recompute')
     ap.add_argument('--keep', action='store_true')
     a = ap.parse_args()
 
@@ -126,10 +131,17 @@ def main():
         return 2
     iters = 5 if a.quick else (a.iters or DEFAULT_ITERS)
     root = tempfile.mkdtemp(prefix='verify_e2e_paper_table_')
-    print('dpsize      : {}\ndeployments : {}\niters       : {}\nscratch     : {}'.format(
-        a.dpsize, a.ndeps, iters, root))
+    run_id, force_env = RUN_ID, None
+    if a.no_cache:
+        run_id = 'e2etable_{}'.format(time.strftime('%m%d%H%M%S'))
+        force_env = {'FORCE_RESOLVE': '1',
+                     'FORCE_RECOMPUTE_METRICS': 'all',
+                     'FORCE_REAGGREGATE': '1'}
+    print('dpsize      : {}\ndeployments : {}\niters       : {}\nrun_id      : {}{}\nscratch     : {}'.format(
+        a.dpsize, a.ndeps, iters, run_id,
+        ' (cold -- no cache reuse)' if a.no_cache else '', root))
     print('=' * 74)
-    res = run_case(root, iters, a.ndeps, a.dpsize)
+    res = run_case(root, iters, a.ndeps, a.dpsize, run_id, force_env)
     print('  -> {} in {:.0f}s'.format('PASS' if res.passed else 'FAIL', res.wall_s))
     return C.finish([res], root, a.keep)
 
