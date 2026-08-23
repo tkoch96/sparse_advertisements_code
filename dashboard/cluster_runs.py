@@ -509,9 +509,11 @@ def _pt_tag(m, obj):
 def _pt_cell_log(m, obj):
     """Harvested cell log: repo cache/ (glob pulls) or run results/."""
     fn = 'table_generate_{}.log'.format(_pt_tag(m, obj))
-    for cand in (os.path.join(REPO, 'cache', fn),
-                 os.path.join(RUNS_DIR, m['run_id'], 'results', fn),
-                 os.path.join(RUNS_DIR, m['run_id'], 'results', 'cache', fn)):
+    import glob as _g
+    cands = ([os.path.join(REPO, 'cache', fn)]
+             + _g.glob(os.path.join(RUNS_DIR, m['run_id'], 'results',
+                                    '**', fn), recursive=True))
+    for cand in cands:
         if os.path.exists(cand):
             return cand
     return None
@@ -583,11 +585,12 @@ def _objective_table(m):
 
 def _pt_table(m):
     """Render the emitted paper table (key + full) if harvested."""
-    base = os.path.join(RUNS_DIR, m['run_id'], 'results', 'figures',
-                        'cluster', m['run_id'], 'paper_table')
-    alt = os.path.join(REPO, 'figures', 'cluster', m['run_id'],
-                       'paper_table')
-    d = base if os.path.isdir(base) else alt
+    import glob as _g
+    cands = (_g.glob(os.path.join(RUNS_DIR, m['run_id'], 'results', '**',
+                                  'paper_table'), recursive=True)
+             + [os.path.join(REPO, 'figures', 'cluster', m['run_id'],
+                             'paper_table')])
+    d = next((c for c in cands if os.path.isdir(c)), '')
     if not os.path.isdir(d):
         return ''
     from dashboard import paper_table as _pt
@@ -798,6 +801,7 @@ def render(exp):
             _card(m, state, headline, details),
             _objective_table(m),
             _pt_table(m),
+            _figures(m),
             _ram_table(m),
             '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">log</h3>',
             _log_tail(m),

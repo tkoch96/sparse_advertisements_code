@@ -712,9 +712,128 @@ def plot_disk(run_id, outdir):
     return out
 
 
+
+
+# ---------------------------------------------- papertable (objectives) --
+
+_PT_OBJS = ['avg_latency', 'per_site_cost', 'max_util',
+            'frac_beyond_optimal', 'joint_priority']
+_PT_SHORT = {'avg_latency': 'lat+res', 'per_site_cost': 'site cost',
+             'max_util': 'MLU', 'frac_beyond_optimal': 'frac-opt',
+             'joint_priority': 'priorities'}
+
+
+def _pt_cell_logs(run_id, manifest):
+    """objective -> local cell-log path (harvested into repo cache/)."""
+    base = None
+    cmd = manifest.get('cmd') or []
+    for i, tok in enumerate(cmd):
+        if tok == '--run_id' and i + 1 < len(cmd):
+            base = cmd[i + 1]
+    if not base:
+        base = run_id.replace('-', '_')
+    out = {}
+    for obj in _PT_OBJS:
+        tag = base if obj == 'avg_latency' else '{}_{}'.format(base, obj)
+        fn = 'table_generate_{}.log'.format(tag)
+        import glob as _g
+        # glob pulls flatten remote paths into results/<glob-name>/<file>
+        cands = ([os.path.join(REPO, 'cache', fn)]
+                 + _g.glob(os.path.join(RUNS_DIR, run_id, 'results',
+                                        '**', fn), recursive=True))
+        for cand in cands:
+            if os.path.exists(cand):
+                out[obj] = cand
+                break
+    return out
+
+
+def _pt_parse_cell(fn):
+    """(iter_deltas, peak_rss_mb, wall_min, n_iters) from one cell log."""
+    txt = open(fn, errors='replace').read()
+    pts = [(float(t), int(i)) for t, i in re.findall(
+        r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)', txt)]
+    deltas = [b[0] - a[0] for a, b in zip(pts, pts[1:])
+              if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
+    rss = [int(r) for r in re.findall(r'\[mem\] tag=\S+ rss_mb=(\d+)', txt)]
+    wall = None
+    try:
+        wall = (os.path.getmtime(fn) - pts[0][0]) / 60.0 if pts else None
+    except Exception:
+        pass
+    return deltas, (max(rss) if rss else None), wall, (pts[-1][1] if pts else 0)
+
+
+def plot_papertable(run_id, outdir, manifest):
+    """Objective-keyed timing figures -- the papertable analogue of the
+    size-keyed dpsweep plots. One bar per OBJECTIVE."""
+    logs = _pt_cell_logs(run_id, manifest)
+    if not logs:
+        return []
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    objs = [o for o in _PT_OBJS if o in logs]
+    parsed = {o: _pt_parse_cell(logs[o]) for o in objs}
+    names = [_PT_SHORT[o] for o in objs]
+    made = []
+
+    # 1. sec/iter distribution per objective
+    fig, ax = plt.subplots(figsize=(7, 3.2))
+    data = [parsed[o][0] or [0] for o in objs]
+    ax.boxplot(data, labels=names, showfliers=False)
+    ax.set_ylabel('sec / training iter')
+    ax.set_title('{} -- iteration time by objective'.format(run_id))
+    ax.grid(alpha=.25, axis='y')
+    f = os.path.join(outdir, 'obj_iter_timing.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    # 2. wall + iterations per objective
+    fig, (a1, a2) = plt.subplots(1, 2, figsize=(9, 3.0))
+    a1.bar(names, [(parsed[o][2] or 0) for o in objs], color='#4878a8')
+    a1.set_ylabel('wall so far (min)'); a1.grid(alpha=.25, axis='y')
+    a2.bar(names, [parsed[o][3] for o in objs], color='#6aa66a')
+    a2.set_ylabel('training iters seen'); a2.grid(alpha=.25, axis='y')
+    for a in (a1, a2):
+        a.tick_params(axis='x', rotation=20)
+    fig.suptitle('{} -- wall & progress by objective'.format(run_id),
+                 fontsize=10)
+    f = os.path.join(outdir, 'obj_wall_iters.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    # 3. peak driver RSS per objective
+    fig, ax = plt.subplots(figsize=(7, 2.8))
+    ax.bar(names, [(parsed[o][1] or 0) / 1024.0 for o in objs],
+           color='#a86048')
+    ax.set_ylabel('peak driver RSS (GB)')
+    ax.set_title('{} -- memory by objective'.format(run_id))
+    ax.grid(alpha=.25, axis='y')
+    ax.tick_params(axis='x', rotation=20)
+    f = os.path.join(outdir, 'obj_memory.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+    return made
+
+
+
+
 def plot_run(run_id):
     outdir = os.path.join(FIG_ROOT, run_id)
     os.makedirs(outdir, exist_ok=True)
+    try:
+        import json as _j
+        manifest = _j.load(open(os.path.join(RUNS_DIR, run_id,
+                                             'manifest.json')))
+    except Exception:
+        manifest = {}
+    if manifest.get('preset') == 'papertable':
+        made = plot_papertable(run_id, outdir, manifest)
+        print('{}: {} figure(s)'.format(run_id, len(made)))
+        for f in made:
+            print('  ' + os.path.relpath(f, REPO))
+        return made
     made = [f for f in (plot_sizes(run_id, outdir),
                         plot_phases(run_id, outdir),
                         plot_work_scaling(run_id, outdir),
