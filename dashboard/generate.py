@@ -1156,7 +1156,7 @@ EXPERIMENTS.append({
 EXPERIMENTS.append({
     'id': 'cost_estimator', 'title': 'Cost estimator',
     'refresh': {'steps': [{
-        'in': ['dashboard/cost_calibration.py'],
+        'in': ['dashboard/cost_calibration.py', 'cache/cluster_runs'],
         'out': ['cache/dashboard/cost_calibration.json'],
         'argv': ['{py}', '-m', 'dashboard.cost_calibration'],
     }]},
@@ -1172,6 +1172,8 @@ EXPERIMENTS.append({'id': 'old_dash', 'title': 'Old dashboards',
 # launched five minutes ago appears on the next refresh cycle (refresh.py
 # reloads this module every cycle) with no registry edit.
 EXPERIMENTS.insert(0, cluster_runs.experiment())
+from dashboard import paper_table
+EXPERIMENTS.insert(1, paper_table.experiment())
 
 
 def load_scores(store_rel, extra_rel=None):
@@ -1317,95 +1319,142 @@ def render_static(exp):
 
 
 _CE_PAGE = '''
-<h2>Cluster cost / time estimator &mdash; evaluate_over_deployment_sizes</h2>
+<h2>Cluster cost / time estimator &mdash; the three campaign workloads</h2>
 <p class="note" id="ce_status"></p>
 <div class="note">
  cores <input id="ce_cores" type="number" value="512" style="width:5em">
- iters/eval <input id="ce_iters" type="number" value="30" style="width:4em">
  size-scaling &alpha; <input id="ce_alpha" type="number" step="0.1"
-   value="2.3" style="width:4em">
- startup min/eval <input id="ce_start" type="number" value="10"
+   value="2.4" style="width:4em">
+ overhead min/eval <input id="ce_ovh" type="number" value="15"
    style="width:4em">
  RSS-scaling &beta; <input id="ce_beta" type="number" step="0.1"
    value="2.0" style="width:4em">
  RAM headroom <input id="ce_head" type="number" step="0.05" value="0.2"
    style="width:4em">
 </div>
-<div class="wrap"><table><thead><tr><th>size</th><th>n deployments</th>
+
+<h3>1 &middot; Ladder: evaluate_over_deployment_sizes (~20 sims/size)</h3>
+<div class="note">iters/eval <input id="ce_iters" type="number" value="200"
+  style="width:5em"></div>
+<div class="wrap"><table><thead><tr><th>size</th><th>n sims</th>
 <th>sec/iter @64w</th><th>wall/eval</th><th>core-hr</th>
 <th>worker RSS MB @64w</th></tr></thead><tbody id="ce_rows"></tbody>
 <tfoot><tr id="ce_tot"></tr></tfoot></table></div>
+
+<h3>2 &middot; Ablation ladder on actual-10 (L-levels &times; deployments)</h3>
+<div class="note">
+ L levels <input id="ab_levels" type="number" value="6" style="width:4em">
+ deps/level <input id="ab_deps" type="number" value="8" style="width:4em">
+ size <input id="ab_size" type="number" value="10" style="width:4em">
+ iters <input id="ab_iters" type="number" value="150" style="width:5em">
+ <span id="ab_out"></span></div>
+
+<h3>3 &middot; Paper table: every objective on actual-32 sub-deployments</h3>
+<div class="note">
+ objectives <input id="pt_objs" type="number" value="5" style="width:4em">
+ deployments <input id="pt_deps" type="number" value="10" style="width:4em">
+ size <input id="pt_size" type="number" value="32" style="width:4em">
+ iters <input id="pt_iters" type="number" value="150" style="width:5em">
+ eval overhead min <input id="pt_ovh" type="number" value="25"
+   style="width:4em">
+ <span id="pt_out"></span></div>
+
+<h3>Full time to completion</h3>
+<div class="wrap"><table><thead><tr><th>workload</th><th>core-hr</th>
+<th>wall @cores</th><th>calendar</th></tr></thead>
+<tbody id="ce_ttc"></tbody></table></div>
 <div class="wrap"><table><thead><tr><th>family</th><th>GB/core</th>
-<th>$/core-hr</th><th>fits RSS+headroom?</th><th>total cost</th>
-<th>vs cheapest fitting</th></tr></thead>
+<th>$/core-hr</th><th>fits RSS+headroom?</th><th>ladder $</th>
+<th>ablation $</th><th>paper table $</th><th>ALL $</th></tr></thead>
 <tbody id="ce_fam"></tbody></table></div>
-<p class="note">Model: core-sec/iter(N) = anchor (actual-32, 64w,
-470 s/iter measured on c8g.24xl) &times; (N/32)^&alpha;; per-eval =
-iters &times; that + startup charged at 64 cores; wall = core-hr /
-cores. Worker RSS(N) = base + sharded-state(N)/64 with state
-&prop; (N/32)^&beta;. GUESSTIMATE &mdash; single measured anchor; the
-24xl smoke + an EC2 size sweep will tighten &alpha;, &beta;, startup.
-Inputs persist in localStorage (survive the 180 s self-reload).</p>
+<p class="note">sec/iter is <b>(m)</b>easured from the latest harvested
+ladder run where available (prefixbudget3, 64 workers; actual-32 assumed
+equal to actual-25 per Tom 2026-08-23), otherwise mode<b>(x)</b>trapolated
+as anchor &times; (N/32)^&alpha;. Per-eval = iters &times; sec/iter +
+overhead (startup + metric phases; the paper table gets its own heavier
+knob for bisections). All core-hr charged at 64 workers. Worker RSS(N) =
+base + sharded-state(N)/64, state &prop; (N/32)^&beta;. Inputs persist in
+localStorage.</p>
 <script>
 (function(){
 var CAL=@CALIB@;
 var SIZES=CAL.sizes;
-var LS='costEstV1';
+var LS='costEstV2';
 function el(i){return document.getElementById(i);}
+var MEAS=(CAL.measured&&CAL.measured.sec_per_iter)||{};
+function tIter(N,A){
+  if(MEAS[String(N)])return {v:MEAS[String(N)].mean,m:'(m)'};
+  if(N>=25&&MEAS['25'])return {v:MEAS['25'].mean,m:'(m)'};
+  return {v:CAL.anchor.t_iter_sec*Math.pow(N/CAL.anchor.size,A),m:'(x)'};
+}
 var rows=el('ce_rows');
 SIZES.forEach(function(N){
   var tr=document.createElement('tr');
   tr.innerHTML='<th>actual-'+N+'</th><td><input id="ce_n_'+N+
-    '" type="number" min="0" value="'+(N===32?5:10)+
-    '" style="width:4em"></td><td id="ce_ti_'+N+'"></td><td id="ce_ev_'+
-    N+'"></td><td id="ce_ch_'+N+'"></td><td id="ce_rs_'+N+'"></td>';
+    '" type="number" min="0" value="20" style="width:4em"></td>'+
+    '<td id="ce_ti_'+N+'"></td><td id="ce_ev_'+N+'"></td><td id="ce_ch_'+
+    N+'"></td><td id="ce_rs_'+N+'"></td>';
   rows.appendChild(tr);
 });
-var ids=['ce_cores','ce_iters','ce_alpha','ce_start','ce_beta','ce_head']
+var ids=['ce_cores','ce_alpha','ce_ovh','ce_beta','ce_head','ce_iters',
+  'ab_levels','ab_deps','ab_size','ab_iters',
+  'pt_objs','pt_deps','pt_size','pt_iters','pt_ovh']
   .concat(SIZES.map(function(N){return 'ce_n_'+N;}));
 function fmtH(h){if(h<1)return (h*60).toFixed(0)+' min';
   return h.toFixed(1)+' h';}
+function fmtCal(h){if(h<24)return fmtH(h);
+  return (h/24).toFixed(1)+' days';}
+function evalCoreHr(N,iters,ovhMin,A){
+  var W=CAL.anchor.workers;
+  return (iters*tIter(N,A).v+ovhMin*60)*W/3600;
+}
 function recalc(){
-  var C=+el('ce_cores').value||1, I=+el('ce_iters').value||1,
-      A=+el('ce_alpha').value||2.3, S=+el('ce_start').value||0,
-      B=+el('ce_beta').value||2, H=+el('ce_head').value||0;
-  var W=CAL.anchor.workers, T32=CAL.anchor.t_iter_sec;
-  var totCH=0, maxRSS=0, maxN=0;
+  var C=+el('ce_cores').value||1, A=+el('ce_alpha').value||2.4,
+      O=+el('ce_ovh').value||0, B=+el('ce_beta').value||2,
+      H=+el('ce_head').value||0, I=+el('ce_iters').value||1;
+  var W=CAL.anchor.workers;
+  var ladCH=0, maxRSS=0, maxN=0;
   SIZES.forEach(function(N){
     var n=+el('ce_n_'+N).value||0;
-    var ti=T32*Math.pow(N/CAL.anchor.size,A);
-    var evalSec=I*ti+S*60;
-    var coreHr=n*evalSec*W/3600;
+    var t=tIter(N,A);
+    var ch=n*evalCoreHr(N,I,O,A);
     var rss=CAL.rss.base_mb+CAL.rss.state32_gb*1024*Math.pow(N/32,B)/W;
-    el('ce_ti_'+N).textContent=ti.toFixed(0);
-    el('ce_ev_'+N).textContent=fmtH(evalSec/3600);
-    el('ce_ch_'+N).textContent=coreHr.toFixed(0);
+    el('ce_ti_'+N).textContent=t.v.toFixed(0)+' '+t.m;
+    el('ce_ev_'+N).textContent=fmtH((I*t.v+O*60)/3600);
+    el('ce_ch_'+N).textContent=ch.toFixed(0);
     el('ce_rs_'+N).textContent=rss.toFixed(0);
-    totCH+=coreHr;
+    ladCH+=ch;
     if(n>0&&rss>maxRSS){maxRSS=rss;maxN=N;}
   });
-  var wallH=totCH/C;
-  el('ce_tot').innerHTML='<th>total</th><td></td><td></td><td>'+
-    fmtH(wallH)+' wall @'+C+' cores</td><td>'+totCH.toFixed(0)+
+  el('ce_tot').innerHTML='<th>ladder total</th><td></td><td></td><td>'+
+    fmtH(ladCH/C)+' wall @'+C+'</td><td>'+ladCH.toFixed(0)+
     '</td><td>peak '+maxRSS.toFixed(0)+' MB (N='+maxN+')</td>';
+  var abCH=(+el('ab_levels').value||0)*(+el('ab_deps').value||0)*
+    evalCoreHr(+el('ab_size').value||10,+el('ab_iters').value||1,O,A);
+  el('ab_out').textContent=' -> '+abCH.toFixed(0)+' core-hr';
+  var ptCH=(+el('pt_objs').value||0)*(+el('pt_deps').value||0)*
+    evalCoreHr(+el('pt_size').value||32,+el('pt_iters').value||1,
+               +el('pt_ovh').value||0,A);
+  el('pt_out').textContent=' -> '+ptCH.toFixed(0)+' core-hr';
+  var allCH=ladCH+abCH+ptCH;
+  var tb=el('ce_ttc'); tb.innerHTML='';
+  [['Ladder (todo 1)',ladCH],['Ablation (todo 2)',abCH],
+   ['Paper table (todo 3)',ptCH],['ALL',allCH]].forEach(function(r){
+    tb.innerHTML+='<tr><th>'+r[0]+'</th><td>'+r[1].toFixed(0)+
+      '</td><td>'+fmtH(r[1]/C)+'</td><td>'+fmtCal(r[1]/C)+'</td></tr>';
+  });
   var needGB=maxRSS*(1+H)/1024;
-  var fits=CAL.families.filter(function(f){
-    return f.ram_gb_per_core>=needGB;});
-  var best=fits.length?fits[0]:null;
   var fb=el('ce_fam'); fb.innerHTML='';
   CAL.families.forEach(function(f){
     var ok=f.ram_gb_per_core>=needGB;
-    var cost=totCH*f.usd_core_hr;
     var tgt=(f.ram_gb_per_core*1024/(1+H)).toFixed(0);
-    var d='';
-    if(best){var delta=cost-totCH*best.usd_core_hr;
-      d=delta===0?'&larr; needed':(delta>0?'+$':'save $')+
-        Math.abs(delta).toFixed(2)+
-        (ok?'':' if worker RSS driven &le;'+tgt+' MB');}
     fb.innerHTML+='<tr><th>'+f.name+'</th><td>'+f.ram_gb_per_core+
       '</td><td>$'+f.usd_core_hr.toFixed(4)+'</td><td>'+
-      (ok?'yes':'no &mdash; need &le;'+tgt+' MB/worker')+
-      '</td><td>$'+cost.toFixed(2)+'</td><td>'+d+'</td></tr>';
+      (ok?'yes':'no &mdash; need &le;'+tgt+' MB/worker')+'</td><td>$'+
+      (ladCH*f.usd_core_hr).toFixed(0)+'</td><td>$'+
+      (abCH*f.usd_core_hr).toFixed(0)+'</td><td>$'+
+      (ptCH*f.usd_core_hr).toFixed(0)+'</td><td><b>$'+
+      (allCH*f.usd_core_hr).toFixed(0)+'</b></td></tr>';
   });
   try{var st={};ids.forEach(function(i){st[i]=el(i).value;});
     localStorage.setItem(LS,JSON.stringify(st));}catch(e){}
@@ -1415,7 +1464,8 @@ try{var st=JSON.parse(localStorage.getItem(LS)||'{}');
     el(i).value=st[i];});}catch(e){}
 ids.forEach(function(i){el(i).addEventListener('input',recalc);});
 el('ce_status').textContent=CAL.status+
-  ' (calibration '+CAL.generated_utc+')';
+  ' (calibration '+CAL.generated_utc+
+  (CAL.measured?'; harvest '+CAL.measured.harvested_utc:'')+')';
 recalc();
 })();
 </script>
@@ -1682,7 +1732,8 @@ RENDERERS = {'objective_ladder': render_objective_ladder,
              'ladder_links': render_ladder_links,
              'cost_estimator': render_cost_estimator,
              'cluster_run': cluster_runs.render,
-             'cluster_index': cluster_runs.render_index}
+             'cluster_index': cluster_runs.render_index,
+             'paper_table': paper_table.render}
 
 
 def main():
@@ -1892,10 +1943,35 @@ document.querySelectorAll('.panel').forEach(function (pane) {
 // be slow (Tom, 2026-08-21).
 (function scrollMemory() {
   var KEY = 'dashScroll';
-  try {
-    var y = sessionStorage.getItem(KEY);
-    if (y !== null) { window.scrollTo(0, parseFloat(y)); }
-  } catch (e) {}
+  // Restore is NOT one-shot (Tom 2026-08-23 "it scrolls me to the top"):
+  // this script runs before the figure <img>s finish loading, so the
+  // document is still short and scrollTo clamps toward 0. Re-assert the
+  // saved position through the layout shifts for a few seconds, and back
+  // off the moment the user scrolls on their own.
+  var userMoved = false;
+  function restore() {
+    if (userMoved) { return; }
+    try {
+      var y = parseFloat(sessionStorage.getItem(KEY));
+      if (!isNaN(y) && Math.abs(window.scrollY - y) > 2) {
+        window.scrollTo(0, y);
+      }
+    } catch (e) {}
+  }
+  try { history.scrollRestoration = 'manual'; } catch (e) {}
+  restore();
+  window.addEventListener('load', restore);
+  var tries = 0;
+  var iv = setInterval(function () {
+    restore();
+    if (++tries > 12) { clearInterval(iv); }
+  }, 300);
+  ['wheel', 'touchstart', 'keydown', 'mousedown'].forEach(function (evn) {
+    window.addEventListener(evn, function () {
+      userMoved = true;
+      clearInterval(iv);
+    }, {passive: true, once: true});
+  });
   var t = null;
   window.addEventListener('scroll', function () {
     if (t) { return; }
