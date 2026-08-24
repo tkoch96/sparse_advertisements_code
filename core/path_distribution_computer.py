@@ -648,8 +648,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		"""Per-path LP objective coefficients (latencies). Named sub-step of
 		solve_generic_lp_persistent so subclasses can override path pricing."""
 		obj_coeffs = []
+		# hoisted: NO_PATH_INGRESS(self) was re-evaluated per PATH --
+		# 1.68M calls per 13-job batch in the 2026-08-24 profile
+		_no_path = NO_PATH_INGRESS(self)
 		for ug, poppi in available_paths:
-			if poppi == NO_PATH_INGRESS(self):
+			if poppi == _no_path:
 				obj_coeffs.append(NO_ROUTE_LATENCY)
 			else:
 				if obj == "avg_latency":
