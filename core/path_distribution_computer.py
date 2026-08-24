@@ -65,6 +65,21 @@ def _get_worker_mem_log_path(worker_i):
 	return _WORKER_MEM_LOG_PATHS[worker_i]
 
 
+def _malloc_trim():
+	"""Return freed allocator arenas to the OS (Linux). RSS is a high-water
+	mark: pymalloc/glibc rarely release pages after big temporaries (the
+	pmat_organize/mega-batch buffers), so worker RSS ratchets up even with
+	zero live garbage -- the 'unattributed' 1.6GB in the 2026-08-24 census.
+	No-op off-Linux and under SCULPTOR_MALLOC_TRIM=0."""
+	if os.environ.get('SCULPTOR_MALLOC_TRIM', '1') == '0':
+		return
+	try:
+		import ctypes
+		ctypes.CDLL('libc.so.6').malloc_trim(0)
+	except Exception:
+		pass
+
+
 def _log_mem_worker(worker_i, tag, **extra):
 	"""Worker-side memory snapshot. Writes to a per-worker file (collected
 	by the driver via dump_mem_log RPC at end of run) AND prints to stdout
@@ -1762,6 +1777,7 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 	# existing send_receive_* / send_messages_workers API stays unchanged.
 	# ------------------------------------------------------------------ #
 	def handle_msg(self, msg_bytes):
+		_malloc_trim()   # ~ms; keeps the arena ratchet from compounding
 		try:
 			cmd, data = pickle.loads(msg_bytes)
 		except Exception as e:

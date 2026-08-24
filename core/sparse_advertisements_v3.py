@@ -4046,6 +4046,25 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 	def _solve_iter_end(self, timers):
 		"""Per-iteration epilogue: t_per_iter, periodic prints/plots, timer summary."""
+		# SCULPTOR_WORKER_REBIRTH_EVERY=N (2026-08-24): memory relief valve.
+		# Every N iters, fan the CURRENT deployment to all workers, which
+		# triggers the full actor rebirth (__dict__.clear + __init__) --
+		# frees the persistent-LP C++ heap and accumulated derived state
+		# that the census cannot see. Workers rebuild lazily (~7s each at
+		# size 32, amortized over N iters). Default off.
+		_rb_every = int(os.environ.get('SCULPTOR_WORKER_REBIRTH_EVERY', '0') or 0)
+		if _rb_every and self.iter > 0 and self.iter % _rb_every == 0:
+			try:
+				_wm = self.get_worker_manager()
+				_t_rb = time.time()
+				print('[mem-valve] iter={} rebirthing {} workers'.format(
+					self.iter, len(getattr(_wm, 'worker_sockets', []))), flush=True)
+				_wm.update_worker_deployments(self.output_deployment())
+				print('[mem-valve] rebirth took {:.1f}s'.format(
+					time.time() - _t_rb), flush=True)
+			except Exception:
+				import traceback
+				traceback.print_exc()
 		self.t_per_iter = (time.time() - self._solve_t_start) / self.iter
 		if self.iter % PRINT_FREQUENCY(self.dpsize) == 0 and self.verbose:
 			print("Optimizing, iter: {}, t_per_iter : {}s, GTO: {}, RD: {}, RDE: {}, {} path measures".format(
