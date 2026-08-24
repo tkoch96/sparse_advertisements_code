@@ -519,6 +519,166 @@ def _pt_cell_log(m, obj):
     return None
 
 
+def _pt_cell_states(m):
+    """objective -> (state, cell_log_path or None) from the driver log."""
+    drv = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = drv.rfind('[expctl] run_id=')
+    if i > 0:
+        drv = drv[i:]
+    out = {}
+    for obj in _PT_OBJECTIVES:
+        st = 'pending'
+        if re.search(r'\[{}\] DONE in'.format(re.escape(obj)), drv):
+            st = 'done'
+        elif re.search(r'\[{}\] NO COMPLETION BANNER'.format(re.escape(obj)), drv):
+            st = 'FAILED'
+        elif re.search(r'\[{}\] covered'.format(re.escape(obj)), drv):
+            st = 'cached'
+        elif re.search(r'\[{}\] running'.format(re.escape(obj)), drv):
+            st = 'running'
+        out[obj] = (st, _pt_cell_log(m, obj))
+    return out
+
+
+_PT_ITER_T_RE = re.compile(
+    r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)')
+
+
+def _pt_progress_table(m):
+    """The burning-money view: per objective -- live iteration, minutes
+    since it last advanced, recent sec/iter, ETA to the iteration cap.
+    The dpsweep progress table with objective as the size axis."""
+    states = _pt_cell_states(m)
+    cap = 150
+    for i, tok in enumerate(m.get('cmd') or []):
+        if tok == '--num_training_iter':
+            try:
+                cap = int((m.get('cmd'))[i + 1])
+            except Exception:
+                pass
+    out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress '
+           '<small>(cap {} iters/objective)</small></h3>'.format(cap),
+           '<div class="wrap"><table><thead><tr><th>objective</th>'
+           '<th>state</th><th>iter</th><th>last advance</th>'
+           '<th>sec/iter (recent)</th><th>ETA to cap</th><th>popps/ugs</th>'
+           '<th>probes/budget</th><th>valve</th><th>sparse</th>'
+           '</tr></thead><tbody>']
+    now = time.time()
+    for obj in _PT_OBJECTIVES:
+        st, log = states[obj]
+        it_n = last_age = spi = eta = popps = sparse = ''
+        probes = ''; valve = '-'
+        if log:
+            txt = _read(log) or ''
+            pts = [(float(t), int(i)) for t, i in _PT_ITER_T_RE.findall(txt)]
+            if pts:
+                it_n = str(pts[-1][1])
+                age_min = (now - pts[-1][0]) / 60.0
+                last_age = ('{:.0f} min ago'.format(age_min)
+                            if age_min < 90 else
+                            '<b style="color:var(--bad,#c0392b)">'
+                            '{:.1f} h ago</b>'.format(age_min / 60))
+                d = [(b[0] - a[0]) for a, b in zip(pts[-8:], pts[-7:])
+                     if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
+                if d:
+                    v = sum(d) / len(d)
+                    spi = '{:.0f}'.format(v)
+                    if st == 'running':
+                        eta = _fmt_dt((cap - pts[-1][1]) * v)
+            mm = _SIM_OPT_RE.search(txt)
+            if mm:
+                popps = '{}/{}'.format(mm.group(1), mm.group(2))
+            if 'ALL DONE' in txt:
+                sparse = ('FAILED' if _SIM_FAIL_RE.search(txt) else 'ok')
+            elif _SIM_FAIL_RE.search(txt):
+                sparse = 'FAILED'
+            mm = _SIM_EXIT_RE.search(txt)
+            if mm:
+                probes = '{}/{}'.format(mm.group(3), mm.group(4))
+            else:
+                mm = _SIM_BUDGET_RE.search(txt)
+                probes = ('?/' + mm.group(1)) if mm else ''
+            valves = len(re.findall(r'\[mem-valve\] iter=', txt))
+            stale = len(re.findall(r'\[stale-path\]', txt))
+            valve = ('{}x'.format(valves) if valves else '-') + \
+                    (' / {} stale'.format(stale) if stale else '')
+        color = {'done': 'var(--ok,#2c7a2c)', 'cached': 'var(--ok,#2c7a2c)',
+                 'running': 'var(--warn,#c9862b)',
+                 'FAILED': 'var(--bad,#c0392b)'}.get(st, 'var(--mut)')
+        out.append('<tr><th>{}</th><td style="color:{}">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td><td class="c">{}</td></tr>'.format(
+                       html.escape(obj), color, st, it_n, last_age,
+                       spi, eta, popps, probes, valve, sparse))
+    out.append('</tbody></table></div>')
+    return '\n'.join(out)
+
+
+def _pt_phase_table(m):
+    """Per-objective wall split: setup+baselines / training / after-train
+    (eval), from the cell logs' [mem] markers."""
+    states = _pt_cell_states(m)
+    rows = []
+    for obj in _PT_OBJECTIVES:
+        st, log = states[obj]
+        if not log:
+            continue
+        txt = _read(log) or ''
+        ts = re.findall(r'\[mem\] tag=\S+ rss_mb=\d+ .*? t=([\d.]+)', txt)
+        pts = [(float(t), int(i)) for t, i in _PT_ITER_T_RE.findall(txt)]
+        if not ts:
+            continue
+        t0, tlast = float(ts[0]), float(ts[-1])
+        setup = (pts[0][0] - t0) if pts else (tlast - t0)
+        train = (pts[-1][0] - pts[0][0]) if pts else 0
+        after = max(0, tlast - (pts[-1][0] if pts else t0))
+        rows.append((obj, st, setup, train, after))
+    if not rows:
+        return ''
+    out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">phases</h3>',
+           '<div class="wrap"><table><thead><tr><th>objective</th>'
+           '<th>setup + baselines</th><th>sparse training</th>'
+           '<th>eval (so far)</th><th>total</th></tr></thead><tbody>']
+    for obj, st, a, b, c in rows:
+        out.append('<tr><th>{}</th><td class="c">{}</td><td class="c">{}'
+                   '</td><td class="c">{}</td><td class="c">{}</td></tr>'
+                   .format(html.escape(obj), _fmt_dt(a), _fmt_dt(b),
+                           _fmt_dt(c), _fmt_dt(a + b + c)))
+    out.append('</tbody></table></div>')
+    return '\n'.join(out)
+
+
+def _pt_log_tail(m, n=100):
+    """Tail of the ACTIVE cell's log -- run.log is the orchestrator and
+    barely moves; the training lives in the per-objective cell logs
+    (Tom 2026-08-24: 'even the tail log looks like it hasn't updated')."""
+    states = _pt_cell_states(m)
+    pick = None
+    for obj in _PT_OBJECTIVES:
+        if states[obj][0] == 'running' and states[obj][1]:
+            pick = (obj, states[obj][1])
+    if pick is None:
+        for obj in reversed(_PT_OBJECTIVES):
+            if states[obj][1]:
+                pick = (obj, states[obj][1])
+                break
+    if pick is None:
+        return _log_tail(m)
+    obj, log = pick
+    txt = _read(log) or ''
+    lines = [l for l in txt.replace('\r', '\n').splitlines()
+             if l.strip() and 'it/s' not in l and 's/it' not in l]
+    age_min = (time.time() - os.path.getmtime(log)) / 60.0
+    return ('<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">log &mdash; '
+            '{} cell <small>(harvested {:.0f} min ago)</small></h3>'
+            '<pre style="font-size:.7rem;max-height:24rem;overflow:auto;'
+            'background:var(--bg2,#00000010);padding:.6rem;border-radius:'
+            '6px">{}</pre>'.format(html.escape(obj), age_min,
+                                   html.escape('\n'.join(lines[-n:]))))
+
+
 def _objective_table(m):
     """Per-OBJECTIVE rows for preset=papertable runs -- the analogue of
     _sim_table where the unit of work is an objective function, not a
@@ -799,12 +959,12 @@ def render(exp):
             '<h2>{} <small>{}</small></h2>'.format(
                 html.escape(m.get('label', m['run_id'])), m['run_id']),
             _card(m, state, headline, details),
-            _objective_table(m),
+            _pt_progress_table(m),
+            _pt_phase_table(m),
             _pt_table(m),
             _figures(m),
             _ram_table(m),
-            '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">log</h3>',
-            _log_tail(m),
+            _pt_log_tail(m),
         ])
     return '\n'.join([
         '<h2>{} <small>{}</small></h2>'.format(
