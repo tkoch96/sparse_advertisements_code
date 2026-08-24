@@ -663,10 +663,21 @@ def status(m, pull=True, tail=25, quiet=False):
     # instance was stopped externally mid-ladder).
     alive = False if inst['state'] != 'running' else None
     if inst['state'] == 'running':
+        # The manifest's pid can be a PREVIOUS segment's (a resume that
+        # failed to record its pid probed a dead pid, verdicted 'died',
+        # and the watch stamped a live run terminal -- 2026-08-24, twice).
+        # run.pid on the box is written by the launcher at every
+        # (re)launch: it is the authority. Fall back to the manifest.
         rc, o, _ = V.ssh(inst['ip'],
-                         'kill -0 {} 2>/dev/null && echo ALIVE || echo DEAD'
-                         .format(m.get('pid', '0')))
+                         'P=$(cat {}/run.pid 2>/dev/null); P=${{P:-{}}}; '
+                         'echo PID=$P; kill -0 $P 2>/dev/null '
+                         '&& echo ALIVE || echo DEAD'
+                         .format(m['remote_dir'], m.get('pid', '0')))
         alive = 'ALIVE' in o
+        mm = re.search(r'PID=(\d+)', o)
+        if mm and str(m.get('pid')) != mm.group(1):
+            m['pid'] = int(mm.group(1))
+            V.save_manifest(m)
         rc, o, _ = V.ssh(inst['ip'], "df -BG --output=avail / | tail -1")
         out['disk_avail'] = o.strip()
 
