@@ -2140,3 +2140,54 @@ class _LocalPathDistributionComputer(Path_Distribution_Computer):
 # replayed by Ray), so we drive the retry at the app level instead.
 Path_Distribution_Computer_Actor = ray.remote(
     num_cpus=1, max_restarts=-1)(_LocalPathDistributionComputer)
+
+
+# ---------------------------------------------------------------- CLI --
+# python core/path_distribution_computer.py --replay_example_load
+# (Tom 2026-08-24): replay a realistic hot-loop workload against ONE
+# in-process worker (no Ray) on a harvested deployment; print the phase
+# latency table per scenario, then the per-attribute object-size census.
+# The scenario engine lives in unit_tests/bench_path_distribution.py.
+if __name__ == '__main__':
+	import argparse as _ap
+	_p = _ap.ArgumentParser()
+	_p.add_argument('--replay_example_load', action='store_true')
+	_p.add_argument('--pickle', default='cache/popp_failure_latency_'
+					'comparison_testing_feature-actual-20_dep_sweep_20.pkl')
+	_p.add_argument('--steps', type=int, default=4)
+	_p.add_argument('--flips-per-step', type=int, default=12)
+	_p.add_argument('--scenarios', default='warm,cold,mlu_off,mlu_on,rebuild')
+	_p.add_argument('--rebuild-every', type=int, default=15)
+	_a = _p.parse_args()
+	if not _a.replay_example_load:
+		_p.error('nothing to do -- pass --replay_example_load')
+	import sys as _sys, os as _os
+	_sys.path.insert(0, _os.path.dirname(_os.path.dirname(
+		_os.path.abspath(__file__))))
+	_sys.argv = ['bench', '--pickle', _a.pickle,
+				 '--scenarios', _a.scenarios,
+				 '--rebuild-every', str(_a.rebuild_every)]
+	import unit_tests.bench_path_distribution as _b
+	_w = _b.build_worker(_a.pickle)
+	_lat, _mlu = 'avg_latency', 'max_util'
+	_S = {'warm': (dict(SCULPTOR_LP_INCREMENTAL='1'), [_lat], 0),
+		  'cold': (dict(SCULPTOR_LP_INCREMENTAL='0'), [_lat], 0),
+		  'mlu_off': (dict(SCULPTOR_LP_INCREMENTAL='1',
+						   SCULPTOR_LP_INCR_MLU='0'), [_lat, _mlu], 0),
+		  'mlu_on': (dict(SCULPTOR_LP_INCREMENTAL='1',
+						  SCULPTOR_LP_INCR_MLU='1'), [_lat, _mlu], 0),
+		  'rebuild': (dict(SCULPTOR_LP_INCREMENTAL='1'), [_lat],
+					  _a.rebuild_every)}
+	_res = {}
+	for _n in _a.scenarios.split(','):
+		_env, _objs, _reb = _S[_n.strip()]
+		_res[_n] = _b.run_scenario(_w, _n, (_a.steps, _a.flips_per_step),
+								   _env, _objs, _reb)
+	print('\n== object-size census (top attributes) ==')
+	_log_objsize_worker(0, 'replay_example_load', _w, top_n=15)
+	_base = _res.get('warm')
+	print('\n== summary (ms/solve) ==')
+	for _k, _v in _res.items():
+		print('  {:10s} {:7.0f}{}'.format(_k, _v * 1000,
+			  '   ({:+.0f}% vs warm)'.format(100 * (_v - _base) / _base)
+			  if _base and _k != 'warm' else ''))
