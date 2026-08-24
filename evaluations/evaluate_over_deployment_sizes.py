@@ -190,7 +190,12 @@ def pull_results_new(cache_fn, port=None, dpsizes=None, n_sim_by_dpsize=None,
 			if _hs:
 				print('[sweep] hotstart sim 0 from runs/{}'.format(_hs),
 					  flush=True)
-				save_run_dir = [_hs] + [None] * (max(nsim, 1) - 1)
+				# evaluate_all_metrics wraps a non-list itself when nsim==1;
+				# passing a list there nests it ([[dir]]) and the join dies
+				# inside the bare except -- the cell then "passes" without
+				# ever solving (2026-08-24, cost the avg_latency resume)
+				save_run_dir = (_hs if max(nsim, 1) == 1
+								else [_hs] + [None] * (nsim - 1))
 			# Was this size's result already on disk? If so evaluate_all_metrics
 			# will load it and return in about a second WITHOUT training, and
 			# its "wall time" is a cache-read, not a measurement. Recording

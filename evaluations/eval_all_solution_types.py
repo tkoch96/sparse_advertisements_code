@@ -372,6 +372,25 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	# weighted by UG volume. Run after an MLU or priority optimisation they
 	# produced numbers that looked valid and meant nothing. Split out
 	# 2026-08-21; objective_hooks routes to the right suite.
+	# SCULPTOR_REQUIRE_SOLNS, enforced at EVAL time too (2026-08-24): the
+	# solve-time guard is bypassed when a stale pickle resume-skips or a
+	# swallowed exception jumps the strategy loop -- the per_site_cost cell
+	# "passed" its banner with every sparse metric None. A required
+	# solution missing HERE is the same lie one phase later.
+	_req = [x for x in os.environ.get('SCULPTOR_REQUIRE_SOLNS', '').split(',')
+			if x]
+	if _req:
+		for _ri in range(N_TO_SIM):
+			_cr = (metrics.get('compare_rets') or {}).get(_ri) or {}
+			_missing = [s for s in _req
+						if not (_cr.get('adv_solns') or {}).get(s)]
+			if _missing:
+				print('!' * 72)
+				print('[FATAL] required solution(s) {} missing at eval time '
+					  '(sim {}) -- aborting instead of emitting a sparse-less '
+					  'comparison.'.format(_missing, _ri))
+				print('!' * 72)
+				raise SystemExit(43)
 	objective = objective_hooks.resolve_objective(kwargs.get('generic_objective'))
 	ctx = objective_hooks.EvalContext(
 		sas=sas, wm=wm, metrics=metrics, soln_types=soln_types, dpsize=dpsize,
