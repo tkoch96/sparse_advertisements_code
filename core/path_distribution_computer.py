@@ -1437,7 +1437,15 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
-			if obj == "avg_latency" or obj == "per_site_cost":
+			if ((obj == "avg_latency" or obj == "per_site_cost")
+					and os.environ.get('SCULPTOR_LP_FORCE_NONPERSISTENT',
+									   '0') != '1'):
+				# SCULPTOR_LP_FORCE_NONPERSISTENT=1 (2026-08-24 bench knob):
+				# route to the fresh-model path below -- a small model built
+				# from only the ACTIVE columns, vs the persistent pool that
+				# drags every ever-minted column (215k at actual-20) through
+				# each factorization. Diagnostic for the optimize-dominates
+				# finding; harmless in production (default off).
 				ts = time.time()
 				total_obj = self.solve_generic_lp_persistent(routed_through_ingress, obj)["objective"]
 				self.timing['solve_generic_lp_persistent'] += time.time() - ts
@@ -2169,15 +2177,7 @@ if __name__ == '__main__':
 				 '--rebuild-every', str(_a.rebuild_every)]
 	import unit_tests.bench_path_distribution as _b
 	_w = _b.build_worker(_a.pickle)
-	_lat, _mlu = 'avg_latency', 'max_util'
-	_S = {'warm': (dict(SCULPTOR_LP_INCREMENTAL='1'), [_lat], 0),
-		  'cold': (dict(SCULPTOR_LP_INCREMENTAL='0'), [_lat], 0),
-		  'mlu_off': (dict(SCULPTOR_LP_INCREMENTAL='1',
-						   SCULPTOR_LP_INCR_MLU='0'), [_lat, _mlu], 0),
-		  'mlu_on': (dict(SCULPTOR_LP_INCREMENTAL='1',
-						  SCULPTOR_LP_INCR_MLU='1'), [_lat, _mlu], 0),
-		  'rebuild': (dict(SCULPTOR_LP_INCREMENTAL='1'), [_lat],
-					  _a.rebuild_every)}
+	_S = _b.scenario_table(_a)   # single source of truth for scenarios
 	_res = {}
 	for _n in _a.scenarios.split(','):
 		_env, _objs, _reb = _S[_n.strip()]

@@ -92,6 +92,8 @@ def gradient_step_load(w, n_steps=4, flips_per_step=12, seed=1234,
 
 
 def run_scenario(w, name, n, env, objs, rebuild_every=0):
+    for k in ('SCULPTOR_LP_FORCE_NONPERSISTENT', 'SCULPTOR_LP_INCR_MLU'):
+        os.environ.pop(k, None)
     for k, v in env.items():
         os.environ[k] = v
     for k in w.timing:
@@ -139,6 +141,22 @@ def run_scenario(w, name, n, env, objs, rebuild_every=0):
     return wall / max(n_done, 1)
 
 
+
+def scenario_table(a):
+    lat = 'avg_latency'
+    return {
+        'warm':    (dict(SCULPTOR_LP_INCREMENTAL='1'), [lat], 0),
+        'cold':    (dict(SCULPTOR_LP_INCREMENTAL='0'), [lat], 0),
+        'mlu_off': (dict(SCULPTOR_LP_INCREMENTAL='1',
+                         SCULPTOR_LP_INCR_MLU='0'), ['congested'], 0),
+        'mlu_on':  (dict(SCULPTOR_LP_INCREMENTAL='1',
+                         SCULPTOR_LP_INCR_MLU='1'), ['congested'], 0),
+        'rebuild': (dict(SCULPTOR_LP_INCREMENTAL='1'), [lat],
+                    getattr(a, 'rebuild_every', 15)),
+        'fresh':   (dict(SCULPTOR_LP_FORCE_NONPERSISTENT='1'), [lat], 0),
+    }
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
@@ -151,17 +169,7 @@ def main():
     ap.add_argument('--scenarios', default='warm,cold,mlu_off,mlu_on,rebuild')
     a = ap.parse_args()
     w = build_worker(a.pickle)
-    lat, mlu = 'avg_latency', 'max_util'
-    S = {
-        'warm':    (dict(SCULPTOR_LP_INCREMENTAL='1'), [lat], 0),
-        'cold':    (dict(SCULPTOR_LP_INCREMENTAL='0'), [lat], 0),
-        'mlu_off': (dict(SCULPTOR_LP_INCREMENTAL='1',
-                         SCULPTOR_LP_INCR_MLU='0'), ['congested'], 0),
-        'mlu_on':  (dict(SCULPTOR_LP_INCREMENTAL='1',
-                         SCULPTOR_LP_INCR_MLU='1'), ['congested'], 0),
-        'rebuild': (dict(SCULPTOR_LP_INCREMENTAL='1'), [lat],
-                    a.rebuild_every),
-    }
+    S = scenario_table(a)
     results = {}
     names = a.scenarios.split(',')
     # pass 0 warms the var_pool/model so scenario ORDER does not decide
