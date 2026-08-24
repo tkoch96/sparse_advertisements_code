@@ -470,6 +470,9 @@ def cmd_launch(a):
               '  python -m cluster.expctl status {}'.format(run_id))
     m['pid'] = pid
     m['state'] = 'running' if pid else 'launched'
+    # a resume supersedes any terminal verdict from the previous segment
+    m.pop('finished_epoch', None)
+    m.pop('verdict', None)
     V.save_manifest(m)
     V.update_alert(sweep={'run_id': run_id,
                           'pid_file': rundir + '/run.pid',
@@ -779,6 +782,18 @@ def cmd_watch(a):
                     print('WARNING: {} bytes still only on the VM'.format(rb - lb))
                 else:
                     print('log fully harvested ({})'.format(V.human_bytes(lb)))
+            # Segment guard (2026-08-24): a watch bound to a KILLED
+            # segment can reach this line after a resume has already
+            # relaunched the run -- stamping 'died' over a live process
+            # (both dashboards showed dead runs while 23 processes
+            # trained). Re-read the manifest; if the pid changed, this
+            # watch's verdict belongs to a previous segment: drop it.
+            _fresh = V.load_manifest(m['run_id'])
+            if _fresh and _fresh.get('pid') != m.get('pid'):
+                print('\n[watch] run was relaunched (pid {} -> {}) -- '
+                      'verdict belongs to the old segment, not stamping.'
+                      .format(m.get('pid'), _fresh.get('pid')))
+                return 0
             m['state'] = st['state']
             m['finished_epoch'] = time.time()
             m['verdict'] = st['headline']
