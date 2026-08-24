@@ -764,6 +764,20 @@ def _pt_parse_cell(fn):
     return deltas, (max(rss) if rss else None), wall, (pts[-1][1] if pts else 0)
 
 
+def _pt_series(fn):
+    """(t_epoch, iter) points + (t, rss_mb) points from one cell log."""
+    txt = open(fn, errors='replace').read()
+    it = [(float(t), int(i)) for t, i in re.findall(
+        r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)', txt)]
+    rss = [(float(t), int(r)) for r, t in re.findall(
+        r'\[mem\] tag=\S+ rss_mb=(\d+) .*? t=([\d.]+)', txt)]
+    # phases: cell start -> first iter (setup+baselines), iter span (train),
+    # last iter -> log mtime (eval, if the training finished)
+    t0 = rss[0][0] if rss else None
+    done = 'ALL DONE' in txt
+    return it, rss, t0, done
+
+
 def plot_papertable(run_id, outdir, manifest):
     """Objective-keyed timing figures -- the papertable analogue of the
     size-keyed dpsweep plots. One bar per OBJECTIVE."""
@@ -812,6 +826,74 @@ def plot_papertable(run_id, outdir, manifest):
     ax.grid(alpha=.25, axis='y')
     ax.tick_params(axis='x', rotation=20)
     f = os.path.join(outdir, 'obj_memory.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    series = {o: _pt_series(logs[o]) for o in objs}
+
+    # 4. training iterations over wall-clock -- the dpsweep progress
+    #    view with objective as the size axis (Tom 2026-08-24)
+    fig, ax = plt.subplots(figsize=(8, 3.4))
+    for o in objs:
+        it, _rss, t0, done = series[o]
+        if not it or t0 is None:
+            continue
+        xs = [(t - t0) / 3600.0 for t, _ in it]
+        ys = [i for _, i in it]
+        ax.plot(xs, ys, label=_PT_SHORT[o] + (' (done)' if done else ''))
+    ax.set_xlabel('hours since cell start'); ax.set_ylabel('training iter')
+    ax.set_title('{} -- training progress over time'.format(run_id))
+    ax.legend(fontsize=8); ax.grid(alpha=.25)
+    f = os.path.join(outdir, 'obj_iters_over_time.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    # 5. sec/iter vs iteration (RB-cadence spikes visible)
+    fig, ax = plt.subplots(figsize=(8, 3.0))
+    for o in objs:
+        it = series[o][0]
+        d = [(b[1], b[0] - a[0]) for a, b in zip(it, it[1:])
+             if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
+        if d:
+            ax.plot([x for x, _ in d], [y for _, y in d],
+                    label=_PT_SHORT[o], alpha=.8)
+    ax.set_xlabel('iteration'); ax.set_ylabel('sec / iter')
+    ax.set_title('{} -- per-iteration wall time'.format(run_id))
+    ax.legend(fontsize=8); ax.grid(alpha=.25)
+    f = os.path.join(outdir, 'obj_sec_per_iter.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    # 6. driver RSS over time per objective
+    fig, ax = plt.subplots(figsize=(8, 3.0))
+    for o in objs:
+        _it, rss, t0, _done = series[o]
+        if rss and t0 is not None:
+            ax.plot([(t - t0) / 3600.0 for t, _ in rss],
+                    [r / 1024.0 for _, r in rss], label=_PT_SHORT[o], alpha=.8)
+    ax.set_xlabel('hours since cell start'); ax.set_ylabel('driver RSS (GB)')
+    ax.set_title('{} -- driver memory over time'.format(run_id))
+    ax.legend(fontsize=8); ax.grid(alpha=.25)
+    f = os.path.join(outdir, 'obj_mem_over_time.png')
+    fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
+    made.append(f)
+
+    # 7. phase split per objective: setup+baselines vs training span
+    fig, ax = plt.subplots(figsize=(7, 3.0))
+    setup, train = [], []
+    for o in objs:
+        it, _rss, t0, _done = series[o]
+        if it and t0 is not None:
+            setup.append((it[0][0] - t0) / 3600.0)
+            train.append((it[-1][0] - it[0][0]) / 3600.0)
+        else:
+            setup.append(0); train.append(0)
+    ax.bar(names, setup, label='setup + baselines', color='#8a8a8a')
+    ax.bar(names, train, bottom=setup, label='sparse training', color='#4878a8')
+    ax.set_ylabel('hours'); ax.legend(fontsize=8)
+    ax.set_title('{} -- phase split by objective'.format(run_id))
+    ax.grid(alpha=.25, axis='y'); ax.tick_params(axis='x', rotation=20)
+    f = os.path.join(outdir, 'obj_phases.png')
     fig.tight_layout(); fig.savefig(f, dpi=130); plt.close(fig)
     made.append(f)
     return made
