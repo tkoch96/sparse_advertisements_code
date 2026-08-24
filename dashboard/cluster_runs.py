@@ -266,9 +266,15 @@ def _dpsweep_live_line(m):
     d = [(b[0] - a[0]) for a, b in zip(pts[-8:], pts[-7:])
          if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
     spi = (sum(d) / len(d)) if d else None
-    stale = ('<b style="color:var(--bad,#c0392b)">{:.1f} h ago</b>'.format(
-                 age_min / 60) if age_min > 90
-             else '{:.0f} min ago'.format(age_min))
+    terminal = (m.get('state') in
+                ('killed', 'died', 'failed', 'done', 'done-dirty', 'suspect')
+                or m.get('finished_epoch'))
+    if terminal:
+        stale = '<span class="mut">(run over)</span>'
+    else:
+        stale = ('<b style="color:var(--bad,#c0392b)">{:.1f} h ago</b>'.format(
+                     age_min / 60) if age_min > 90
+                 else '{:.0f} min ago'.format(age_min))
     valves = len(re.findall(r'\[mem-valve\] iter=', txt))
     return ('<p class="note">live: iter <b>{}</b>, last advance {}{}{}</p>'
             .format(pts[-1][1], stale,
