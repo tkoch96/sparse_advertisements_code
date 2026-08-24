@@ -199,7 +199,10 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					raise TypeError
 				metrics['compare_rets'][random_iter]['n_advs'] ## if this field is populated, we've already computed this iteration's solution
 				continue
-			except TypeError:
+			except (TypeError, KeyError):
+				# TypeError: hotstart requested, or compare_rets slot is None.
+				# KeyError: n_advs absent (e.g. cleared to force a re-solve,
+				# 2026-08-24) -- either way this sim is NOT computed: solve it.
 				pass
 			print("-----Deployment number = {} -------".format(random_iter))
 			_log_mem('eval_solve_strategies', ri=random_iter)
