@@ -104,6 +104,14 @@ def _status_of(m):
     log = _read(os.path.join(d, 'run.log'), '') or ''
     rc_txt = (_read(os.path.join(d, 'run.rc'), '') or '').strip()
     rc = int(rc_txt) if rc_txt.lstrip('-').isdigit() else None
+    # run.rc is cleared REMOTELY at relaunch but the harvested local copy
+    # survives -- after a resume it still holds the PREVIOUS segment's rc
+    # (43 here, 2026-08-24) and the card called a live run FAILED. Only
+    # honor rc when the log's CURRENT segment actually wrote its exit
+    # marker; an open segment has no exit code yet, whatever the file says.
+    i = log.rfind('[expctl] run_id=')
+    if i >= 0 and 'exit_rc=' not in log[i:]:
+        rc = None
     state, headline, details = verdict(
         log, rc, killed=(m.get('state') == 'killed'))
     # This renderer is offline -- it cannot ping the VM to see whether the
