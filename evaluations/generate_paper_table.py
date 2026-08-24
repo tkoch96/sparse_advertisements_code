@@ -760,6 +760,13 @@ def main():
     ap.add_argument('--run_id', '--run-tag', dest='run_tag',
                     default='papertable')
     ap.add_argument('--objectives', default=','.join(DEFAULT_OBJECTIVES))
+    ap.add_argument('--hotstart', default='',
+                    help="resume sparse solves from state-N checkpoints: "
+                         "'obj:runs_dir[,obj:runs_dir]', e.g. "
+                         "'avg_latency:1787505247-testing_feature-actual-32-"
+                         "sparse'. Each dir must hold state-0.pkl (the "
+                         "deployment) plus the checkpoint to resume from; "
+                         "sparse writes them every 5 iters automatically.")
     ap.add_argument('--plan-only', action='store_true',
                     help='print coverage + commands, execute nothing')
     ap.add_argument('--format', default='all',
@@ -769,6 +776,22 @@ def main():
     a = ap.parse_args()
     objectives = [OBJECTIVE_ALIASES.get(o.strip(), o.strip())
                   for o in a.objectives.split(',') if o.strip()]
+    hotstart = {}
+    for tok in (t for t in a.hotstart.split(',') if t.strip()):
+        if ':' not in tok:
+            raise SystemExit("--hotstart entries are 'objective:runs_dir' "
+                             "(got {!r})".format(tok))
+        obj, d = tok.split(':', 1)
+        obj = OBJECTIVE_ALIASES.get(obj.strip(), obj.strip())
+        if obj not in objectives:
+            raise SystemExit('--hotstart objective {!r} not in --objectives'
+                             .format(obj))
+        sd = os.path.join(_REPO, 'runs', d.strip())
+        if not os.path.exists(os.path.join(sd, 'state-0.pkl')):
+            raise SystemExit('--hotstart {}: no state-0.pkl under {} -- '
+                             'state-0 is REQUIRED for hot-start'
+                             .format(obj, sd))
+        hotstart[obj] = d.strip()
     dpsize = normalize_dpsize(a.dpsize)
     run_tag = a.run_tag
 
@@ -808,8 +831,11 @@ def main():
                 else '{}_{}'.format(run_tag, obj)
             if FORCE_RESOLVE:
                 tag = '{}_r{}'.format(tag, int(_t.time()) % 100000)
+            cell_env = dict(env_extra)
+            if obj in hotstart:
+                cell_env['SCULPTOR_HOTSTART_RUN_DIR'] = hotstart[obj]
             run_objective_cell(obj, dpsize, a.nsim, a.iters, tag,
-                               env_extra=env_extra)
+                               env_extra=cell_env)
         print('\n== re-checking coverage ==')
         cov = coverage(dpsize, objectives, a.nsim, run_tag)
 
