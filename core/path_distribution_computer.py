@@ -2160,6 +2160,11 @@ if __name__ == '__main__':
 	import argparse as _ap
 	_p = _ap.ArgumentParser()
 	_p.add_argument('--replay_example_load', action='store_true')
+	_p.add_argument('--replay_batch_load', action='store_true',
+					help='drive _cmd_calc_compressed_lb like a VM RB/LB '
+						 'flush; add --profile for a cProile split')
+	_p.add_argument('--jobs', type=int, default=24)
+	_p.add_argument('--profile', action='store_true')
 	_p.add_argument('--pickle', default='cache/popp_failure_latency_'
 					'comparison_testing_feature-actual-20_dep_sweep_20.pkl')
 	_p.add_argument('--steps', type=int, default=4)
@@ -2167,8 +2172,8 @@ if __name__ == '__main__':
 	_p.add_argument('--scenarios', default='warm,cold,mlu_off,mlu_on,rebuild')
 	_p.add_argument('--rebuild-every', type=int, default=15)
 	_a = _p.parse_args()
-	if not _a.replay_example_load:
-		_p.error('nothing to do -- pass --replay_example_load')
+	if not (_a.replay_example_load or _a.replay_batch_load):
+		_p.error('pass --replay_example_load or --replay_batch_load')
 	import sys as _sys, os as _os
 	_sys.path.insert(0, _os.path.dirname(_os.path.dirname(
 		_os.path.abspath(__file__))))
@@ -2177,6 +2182,12 @@ if __name__ == '__main__':
 				 '--rebuild-every', str(_a.rebuild_every)]
 	import unit_tests.bench_path_distribution as _b
 	_w = _b.build_worker(_a.pickle)
+	if _a.replay_batch_load:
+		_b.replay_batch(_w, n_jobs=_a.jobs, profile=False)      # warm pool
+		_b.replay_batch(_w, n_jobs=_a.jobs, profile=_a.profile) # measured
+		print('\n== object-size census (top attributes) ==')
+		_log_objsize_worker(0, 'replay_batch_load', _w, top_n=15)
+		raise SystemExit(0)
 	_S = _b.scenario_table(_a)   # single source of truth for scenarios
 	_res = {}
 	for _n in _a.scenarios.split(','):

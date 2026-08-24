@@ -193,3 +193,64 @@ def main():
 
 if __name__ == '__main__':
     main()
+
+
+def build_batch_payload(w, n_jobs=24, rb_frac=0.6, seed=99):
+    """A calc_compressed_lb payload shaped like a production RB/LB flush:
+    data[0] = ((base_adv,), base_kwa); data[1:] = (diff, kwa) where diff
+    = np.where(base != candidate). RB-style jobs zero one popp's whole
+    row (a failure); LB-style jobs flip one (popp, prefix) entry."""
+    rng = np.random.RandomState(seed)
+    base = np.zeros((w.n_popp, w.n_prefixes))
+    base[:, 0] = 1
+    for j in range(1, w.n_prefixes):
+        base[rng.choice(w.n_popp, size=max(2, w.n_popp // 6),
+                        replace=False), j] = 1
+    kwa = {'generic_obj': 'avg_latency'}
+    payload = [((base.copy(),), dict(kwa))]
+    for i in range(n_jobs):
+        cand = base.copy()
+        if rng.random() < rb_frac:
+            cand[rng.randint(w.n_popp), :] = 0          # popp failure
+        else:
+            r, c = rng.randint(w.n_popp), rng.randint(w.n_prefixes)
+            cand[r, c] = 1 - cand[r, c]                 # gradient flip
+        payload.append((np.where(base != cand), dict(kwa)))
+    return payload
+
+
+def replay_batch(w, n_jobs=24, profile=False):
+    """Drive _cmd_calc_compressed_lb exactly like a VM flush; print the
+    per-batch timing table (same [wt] accounting as production) and,
+    with profile=True, a cProfile top-25 to split pmat internals."""
+    payload = build_batch_payload(w, n_jobs=n_jobs)
+    try:
+        w.calc_cache.all_caches['lb'] = {}
+    except Exception:
+        pass
+    rss0, t0 = rss_mb(), time.time()
+    if profile:
+        import cProfile, pstats, io
+        pr = cProfile.Profile()
+        pr.enable()
+    ret = w._cmd_calc_compressed_lb(payload)
+    if profile:
+        pr.disable()
+    wall = time.time() - t0
+    n = len(payload)
+    print('\n== batch replay ==  {} jobs in {:.1f}s -> {:.0f} ms/job | '
+          'RSS {:.0f}->{:.0f} MB'.format(n, wall, 1000 * wall / n,
+                                         rss0, rss_mb()))
+    for k, v in sorted(w.timing.items(), key=lambda kv: -kv[1]):
+        if v > 0.01:
+            print('    {:38s} {:7.2f}s  ({:4.0f}%)'.format(
+                k, v, 100 * v / wall))
+    if profile:
+        sio = io.StringIO()
+        ps = pstats.Stats(pr, stream=sio).sort_stats('cumulative')
+        ps.print_stats(25)
+        print('\n== cProfile top-25 (cumulative) ==')
+        for line in sio.getvalue().splitlines():
+            if line.strip():
+                print('   ', line[:150])
+    return wall / n
