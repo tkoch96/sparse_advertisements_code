@@ -171,6 +171,26 @@ def pull_results_new(cache_fn, port=None, dpsizes=None, n_sim_by_dpsize=None,
 					   'nsim': {str(d): n for d, n in todo},
 					   'done': per_size, 'failed': {}, 'cache_fn': cache_fn})
 			save_run_dir = None
+			# SCULPTOR_HOTSTART_RUN_DIR (2026-08-24): resume sim 0's sparse
+			# solve from an existing runs/<dir>'s state-N checkpoints --
+			# sparse ALWAYS writes them every 5 iters (set_save_run_dir
+			# auto-creates the dir), so a worker crash costs <=5 iters,
+			# not the whole solve. Single-sim runs only.
+			# Format: a bare dir applies always; 'obj:dir[,obj:dir]' applies
+			# only when SCULPTOR_GENERIC_OBJECTIVE matches -- the paper-table
+			# driver runs one cell per objective off the same env, and
+			# resuming objective B from objective A's optimizer state would
+			# be silently wrong.
+			_hs = os.environ.get('SCULPTOR_HOTSTART_RUN_DIR', '')
+			if _hs and ':' in _hs:
+				_cur = os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
+									  'avg_latency')
+				_hs = dict(x.split(':', 1) for x in _hs.split(',')
+						   if ':' in x).get(_cur, '')
+			if _hs:
+				print('[sweep] hotstart sim 0 from runs/{}'.format(_hs),
+					  flush=True)
+				save_run_dir = [_hs] + [None] * (max(nsim, 1) - 1)
 			# Was this size's result already on disk? If so evaluate_all_metrics
 			# will load it and return in about a second WITHOUT training, and
 			# its "wall time" is a cache-read, not a measurement. Recording
