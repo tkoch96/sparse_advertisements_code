@@ -236,6 +236,19 @@ def main():
         # the site without them).
         try:
             import importlib
+            # reload EVERY dashboard module, not just generate: generate's
+            # own `from dashboard import cluster_runs` returns the CACHED
+            # module, so renderer fixes never reached a running loop --
+            # 2026-08-24, the dash showed dead runs for hours after the
+            # verdict logic was fixed on disk.
+            import sys as _sys
+            for _n in sorted(_sys.modules):
+                if (_n.startswith('dashboard.') and _n not in
+                        ('dashboard.refresh', 'dashboard.generate')):
+                    try:
+                        importlib.reload(_sys.modules[_n])
+                    except Exception:
+                        pass
             importlib.reload(generate)
         except Exception as e:
             print('[refresh] registry reload failed: {}'.format(e),
