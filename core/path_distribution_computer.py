@@ -641,21 +641,16 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 					try:
 						obj_coeffs.append(self.whole_deployment_ug_perfs[ug][self.popps[poppi]])
 					except KeyError:
-						# TEMP DIAGNOSTIC (2026-08-22 stale-state hunt)
-						popp = self.popps[poppi]
-						prios = getattr(self, 'whole_deployment_ground_truth_ingress_priorities', {})
-						print('[staledump] w={} ug={} poppi={} popp={} '
-							  'popp_in_popps={} ug_in_perfs={} n_perfs_ug={} '
-							  'popp_in_prios_ug={} sample_perf_keys={} '
-							  'n_popps={} dpsize={}'.format(
-							self.worker_i, ug, poppi, popp,
-							popp in self.popp_to_ind,
-							ug in self.whole_deployment_ug_perfs,
-							len(self.whole_deployment_ug_perfs.get(ug, {})),
-							popp in prios.get(ug, {}),
-							list(self.whole_deployment_ug_perfs.get(ug, {}).keys())[:3],
-							self.n_popp, self.dpsize), flush=True)
-						raise
+						# RARE STALE-PATH EVENT (2026-08-24, Tom): a path was
+						# offered for a (ug, popp) the ug has no perf entry
+						# for -- observed once per multi-hour solve at size
+						# 32 (KeyError ('vtrwarsaw','9009'), iter 71). Log a
+						# full forensic dump LOUDLY, then price the path as
+						# unroutable instead of killing a 5h solve: one
+						# NO_ROUTE-priced path among ~100k biases one LP
+						# call, aborting loses the whole strategy.
+						self._log_stale_path(ug, poppi, available_paths)
+						obj_coeffs.append(NO_ROUTE_LATENCY)
 				elif obj == "per_site_cost":
 					pop, _ = self.popps[poppi]
 					site_cost = self.site_costs[pop]
@@ -663,6 +658,42 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				else:
 					raise ValueError("obj {} not supported in solve_generic_lp_persistent".format(obj))
 		return obj_coeffs
+
+
+	def _log_stale_path(self, ug, poppi, available_paths):
+		"""Forensics for the rare stale-path KeyError. Everything a future
+		debugging session needs, deduped per (ug, poppi) per process."""
+		seen = getattr(self, '_stale_path_seen', None)
+		if seen is None:
+			seen = self._stale_path_seen = set()
+		count = getattr(self, '_stale_path_count', 0)
+		self._stale_path_count = count + 1
+		if (ug, poppi) in seen:
+			return
+		seen.add((ug, poppi))
+		popp = self.popps[poppi] if poppi < len(self.popps) else None
+		prios = getattr(self,
+			'whole_deployment_ground_truth_ingress_priorities', {})
+		perfs_ug = self.whole_deployment_ug_perfs.get(ug, {})
+		ug_paths = [pi for (u, pi) in available_paths if u == ug]
+		import json as _json
+		print('[stale-path] w={} n_seen={} FORENSICS {}'.format(
+			self.worker_i, self._stale_path_count,
+			_json.dumps({
+				'ug': str(ug), 'poppi': poppi, 'popp': str(popp),
+				'n_popps': self.n_popp, 'dpsize': str(self.dpsize),
+				'popp_in_popp_to_ind': popp in self.popp_to_ind,
+				'ug_in_perfs': ug in self.whole_deployment_ug_perfs,
+				'n_perfs_ug': len(perfs_ug),
+				'popp_in_prios_ug': popp in prios.get(ug, {}),
+				'n_prios_ug': len(prios.get(ug, {})),
+				'ug_available_poppis': ug_paths[:20],
+				'perf_popp_sample': [str(k) for k in list(perfs_ug)[:5]],
+				'prio_popp_sample': [str(k) for k in
+									 list(prios.get(ug, {}))[:5]],
+				'ugs_total': len(self.whole_deployment_ug_perfs),
+				'ug_in_ug_to_ind': ug in getattr(self, 'ug_to_ind', {}),
+			})), flush=True)
 
 	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
 		"""The high-level wrapper that tries Standard first, then MLU."""
