@@ -173,7 +173,40 @@ def _tail_cmds(m):
                             '(advances each harvest, survives the VM)'))
 
 
-def _card(m, state, headline, details):
+def _pt_card_summary(m):
+    """'objectives 1/5 done -- projected ~34h / ~$97 more at current pace'"""
+    try:
+        states = _pt_cell_states(m)
+    except Exception:
+        return None
+    done = sum(1 for st, _ in states.values() if st in ('done', 'cached'))
+    total = len(states)
+    # measured pace: wall of completed cells, else the running cell's
+    # sec/iter extrapolated to the cap
+    drv = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = drv.rfind('[expctl] run_id=')
+    walls = [float(x) for x in re.findall(
+        r'\] DONE in ([\d.]+) min', drv[i:])] if i >= 0 else []
+    per_cell_h = (sum(walls) / len(walls) / 60.0) if walls else None
+    if per_cell_h is None:
+        for obj, (st, log) in states.items():
+            if st == 'running' and log:
+                pts = [(float(t), int(n)) for t, n in
+                       _PT_ITER_T_RE.findall(_read(log) or '')]
+                d = [(b[0] - a[0]) for a, b in zip(pts[-8:], pts[-7:])
+                     if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
+                if d:
+                    per_cell_h = 150 * (sum(d) / len(d)) / 3600.0 + 0.5
+    if per_cell_h is None:
+        return '{}/{} objectives done'.format(done, total)
+    remaining_h = per_cell_h * (total - done)
+    rate = _rate(m.get('instance_type'))
+    return ('{}/{} objectives done &mdash; projected ~{} / ~${:.0f} more '
+            'at current pace'.format(done, total, _fmt_dt(remaining_h * 3600),
+                                     remaining_h * rate))
+
+
+def _card(m, state, headline, details, extra_rows=None):
     end = m.get('finished_epoch') or time.time()
     elapsed = end - m.get('started_epoch', end)
     rate = _rate(m.get('instance_type'))
@@ -205,6 +238,8 @@ def _card(m, state, headline, details):
             m['run_id'])),
         ('live tail', _tail_cmds(m)),
     ]
+    for r in (extra_rows or []):
+        rows.insert(1, r)
     out = ['<div class="wrap"><table><tbody>']
     for k, v in rows:
         out.append('<tr><th>{}</th><td>{}</td></tr>'.format(k, v))
@@ -214,6 +249,32 @@ def _card(m, state, headline, details):
                    '<br>'.join('!! ' + html.escape(d) for d in details) +
                    '</p>')
     return '\n'.join(out)
+
+
+def _dpsweep_live_line(m):
+    """Live iteration + staleness for the size currently training --
+    the same burning-money signal the papertable progress table carries."""
+    txt = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = txt.rfind('[expctl] run_id=')
+    if i > 0:
+        txt = txt[i:]
+    pts = [(float(t), int(n)) for t, n in _PT_ITER_T_RE.findall(txt)]
+    if not pts:
+        return ('<p class="note">no training iterations in this segment '
+                'yet (deployment setup / baselines).</p>')
+    age_min = (time.time() - pts[-1][0]) / 60.0
+    d = [(b[0] - a[0]) for a, b in zip(pts[-8:], pts[-7:])
+         if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
+    spi = (sum(d) / len(d)) if d else None
+    stale = ('<b style="color:var(--bad,#c0392b)">{:.1f} h ago</b>'.format(
+                 age_min / 60) if age_min > 90
+             else '{:.0f} min ago'.format(age_min))
+    valves = len(re.findall(r'\[mem-valve\] iter=', txt))
+    return ('<p class="note">live: iter <b>{}</b>, last advance {}{}{}</p>'
+            .format(pts[-1][1], stale,
+                    ', ~{:.0f} s/iter recently'.format(spi) if spi else '',
+                    ', {} mem-valve rebirths'.format(valves) if valves
+                    else ''))
 
 
 def _progress_table(m):
@@ -955,10 +1016,13 @@ def render(exp):
     if m.get('preset') == 'papertable':
         # objective-keyed run: the size-keyed progress/sim/phase tables
         # would all render empty -- the unit of work here is an objective
+        _summary = _pt_card_summary(m)
         return '\n'.join([
             '<h2>{} <small>{}</small></h2>'.format(
                 html.escape(m.get('label', m['run_id'])), m['run_id']),
-            _card(m, state, headline, details),
+            _card(m, state, headline, details,
+                  extra_rows=[('table progress', _summary)] if _summary
+                  else None),
             _pt_progress_table(m),
             _pt_phase_table(m),
             _pt_table(m),
@@ -972,6 +1036,7 @@ def render(exp):
         _card(m, state, headline, details),
         '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress</h3>',
         _progress_table(m),
+        _dpsweep_live_line(m),
         _sim_table(m),
         _phase_table(m),
         _init_table(m),
