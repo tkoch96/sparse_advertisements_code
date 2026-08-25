@@ -1221,8 +1221,9 @@ def render_objective_ladder(exp):
     out.append('<p class="note">{}</p>'.format(exp.get('intro', '')))
     for f in exp.get('figures', []):
         if os.path.exists(os.path.join(REPO, f)):
-            out.append('<img src="plots/{}" alt="{}">'.format(
-                _plots_rel(f), exp['id']))
+            # mtime cache-buster like _img(); a raw same-named src lets
+            # the browser serve yesterday's PNG under today's page
+            out.append(_img(f))
     out.append('<div class="wrap"><table><thead><tr><th>arm</th>')
     out += ['<th>N={}</th>'.format(n) for n in NS]
     out.append('</tr></thead><tbody>')
