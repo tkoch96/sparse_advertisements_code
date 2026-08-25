@@ -254,3 +254,123 @@ def replay_batch(w, n_jobs=24, profile=False):
             if line.strip():
                 print('   ', line[:150])
     return wall / n
+
+
+def init_like_advertisement(w, rng):
+    """Thresholded shape of the production 'using_objective' init: anycast
+    prefix 0 fully on, one prefix per pop carrying that pop's popps, the
+    remaining prefixes sparsely on with linearly-decaying density
+    (init_advertisement in core/sparse_advertisements_v3.py)."""
+    a = np.zeros((w.n_popp, w.n_prefixes), dtype=bool)
+    a[:, 0] = True
+    pops = sorted(set(p for p, _ in w.popps))
+    n_assigned = min(len(pops), w.n_prefixes - 1)
+    for i in range(n_assigned):
+        rows = [j for j, (p, _) in enumerate(w.popps) if p == pops[i]]
+        a[rows, i + 1] = True
+    start = n_assigned + 1
+    if w.n_prefixes > start:
+        prob_ons = np.linspace(.05, .005, num=w.n_prefixes - start)
+        for i, prob in enumerate(prob_ons):
+            a[rng.random_sample(w.n_popp) < prob, start + i] = True
+    return a
+
+
+def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
+                     seed=7, obj='avg_latency', rb_rows=0):
+    """Tom's A/B/C protocol (2026-08-25): measure the STEADY-STATE batch,
+    not a synthetic one.
+
+      (A) base advertisement shaped like the production init
+      (B) one warm-up batch: n_indices probed entries, each enqueued as
+          the same single-flip PAIR the driver builds (entry at 0 and at
+          1, both as diffs vs base) -- plus rb_rows popp-row-zero jobs
+          if the batch should look like an RB fan-out slice
+      (C) repeat the batch with ~pct_new of the probed indices replaced
+          by fresh ones (the explore/remeasure mix), the base drifted by
+          `drift` toggled entries (the applied gradient step -- keeps
+          the lb memo honest while pattern caches stay warm)
+
+    Rounds 2+ of (C) are the realistic measurement. Batches go through
+    _cmd_calc_compressed_lb so the driver->worker payload shape, the
+    per-batch timing reset, and the [wt] summary are all the production
+    ones."""
+    rng = np.random.RandomState(seed)
+    base = init_like_advertisement(w, rng)
+    all_inds = [(i, j) for i in range(w.n_popp) for j in range(w.n_prefixes)]
+
+    def _fresh(k, exclude):
+        picks = []
+        while len(picks) < k:
+            ind = all_inds[rng.randint(len(all_inds))]
+            if ind not in exclude and ind not in picks:
+                picks.append(ind)
+        return picks
+
+    probed = _fresh(n_indices, set())
+    rb_popps = list(rng.choice(w.n_popp, size=rb_rows, replace=False)) \
+        if rb_rows else []
+    results = []
+    for rnd in range(n_rounds):
+        # build the exact production payload: job 0 = base, then for each
+        # probed index the off/on pair as diffs vs base, then RB rows
+        kwa0 = {'generic_obj': obj, 'job_id': 0}
+        data = [((base.copy(),), kwa0)]
+        jid = 1
+        for ind in probed:
+            for setting in (False, True):
+                other = base.copy()
+                other[ind] = setting
+                data.append((np.where(base != other),
+                             {'generic_obj': obj, 'job_id': jid}))
+                jid += 1
+        for poppi in rb_popps:
+            other = base.copy()
+            other[poppi, :] = False
+            data.append((np.where(base != other),
+                         {'generic_obj': obj, 'job_id': jid}))
+            jid += 1
+
+        lb_cache = w.calc_cache.all_caches.get('lb', {})
+        hits0, t0 = len(lb_cache), time.time()
+        w._cmd_calc_compressed_lb(data)   # resets w.timing itself
+        wall = time.time() - t0
+        n_jobs = len(data)
+        # exclusive (self) times -- the raw dict nests (lp_persistent
+        # wraps optimize etc.) and summing it double-counts
+        tt = {k: v for k, v in w._self_timing().items() if v > 0}
+        timed = sum(tt.values())
+        shares = ' '.join('{}={:.0f}%'.format(k, 100 * v / timed)
+                          for k, v in sorted(tt.items(),
+                                             key=lambda kv: -kv[1])
+                          if v / timed >= .01)
+        new_entries = len(lb_cache) - hits0
+        print('round {:>2d}{}: {:6.1f}s  {:5.0f} ms/job  jobs={}  '
+              'memo_hits={}  {}'.format(
+                  rnd, ' (warm-up)' if rnd == 0 else '',
+                  wall, 1000 * wall / n_jobs, n_jobs,
+                  n_jobs - new_entries, shares), flush=True)
+        results.append((wall, n_jobs, dict(tt)))
+
+        # (C) evolve: replace ~pct_new of the probed indices, drift base
+        n_new = max(1, int(round(pct_new * n_indices)))
+        keep = probed[n_new:]
+        probed = keep + _fresh(n_new, set(keep))
+        for _ in range(drift):
+            ind = all_inds[rng.randint(len(all_inds))]
+            base[ind] = ~base[ind]
+
+    # steady state = rounds 2+ (round 0 warms, round 1 still mixes)
+    ss = results[2:] or results[1:]
+    tot_w = sum(r[0] for r in ss); tot_j = sum(r[1] for r in ss)
+    agg = {}
+    for _, _, tt in ss:
+        for k, v in tt.items():
+            agg[k] = agg.get(k, 0) + v
+    timed = sum(agg.values()) or 1
+    print('\n== steady state (rounds 2+) ==  {:.0f} ms/job over {} jobs'
+          .format(1000 * tot_w / max(tot_j, 1), tot_j))
+    for k, v in sorted(agg.items(), key=lambda kv: -kv[1]):
+        if v / timed >= .01:
+            print('    {:38s} {:7.2f}s  ({:4.0f}%)'.format(k, v, 100 * v / timed))
+    return results

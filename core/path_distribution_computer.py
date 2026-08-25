@@ -2170,6 +2170,23 @@ if __name__ == '__main__':
 	_p.add_argument('--replay_batch_load', action='store_true',
 					help='drive _cmd_calc_compressed_lb like a VM RB/LB '
 						 'flush; add --profile for a cProile split')
+	_p.add_argument('--replay_realistic_load', action='store_true',
+					help="Tom's A/B/C protocol: init-shaped base adv, "
+						 'production single-flip pairs, repeated rounds '
+						 'with --pct-new fresh perturbations + base '
+						 'drift; rounds 2+ are the steady-state numbers')
+	_p.add_argument('--indices', type=int, default=12,
+					help='probed entries per batch (jobs = 1 + 2x this '
+						 '+ --rb-rows)')
+	_p.add_argument('--rounds', type=int, default=6)
+	_p.add_argument('--pct-new', type=float, default=0.2)
+	_p.add_argument('--drift', type=int, default=3,
+					help='base entries toggled between rounds (the '
+						 'applied gradient step); 0 = frozen base, '
+						 'repeats become memo hits')
+	_p.add_argument('--rb-rows', type=int, default=0,
+					help='popp-row-zero jobs per batch (RB fan-out mix)')
+	_p.add_argument('--obj', default='avg_latency')
 	_p.add_argument('--jobs', type=int, default=24)
 	_p.add_argument('--profile', action='store_true')
 	_p.add_argument('--pickle', default='cache/popp_failure_latency_'
@@ -2179,8 +2196,10 @@ if __name__ == '__main__':
 	_p.add_argument('--scenarios', default='warm,cold,mlu_off,mlu_on,rebuild')
 	_p.add_argument('--rebuild-every', type=int, default=15)
 	_a = _p.parse_args()
-	if not (_a.replay_example_load or _a.replay_batch_load):
-		_p.error('pass --replay_example_load or --replay_batch_load')
+	if not (_a.replay_example_load or _a.replay_batch_load
+			or _a.replay_realistic_load):
+		_p.error('pass --replay_example_load, --replay_batch_load or '
+				 '--replay_realistic_load')
 	import sys as _sys, os as _os
 	_sys.path.insert(0, _os.path.dirname(_os.path.dirname(
 		_os.path.abspath(__file__))))
@@ -2189,6 +2208,13 @@ if __name__ == '__main__':
 				 '--rebuild-every', str(_a.rebuild_every)]
 	import unit_tests.bench_path_distribution as _b
 	_w = _b.build_worker(_a.pickle)
+	if _a.replay_realistic_load:
+		_b.realistic_rounds(_w, n_indices=_a.indices, n_rounds=_a.rounds,
+							pct_new=_a.pct_new, drift=_a.drift,
+							obj=_a.obj, rb_rows=_a.rb_rows)
+		print('\n== object-size census (top attributes) ==')
+		_log_objsize_worker(0, 'replay_realistic_load', _w, top_n=15)
+		raise SystemExit(0)
 	if _a.replay_batch_load:
 		_b.replay_batch(_w, n_jobs=_a.jobs, profile=False)      # warm pool
 		_b.replay_batch(_w, n_jobs=_a.jobs, profile=_a.profile) # measured
