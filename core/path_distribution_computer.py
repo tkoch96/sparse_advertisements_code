@@ -1205,10 +1205,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# --- 1. Initialize Containers ---
 		# Instead of nested dicts, we build the flat lists required for vectorization directly.
 		self.rti_data = {
-			"meta_data": [],  # List of tuples: (ui, pref_i, ug_name)
+			"meta_data": [],  # legacy (sim_rti_better); combined path uses block_meta
 			"all_probs": [],  # legacy per-scenario lists (sim_rti_better)
 			"all_poppis": [],
 			"blocks": [],     # [(lengths:int16[], choices_pad:int16[nxm])]
+			"block_meta": [], # [(pref_i, [ug names in block-row order])]
 		}
 
 		# Ensure persistent cache exists (persist this across function calls)
@@ -1232,23 +1233,19 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if not np.any(col):
 				continue
 
-			# Create a hashable signature for this availability state
-			tloga = tuple(col)
-
 			# --- CACHE CHECK ---
 			key = np.packbits(col).tobytes()
 			if key in self.pattern_cache:
 				# HIT: compact padded entry (uis:int32, lengths:int16,
-				# choices_pad:int16[n_scen x max_n], -1 padded). Appended
-				# as a BLOCK; _sample_scenario_realizations assembles the
-				# padded sampling matrices with vectorized copies instead
-				# of per-scenario python (Tom 2026-08-19 pattern_cache
-				# compaction: ~7x RAM, hit path faster than list appends).
-				uis_e, lens_e, pad_e = self.pattern_cache[key]
-				md = self.rti_data["meta_data"]
-				for ui in uis_e:
-					md.append((ui, pref_i, ugs[ui]))
+				# choices_pad:int16[n_scen x max_n], -1 padded, ug-name
+				# list). Appended as a BLOCK; the per-ui meta_data tuple
+				# loop that used to run here (one append per ug per
+				# active prefix per call) is gone -- names are cached
+				# with the pattern, prefix ids ride per-block
+				# (Tom 2026-08-25 loop elimination).
+				uis_e, lens_e, pad_e, names_e = self.pattern_cache[key]
 				self.rti_data["blocks"].append((lens_e, pad_e))
+				self.rti_data["block_meta"].append((pref_i, names_e))
 				continue
 
 			# --- CACHE MISS: Calculate Logic (VECTORIZED, Tom 2026-08-19
@@ -1275,32 +1272,51 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# python scan walked EVERY (ug,child,parent) entry per miss,
 			# which scales ~n_ug*n_popp^2 with measurements (354MB and
 			# millions of entries at actual-25 late-run).
-			blocked_user_child = set()
+			# blocked (ui, child) pairs as ARRAYS -- the per-row python
+			# set-build was the top consumer of pmat_organize on misses
+			# (Tom 2026-08-25 loop elimination); duplicates are fine, the
+			# mask clear below is idempotent.
+			blocked_rows = None
 			_csr = getattr(self, '_pt_csr', None)
 			if _csr is not None:
 				_pt_parents, _pt_offs, _pt_rows = _csr
 				if _pt_parents.shape[0]:
-					for _j in np.nonzero(col[_pt_parents])[0]:
-						for _bui, _bchild in _pt_rows[
-								_pt_offs[_j]:_pt_offs[_j + 1]].tolist():
-							blocked_user_child.add((_bui, _bchild))
+					_j_act = np.nonzero(col[_pt_parents])[0]
+					if _j_act.size:
+						blocked_rows = np.concatenate(
+							[_pt_rows[_pt_offs[_j]:_pt_offs[_j + 1]]
+							 for _j in _j_act])
 			else:
 				# legacy dict path (SCULPTOR_COMPACT_PT=0 or no update yet)
-				for ug, child, parent in self.parent_tracker:
-					parenti = self.popp_to_ind[parent]
-					if parenti in active_poppis_set:
-						ui = self.whole_deployment_ug_to_ind[ug]
-						childi = self.popp_to_ind[child]
-						blocked_user_child.add((ui, childi))
+				_pairs = [
+					(self.whole_deployment_ug_to_ind[ug],
+					 self.popp_to_ind[child])
+					for ug, child, parent in self.parent_tracker
+					if self.popp_to_ind[parent] in active_poppis_set]
+				if _pairs:
+					blocked_rows = np.asarray(_pairs, dtype=np.int64)
 
 			# 3. Build routing for this state — fully vectorized.
 			mask = col[_flat]                     # popp physically up
-			if blocked_user_child:
-				# sparse corrections: locate each blocked (ui, child)
-				# inside ui's CSR segment and clear it
-				for (_bui, _bchild) in blocked_user_child:
-					seg = slice(_offs[_bui], _offs[_bui + 1])
-					mask[seg] &= (_flat[seg] != _bchild)
+			if blocked_rows is not None and blocked_rows.shape[0]:
+				# one searchsorted against a once-per-deployment sorted
+				# (ui, child) -> flat-position index replaces the
+				# per-pair python segment scan
+				if not hasattr(self, '_uipop_poskey'):
+					_ui_of_pos = np.repeat(
+						np.arange(self.whole_deployment_n_ug,
+								  dtype=np.int64),
+						np.diff(_offs))
+					_poskey = _ui_of_pos * self.n_popp + _flat
+					_order = np.argsort(_poskey, kind='stable')
+					self._uipop_poskey = (_poskey[_order], _order)
+				_sk, _order = self._uipop_poskey
+				_bk = (blocked_rows[:, 0].astype(np.int64) * self.n_popp
+					   + blocked_rows[:, 1])
+				_idx = np.minimum(np.searchsorted(_sk, _bk),
+								  max(len(_sk) - 1, 0))
+				_valid = _sk[_idx] == _bk if len(_sk) else _idx[:0].astype(bool)
+				mask[_order[_idx[_valid]]] = False
 			lens_all = np.add.reduceat(
 				mask.astype(np.int16),
 				_offs[:-1].clip(max=max(len(_flat) - 1, 0)))
@@ -1319,12 +1335,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			if n_scen:
 				_colidx = np.arange(max_n)[None, :] < lens_e[:, None]
 				pad_e[_colidx] = valid_flat
-			md = self.rti_data["meta_data"]
-			for _ui in uis_e:
-				md.append((int(_ui), pref_i, ugs[_ui]))
+			# materialize ug names ONCE per pattern (cached); no per-call
+			# meta_data tuple loop
+			names_e = [ugs[_ui] for _ui in uis_e]
 			self.pattern_cache[np.packbits(col).tobytes()] = (
-				uis_e, lens_e, pad_e)
+				uis_e, lens_e, pad_e, names_e)
 			self.rti_data["blocks"].append((lens_e, pad_e))
+			self.rti_data["block_meta"].append((pref_i, names_e))
 
 		self.timing['pmat_organize'] += time.time() - ts_total
 		if LP_SOLVE_DEBUG and getattr(self, 'worker_i', -1) in (0, 'drv'):
@@ -1410,21 +1427,36 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		selected_poppis = self.rti_data["choices_matrix"][row_indices, idx_selections]
 
 		# --- 4. Construct Final Output Dictionary ---
+		# Per-BLOCK dict(zip(names, popps)) at C speed replaces the
+		# per-(scenario x MC) python loop (Tom 2026-08-25 loop
+		# elimination). Same nested shape, same insertion order.
+		if not hasattr(self, '_popps_arr'):
+			self._popps_arr = np.empty(len(self.popps), dtype=object)
+			self._popps_arr[:] = self.popps
+		block_meta = self.rti_data.get("block_meta")
 		routed_through_ingress = {}
-
-		for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
-			simulated_routes = selected_poppis[i] # Array of size MC_NUM
-			
-			for mci, poppi in enumerate(simulated_routes):
-				if mci not in routed_through_ingress:
-					routed_through_ingress[mci] = {}
-				
-				# Ensure structure exists
-				if pref_i not in routed_through_ingress[mci]:
-					routed_through_ingress[mci][pref_i] = {}
-				
-				# Assuming self.popps is a list/dict of actual POP objects
-				routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
+		if block_meta:
+			for mci in range(self.MC_NUM):
+				per_pref = {}
+				row = 0
+				for pref_i, names_e in block_meta:
+					nrow = len(names_e)
+					per_pref[pref_i] = dict(zip(
+						names_e,
+						self._popps_arr[
+							selected_poppis[row:row + nrow, mci]].tolist()))
+					row += nrow
+				routed_through_ingress[mci] = per_pref
+		else:
+			# legacy meta_data path (sim_rti_better producer)
+			for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
+				simulated_routes = selected_poppis[i]
+				for mci, poppi in enumerate(simulated_routes):
+					if mci not in routed_through_ingress:
+						routed_through_ingress[mci] = {}
+					if pref_i not in routed_through_ingress[mci]:
+						routed_through_ingress[mci][pref_i] = {}
+					routed_through_ingress[mci][pref_i][ug_name] = self.popps[poppi]
 
 		return routed_through_ingress
 
