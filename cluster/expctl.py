@@ -367,6 +367,15 @@ def cmd_launch(a):
         if not a.cmd:
             raise SystemExit('give --preset or a raw command after --')
         argv, env, pulls = list(a.cmd), {}, []
+    if prev:
+        # a resume must not silently DROP env the original segment ran
+        # with (2026-08-25: SCULPTOR_HOTSTART_RUN_DIR was supplied via
+        # --env on segment 1, the resume rebuilt env from the preset
+        # alone, and actual-32 would have retrained from scratch).
+        # Preset-computed keys keep their fresh values; everything else
+        # inherits. Explicit --env below still overrides both.
+        for k, v in (prev.get('env') or {}).items():
+            env.setdefault(k, v)
     for kv in a.env or []:
         k, _, v = kv.partition('=')
         env[k] = v
