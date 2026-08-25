@@ -46,6 +46,12 @@ MEM_RE = re.compile(
     r'(?:vms_mb=(?P<vms>-?\d+)\s+)?'
     r'(?:peak_mb=(?P<peak>-?\d+)\s+)?'
     r'sys_avail_mb=(?P<avail>-?\d+)\s+'
+    # the 2026-08-25 instrumentation inserted shm/workers columns here;
+    # without these optional groups every new-format marker silently
+    # failed to match and the memory plot froze (Tom: "i dont see the
+    # memory problems you talk about cause the dash is stale")
+    r'(?:shm_mb=(?P<shm>-?\d+)\s+)?'
+    r'(?:workers_rss_mb=(?P<wrss>-?\d+)\s+)?'
     r'pid=(?P<pid>\d+)\s+t=(?P<t>[\d.]+)(?P<extra>.*)')
 
 ITER_RE = re.compile(r'LEARNING ITERATION\s*:\s*(\d+)')
@@ -558,7 +564,11 @@ def plot_iter_timing(run_id, outdir):
     # {size: {phase: [(iter, seconds)]}}
     data = {}
     for line in log.replace('\r', '\n').splitlines():
-        ms = re.search(r'\[sweep\] === dpsize=(\d+)', line)
+        # banner prints dpsize=32 (old) or dpsize=actual-32 (post-
+        # restructure); the numeric-only regex left cur_size stuck on the
+        # previous segment's size and misattributed every iteration
+        # (Tom 2026-08-25: new actual-32 bars showed in the actual-3 panel)
+        ms = re.search(r'\[sweep\] === dpsize=(?:[\w]*?-)?(\d+)', line)
         if ms:
             cur_size, cur_iter = int(ms.group(1)), None
             continue
@@ -581,7 +591,14 @@ def plot_iter_timing(run_id, outdir):
     for ax, s in zip(axes[0], sizes):
         bottom = {}
         for phase in ('grads', 'measure', 'stop', 'info'):
-            pts = sorted(data[s].get(phase, []))
+            # resumed segments REUSE iteration numbers; the raw list is in
+            # file order, so keep the LAST occurrence per iter -- otherwise
+            # a resume's fast bars hide under the old segment's slow ones
+            # (Tom 2026-08-25: 'USE UPDATED DATA')
+            _dd = {}
+            for _it, _v in data[s].get(phase, []):
+                _dd[_it] = _v
+            pts = sorted(_dd.items())
             if not pts:
                 continue
             xs = [p[0] for p in pts]
@@ -673,16 +690,27 @@ def plot_mem(run_id, outdir):
             continue
         rows.append((float(m.group('t')), int(m.group('rss')),
                      int(m.group('avail')), m.group('tag'),
-                     m.group('extra')))
+                     m.group('extra'),
+                     int(m.group('wrss')) if m.group('wrss') else None,
+                     int(m.group('shm')) if m.group('shm') else None))
     if len(rows) < 2:
         return None
     t0 = rows[0][0]
     hrs = [(r[0] - t0) / 3600.0 for r in rows]
     fig, ax = plt.subplots(figsize=(6.4, 3.4))
     ax.plot(hrs, [r[1] / 1024.0 for r in rows], 'o-', color='#31647f',
-            label='driver RSS')
+            label='driver RSS', markersize=2.5)
+    _w = [(h, r[5]) for h, r in zip(hrs, rows) if r[5] and r[5] > 0]
+    if _w:
+        ax.plot([p[0] for p in _w], [p[1] / 1024.0 for p in _w], '^-',
+                color='#2f9e6e', label='workers RSS (sum)', markersize=2.5)
+    _s = [(h, r[6]) for h, r in zip(hrs, rows) if r[6] and r[6] > 0]
+    if _s:
+        ax.plot([p[0] for p in _s], [p[1] / 1024.0 for p in _s], 'v-',
+                color='#8b5aa8', label='shm (plasma)', markersize=2.5)
+    ax.legend(fontsize=6, loc='upper left')
     ax.set_xlabel('hours into run')
-    ax.set_ylabel('driver RSS (GB)', color='#31647f')
+    ax.set_ylabel('GB (driver / workers / shm)', color='#31647f')
     _style(ax)
     ax2 = ax.twinx()
     ax2.plot(hrs, [r[2] / 1024.0 for r in rows], 's--', color='#c9862b',
@@ -771,11 +799,24 @@ def _pt_cell_logs(run_id, manifest):
     return out
 
 
+def _latest_attempt(pts):
+    """A killed+relaunched cell appends a SECOND training attempt to the
+    same log, restarting the iter counter (or hotstarting lower). Keep
+    only the points after the last counter reset -- stats and series then
+    describe the run that is actually executing (Tom 2026-08-25)."""
+    start = 0
+    for i in range(1, len(pts)):
+        if pts[i][1] < pts[i - 1][1]:
+            start = i
+    return pts[start:]
+
+
 def _pt_parse_cell(fn):
     """(iter_deltas, peak_rss_mb, wall_min, n_iters) from one cell log."""
     txt = open(fn, errors='replace').read()
     pts = [(float(t), int(i)) for t, i in re.findall(
         r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)', txt)]
+    pts = _latest_attempt(pts)
     deltas = [b[0] - a[0] for a, b in zip(pts, pts[1:])
               if a[1] < b[1] and 0 < b[0] - a[0] < 3600]
     rss = [int(r) for r in re.findall(r'\[mem\] tag=\S+ rss_mb=(\d+)', txt)]
@@ -792,8 +833,11 @@ def _pt_series(fn):
     txt = open(fn, errors='replace').read()
     it = [(float(t), int(i)) for t, i in re.findall(
         r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)', txt)]
+    it = _latest_attempt(it)
     rss = [(float(t), int(r)) for r, t in re.findall(
         r'\[mem\] tag=\S+ rss_mb=(\d+) .*? t=([\d.]+)', txt)]
+    if it:
+        rss = [p for p in rss if p[0] >= it[0][0] - 600]
     # phases: cell start -> first iter (setup+baselines), iter span (train),
     # last iter -> log mtime (eval, if the training finished)
     t0 = rss[0][0] if rss else None
