@@ -291,6 +291,46 @@ def _dpsweep_live_line(m):
                     else ''))
 
 
+def _ramp_table(m):
+    """Per-size x per-sim status for a multi-deployment sweep segment
+    (the 2026-08-25 nsim ramp: 5,10,15,20,25,32 x 20,20,12,5,4,3).
+    Sources: progress.json (sizes/nsim/done/current) + the CURRENT
+    segment of run.log for which sim is training and its iter."""
+    pj = _read_json(os.path.join(RUNS_DIR, m['run_id'], 'logs',
+                                 'progress.json'))
+    if not pj or not pj.get('nsim'):
+        return ''
+    txt = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = txt.rfind('[expctl] run_id=')
+    if i > 0:
+        txt = txt[i:]
+    cur = str(pj.get('current'))
+    # latest sim marker + iter in the current segment
+    sims = re.findall(r'deployment number =?\s*(\d+)', txt)
+    cur_sim = int(sims[-1]) if sims else 0
+    itm = re.findall(r'\[it\] t=\S+ iter=(\d+)', txt)
+    cur_iter = int(itm[-1]) if itm else None
+    done = pj.get('done') or {}
+    out = ['<table><thead><tr><th>size</th><th>sims</th>'
+           '<th>status</th></tr></thead><tbody>']
+    for sz in pj.get('sizes', []):
+        n = (pj.get('nsim') or {}).get(str(sz), '?')
+        d = done.get(str(sz))
+        if d and d.get('ok'):
+            st = 'done in {:.0f} min'.format(d.get('wall_s', 0) / 60)
+        elif str(sz) == cur:
+            st = ('<b>training sim {}/{}</b>{}'.format(
+                cur_sim + 1, n,
+                ', iter {}'.format(cur_iter) if cur_iter is not None
+                else ' (setup)'))
+        else:
+            st = '<span class="mut">queued</span>'
+        out.append('<tr><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
+            sz, n, st))
+    out.append('</tbody></table>')
+    return ('<h3>deployment ramp</h3>' + '\n'.join(out))
+
+
 def _progress_table(m):
     p = _read_json(os.path.join(RUNS_DIR, m['run_id'], 'logs',
                                 'progress.json'))
@@ -1051,6 +1091,7 @@ def render(exp):
         '<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress</h3>',
         _progress_table(m),
         _dpsweep_live_line(m),
+        _ramp_table(m),
         _sim_table(m),
         _phase_table(m),
         _init_table(m),
