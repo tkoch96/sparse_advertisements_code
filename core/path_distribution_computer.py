@@ -70,8 +70,12 @@ def _malloc_trim():
 	mark: pymalloc/glibc rarely release pages after big temporaries (the
 	pmat_organize/mega-batch buffers), so worker RSS ratchets up even with
 	zero live garbage -- the 'unattributed' 1.6GB in the 2026-08-24 census.
-	No-op off-Linux and under SCULPTOR_MALLOC_TRIM=0."""
-	if os.environ.get('SCULPTOR_MALLOC_TRIM', '1') == '0':
+	OPT-IN (SCULPTOR_MALLOC_TRIM=1) as of 2026-08-25: per-message trim
+	is harmless with headroom but under memory pressure the freed pages
+	re-fault on the next allocation -- a plausible amplifier of the
+	actual-32 endgame degradation (LB grads 80s->1188s as free memory
+	hit 3GB). Prefer-underfit: off unless explicitly enabled."""
+	if os.environ.get('SCULPTOR_MALLOC_TRIM', '0') != '1':
 		return
 	try:
 		import ctypes
