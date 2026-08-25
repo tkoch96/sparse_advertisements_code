@@ -468,8 +468,10 @@ def make_paper_plots(cache_fn, **kwargs):
 		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Flash Crowd Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
-	ax.set_ylim([0,300])
-	ax.set_yticks([0,60,120,180,240,300])
+	# y-limits were hardcoded for the old grid-search units (0-300);
+	# the reference-first bisection reports on a different scale, so
+	# autoscale -- the fixed limits squashed all curves flat
+	# (Tom 2026-08-25)
 	ax.legend(fontsize=12)
 	save_figure('flash_crowd_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Flash Crowd--")
@@ -506,8 +508,7 @@ def make_paper_plots(cache_fn, **kwargs):
 		metric_by_solution[solution] = np.array(this_resiliences)
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Diurnal Intensity (M)\nBefore Congestion (Pct.)",fontsize=12)
-	ax.set_ylim([0,120])
-	ax.set_yticks([0,40,80,120])
+	# autoscale (same rationale as the flash-crowd figure above)
 	ax.legend(fontsize=12)
 	save_figure('diurnal_blowup_before_congestion_over_{}.pdf'.format(evaluate_over))
 	print("--Diurnal--")

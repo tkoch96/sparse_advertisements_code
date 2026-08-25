@@ -917,7 +917,7 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 						'({} pops)'.format(_shdir, len(considering_pops)),
 						flush=True)
 					return _fl.load_actual_perfs_arrays(
-						considering_pops, **kwargs)
+						considering_pops, shard_dir=_shdir, **kwargs)
 			except Exception as _e:
 				import traceback; traceback.print_exc()
 				print('[depsetup] array fast-path failed ({}); using '

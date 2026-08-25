@@ -83,7 +83,15 @@ def load_actual_perfs_arrays(considering_pops, **kwargs):
 
     # ---- shard parse -> per-(ug,popp) minima as flat arrays ----
     import json as _json
-    shard_dir = os.environ.get('SCULPTOR_LAT_SHARDS')
+    # kwargs['shard_dir'] wins: deployment_setup resolves the shard dir
+    # (env OR the repo default incl. autobuild) and passes it through --
+    # re-resolving from env alone here returned None whenever the env var
+    # was unset, TypeError'd, and silently fell back to the 4.5GB serial
+    # CSV loop (seen in verify_e2e_dpsizes, 2026-08-25)
+    shard_dir = kwargs.get('shard_dir') or os.environ.get('SCULPTOR_LAT_SHARDS')
+    if not shard_dir:
+        raise ValueError('no shard dir resolved (pass shard_dir= or set '
+                         'SCULPTOR_LAT_SHARDS)')
     ug_keys = []            # ('tmp', ip) in first-appearance order
     ug_index = {}
     popp_keys = []
