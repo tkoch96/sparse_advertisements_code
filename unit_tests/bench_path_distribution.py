@@ -279,7 +279,7 @@ def init_like_advertisement(w, rng):
 
 def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
                      seed=7, obj='avg_latency', rb_rows=0, seed_pt=True,
-                     clear_meas=True):
+                     clear_meas=True, profile=False):
     """Tom's A/B/C protocol (2026-08-25): measure the STEADY-STATE batch,
     not a synthetic one.
 
@@ -337,7 +337,15 @@ def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
 
         lb_cache = w.calc_cache.all_caches.get('lb', {})
         hits0, t0 = len(lb_cache), time.time()
-        w._cmd_calc_compressed_lb(data)   # resets w.timing itself
+        if profile and rnd >= 2:   # steady-state rounds only
+            import cProfile, pstats
+            if not hasattr(w, '_bench_prof'):
+                w._bench_prof = cProfile.Profile()
+            w._bench_prof.enable()
+            w._cmd_calc_compressed_lb(data)
+            w._bench_prof.disable()
+        else:
+            w._cmd_calc_compressed_lb(data)   # resets w.timing itself
         wall = time.time() - t0
         n_jobs = len(data)
         # exclusive (self) times -- the raw dict nests (lp_persistent
@@ -383,6 +391,12 @@ def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
     for k, v in sorted(agg.items(), key=lambda kv: -kv[1]):
         if v / timed >= .01:
             print('    {:38s} {:7.2f}s  ({:4.0f}%)'.format(k, v, 100 * v / timed))
+    if profile and hasattr(w, '_bench_prof'):
+        import pstats
+        print('\n== cProfile, steady-state rounds (cumulative) ==')
+        pstats.Stats(w._bench_prof).sort_stats('cumulative').print_stats(28)
+        print('== cProfile, steady-state rounds (tottime) ==')
+        pstats.Stats(w._bench_prof).sort_stats('tottime').print_stats(22)
     return results
 
 
