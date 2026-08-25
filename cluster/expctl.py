@@ -824,8 +824,16 @@ def cmd_kill(a):
     m = V.load_manifest(a.run_id)
     inst = V.describe(m['instance_id'])[0]
     if inst['state'] == 'running':
-        V.ssh(inst['ip'], 'pkill -TERM -P {pid} 2>/dev/null; kill -TERM {pid} '
-                          '2>/dev/null; sleep 5; kill -KILL {pid} 2>/dev/null; '
+        # Kill the whole PROCESS GROUP, not just pid + direct children:
+        # generate_paper_table's cell subprocesses (and their Ray fleets)
+        # are grandchildren -- pkill -P orphaned them, and up to three
+        # zombie cells trained for hours on stale code, interleaving into
+        # the live cell logs (2026-08-25).
+        V.ssh(inst['ip'], 'PG=$(ps -o pgid= -p {pid} | tr -d " "); '
+                          'pkill -TERM -P {pid} 2>/dev/null; kill -TERM {pid} '
+                          '2>/dev/null; sleep 5; '
+                          '[ -n "$PG" ] && kill -KILL -- -$PG 2>/dev/null; '
+                          'kill -KILL {pid} 2>/dev/null; '
                           'true'.format(pid=m.get('pid', 0)))
         print('sent TERM/KILL to pid {}'.format(m.get('pid')))
         harvest(m, inst['ip'])
