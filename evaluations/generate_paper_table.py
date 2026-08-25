@@ -559,6 +559,12 @@ def run_objective_cell(obj, dpsize, nsim, iters, tag, env_extra=None):
         # over the SAME nsim deployments -- comparable, not confounded
         'SCULPTOR_EVAL_SEED': env.get('SCULPTOR_EVAL_SEED', '31415'),
     })
+    # env_extra LAST so per-cell overrides (SCULPTOR_HOTSTART_RUN_DIR,
+    # FORCE_* recalc flags) actually reach the subprocess -- the
+    # parameter was accepted and silently DROPPED until 2026-08-25;
+    # every --hotstart papertable cell trained from scratch.
+    if env_extra:
+        env.update(env_extra)
     log_fn = os.path.join(CACHE_DIR, 'table_generate_{}.log'.format(tag))
     argv = [sys.executable, '-u',
             os.path.join(_REPO, 'evaluations',
