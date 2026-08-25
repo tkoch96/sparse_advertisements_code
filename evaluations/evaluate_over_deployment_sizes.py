@@ -188,6 +188,15 @@ def pull_results_new(cache_fn, port=None, dpsizes=None, n_sim_by_dpsize=None,
 									  'avg_latency')
 				_hs = dict(x.split(':', 1) for x in _hs.split(',')
 						   if ':' in x).get(_cur, '')
+			if _hs and str(dpsize) not in _hs:
+				# SIZE GUARD (Tom 2026-08-25): the env survives resumes
+				# (expctl inherits it) and a bare dir used to apply to sim
+				# 0 of EVERY size -- a size-5 solve loaded the actual-32
+				# state-152 (n_on=2653) before this guard. Only apply when
+				# the dir name carries the current size.
+				print('[sweep] hotstart dir {} does not match dpsize={}; '
+					  'ignoring'.format(_hs, dpsize), flush=True)
+				_hs = ''
 			if _hs:
 				print('[sweep] hotstart sim 0 from runs/{}'.format(_hs),
 					  flush=True)

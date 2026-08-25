@@ -2683,6 +2683,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		## information about learned preferneces
 		self.measured_prefs = save_state['measured_prefs']
+		_adv = save_state.get('optimization_advertisement')
+		if _adv is not None and hasattr(self, 'n_popp') and \
+				_adv.shape != (self.n_popp, self.n_prefixes):
+			raise ValueError(
+				'hot-start state shape {} != deployment ({}, {}) -- '
+				'refusing to load a different deployment\'s state'.format(
+					_adv.shape, self.n_popp, self.n_prefixes))
 		self.parent_tracker = save_state['parent_tracker']
 		for (ui,beaten_ingress,routed_ingress), tf in self.parent_tracker.items():
 			if not tf: continue
