@@ -1014,5 +1014,48 @@ def main(argv=None):
     return 0
 
 
+def convert_ladder_pdfs(run_id):
+    """Pin the evaluate_over_deployment_sizes paper figures into the run's
+    dash dir as ladder_*.png (steps contract: tab figures must be step
+    outputs -- the Aug-23 set was a one-off manual conversion that then
+    froze; Tom 2026-08-25 'i still just see up to 20'). Uses macOS sips,
+    falls back to pdftoppm. Only converts when the PDF is newer."""
+    import subprocess
+    src = os.path.join(REPO, 'figures', 'cluster', run_id)
+    dst = os.path.join(FIG_ROOT, run_id)
+    if not os.path.isdir(src):
+        return
+    os.makedirs(dst, exist_ok=True)
+    for fn in sorted(os.listdir(src)):
+        if not fn.endswith('.pdf'):
+            continue
+        out = os.path.join(dst, 'ladder_' + fn[:-4] + '.png')
+        pdf = os.path.join(src, fn)
+        if os.path.exists(out) and \
+                os.path.getmtime(out) >= os.path.getmtime(pdf):
+            continue
+        for cmd in (['sips', '-s', 'format', 'png', '--resampleWidth',
+                     '900', pdf, '--out', out],
+                    ['pdftoppm', '-png', '-r', '110', '-singlefile',
+                     pdf, out[:-4]]):
+            try:
+                r = subprocess.run(cmd, capture_output=True, timeout=60)
+                if r.returncode == 0 and os.path.exists(out):
+                    break
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+
+
+_orig_main = main
+def main():
+    rc = _orig_main()
+    try:
+        import sys as _s
+        convert_ladder_pdfs(_s.argv[1])
+    except Exception:
+        import traceback; traceback.print_exc()
+    return rc
+
+
 if __name__ == '__main__':
     raise SystemExit(main())
