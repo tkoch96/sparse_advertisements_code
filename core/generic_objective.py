@@ -13,10 +13,31 @@ from helpers.helpers import *
 from helpers.constants import *
 import numpy as np
 
+# Gradient properties, declared PER OBJECTIVE on the objective object so
+# the SGD loop consults the objective instead of hardcoding name lists
+# scattered through the trainer (Tom 2026-08-25). Keys are objective
+# names; absent objectives get the defaults below. An extension objective
+# that wants resilience gradients registers itself here (see
+# core/hard_objectives.py for the registration pattern).
+GRADIENT_PROPERTIES = {
+	# latency + gamma*resilience: the ONE objective whose training pays
+	# for the popp-failure resilience mega-batches (~210s/iter at
+	# actual-32). Every other objective trains on its own gradient only.
+	'avg_latency': {'resilience': True},
+}
+_GRADIENT_DEFAULTS = {'resilience': False}
+
+
 class Generic_Objective:
 	def __init__(self, sas, obj, **kwargs):
 		self.sas = sas # SAS object
 		self.obj = obj # string identifying the objective. e.g., avg_latency
+		_props = dict(_GRADIENT_DEFAULTS)
+		_props.update(GRADIENT_PROPERTIES.get(obj, {}))
+		# True iff this objective's training computes resilience-benefit
+		# gradients (and values). Consulted by
+		# Sparse_Advertisement_Solver.gradients and resilience_benefit.
+		self.uses_resilience_gradient = bool(_props['resilience'])
 		# Extra kwargs (e.g., site_cost_alpha, bulk_cap_limit) forwarded to every
 		# LP call. Set by the experiment driver from the ObjectiveSpec.lp_kwargs.
 		# Empty {} preserves prior behavior since the LP functions all use

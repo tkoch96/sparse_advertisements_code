@@ -85,6 +85,31 @@ def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
         C.check_metrics(pkl, res, prefix='{}: '.format(obj),
                         started_at=t0 if attempted[obj] else None)
 
+    # RB-gradient isolation (Tom 2026-08-25): ONLY avg_latency (latency +
+    # gamma*resilience) may compute resilience gradients. Any RB-flush
+    # marker in another objective's cell log is a regression against the
+    # objective gate in core/sparse_advertisements_v3.gradients().
+    _RB_MARKS = ('Calcing resilience benefit grad took', 'Last RB call')
+    for obj in OBJECTIVES:
+        if not attempted[obj]:
+            continue
+        tag = RUN_ID if obj == 'avg_latency' else '{}_{}'.format(RUN_ID, obj)
+        cell_log = os.path.join(C.REPO, 'cache',
+                                'table_generate_{}.log'.format(tag))
+        cl = open(cell_log, errors='replace').read()             if os.path.exists(cell_log) else ''
+        n_rb = sum(cl.count(m) for m in _RB_MARKS)
+        if obj == 'avg_latency':
+            res.check(n_rb > 0,
+                      'avg_latency DOES compute RB gradients',
+                      '{} RB markers'.format(n_rb))
+        else:
+            res.check(n_rb == 0,
+                      '{}: NO resilience gradients computed'.format(obj),
+                      '{} RB markers found -- objective gate broken!'
+                      .format(n_rb) if n_rb else '')
+            res.check('RB grad skipped' in cl,
+                      '{}: skip gate visibly engaged'.format(obj))
+
     # the table itself
     tex = os.path.join(table_out, 'paper_table.tex')
     csv_fn = os.path.join(table_out, 'paper_table.csv')

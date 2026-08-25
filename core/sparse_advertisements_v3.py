@@ -621,7 +621,9 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		(benefit, None) when a gate below skips the flush entirely."""
 		# want to maximize resilience beneift, so want to maximize new benefits
 		# when peers are knocked out
-		if not self.simulated or self.generic_objective.obj not in ["avg_latency"] or self.gamma == 0:
+		if (not self.simulated
+				or not self.generic_objective.uses_resilience_gradient
+				or self.gamma == 0):
 			return (0, None) if with_lb else 0
 		# Under headroom mode (SCULPTOR_CAPACITY_HEADROOM>0), resilience is
 		# absorbed into the LP via reserved capacity, so we don't use the
@@ -1571,7 +1573,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# NOT a gamma threshold: avg_latency's gamma anneals from ~0, and
 		# its early iterations must keep their RB gradients.
 		if (not self.simulated
-				or self.generic_objective.obj not in ["avg_latency"]
+				or not self.generic_objective.uses_resilience_gradient
 				or self.get_gamma() == 0):
 			res_grad = np.zeros(np.shape(L_grad))
 			if self.verbose:
