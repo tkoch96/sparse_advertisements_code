@@ -492,6 +492,23 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		self.var_pool = {} # Key: (ug, poppi) -> Gurobi Var Object
 		self._mark_init('init_persistent_lp', time.time() - _t_init0)
 
+	def _mlu_lp_weight(self):
+		"""LP-units MLU dominance weight: SCULPTOR_MLU_WEIGHT_MULT (10)
+		x sum(vol_u * best_lat_u) -- the LP latency term is a
+		vol-weighted SUM, so the floor-sum puts W*MLU ~10x its dynamic
+		range (mean-scale twin of the retired hard_objectives A)."""
+		w = getattr(self, '_mlu_lp_weight_cached', None)
+		if w is None:
+			best = self.lat_matrix.min(axis=0)
+			vols = np.asarray(
+				[self.whole_deployment_ug_to_vol[ug]
+				 for ug in self.whole_deployment_ugs], dtype=np.float64)
+			mult = float(os.environ.get('SCULPTOR_MLU_WEIGHT_MULT', '10'))
+			self._mlu_floor_mean = float(np.average(best, weights=vols))
+			w = mult * float(np.sum(best * vols))
+			self._mlu_lp_weight_cached = w
+		return w
+
 	def _compute_static_caps(self):
 		# Headroom is gated on _in_training so the eval phase always sees full
 		# capacities. Pin the [..., 1000000.0] "no-route" sentinel; it's an
@@ -517,8 +534,13 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		for pi, constr in self.cap_constrs.items():
 			constr.RHS = float(self.static_caps[pi])
 
-	def solve_unified_lp(self, available_paths, obj_coeffs, using_mlu=False):
-		"""Core solve logic. Toggles between Standard and MLU."""
+	def solve_unified_lp(self, available_paths, obj_coeffs, using_mlu=False,
+						 mlu_weight=None):
+		"""Core solve logic. Toggles between Standard and MLU.
+		mlu_weight: objective weight on the MLU variable in MLU mode
+		(default 1/ALPHA, the historical infeasibility-fallback weight).
+		max_util training passes its dominance weight here so ONE LP
+		minimizes latency + W*MLU (Tom 2026-08-25)."""
 		# 1. Deactivate ONLY the previously-active path variables (Tom
 		# 2026-08-19 hot-loop optimization: the old deactivate-ALL swept
 		# O(var_pool)=O(170k at actual-25) per solve — ~46% of lb-solve
@@ -534,7 +556,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		# 2. Configure MLU variable and Capacity RHS
 		if using_mlu:
-			self.mlu_dummy.Obj = 1.0 / ALPHA
+			self.mlu_dummy.Obj = (1.0 / ALPHA if mlu_weight is None
+								  else float(mlu_weight))
 			self.mlu_dummy.UB = gp.GRB.INFINITY
 			for pi, constr in self.cap_constrs.items():
 				self.model.chgCoeff(constr, self.mlu_dummy, -1.0 * self.static_caps[pi])
@@ -580,10 +603,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# mode-invariant; section 2 already switches the MLU dummy/cap
 		# state per call. So incremental diffs stay valid across modes.
 		_incr_mlu_ok = os.environ.get('SCULPTOR_LP_INCR_MLU', '0') == '1'
+		# same-MODE consecutive solves are always incrementally safe
+		# (UB state and path coeffs are call-invariant); only a mode
+		# SWITCH stays gated behind SCULPTOR_LP_INCR_MLU. Without this,
+		# max_util training (always-MLU) would full-sweep every solve.
 		_incr = (prev_keys is not None
 				 and os.environ.get('SCULPTOR_LP_INCREMENTAL', '1') != '0'
 				 and (_incr_mlu_ok or
-					  (not using_mlu and not getattr(self, '_last_mlu', False))))
+					  using_mlu == getattr(self, '_last_mlu', False)))
 		active_vars = [self.var_pool[k] for k in available_paths]
 		if _incr:
 			to_deact = [self.var_pool[k] for k in prev_keys - new_keys]
@@ -761,7 +788,24 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		# Pre-calculate objective (latencies)
 		site_cost_alpha = kwargs.get('site_cost_alpha', DEFAULT_SITE_COST)
-		obj_coeffs = self._path_obj_coeffs(available_paths, obj, site_cost_alpha)
+		# max_util (Tom 2026-08-25): ONE persistent LP minimizing
+		# latency + W*MLU -- latency path coefficients, MLU mode, W
+		# sized so the MLU term dominates (SCULPTOR_MLU_WEIGHT_MULT x
+		# the vol-weighted per-UG optimal-latency floor, matching the
+		# retired two-LP hard_objectives form). Replaces fresh
+		# steady-LP + fresh solve_min_mlu (15s-timeout burns) per call.
+		_is_mlu_obj = obj == 'max_util'
+		if _is_mlu_obj:
+			kwargs['is_mlu_obj'] = True
+		obj_coeffs = self._path_obj_coeffs(
+			available_paths, 'avg_latency' if _is_mlu_obj else obj,
+			site_cost_alpha)
+		if _is_mlu_obj:
+			model_res = self.solve_unified_lp(
+				available_paths, obj_coeffs, using_mlu=True,
+				mlu_weight=self._mlu_lp_weight())
+			# falls through to the shared extraction below; the MLU
+			# term joins the soft objective there
 
 		# 1. Try Standard Solve — unless the standard LP has been
 		# infeasible on a streak (congested/belief regime): then skip the
@@ -774,19 +818,20 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		_streak = getattr(self, '_std_infeas_streak', 0)
 		_skip_standard = (_adaptive and _streak >= 3
 						  and (_streak % 25) != 0)
-		model_res = None
-		if not _skip_standard:
-			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
-			if model_res is None:
-				self._std_infeas_streak = _streak + 1
+		if not _is_mlu_obj:
+			model_res = None
+			if not _skip_standard:
+				model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=False)
+				if model_res is None:
+					self._std_infeas_streak = _streak + 1
+				else:
+					self._std_infeas_streak = 0
 			else:
-				self._std_infeas_streak = 0
-		else:
-			self._std_infeas_streak = _streak + 1
+				self._std_infeas_streak = _streak + 1
 
-		# 2. Fallback to MLU if Standard is Infeasible (or skipped)
-		if model_res is None:
-			model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
+			# 2. Fallback to MLU if Standard is Infeasible (or skipped)
+			if model_res is None:
+				model_res = self.solve_unified_lp(available_paths, obj_coeffs, using_mlu=True)
 
 		if model_res is None:
 			# LP is infeasible (e.g. failure scenario removed the last route
@@ -919,6 +964,20 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						   if _soft_routed_vol > 0 else 0.0)
 			_frac_bad = _soft_bad_vol / _total_v if _total_v > 0 else 1.0
 			_objective = -1 * (_avg_routed + _soft_P * _frac_bad)
+			if kwargs.get('is_mlu_obj'):
+				# max_util training scalar: soft latency + A_mean * MLU
+				# (mean-scale, soft-bounded -- Tom's gradient-stability
+				# ruling; MLU from the solution's link loads)
+				_mlu = 0.0
+				_npi = NO_PATH_INGRESS(self)
+				for pi, v in vols_by_poppi.items():
+					if pi != _npi and self.static_caps[pi] > 0:
+						_mlu = max(_mlu, v / self.static_caps[pi])
+				self._mlu_lp_weight()   # ensures _mlu_floor_mean
+				_A = (float(os.environ.get('SCULPTOR_MLU_WEIGHT_MULT',
+										   '10'))
+					  * self._mlu_floor_mean)
+				_objective -= _A * _mlu
 		else:
 			_objective = -1 * model_res.objVal / obj_norm
 		self.timing['organizing_results'] += time.time()-ts
@@ -1523,7 +1582,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		objs = np.zeros(self.MC_NUM)
 		for i in range(self.MC_NUM):
 			routed_through_ingress = all_routed_through_ingress[i]
-			if ((obj == "avg_latency" or obj == "per_site_cost")
+			if ((obj == "avg_latency" or obj == "per_site_cost"
+					or obj == "max_util")
 					and os.environ.get('SCULPTOR_LP_FORCE_NONPERSISTENT',
 									   '0') != '1'):
 				# SCULPTOR_LP_FORCE_NONPERSISTENT=1 (2026-08-24 bench knob):
