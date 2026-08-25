@@ -3623,6 +3623,44 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# frees the persistent-LP C++ heap and accumulated derived state
 		# that the census cannot see. Workers rebuild lazily (~7s each at
 		# size 32, amortized over N iters). Default off.
+		# SCULPTOR_WORKER_REFRESH_FULL_EVERY=N (Tom 2026-08-25): STAGGERED
+		# valve, default ON. Each iteration rebirths ceil(n_workers/N)
+		# workers round-robin, so the whole fleet turns over every ~N
+		# iters without the fleet-wide cold-cache stall. Reborn workers
+		# get iter/training-mode re-pushed and the next parent-tracker
+		# broadcast (every measurement iter) restores beliefs. 0 = off.
+		_rf_every = int(os.environ.get(
+			'SCULPTOR_WORKER_REFRESH_FULL_EVERY', '40') or 0)
+		if _rf_every and self.iter > 0:
+			try:
+				_wm = self.get_worker_manager()
+				_ids = sorted(getattr(_wm, 'worker_sockets', {}))
+				if _ids:
+					_k = max(1, (len(_ids) + _rf_every - 1) // _rf_every)
+					_ptr = getattr(self, '_worker_refresh_ptr', 0)
+					_pick = [_ids[(_ptr + j) % len(_ids)]
+							 for j in range(_k)]
+					self._worker_refresh_ptr = (_ptr + _k) % len(_ids)
+					_t_rb = time.time()
+					_wm.rebirth_worker_subset(
+						_pick, self.output_deployment())
+					for _cmd in (('set_iter', self.iter),
+								 ('set_training_mode',
+								  getattr(self, '_in_training', True))):
+						_msg = pickle.dumps(_cmd)
+						import ray as _ray
+						_ray.get([_wm.worker_sockets[w]
+								  .handle_msg.remote(_msg)
+								  for w in _pick])
+					self.update_parent_tracker_workers()
+					print('[worker-refresh] iter={} reborn={} '
+						  '({}/{} per iter, full cycle ~{} iters) '
+						  'took {:.1f}s'.format(
+							  self.iter, _pick, _k, len(_ids),
+							  _rf_every, time.time() - _t_rb), flush=True)
+			except Exception:
+				import traceback
+				traceback.print_exc()
 		_rb_every = int(os.environ.get('SCULPTOR_WORKER_REBIRTH_EVERY', '0') or 0)
 		if _rb_every and self.iter > 0 and self.iter % _rb_every == 0:
 			try:

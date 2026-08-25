@@ -587,6 +587,20 @@ class Worker_Manager:
 		print("Waiting for deployment ACK messages...")
 		ray.get(refs)
 
+	def rebirth_worker_subset(self, worker_ids, new_deployment):
+		"""Staggered memory valve (Tom 2026-08-25): rebirth ONLY the given
+		workers via the same update_deployment full re-init the all-at-once
+		valve uses. 1-2 cold workers per flush amortizes the cold-cache
+		cost that made the fleet-wide valve catastrophic (3489s LB grad
+		after the iter-100 full rebirth)."""
+		msg = pickle.dumps(('update_deployment', (new_deployment, {})))
+		refs = []
+		for worker in worker_ids:
+			if worker in self.worker_sockets:
+				self.worker_to_deployments[worker] = new_deployment
+				refs.append(self.worker_sockets[worker].handle_msg.remote(msg))
+		ray.get(refs)
+
 	def _collect_and_emit_worker_mem_logs(self):
 		"""Pull each Ray actor's per-process mem log file and echo to stdout
 		so the lines land in the driver sweep log. Necessary because Ray's
