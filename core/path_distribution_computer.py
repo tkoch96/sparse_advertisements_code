@@ -2187,6 +2187,12 @@ if __name__ == '__main__':
 	_p.add_argument('--rb-rows', type=int, default=0,
 					help='popp-row-zero jobs per batch (RB fan-out mix)')
 	_p.add_argument('--obj', default='avg_latency')
+	_p.add_argument('--no-clear-meas', action='store_true',
+					help='skip the per-round measurement-cache clear '
+						 '(production clears every iteration)')
+	_p.add_argument('--no-seed-pt', action='store_true',
+					help='skip seeding the parent tracker from the init '
+						 'measurement (fresh-worker regime)')
 	_p.add_argument('--jobs', type=int, default=24)
 	_p.add_argument('--profile', action='store_true')
 	_p.add_argument('--pickle', default='cache/popp_failure_latency_'
@@ -2211,7 +2217,9 @@ if __name__ == '__main__':
 	if _a.replay_realistic_load:
 		_b.realistic_rounds(_w, n_indices=_a.indices, n_rounds=_a.rounds,
 							pct_new=_a.pct_new, drift=_a.drift,
-							obj=_a.obj, rb_rows=_a.rb_rows)
+							obj=_a.obj, rb_rows=_a.rb_rows,
+							seed_pt=not _a.no_seed_pt,
+							clear_meas=not _a.no_clear_meas)
 		print('\n== object-size census (top attributes) ==')
 		_log_objsize_worker(0, 'replay_realistic_load', _w, top_n=15)
 		raise SystemExit(0)

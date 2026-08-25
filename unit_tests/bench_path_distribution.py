@@ -52,6 +52,7 @@ def build_worker(pickle_fn):
     from core.path_distribution_computer import _LocalPathDistributionComputer
     t0 = time.time()
     w = _LocalPathDistributionComputer(0, deployment, kwa)
+    w._bench_deployment = deployment   # for seed_parent_tracker_from_init
     print('worker init: {:.1f}s | popps={} ugs={} prefixes={}'.format(
         time.time() - t0, w.n_popp, w.n_ug, w.n_prefixes))
     return w
@@ -277,7 +278,8 @@ def init_like_advertisement(w, rng):
 
 
 def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
-                     seed=7, obj='avg_latency', rb_rows=0):
+                     seed=7, obj='avg_latency', rb_rows=0, seed_pt=True,
+                     clear_meas=True):
     """Tom's A/B/C protocol (2026-08-25): measure the STEADY-STATE batch,
     not a synthetic one.
 
@@ -297,6 +299,8 @@ def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
     ones."""
     rng = np.random.RandomState(seed)
     base = init_like_advertisement(w, rng)
+    if seed_pt:
+        seed_parent_tracker_from_init(w, base)
     all_inds = [(i, j) for i in range(w.n_popp) for j in range(w.n_prefixes)]
 
     def _fresh(k, exclude):
@@ -353,6 +357,12 @@ def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
         results.append((wall, n_jobs, dict(tt)))
 
         # (C) evolve: replace ~pct_new of the probed indices, drift base
+        if clear_meas:
+            # production measures the stepped advertisement every
+            # iteration; enforce_measured_prefs -> clear_new_meas_caches
+            # cold-starts the pattern cache for the NEXT batch. This is
+            # what makes pmat_organize dominate live [wt] lines.
+            w.clear_new_meas_caches()
         n_new = max(1, int(round(pct_new * n_indices)))
         keep = probed[n_new:]
         probed = keep + _fresh(n_new, set(keep))
@@ -374,3 +384,54 @@ def realistic_rounds(w, n_indices=12, n_rounds=6, pct_new=0.2, drift=3,
         if v / timed >= .01:
             print('    {:38s} {:7.2f}s  ({:4.0f}%)'.format(k, v, 100 * v / timed))
     return results
+
+
+def seed_parent_tracker_from_init(w, base):
+    """Emulate the STARTUP MEASUREMENT of the init advertisement (Tom
+    2026-08-25): for every (ug, prefix col of base), the ground-truth
+    routed ingress (min priority rank among active popps the ug can
+    reach) beats every other active reachable popp -- exactly the pairs
+    enforce_measured_prefs learns when production measures init. Fed to
+    the worker through BOTH production channels: the compact CSR
+    (_cmd_update_parent_tracker_csr, the SCULPTOR_COMPACT_PT default)
+    and the legacy dict command."""
+    dep = w._bench_deployment
+    ip = dep.get('whole_deployment_ingress_priorities') \
+        or dep['ingress_priorities']
+    ug_perfs = dep.get('whole_deployment_ug_perfs') or dep['ug_perfs']
+    ugs = list(w.whole_deployment_ugs)
+    popp_to_ind = {p: i for i, p in enumerate(w.popps)}
+    ug_to_ind = {ug: i for i, ug in enumerate(ugs)}
+    trips, parents_on = set(), {}
+    for pref_i in range(base.shape[1]):
+        active = set(np.where(base[:, pref_i])[0])
+        if not active:
+            continue
+        for ug in ugs:
+            prefs = ip.get(ug, {})
+            cand = [popp_to_ind[p] for p in ug_perfs.get(ug, [])
+                    if popp_to_ind.get(p) in active]
+            if len(cand) < 2:
+                continue
+            routed = min(cand, key=lambda pi: prefs.get(w.popps[pi], 1e9))
+            ui = ug_to_ind[ug]
+            for beaten in cand:
+                if beaten != routed:
+                    trips.add((routed, ui, beaten))
+                    parents_on.setdefault(ug, {})[
+                        (w.popps[beaten], w.popps[routed])] = None
+    t = np.asarray(sorted(trips), dtype=np.int64)
+    if t.shape[0]:
+        parents, starts = np.unique(t[:, 0], return_index=True)
+        offsets = np.concatenate([starts, [t.shape[0]]]).astype(np.int64)
+        payload = (parents.astype(np.int32), offsets,
+                   t[:, 1:].astype(np.int32), True)
+    else:
+        payload = (np.zeros(0, dtype=np.int32), np.zeros(1, dtype=np.int64),
+                   np.zeros((0, 2), dtype=np.int32), False)
+    w._cmd_update_parent_tracker(parents_on)
+    w._cmd_update_parent_tracker_csr(payload)
+    print('seeded parent tracker from init measurement: {} (ug,beaten,'
+          'routed) pairs over {} ugs'.format(len(trips), len(parents_on)),
+          flush=True)
+    return len(trips)
