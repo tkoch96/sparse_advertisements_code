@@ -596,6 +596,29 @@ def plot_iter_timing(run_id, outdir):
         ax.set_xlabel('iteration')
         _style(ax)
     axes[0][0].set_ylabel('seconds in iteration')
+    # Outlier rejection on the y-limit (Tom 2026-08-25): one pathological
+    # iteration (a straggler or GC stall) blew the shared axis so every
+    # normal bar was unreadable. Clip at 1.5x the p95 of per-iteration
+    # TOTALS; clipped bars keep drawing off-axis and the count is noted.
+    totals = []
+    for s_ in sizes:
+        per_iter = {}
+        for phase_pts in data[s_].values():
+            for it, sec in phase_pts:
+                per_iter[it] = per_iter.get(it, 0.0) + sec
+        totals.extend(per_iter.values())
+    if totals:
+        totals.sort()
+        cap = 1.5 * totals[min(len(totals) - 1, int(.95 * len(totals)))]
+        n_clip = sum(1 for t in totals if t > cap)
+        if n_clip:
+            for ax in axes[0]:
+                ax.set_ylim(0, cap)
+            axes[0][-1].annotate(
+                '{} outlier iter(s) clipped (max {:.0f}s)'.format(
+                    n_clip, totals[-1]),
+                xy=(0.98, 0.98), xycoords='axes fraction', ha='right',
+                va='top', fontsize=7, color='#c9862b')
     axes[0][-1].legend(fontsize=7)
     fig.suptitle('{}: where each iteration goes'.format(run_id), fontsize=9)
     out = os.path.join(outdir, 'iter_timing.png')
