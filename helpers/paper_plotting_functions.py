@@ -22,7 +22,15 @@ def get_figure(l=7,h=3):
 
 def save_figure(fn):
 	if 'penalty' not in fn: ## Spammy, not using them
-		plt.savefig(os.path.join('figures', 'paper', fn), bbox_inches='tight')
+		# SCULPTOR_FIG_SUBDIR namespaces a run's figures (the dpsweep
+		# driver sets it from --figures-subdir); this helper ignoring it
+		# meant make_paper_plots always wrote figures/paper/ and the
+		# dash's per-run copies never updated (Tom 2026-08-25)
+		_sub = os.environ.get('SCULPTOR_FIG_SUBDIR')
+		_dir = os.path.join('figures', _sub) if _sub else \
+			os.path.join('figures', 'paper')
+		os.makedirs(_dir, exist_ok=True)
+		plt.savefig(os.path.join(_dir, fn), bbox_inches='tight')
 	plt.clf()
 	plt.close()
 

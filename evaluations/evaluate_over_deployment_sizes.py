@@ -24,6 +24,7 @@ from helpers.constants import *
 from evaluations.eval_all_solution_types import evaluate_all_metrics
 import numpy as np, os, pickle, json, time, traceback
 np.random.seed(31705)
+import re
 import matplotlib
 matplotlib.rcParams['pdf.fonttype'] = 42
 matplotlib.rcParams['ps.fonttype'] = 42
@@ -302,7 +303,11 @@ def make_paper_plots(cache_fn, **kwargs):
 	print_metrics = {}
 
 	metrics_by_dpsize = pickle.load(open(cache_fn, 'rb'))
-	dpsizes = sorted(list(metrics_by_dpsize))
+	# keys are ints from older segments and 'actual-NN' strings from the
+	# post-restructure driver -- sort by the numeric size so mixed pickles
+	# (e.g. prefixbudget3 after the 2026-08-25 resume) still plot
+	dpsizes = sorted(metrics_by_dpsize,
+					 key=lambda k: int(re.search(r'\d+', str(k)).group()))
 	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
 
 	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
