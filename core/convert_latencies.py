@@ -59,23 +59,24 @@ def parse_chunk(job):
     return ci, per_pop
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--csv', default='cache/vultr_ingress_latencies_by_dst.csv')
-    ap.add_argument('--out', default='cache/lat_shards')
-    ap.add_argument('--procs', type=int, default=max(2, mp.cpu_count() - 2))
-    args = ap.parse_args()
-    csv = args.csv if os.path.isabs(args.csv) else os.path.join(_REPO_ROOT, args.csv)
-    out = args.out if os.path.isabs(args.out) else os.path.join(_REPO_ROOT, args.out)
+def build_shards(csv, out, procs=None):
+    """Build the per-pop shards from the CSV. Writes into a tmp sibling
+    and renames into place so concurrent builders / readers never see a
+    half-written shard dir (the manifest is the last thing written, and
+    available() keys on the manifest). Returns True on success."""
+    procs = procs or max(2, mp.cpu_count() - 2)
+    final_out = out
+    out = '{}.tmp.{}'.format(final_out, os.getpid())
     os.makedirs(out, exist_ok=True)
     t0 = time.time()
     jobs = [(csv, s, e, i) for i, (s, e) in
-            enumerate(chunk_bounds(csv, args.procs * 4))]
+            enumerate(chunk_bounds(csv, procs * 4))]
     print('parsing {} ({:.1f}GB) in {} chunks x {} procs'.format(
         os.path.basename(csv), os.path.getsize(csv) / 1e9, len(jobs),
-        args.procs), flush=True)
+        procs), flush=True)
     merged = {}
-    with mp.Pool(args.procs) as pool:
+    _ctx = mp.get_context("fork") if "fork" in mp.get_all_start_methods() else mp
+    with _ctx.Pool(procs) as pool:
         for ci, per_pop in sorted(pool.imap_unordered(parse_chunk, jobs),
                                   key=lambda r: r[0]):
             for pop, (ips, peers, lats) in sorted(per_pop.items()):
@@ -107,7 +108,30 @@ def main():
         json.dump({'source': os.path.basename(csv),
                    'source_bytes': os.path.getsize(csv),
                    'rows_by_pop': manifest}, f, indent=1)
-    print('done in {:.0f}s -> {}'.format(time.time() - t0, out))
+    # atomic-ish promote: lose the race gracefully if another process
+    # finished first (its manifest is just as good)
+    try:
+        if os.path.isdir(final_out) and not os.listdir(final_out):
+            os.rmdir(final_out)
+        os.rename(out, final_out)
+    except OSError:
+        from core.shard_loader import available as _avail
+        if not _avail(final_out):
+            raise
+        import shutil; shutil.rmtree(out, ignore_errors=True)
+    print('done in {:.0f}s -> {}'.format(time.time() - t0, final_out))
+    return True
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--csv', default='cache/vultr_ingress_latencies_by_dst.csv')
+    ap.add_argument('--out', default='cache/lat_shards')
+    ap.add_argument('--procs', type=int, default=max(2, mp.cpu_count() - 2))
+    args = ap.parse_args()
+    csv = args.csv if os.path.isabs(args.csv) else os.path.join(_REPO_ROOT, args.csv)
+    out = args.out if os.path.isabs(args.out) else os.path.join(_REPO_ROOT, args.out)
+    build_shards(csv, out, args.procs)
 
 
 if __name__ == '__main__':

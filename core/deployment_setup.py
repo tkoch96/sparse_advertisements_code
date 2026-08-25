@@ -885,6 +885,29 @@ def load_actual_perfs(considering_pops=list(POP_TO_LOC['vultr']), **kwargs):
 	# SCULPTOR_DEPSETUP_ARRAYS=0 restores the loop below unconditionally.
 	if os.environ.get('SCULPTOR_DEPSETUP_ARRAYS', '1') != '0':
 		_shdir = _resolve_lat_shard_dir()
+		if (_shdir is None
+				and os.environ.get('SCULPTOR_LAT_SHARDS') is None
+				and os.environ.get('SCULPTOR_LAT_SHARDS_AUTOBUILD', '1') != '0'):
+			# No usable shards and nothing pinned via env: build them now
+			# rather than silently degrading to the serial 4.5GB CSV loop
+			# (Tom 2026-08-25 -- a fresh box paid the legacy loop on every
+			# deployment because nobody had run convert_latencies there).
+			# One-time parallel cost, amortized across every future load;
+			# build is atomic (tmp dir + rename), losers of a concurrent
+			# race adopt the winner's shards.
+			_csv = os.path.join(CACHE_DIR, 'vultr_ingress_latencies_by_dst.csv')
+			if os.path.exists(_csv):
+				try:
+					from core.convert_latencies import build_shards as _bs
+					print('[depsetup] lat shards missing -- auto-building '
+						'once (SCULPTOR_LAT_SHARDS_AUTOBUILD=0 to disable)',
+						flush=True)
+					_bs(_csv, os.path.join(CACHE_DIR, 'lat_shards'))
+					_shdir = _resolve_lat_shard_dir()
+				except Exception:
+					import traceback; traceback.print_exc()
+					print('[depsetup] shard auto-build failed; using '
+						'legacy loop', flush=True)
 		if _shdir:
 			try:
 				from core import shard_loader as _shl
