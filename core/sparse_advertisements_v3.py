@@ -1563,9 +1563,25 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing latency benefit grad took {}s".format(int(time.time() - ts)))
 		if self.verbose:
 			ts = time.time()
-		res_grad = self.gradients_resilience_benefit_fn(a)
-		if self.verbose:
-			print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
+		# Objective gate (Tom 2026-08-25): mirror resilience_benefit's
+		# VALUE-path condition (line ~624) on the GRADIENT path. Only
+		# latency+gamma*resilience trains with RB; the other objectives
+		# were fanning the full 312-scenario RB mega-batch (~210s/iter
+		# at actual-32) and scaling the result by their gamma ~ 3e-5.
+		# NOT a gamma threshold: avg_latency's gamma anneals from ~0, and
+		# its early iterations must keep their RB gradients.
+		if (not self.simulated
+				or self.generic_objective.obj not in ["avg_latency"]
+				or self.get_gamma() == 0):
+			res_grad = np.zeros(np.shape(L_grad))
+			if self.verbose:
+				print(time.strftime("[%H:%M:%SZ] ", time.gmtime())
+					  + "RB grad skipped (objective {} does not train "
+					  "with resilience)".format(self.generic_objective.obj))
+		else:
+			res_grad = self.gradients_resilience_benefit_fn(a)
+			if self.verbose:
+				print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
 		
 		gamma = self.get_gamma()
 		# gamma specifies a tradeoff between LB and RB, so shouldn't really be > 1
