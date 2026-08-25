@@ -59,7 +59,104 @@ def _apply_capacity_headroom(arr, sas=None):
 def NO_PATH_INGRESS(sas):
 	return sas.n_popps
 
-def get_paths_by_ug(sas, routed_through_ingress):
+def get_paths_by_ug(sas, routed_through_ingress, want_paths_by_ug=True):
+	# want_paths_by_ug=False (the persistent-LP hot loop, which discards
+	# the dict) takes a BATCHED path: flat name->index gather, np.unique
+	# dedupe, one global lexsort by (ug-name rank, latency) instead of
+	# 18.6M list appends + a per-ug fromiter/argsort storm (Tom
+	# 2026-08-25 loop elimination). Output order matches the dict path
+	# except on exact-latency ties, where the old set-iteration order is
+	# unreproducible; ties resolve to ascending popp index instead
+	# (fenced in unit_tests/test_paths_coeffs_equiv.py).
+	if not want_paths_by_ug and getattr(sas, 'lat_matrix', None) is not None:
+		return _get_paths_by_ug_batched(sas, routed_through_ingress)
+	sas._paths_arrays = None
+	return _get_paths_by_ug_dict(sas, routed_through_ingress)
+
+
+def _get_paths_by_ug_batched(sas, routed_through_ingress):
+	n_popp = sas.n_popps
+	# array handoff: the sampler stashes the (ug_idx, popp_idx) arrays
+	# each realization dict was BUILT from; identity match skips the
+	# name->index reconversion (the wall in the 2026-08-25 profile)
+	u_all = p_all = None
+	for entry in getattr(sas, '_rti_flat', ()) or ():
+		if entry[0] is routed_through_ingress:
+			_, u_all, p_all = entry
+			break
+	if u_all is None:
+		from operator import itemgetter
+		popp_to_ind = sas.popp_to_ind
+		ug_to_ind = sas.whole_deployment_ug_to_ind
+		ugs_flat, popps_flat = [], []
+		for prefixi in sorted(routed_through_ingress):
+			d = routed_through_ingress[prefixi]
+			ugs_flat.extend(d.keys())
+			popps_flat.extend(d.values())
+		n = len(ugs_flat)
+		if n:
+			u_all = np.asarray(itemgetter(*ugs_flat)(ug_to_ind)
+							   if n > 1 else [ug_to_ind[ugs_flat[0]]],
+							   dtype=np.int64)
+			try:
+				p_all = np.asarray(itemgetter(*popps_flat)(popp_to_ind)
+								   if n > 1 else [popp_to_ind[popps_flat[0]]],
+								   dtype=np.int64)
+			except (KeyError, TypeError):   # None ingress present (rare)
+				p_all = np.fromiter(
+					(-1 if p is None else popp_to_ind[p]
+					 for p in popps_flat), dtype=np.int64, count=n)
+		else:
+			u_all = p_all = np.zeros(0, dtype=np.int64)
+	if u_all.shape[0]:
+		valid = p_all >= 0
+		key = u_all[valid] * (n_popp + 1) + p_all[valid]
+		uniq = np.unique(key)              # sorted (u, p), deduped
+		uu = uniq // (n_popp + 1)
+		pp = uniq % (n_popp + 1)
+	else:
+		uu = pp = np.zeros(0, dtype=np.int64)
+	# rank of each ug INDEX under sorted-by-name order: the old path
+	# sorted available_paths by the ug TUPLE, not the index
+	rank = getattr(sas, '_ug_name_rank', None)
+	if rank is None:
+		_order = sorted(range(len(sas.whole_deployment_ugs)),
+						key=lambda i: sas.whole_deployment_ugs[i])
+		rank = np.empty(len(_order), dtype=np.int64)
+		rank[_order] = np.arange(len(_order))
+		sas._ug_name_rank = rank
+	if uu.shape[0]:
+		lat = sas.lat_matrix[pp, uu]
+		order = np.lexsort((lat, rank[uu]))   # stable; ties -> pp asc
+		uu, pp = uu[order], pp[order]
+	ugs_list = sas.whole_deployment_ugs
+	if uu.shape[0]:
+		from operator import itemgetter
+		_names = itemgetter(*uu.tolist())(ugs_list) if uu.shape[0] > 1 \
+			else [ugs_list[int(uu[0])]]
+		available_paths = list(zip(_names, pp.tolist()))
+	else:
+		available_paths = []
+	# no-path tail, in whole_deployment_ugs order (old get_difference)
+	present = np.zeros(len(ugs_list), dtype=bool)
+	present[uu] = True
+	no_path_inds = np.where(~present)[0]
+	_npi = NO_PATH_INGRESS(sas)
+	for i in no_path_inds:
+		if not sas.simulated:
+			print("UG {} has no path, clients: {}".format(
+				ugs_list[i], sas.ug_to_ip.get(ugs_list[i])))
+		available_paths.append((ugs_list[i], _npi))
+	if no_path_inds.shape[0]:
+		uu = np.concatenate([uu, no_path_inds])
+		pp = np.concatenate([pp, np.full(no_path_inds.shape[0], _npi,
+										 dtype=np.int64)])
+	# stash for _path_obj_coeffs' vectorized pricing (same order)
+	sas._paths_arrays = (uu, pp, len(available_paths))
+	return available_paths, None
+
+
+def _get_paths_by_ug_dict(sas, routed_through_ingress):
 	## sas is Sparse_Advertisement_Solver (i.e., deployment) object
 	## routed_through_ingress is one possible realization of routes. it is a dictionary maping prefixes -> user -> ingress
 	## returns available paths which is a list of all (users, ingresses)

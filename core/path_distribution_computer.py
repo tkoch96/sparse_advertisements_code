@@ -651,6 +651,41 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def _path_obj_coeffs(self, available_paths, obj, site_cost_alpha):
 		"""Per-path LP objective coefficients (latencies). Named sub-step of
 		solve_generic_lp_persistent so subclasses can override path pricing."""
+		# VECTORIZED pricing off the arrays get_paths_by_ug's batched
+		# path stashed (same order as available_paths; length-checked).
+		# lat_matrix already encodes missing-perf as NO_ROUTE_LATENCY --
+		# identical values to the dict chain incl. the stale-path
+		# fallback (Tom 2026-08-25 loop elimination).
+		_arrs = getattr(self, '_paths_arrays', None)
+		if (_arrs is not None and _arrs[2] == len(available_paths)
+				and obj in ("avg_latency", "per_site_cost")
+				and getattr(self, 'lat_matrix', None) is not None):
+			_uu, _pp, _ = _arrs
+			self._paths_arrays = None   # single-shot; guards staleness
+			_np_ing = NO_PATH_INGRESS(self)
+			_is_np = _pp == _np_ing
+			_pc = np.where(_is_np, 0, _pp)
+			coeffs = self.lat_matrix[_pc, _uu].astype(np.float64, copy=True)
+			if obj == "per_site_cost":
+				_scbp = getattr(self, '_site_cost_by_poppi', None)
+				if _scbp is None:
+					_scbp = np.asarray(
+						[self.site_costs[pop] for pop, _ in self.popps],
+						dtype=np.float64)
+					self._site_cost_by_poppi = _scbp
+				coeffs = coeffs + site_cost_alpha * _scbp[_pc]
+			coeffs[_is_np] = NO_ROUTE_LATENCY
+			# stale-path forensics survive: a real path priced NO_ROUTE
+			# means the ug had no perf entry for it -- log loudly (rare)
+			_stale = np.where((~_is_np)
+							  & (self.lat_matrix[_pc, _uu]
+								 >= NO_ROUTE_LATENCY))[0]
+			for _i in _stale[:5]:
+				ug = available_paths[_i][0]
+				if self.popps[int(_pp[_i])] not in \
+						self.whole_deployment_ug_perfs.get(ug, {}):
+					self._log_stale_path(ug, int(_pp[_i]), available_paths)
+			return coeffs.tolist()
 		obj_coeffs = []
 		# hoisted: NO_PATH_INGRESS(self) was re-evaluated per PATH --
 		# 1.68M calls per 13-job batch in the 2026-08-24 profile
@@ -720,7 +755,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 	def solve_generic_lp_persistent(self, routed_through_ingress, obj, **kwargs):
 		"""The high-level wrapper that tries Standard first, then MLU."""
 		ts = time.time()
-		available_paths, _ = get_paths_by_ug(self, routed_through_ingress)
+		available_paths, _ = get_paths_by_ug(self, routed_through_ingress,
+											 want_paths_by_ug=False)
 		self.timing['get_paths_by_ug'] += time.time() - ts
 
 		# Pre-calculate objective (latencies)
@@ -1245,7 +1281,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 				# (Tom 2026-08-25 loop elimination).
 				uis_e, lens_e, pad_e, names_e = self.pattern_cache[key]
 				self.rti_data["blocks"].append((lens_e, pad_e))
-				self.rti_data["block_meta"].append((pref_i, names_e))
+				self.rti_data["block_meta"].append((pref_i, names_e, uis_e))
 				continue
 
 			# --- CACHE MISS: Calculate Logic (VECTORIZED, Tom 2026-08-19
@@ -1341,7 +1377,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			self.pattern_cache[np.packbits(col).tobytes()] = (
 				uis_e, lens_e, pad_e, names_e)
 			self.rti_data["blocks"].append((lens_e, pad_e))
-			self.rti_data["block_meta"].append((pref_i, names_e))
+			self.rti_data["block_meta"].append((pref_i, names_e, uis_e))
 
 		self.timing['pmat_organize'] += time.time() - ts_total
 		if LP_SOLVE_DEBUG and getattr(self, 'worker_i', -1) in (0, 'drv'):
@@ -1439,7 +1475,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			for mci in range(self.MC_NUM):
 				per_pref = {}
 				row = 0
-				for pref_i, names_e in block_meta:
+				for pref_i, names_e, _uis_e in block_meta:
 					nrow = len(names_e)
 					per_pref[pref_i] = dict(zip(
 						names_e,
@@ -1447,6 +1483,17 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 							selected_poppis[row:row + nrow, mci]].tolist()))
 					row += nrow
 				routed_through_ingress[mci] = per_pref
+			# ARRAY HANDOFF (Tom 2026-08-25): the (ug_idx, popp_idx)
+			# pairs the dicts were built FROM, stashed per-realization.
+			# get_paths_by_ug's batched path recognizes these dicts by
+			# identity and skips the name->index reconversion entirely.
+			# Strong dict refs pin object ids until the next sample.
+			_u_flat = (np.concatenate([m[2] for m in block_meta])
+					   .astype(np.int64))
+			self._rti_flat = [
+				(routed_through_ingress[mci], _u_flat,
+				 selected_poppis[:, mci].astype(np.int64))
+				for mci in range(self.MC_NUM)]
 		else:
 			# legacy meta_data path (sim_rti_better producer)
 			for i, (ui, pref_i, ug_name) in enumerate(self.rti_data["meta_data"]):
@@ -2251,7 +2298,8 @@ if __name__ == '__main__':
 							pct_new=_a.pct_new, drift=_a.drift,
 							obj=_a.obj, rb_rows=_a.rb_rows,
 							seed_pt=not _a.no_seed_pt,
-							clear_meas=not _a.no_clear_meas)
+							clear_meas=not _a.no_clear_meas,
+							profile=_a.profile)
 		print('\n== object-size census (top attributes) ==')
 		_log_objsize_worker(0, 'replay_realistic_load', _w, top_n=15)
 		raise SystemExit(0)
