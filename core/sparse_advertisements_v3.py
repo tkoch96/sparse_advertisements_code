@@ -1186,6 +1186,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				'info_support_size': 10*self.n_pops,
 			}
 
+		# SCULPTOR_LB_GRAD_BUDGET_SCALE (Tom 2026-08-25): scale the
+		# NON-resilience gradient probe budget (lb_support_size only; RB
+		# budgets untouched). 0.5 halves the objective-gradient LP spend
+		# per iteration.
+		_lb_scale = float(os.environ.get('SCULPTOR_LB_GRAD_BUDGET_SCALE',
+										 '1') or 1)
+		if _lb_scale != 1:
+			_old = self.gradient_support_settings['lb_support_size']
+			self.gradient_support_settings['lb_support_size'] = \
+				max(1, int(_old * _lb_scale))
+			print('[grad-budget] lb_support_size {} -> {} (scale {})'.format(
+				_old, self.gradient_support_settings['lb_support_size'],
+				_lb_scale), flush=True)
+
 		self.uncertainty_factor = 10
 		self.n_max_info_iter = 1
 
