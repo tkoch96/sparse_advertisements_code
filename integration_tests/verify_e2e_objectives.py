@@ -19,6 +19,7 @@ subsumes that (same cells, plus aggregation + emit), so the old test lives on
 inside this one.
 """
 import argparse
+import glob
 import csv
 import os
 import re
@@ -77,11 +78,16 @@ def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
     dp_str = dpsize_str(dpsize)
     for obj in OBJECTIVES:
         suffix = '' if obj == 'avg_latency' else '_' + obj
-        # the driver is REPO-anchored; RUN_ID namespaces these so they
-        # cannot collide with real results
-        pkl = os.path.join(C.REPO, 'cache',
-                           'popp_failure_latency_comparison_{}_{}{}.pkl'.format(
-                               dp_str, run_id, suffix))
+        # the driver is REPO-anchored; run_id namespaces these so they
+        # cannot collide with real results. Glob because FORCE_RESOLVE
+        # appends _r<suffix> to the tag under --no-cache.
+        pat = os.path.join(C.REPO, 'cache',
+                           'popp_failure_latency_comparison_{}_{}{}*.pkl'
+                           .format(dp_str, run_id, suffix))
+        cands = [f for f in glob.glob(pat)
+                 if obj != 'avg_latency' or not any(
+                     '_' + o in f for o in OBJECTIVES if o != obj)]
+        pkl = max(cands, key=os.path.getmtime) if cands else pat
         C.check_metrics(pkl, res, prefix='{}: '.format(obj),
                         started_at=t0 if attempted[obj] else None)
 
@@ -93,10 +99,24 @@ def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
     for obj in OBJECTIVES:
         if not attempted[obj]:
             continue
-        tag = RUN_ID if obj == 'avg_latency' else '{}_{}'.format(RUN_ID, obj)
-        cell_log = os.path.join(C.REPO, 'cache',
-                                'table_generate_{}.log'.format(tag))
-        cl = open(cell_log, errors='replace').read()             if os.path.exists(cell_log) else ''
+        # THIS run's cell log: run_id is timestamped under --no-cache and
+        # FORCE_RESOLVE appends _r<suffix> to the tag, so glob and take
+        # the newest match (the first fence build used the static RUN_ID
+        # and asserted against a previous day's pre-gate logs).
+        import glob as _g
+        if obj == 'avg_latency':
+            cands = [f for f in _g.glob(os.path.join(
+                C.REPO, 'cache', 'table_generate_{}*.log'.format(run_id)))
+                if not any('_' + o in f for o in OBJECTIVES
+                           if o != 'avg_latency')]
+        else:
+            cands = _g.glob(os.path.join(
+                C.REPO, 'cache',
+                'table_generate_{}*_{}*.log'.format(run_id, obj)))
+        cell_log = max(cands, key=os.path.getmtime) if cands else None
+        res.check(cell_log is not None,
+                  '{}: cell log located'.format(obj))
+        cl = open(cell_log, errors='replace').read() if cell_log else ''
         n_rb = sum(cl.count(m) for m in _RB_MARKS)
         if obj == 'avg_latency':
             res.check(n_rb > 0,

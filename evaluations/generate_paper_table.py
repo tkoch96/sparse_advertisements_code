@@ -466,10 +466,20 @@ def load_metrics(dpsize, objective, run_tag=None):
 
 # ------------------------------------------------------------- coverage --
 
-def coverage(dpsize, objectives, nsim_target, run_tag):
+def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
     out = {}
     for obj in objectives:
-        m, p = load_metrics(dpsize, obj, run_tag)
+        _full = (tag_overrides or {}).get(obj)
+        if _full:
+            # FORCE_RESOLVE renamed this objective's tag mid-run; load the
+            # exact pickle the cell just wrote (2026-08-25)
+            p = pickle_path(dpsize, _full)
+            try:
+                m = pickle.load(open(p, 'rb'))
+            except (FileNotFoundError, EOFError):
+                m = None
+        else:
+            m, p = load_metrics(dpsize, obj, run_tag)
         n = 0
         failed = []
         if m:
@@ -813,6 +823,7 @@ def main():
         plan(dpsize, objectives, a.nsim, run_tag, cov)
     else:
         env_extra = {}
+        _forced_tags = {}
         if FORCE_RECOMPUTE_METRICS:
             env_extra['SCULPTOR_RECALC'] = FORCE_RECOMPUTE_METRICS
         for obj in objectives:
@@ -831,13 +842,19 @@ def main():
                 else '{}_{}'.format(run_tag, obj)
             if FORCE_RESOLVE:
                 tag = '{}_r{}'.format(tag, int(_t.time()) % 100000)
+                # remember the FULL renamed tag: coverage/emit must
+                # re-check THESE pickles, not the base-tag ones
+                # (2026-08-25 -- --no-cache runs solved everything then
+                # said 'no pickles found' and emitted no table)
+                _forced_tags[obj] = tag
             cell_env = dict(env_extra)
             if obj in hotstart:
                 cell_env['SCULPTOR_HOTSTART_RUN_DIR'] = hotstart[obj]
             run_objective_cell(obj, dpsize, a.nsim, a.iters, tag,
                                env_extra=cell_env)
         print('\n== re-checking coverage ==')
-        cov = coverage(dpsize, objectives, a.nsim, run_tag)
+        cov = coverage(dpsize, objectives, a.nsim, run_tag,
+                       tag_overrides=_forced_tags)
 
     if any(c[0] is not None for c in cov.values()):
         labels, rows = build_table(cov)

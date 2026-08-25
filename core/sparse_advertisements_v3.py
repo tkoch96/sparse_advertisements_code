@@ -331,6 +331,9 @@ def _solve_one_strategy_in_subprocess(strategy_name, deployment, init_kwa,
 class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 	def __init__(self, *args, init={'type':'using_objective'}, explore='bimodality',
 			using_resilience_benefit=False, **kwargs):
+		# consumed by this signature -> re-inject so the objective factory
+		# (Optimal_Adv_Wrapper.__init__) sees it (passthrough only)
+		kwargs['using_resilience_benefit'] = using_resilience_benefit
 		super().__init__(*args, **kwargs)
 		# (hyper-) parameters
 
@@ -439,16 +442,9 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		### but always aim to unify them after dev
 		self.latency_benefit_fn = self.latency_benefit
 		self.gradient_fn = self.gradients
-		## Whether to incorporate resilience into the objective function
-		# (Note if gamma = 0, this won't matter anyway)
+		# auxiliary-term participation is OBJECTIVE policy (see
+		# core/generic_objective.py); kwargs are stored passthrough-only
 		self.using_resilience_benefit = using_resilience_benefit
-		if using_resilience_benefit:
-			assert self.gamma > 0
-			self.resilience_benefit_fn = self.resilience_benefit
-			self.gradients_resilience_benefit_fn = self.gradients_resilience_benefit
-		else:
-			self.resilience_benefit_fn = lambda a : 0
-			self.gradients_resilience_benefit_fn = lambda a : np.zeros(a.shape)
 
 		self.proximal = True
 
@@ -493,9 +489,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			self.metrics[k] = []
 
 	def gradients(self, *args, **kwargs):
-		pass
-
-	def gradients_resilience_benefit(self,*args, **kwargs):
 		pass
 
 	def get_n_most_likely_peers_justsort(self, ug, available_peers, n=5, verb=False):
@@ -611,87 +604,13 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			return self.flush_latency_benefit_queue(**kwargs)[0]
 
 	def get_gamma(self):
-		return self.gamma
+		return self.generic_objective.gamma_target
 
-	def resilience_benefit(self, a, with_lb=False, **kwargs):
-		""" sum over peers of E(delta benefit when that peer is knocked out).
-		with_lb=True also returns the base-adv (latency_benefit, u) tuple
-		(job 0 of the flush, previously discarded) so the caller can share
-		this flush instead of paying a separate 1-job flush; returns
-		(benefit, None) when a gate below skips the flush entirely."""
-		# want to maximize resilience beneift, so want to maximize new benefits
-		# when peers are knocked out
-		if (not self.simulated
-				or not self.generic_objective.uses_resilience_gradient
-				or self.gamma == 0):
-			return (0, None) if with_lb else 0
-		# Under headroom mode (SCULPTOR_CAPACITY_HEADROOM>0), resilience is
-		# absorbed into the LP via reserved capacity, so we don't use the
-		# RB-grad for optimization. The N_popps+1 LP flush here is purely to
-		# populate the "Believed: RB" print and pseudo_objective stopping
-		# signal — both can run RB-free without harming convergence. Skipping
-		# saves ~18s/iter at actual-10.
-		#
-		# Gated on _in_training so a future caller that wants the real RB
-		# value for reporting (e.g. paper-figure stats) gets it back. Headroom
-		# is a training-time approximation only.
-		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
-			return (0, None) if with_lb else 0
-		# SCULPTOR_STARTUP_RB (Tom 2026-08-22): the FIRST flush of this
-		# fan-out runs against cold workers (empty persistent-LP columns,
-		# empty caches) and measured 24-28 MINUTES at dpsize=20/25 on the
-		# 2026-08-21 ladder -- ~9x a steady-state iteration. Only the
-		# startup call (init_optimization_vars passes startup_rb=True) is
-		# affected; per-iteration RB is untouched.
-		#   full          stock behavior (default)
-		#   sample:<f>    deterministic every-k-th popp subset (k=1/f),
-		#                 benefit scaled by n_popps/len(subset). Chosen
-		#                 deterministic, not random, so A/B arms share the
-		#                 training RNG stream.
-		#   skip          no RB at startup (base-adv LB job only); the
-		#                 first in-training flush then pays the warm-cache
-		#                 price, which is the 'defer' arm of the A/B.
-		_startup = bool(kwargs.pop('startup_rb', False))
-		_mode = os.environ.get('SCULPTOR_STARTUP_RB', 'full') if _startup else 'full'
-		popps_to_fail = list(self.popps)
-		_scale = 1.0
-		if _mode.startswith('sample'):
-			try:
-				_frac = float(_mode.split(':', 1)[1])
-			except (IndexError, ValueError):
-				_frac = 0.1
-			_k = max(1, int(round(1.0 / max(_frac, 1e-6))))
-			popps_to_fail = popps_to_fail[::_k]
-			_scale = float(len(self.popps)) / max(len(popps_to_fail), 1)
-		elif _mode == 'skip':
-			popps_to_fail = []
-		tmp = np.ones(a.shape)
-		cpkwargs = copy.deepcopy(kwargs)
-		cpkwargs['retnow'] = False
-		_t_rb = time.time()
-		self.latency_benefit_fn(a, **cpkwargs)
-		for popp in popps_to_fail:
-			# we don't know for sure where users are going
-			# so we have to compute over all users
-			tmp[self.popp_to_ind[popp],:] = 0
-			cpkwargs['failing_popp'] = popp
-			self.latency_benefit_fn(a * tmp, **cpkwargs)
-			tmp[self.popp_to_ind[popp],:] = 1
-		rets = self.flush_latency_benefit_queue()
+	def modeled_objective(self, a, **kwargs):
+		return self.generic_objective.modeled_objective_value(a, **kwargs)
 
-		benefit = 0
-		for b,_ in rets[1:]:
-			benefit += b
-		benefit *= _scale
-		if _startup:
-			print('[startup-rb] mode={} popps={}/{} scale={:.2f} '
-				  'benefit={:.3f} took={:.1f}s'.format(
-					  _mode, len(popps_to_fail), len(self.popps), _scale,
-					  benefit, time.time() - _t_rb), flush=True)
-
-		if with_lb:
-			return benefit, rets[0]
-		return benefit
+	def resilience_benefit(self, a, **kwargs):
+		return self.generic_objective.resilience_benefit(a, **kwargs)
 
 	def init_advertisement(self):
 		print("Initializing advertisement...")
@@ -762,48 +681,6 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			return a
 		else:
 			raise ValueError("Adv init {} not recognized.".format(mode))
-
-	def modeled_objective(self, a, **kwargs):
-		"""Approx actual objective with our belief."""
-		if self.verbose:
-			print("Calculating modeled objective")
-		norm_penalty = self.advertisement_cost(a)
-		latency_benefit = None
-		# popped here so it never leaks into worker job kwa on the
-		# gamma==0 / no-resilience paths
-		_startup_rb = kwargs.pop('startup_rb', False)
-		if self.using_resilience_benefit:
-			# combined flush: the base-adv LB rides as job 0 of the
-			# resilience fan-out (it was already queued and discarded there)
-			# instead of a separate 1-job flush that serializes on a single
-			# worker while the rest of the pool idles
-			resilience_benefit, _base = self.resilience_benefit_fn(
-				a, with_lb=True, startup_rb=_startup_rb, **kwargs)
-			if _base is not None:
-				latency_benefit, u = _base
-		else:
-			resilience_benefit = 0
-		if latency_benefit is None:
-			kwargs['retnow'] = True
-			latency_benefit, u = self.latency_benefit_fn(a, **kwargs)
-
-		if self.verbose:
-			benefits,probs = u
-			ex = np.average(benefits,weights=probs+1e-8)
-			exsq = np.average(np.power(benefits,2),weights=probs+1e-8)
-			var = exsq - np.power(ex,2)
-			std = np.sqrt(var)
-			print("Believed: NP: {}, LB: {} ({} std dev), RB: {}".format(round(norm_penalty,3),
-				round(latency_benefit,3), round(std,3), round(resilience_benefit,3)))
-
-		# gamma = self.get_gamma()
-		gamma = self.gamma
-		if gamma <= 1:
-			benefit = latency_benefit + gamma * resilience_benefit
-		else:
-			benefit = 1 / gamma * latency_benefit + resilience_benefit
-
-		return self.lambduh * norm_penalty - (benefit)
 
 class Sparse_Advertisement_Eval(Sparse_Advertisement_Wrapper):
 	def __init__(self, *args, **kwargs):
@@ -1278,7 +1155,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				'pop_rb_support_size': 30*self.n_pops,  # smaller search space than popp; modest budget
 				'info_support_size': 5*self.n_pops,
 			}
-			if self.gamma == 0:
+			if not self.generic_objective.uses_resilience_gradient:
 				self.gradient_support_settings['lb_support_size'] *= 4
 		else:
 			## we are severely rate limited by measurement speed, so we should aim to compute as much as possible
@@ -1327,7 +1204,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		else:
 			return self.measured_objective(self.get_last_advertisement())
 	
-	def gradients_latency_benefit(self, a):
+	def gradients_objective_benefit(self, a):
+		# Renamed from gradients_latency_benefit (Tom 2026-08-25): this is
+		# the gradient of WHATEVER the generic LP objective returns, not of
+		# latency specifically -- 'latency benefit' was the historical name
+		# from when avg_latency was the only objective.
 		L_grad = np.zeros(a.shape)
 		a_effective = threshold_a(a).astype(bool)
 
@@ -1453,6 +1334,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_lb_rets = self.flush_latency_benefit_queue()
 		return self._assemble_lb_gradients(calls, all_lb_rets, a, L_grad)
 
+
+	# back-compat alias (pre-2026-08-25 name)
+	gradients_latency_benefit = gradients_objective_benefit
+
 	def _assemble_lb_gradients(self, calls, all_lb_rets, a, L_grad):
 		"""Turn the flushed (benefit, pdf) pairs into the LB gradient. Named
 		sub-step of gradients_latency_benefit so subclasses can intercept the
@@ -1558,48 +1443,25 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# gradient is the proximal gradient of the L1 norm
 		# minus lambduh times gradient of L 
 		# gradient of L is calculated via a continuous approximation
-		if self.verbose:
-			ts = time.time()
-		L_grad = self.gradients_latency_benefit(a)
-		if self.verbose:
-			print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing latency benefit grad took {}s".format(int(time.time() - ts)))
-		if self.verbose:
-			ts = time.time()
-		# Objective gate (Tom 2026-08-25): mirror resilience_benefit's
-		# VALUE-path condition (line ~624) on the GRADIENT path. Only
-		# latency+gamma*resilience trains with RB; the other objectives
-		# were fanning the full 312-scenario RB mega-batch (~210s/iter
-		# at actual-32) and scaling the result by their gamma ~ 3e-5.
-		# NOT a gamma threshold: avg_latency's gamma anneals from ~0, and
-		# its early iterations must keep their RB gradients.
-		if (not self.simulated
-				or not self.generic_objective.uses_resilience_gradient
-				or self.get_gamma() == 0):
-			res_grad = np.zeros(np.shape(L_grad))
-			if self.verbose:
-				print(time.strftime("[%H:%M:%SZ] ", time.gmtime())
-					  + "RB grad skipped (objective {} does not train "
-					  "with resilience)".format(self.generic_objective.obj))
-		else:
-			res_grad = self.gradients_resilience_benefit_fn(a)
-			if self.verbose:
-				print(time.strftime("[%H:%M:%SZ] ", time.gmtime()) + "Calcing resilience benefit grad took {}s".format(int(time.time() - ts)))
-		
-		gamma = self.get_gamma()
-		# gamma specifies a tradeoff between LB and RB, so shouldn't really be > 1
-		# to encourage stability
+		# Objective-owned training policy (Tom 2026-08-25): the objective
+		# object decides WHICH gradient components it pays for and the
+		# gamma trade-off (incl. annealing, which lives in
+		# LatencyPlusResilienceObjective). The solver keeps the machinery
+		# below: combine, rescale, NaN guard, prox, metrics.
+		L_grad, res_grad = self.generic_objective.component_gradients(a)
+		gamma = self.generic_objective.get_gamma()
+		# gamma specifies a tradeoff between components; shouldn't really
+		# be > 1, to encourage stability (base objectives: gamma == 0, so
+		# net_grad is simply the objective's own gradient)
 		if gamma <= 1: 
 			net_grad = L_grad + gamma * res_grad
-			if add_metrics:
-				self.metrics['l_benefit_grads'].append(L_grad)
-				self.metrics['res_benefit_grads'].append(gamma * res_grad)
-				self.metrics['cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
 		else:
 			net_grad = 1 / gamma * L_grad + res_grad
-			if add_metrics:
-				self.metrics['l_benefit_grads'].append(1 / gamma * L_grad)
-				self.metrics['res_benefit_grads'].append(res_grad)
-				self.metrics['cost_grads'].append(self.lambduh * self.alpha * np.ones(L_grad.shape))
+		if add_metrics:
+			# WHAT gets recorded is objective policy (Tom 2026-08-25)
+			self.generic_objective.record_gradient_metrics(
+				self.metrics, L_grad, res_grad, gamma,
+				self.lambduh * self.alpha * np.ones(L_grad.shape))
 
 		net_grad = self._rescale_gradient(net_grad, a)
 
@@ -1768,141 +1630,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		return net_grad
 
-	def gradients_resilience_benefit_popp(self, advertisement):
-
-		## want to test popp,pref 
-		## turn it off, fail a popp. measure LB (a)
-		## turn it on, fail same popp. measure LB (b)
-		## should turn popp,pref on if (b) > (a)
-
-
-
-		### Positive resilience benefit gradient means turning a popp
-		## on will increase resilience
-		### increasing resilience means maximizing benefit under popp failures
-
-
-		grad_rb = np.zeros(advertisement.shape)
-		calls = []
-
-
-		### We monte-carlo sample the full space
-		total_n_grad_calc = self.gradient_support_settings['popp_rb_support_size']
-		
-		pct_explore = 80 # pct of gradient calculation budget dedicated to exploring
-		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
-		# number of gradient calcs that re-calc previously high gradients
-		N_REMEASURE = total_n_grad_calc - N_EXPLORE
-		gamma = self.get_gamma()
-		try:
-			best_from_last_time = sorted(self.last_rb_calls_results_popp.items(), key = lambda el :
-				-1 * np.abs(el[1]))
-			# same objective-scale-relative significance cutoff as the LB
-			# remeasure filter (SCULPTOR_SIG_CUTOFF, Tom 2026-08-16)
-			if _os.environ.get('SCULPTOR_SIG_CUTOFF', 'p5') == 'p5':
-				_prev_mags = np.abs(np.array([v for _, v in best_from_last_time]))
-				_sig_cut = (max(1e-12, float(np.percentile(_prev_mags, 5)))
-							if len(_prev_mags) else 1e-12)
-			else:
-				_sig_cut = .01
-			n_significant = 0
-			for (popp,rand_kill_popp,rand_outer_prefix),val in best_from_last_time:
-				if (popp,rand_kill_popp,rand_outer_prefix) in calls:
-					continue
-				if gamma * np.abs(val) < self.lambduh or np.abs(val) < _sig_cut:
-					# if it's not important enough to warrant the cost, don't bother
-					continue
-				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp], rand_outer_prefix]) > \
-					ADVERTISEMENT_THRESHOLD * 7 / 10: 
-					# advertisment is almost completely on or completely off
-					continue
-
-				tmp_a = copy.copy(advertisement)
-
-				this_popp_random_kill = self.popp_to_ind[rand_kill_popp]
-				tmp_a[this_popp_random_kill,:] = 0.0 # kill this random popp
-				this_killed_popp_ugs = self._ensure_popp_to_users().get(this_popp_random_kill, [])
-				if len(this_killed_popp_ugs) == 0:
-					continue
-
-				poppi = self.popp_to_ind[popp]
-				tmp_a[poppi,rand_outer_prefix] = 1.0 # Turn this popp on
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
-				tmp_a[poppi,rand_outer_prefix] = 0.0 # turn this popp off
-				self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
-
-				calls.append((popp, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
-
-				n_significant += 1
-				if n_significant >= N_REMEASURE:
-					break
-			print("Last RB call, {} were significant".format(n_significant))
-
-		except AttributeError: # there are no last calls on the first iteration
-			pass
-
-		N_REMEASURE = len(calls)
-		N_EXPLORE = total_n_grad_calc - N_REMEASURE
-
-
-		all_popps = np.arange(self.n_popp)
-
-
-		try:
-			raise AttributeError
-			## Sample popps that need more help, more
-			rand_popp_choices = np.random.choice(all_popps, p=self.popp_rb_sample_probabilities, 
-				size=N_EXPLORE)
-		except AttributeError:
-			rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
-				size=N_EXPLORE)
-
-		# associated prefix distribution should be biased towards prefixes that are far from 1 and 0
-		possible_prefix_choices = np.arange(self.n_prefixes)
-		prob_each_pref = np.ones(self.n_prefixes) / self.n_prefixes
-
-		for rand_kill_poppi in rand_popp_choices:
-			rand_kill_popp = self.popps[rand_kill_poppi]
-			
-			poppi_helper = np.random.choice(all_popps,
-				 p=self.popp_backup_sample_probs[rand_kill_poppi,:]) 
-			popp_helper = self.popps[poppi_helper] # popp ij testing gradient is poppi,rand_outer_prefix (should we turn this on/off to help out?)
-
-			rand_outer_prefix = int(np.random.choice(possible_prefix_choices, p=prob_each_pref))
-
-			if (popp_helper, rand_kill_popp, rand_outer_prefix) in calls: continue
-			
-			tmp_a = copy.copy(advertisement)
-			tmp_a[rand_kill_poppi,:] = 0.0 # kill this random popp
-			this_killed_popp_ugs = self._ensure_popp_to_users().get(rand_kill_poppi, [])
-			if len(this_killed_popp_ugs) == 0:
-				continue
-
-			tmp_a[poppi_helper,rand_outer_prefix] = 1.0 # Turn this popp on
-			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
-			tmp_a[poppi_helper,rand_outer_prefix] = 0.0 # turn this popp off
-			self.latency_benefit(tmp_a, ugs=this_killed_popp_ugs)
-			calls.append((popp_helper, rand_kill_popp, rand_outer_prefix, this_killed_popp_ugs))
-
-		all_lb_rets = self.flush_latency_benefit_queue()
-		grad_rb = self._assemble_rb_popp_gradients(calls, all_lb_rets, advertisement, grad_rb)
-
-		### Track which calls are being made
-		for poppi,poppj,pref,_ in calls:
-			try:
-				self.n_resilience_benefit_popp_calls[poppi,poppj,pref] += 1
-			except KeyError:
-				self.n_resilience_benefit_popp_calls[poppi,poppj,pref] = 1
-
-		if not self.simulated:
-			max_val = np.max(np.abs(grad_rb.flatten()))
-			if max_val > 1:
-				grad_rb = grad_rb / max_val
-
-		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
-
-		return grad_rb
-
 	def _assemble_rb_popp_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
 		# RB sigma capture (merged from the ablation fork 2026-08-16)
 		try:
@@ -1935,113 +1662,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			ind += 2
 		return grad_rb
 
-	def gradients_resilience_benefit_pop(self, advertisement):
-
-		## want to test popp,pref 
-		## turn it off, fail a PoP. measure LB (a)
-		## turn it on, fail same PoP. measure LB (b)
-		## should turn popp,pref on if (b) > (a)
-
-
-
-		### Positive resilience benefit gradient means turning a popp
-		## on will increase resilience
-		### increasing resilience means maximizing benefit under PoP failures
-
-
-		grad_rb = np.zeros(advertisement.shape)
-		#### Previously disabled ("unused, too noisy"). Re-enabled May-30 to test
-		#### whether the pop-failure gradient term closes the site-failure
-		#### painter-beats-sparse gap. Gated externally via SCULPTOR_ALPHA_POP
-		#### (called only when alpha > 0 in gradients_resilience_benefit).
-		a_effective = threshold_a(advertisement).astype(bool)
-		calls = []
-
-
-		total_n_grad_calc = self.gradient_support_settings['pop_rb_support_size']
-		
-		pct_explore = 80 # pct of gradient calculation budget dedicated to exploring
-		N_EXPLORE = int(total_n_grad_calc * pct_explore/100)
-		# number of gradient calcs that re-calc previously high gradients
-		N_REMEASURE = total_n_grad_calc - N_EXPLORE
-		gamma = self.get_gamma()
-		try:
-			best_from_last_time = sorted(self.last_rb_calls_results_pop.items(), key = lambda el : 
-				-1 * np.abs(el[1]))
-			n_significant = 0
-			for (popp,rand_kill_pop,rand_outer_prefix),val in best_from_last_time:
-				if (popp,rand_kill_pop,rand_outer_prefix) in calls: 
-					continue
-				if gamma * np.abs(val) < self.lambduh:
-					# if it's not important enough to warrant the cost, don't bother
-					continue
-				if np.abs(ADVERTISEMENT_THRESHOLD - advertisement[self.popp_to_ind[popp],rand_outer_prefix]) > \
-					ADVERTISEMENT_THRESHOLD * 7 / 10: 
-					# advertisment is almost completely on or completely off
-					continue
-
-				tmp_a = copy.copy(a_effective)
-				tmp_a[self.pop_to_popp_inds[rand_kill_pop],:] = False # kill this random pop
-
-				poppi = self.popp_to_ind[popp]
-				tmp_a[poppi,rand_outer_prefix] = True # Turn this popp on
-				self.latency_benefit(tmp_a)
-				tmp_a[poppi,rand_outer_prefix] = False # turn this popp off
-				self.latency_benefit(tmp_a)
-
-				calls.append((popp, rand_kill_pop, rand_outer_prefix))
-
-				n_significant += 1
-				if n_significant >= N_REMEASURE:
-					break
-			print("Last RB call, {} were significant".format(n_significant))
-
-		except AttributeError: # there are no last calls on the first iteration
-			pass
-
-		N_REMEASURE = len(calls)
-		N_EXPLORE = total_n_grad_calc - N_REMEASURE
-
-
-		### Popps for which we're testing if we want to turn them on/off
-		rand_popp_choices = np.random.randint(low=0,high=self.n_popps,
-			size=N_EXPLORE) 
-		### associated prefixes for the rand_popp_choices
-		# associated prefix distribution should be biased towards prefixes that are far from 1 and 0
-		random_prefix_choices = np.zeros(N_EXPLORE,dtype=np.int32)
-		possible_choices = np.arange(self.n_prefixes)
-		for i in range(N_EXPLORE):
-			prob_each_pref = ADVERTISEMENT_THRESHOLD - np.abs(advertisement[rand_popp_choices[i],:] - ADVERTISEMENT_THRESHOLD) + .1
-			prob_each_pref = prob_each_pref / np.sum(prob_each_pref)
-			prob_each_pref = np.ones(self.n_prefixes) / self.n_prefixes
-			random_prefix_choices[i] = int(np.random.choice(possible_choices, p=prob_each_pref))
-
-
-		for poppi, rand_outer_prefix in zip(rand_popp_choices,random_prefix_choices):
-			popp = self.popps[poppi] # popp ij testing gradient is poppi,rand_outer_prefix
-
-			## random kill PoP
-			this_popp_random_kill = np.random.choice(np.arange(self.n_popp),
-				 p=self.popp_backup_sample_probs[poppi,:]) 
-			rand_kill_pop = self.popps[this_popp_random_kill][0]
-			if (popp, rand_kill_pop, rand_outer_prefix) in calls: continue
-			
-			tmp_a = copy.copy(a_effective)
-			tmp_a[self.pop_to_popp_inds[rand_kill_pop],:] = False # kill this random pop
-
-			tmp_a[poppi,rand_outer_prefix] = True # Turn this popp on
-			self.latency_benefit(tmp_a)
-			tmp_a[poppi,rand_outer_prefix] = False # turn this popp off
-			self.latency_benefit(tmp_a)
-			calls.append((popp, rand_kill_pop, rand_outer_prefix))
-
-		all_lb_rets = self.flush_latency_benefit_queue()
-		grad_rb = self._assemble_rb_pop_gradients(calls, all_lb_rets, advertisement, grad_rb)
-
-		grad_rb = grad_rb.clip(-GRAD_CLIP_VAL,GRAD_CLIP_VAL)
-
-		return grad_rb
-
 	def _assemble_rb_pop_gradients(self, calls, all_lb_rets, advertisement, grad_rb):
 		# RB sigma capture (merged from the ablation fork 2026-08-16)
 		try:
@@ -2072,40 +1692,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 			ind += 2
 		return grad_rb
-
-	def gradients_resilience_benefit(self, advertisement):
-		# Under SCULPTOR_CAPACITY_HEADROOM>0 the inner LP already reserves
-		# capacity for failures, so the SGD-RB gradient is unnecessary.
-		# Symmetric with resilience_benefit() (the value), which also
-		# short-circuits under headroom. Gated on _in_training so this is
-		# strictly a training-time approximation -- non-training callers
-		# get the real gradient.
-		if self._in_training and float(os.environ.get('SCULPTOR_CAPACITY_HEADROOM', '0')) > 0:
-			return np.zeros(advertisement.shape)
-
-		grad_link_failure = self.gradients_resilience_benefit_popp(advertisement)
-		# SCULPTOR_ALPHA_POP weights the pop-failure resilience gradient.
-		# Default 0 reproduces the prior "popp only" behaviour (the pop
-		# gradient was historically disabled with the note "hurts convergence").
-		# Test setting alpha=0.05..0.5 to see if it closes the painter-beats-
-		# sparse gap on site-failure latency that shows up at dp15 / dp25.
-		#
-		# SCULPTOR_ALPHA_POP_ANNEAL_END_ITER (int, default 0):
-		#   If >0, linearly ramp alpha from 0 -> SCULPTOR_ALPHA_POP across the
-		#   first N iters of sparse training. Lets the latency-benefit term
-		#   converge first before the noisier pop-failure gradient kicks in.
-		alpha_max = float(os.environ.get('SCULPTOR_ALPHA_POP', '0'))
-		anneal_end = int(os.environ.get('SCULPTOR_ALPHA_POP_ANNEAL_END_ITER', '0'))
-		if anneal_end > 0:
-			it = max(0, int(getattr(self, 'iter', 0)))
-			alpha = alpha_max * min(1.0, it / float(anneal_end))
-		else:
-			alpha = alpha_max
-		if alpha > 0:
-			grad_pop_failure = self.gradients_resilience_benefit_pop(advertisement)
-		else:
-			grad_pop_failure = 0
-		return grad_link_failure + alpha * grad_pop_failure
 
 	def impose_advertisement_constraint(self, a):
 		"""The convex constraint 0 <= a_ij <= 1 has the simple solution to clip."""
@@ -2258,70 +1844,32 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		all_objectives = self.metrics['actual_nonconvex_objective']
 		all_pseudo_objectives = self.metrics['pseudo_objectives']
 		all_effective_ojectives = self.metrics['effective_objectives']
-		all_resilience_benefits = self.metrics['resilience_benefit']
-		all_latency_benefits = self.metrics['latency_benefit']
-		all_gt_latency_benefits = self.metrics['gt_latency_benefit']
-		all_gt_resilience_benefits = self.metrics['gt_resilience_benefit']
-		all_gammas = self.metrics['effective_gammas']
 		ax[1,1].plot(list(range(start_iter,len(all_pseudo_objectives))), all_pseudo_objectives[start_iter:])
 		ax[1,1].set_ylabel("Believed Objective")
 		ax[0,1].plot(all_objectives)
 		ax[0,1].set_ylabel("GT Objective")
 		ax[2,1].plot(all_effective_ojectives)
 		ax[2,1].set_ylabel("GT Effective Objective")
-		ax[3,1].plot(list(range(start_iter,len(all_resilience_benefits))), all_resilience_benefits[start_iter:])
-		ax[3,1].set_ylabel("Res Ben")
-		ax[4,1].plot(list(range(start_iter,len(all_latency_benefits))), all_latency_benefits[start_iter:])
-		ax[4,1].set_ylabel("Lat Ben")
-
-		ax[5,0].plot(all_gt_latency_benefits)
-		ax[5,0].set_ylabel("GT Lat Ben")
-		ax[5,1].plot(all_gt_resilience_benefits)
-		ax[5,1].set_ylabel("GT Res Ben")
-		
-		#### Add in optimal lines
-		####### 
-		try:
-			ax[5,0].hlines(y=self.optimal_expensive_solution['latency'], xmin=0, xmax=self.iter, linewidth=2, color='k')
-			ax[5,0].text(0,self.optimal_expensive_solution['latency'],"One per Peering")
-		except AttributeError:
-			pass
-		try:
-			ax[5,1].hlines(y=self.optimal_expensive_solution['resilience'], xmin=0, xmax=self.iter, linewidth=2, color='k')
-			ax[5,1].text(0,self.optimal_expensive_solution['resilience'],"One per Peering")
-		except AttributeError:
-			pass
+		# rows 3-5 right column + row 5: objective-specific panels
+		# (LB/RB decomposition for latency+gamma*resilience; nothing for
+		# base objectives, whose value is tracked by the generic
+		# believed/GT objective panels above) -- Tom 2026-08-25
+		self.generic_objective.plot_convergence_extras(
+			self, ax, self.metrics, start_iter=start_iter)
 		try:
 			ax[0,1].hlines(y=self.optimal_expensive_solution['overall'], xmin=0, xmax=self.iter, linewidth=2, color='k')
 			ax[0,1].text(0,self.optimal_expensive_solution['overall'],"One per Peering")
 		except AttributeError:
 			pass
 
-		#### ADD IN PAINTER LINES IF APPROPRIATE
-		try:
-			ax[5,0].hlines(y=self.painter_solution['latency_benefit'], xmin=0, xmax=self.iter, linewidth=2, color='r')
-		except AttributeError:
-			pass
-		try:
-			self.painter_gt_resilience_benefit
-		except AttributeError:
-			try:
-				self.painter_gt_resilience_benefit = self.get_ground_truth_resilience_benefit(self.painter_solution['advertisement'])
-			except AttributeError:
-				pass
-		try:
-			ax[5,1].hlines(y=self.painter_gt_resilience_benefit, xmin=0, xmax=self.iter, linewidth=2, color='r')
-		except AttributeError:
-			pass
+		#### ADD IN PAINTER OBJECTIVE LINE IF APPROPRIATE (generic; the
+		#### LB/RB painter reference lines moved into the objective's
+		#### plot_convergence_extras, 2026-08-25)
 		try:
 			ax[0,1].hlines(y=self.painter_solution['objective'], xmin=0, xmax=self.iter, linewidth=2, color='r')
 			ax[0,1].text(0,self.painter_solution['objective'], "PAINTER")
 		except AttributeError:
 			pass
-
-
-		ax[6,0].plot(all_gammas)
-		ax[6,0].set_ylabel("Effective Gamma")
 
 		try:
 			all_link_utilizations = np.array(self.metrics['link_utilizations'])
@@ -2429,33 +1977,40 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			for pref_i in range(self.n_prefixes):
 				print("PoPP {} Prefix {}: {}".format(self.popps[popp_i], pref_i, a[popp_i,pref_i]))
 
+	# Step-size mode (Tom 2026-08-25). One class variable replaces the
+	# legacy lambduh-bucket if/else that set_alpha carried since the v1
+	# era. Options:
+	#   'rmsprop'  (DEFAULT -- ratified 2026-08-18, beats adagrad 13/3/4
+	#               across all 4 families; _rescale_gradient normalizes
+	#               per-coordinate, so alpha is a plain base step)
+	#   'adagrad'  (AdaGrad-Norm; alpha folds out of the scale)
+	#   'constant' (no gradient rescaling; alpha is THE step size)
+	# The mode feeds _rescale_gradient via SCULPTOR_ABLATION_GRAD_SCALE
+	# unless that env var overrides it explicitly.
+	ALPHA_MODE = 'rmsprop'
+	BASE_ALPHA = .01
+
 	def set_alpha(self):
-		assert self.lambduh < 10
-		if self.lambduh < 10 and self.lambduh > 1:
-			self.alpha = .00005
-		elif self.lambduh <= 1 and self.lambduh > .1:
-			self.alpha = .0005
-		elif self.lambduh <= .1 and self.lambduh > .01:
-			self.alpha = .001
-		elif self.lambduh <= .01:
-			self.alpha = .01
-		# base-alpha env override (merged from the ablation fork 2026-08-16;
-		# under 'adagrad'/'dog' policies alpha folds out and this is inert)
-		_a = os.environ.get('SCULPTOR_ALPHA', os.environ.get('SCULPTOR_ABLATION_ALPHA'))
+		mode = os.environ.get('SCULPTOR_ABLATION_GRAD_SCALE',
+							  self.ALPHA_MODE)
+		self.alpha = self.BASE_ALPHA
+		# env override kept (ablation-fork heritage): pins the base step
+		_a = os.environ.get('SCULPTOR_ALPHA',
+							os.environ.get('SCULPTOR_ABLATION_ALPHA'))
 		if _a:
 			self.alpha = float(_a)
-			print('base alpha override: {}'.format(self.alpha), flush=True)
+		if mode == 'constant':
+			# 'fixed' is _rescale_gradient's vanilla alpha*grad path
+			os.environ['SCULPTOR_ABLATION_GRAD_SCALE'] = 'fixed'
+		print('[alpha] mode={} base_alpha={}'.format(mode, self.alpha),
+			  flush=True)
 
 	def get_gamma(self):
-		### Idea is to increase gamma to our desired value as we become more confident about adjacent strategies
-		if self.simulated:
-			uncertainty_factor = np.maximum(1,np.abs(self.uncertainty_factor))
-			divider = uncertainty_factor * (1 / (1 + 3 / np.sqrt((self.iter+1))))
-		else:
-			## no uncertainty factor since we don't do max info (for now)
-			divider = (1 + 5 / np.sqrt((self.iter+1)))
-
-		return self.gamma / divider
+		# Thin wrapper: the annealing schedule is objective policy and
+		# lives on the objective object (LatencyPlusResilienceObjective;
+		# base objectives return 0 -- they train on their own gradient
+		# only). Kept as a method because many call sites use it.
+		return self.generic_objective.get_gamma()
 
 	def _broadcast_mc_num(self, n):
 		# Mirror of _broadcast_training_mode: fan a new MC_NUM out to the
@@ -2882,10 +2437,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self.last_objective = self.current_pseudo_objective
 		self.last_effective_objective = self.current_effective_objective
 		
-		self.metrics['effective_gammas'].append(self.get_gamma())
-		print(f"[Timing] get_gamma: {time.time() - perf_t:.5f}s")
-		perf_t = time.time()
-
+		# ---- (a) metrics that apply to EVERY objective (Tom 2026-08-25):
+		# measured/GT/effective objective values + the believed model.
+		# gt_latency_benefit is historically named; it holds the GT value
+		# of WHATEVER the generic objective is.
 		if not skip_measuring or len(self.metrics['gt_latency_benefit']) == 0:
 			#### This takes the most time, probably because we always step to a new advertisement and so reset our caches
 			
@@ -2893,12 +2448,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			print(f"[Timing] measured_objective (1st): {time.time() - perf_t:.5f}s")
 			perf_t = time.time()
 
-			self.metrics['gt_latency_benefit'].append(self.get_ground_truth_latency_benefit(advertisement, verb=True, save_ug_ingress_decisions=True))
-			print(f"[Timing] get_ground_truth_latency_benefit: {time.time() - perf_t:.5f}s")
-			perf_t = time.time()
-
-			self.metrics['gt_resilience_benefit'].append(self.get_ground_truth_resilience_benefit(advertisement, store_metrics=True))
-			print(f"[Timing] get_ground_truth_resilience_benefit: {time.time() - perf_t:.5f}s")
+			self.metrics['gt_latency_benefit'].append(self.generic_objective.get_ground_truth_objective_value(advertisement, verb=True, save_ug_ingress_decisions=True))
+			print(f"[Timing] get_ground_truth_objective_value: {time.time() - perf_t:.5f}s")
 			perf_t = time.time()
 
 			self.metrics['effective_objectives'].append(self.measured_objective(copy.copy(threshold_a(advertisement))))
@@ -2906,14 +2457,20 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			perf_t = time.time()
 
 		else:
-			for k in ['actual_nonconvex_objective', 'gt_latency_benefit', 'gt_resilience_benefit', 'effective_objectives']:
+			for k in ['actual_nonconvex_objective', 'gt_latency_benefit', 'effective_objectives']:
 				self.metrics[k].append(self.metrics[k][-1])
 			print(f"[Timing] Skipping measurement (appending last metrics): {time.time() - perf_t:.5f}s")
 			perf_t = time.time()
 
 		self.current_objective = self.metrics['actual_nonconvex_objective'][-1]
 		self.current_latency_benefit = self.metrics['gt_latency_benefit'][-1]
-		self.current_resilience_benefit = self.metrics['gt_resilience_benefit'][-1]
+
+		# ---- (b) metrics that are OBJECTIVE POLICY (gamma trajectory,
+		# resilience benefit): delegated to the objective object; base
+		# objectives append neutral zeros without touching RB machinery.
+		self.generic_objective.record_iteration_metrics(
+			self, self.metrics, advertisement, skip_measuring)
+		perf_t = time.time()
 
 		self.current_pseudo_objective = self.modeled_objective(advertisement, verbose=True)
 		print(f"[Timing] modeled_objective (pseudo): {time.time() - perf_t:.5f}s")
@@ -2925,19 +2482,15 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 
 		self.metrics['pseudo_objectives'].append(self.current_pseudo_objective)
 		
-		rb = self.resilience_benefit(advertisement)
-		self.metrics['resilience_benefit'].append(rb)
-		print(f"[Timing] resilience_benefit: {time.time() - perf_t:.5f}s")
-		perf_t = time.time()
-
+		# believed (model) objective value -- generic
 		lb_model = self.latency_benefit_fn(advertisement,retnow=True)
 		self.metrics['latency_benefit'].append(lb_model[0])
 		print(f"[Timing] latency_benefit_fn: {time.time() - perf_t:.5f}s")
 		perf_t = time.time()
 
-		## Add to metrics
+		## Add to metrics (generic call accounting; the resilience-call
+		## counterpart is appended by the objective hook above)
 		self.metrics['frac_latency_benefit_calls'].append(len(self.n_latency_benefit_calls) / (self.n_popps * self.n_prefixes))
-		self.metrics['frac_resilience_benefit_calls'].append(len(self.n_resilience_benefit_popp_calls) / (self.n_popps * self.n_popps * self.n_prefixes))
 
 		### Notify workers of new training iteration (recovery-wrapped: a spot
 		### reclaim mid-training rebuilds the pool and retries instead of dying)
@@ -3300,28 +2853,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			except Exception as e:
 				print('[belief-memo] persist failed ({})'.format(e),
 					  flush=True)
-
-	def modify_ugs(self):
-		##### DEPRECATED
-		try:
-			### See if we've already computed the modified deployment
-			self.og_deployment
-			return
-		except AttributeError:
-			pass
-		## create a pseudo deployment modeled after the optimal solution
-		## make a user's optimally assigned popp their lowest-latency popp
-		## split users by volume
-		self.og_deployment = self.output_deployment()
-
-		print("Not modifying deployment to use pseudo-UGs because not using heuristic approximations.")
-		return
-
-	def reset_ugs(self):
-		self.update_deployment(self.og_deployment)
-		print(np.sum(self.optimization_advertisement>.5,axis=0))
-		# if not self.simulated:
-		# 	self.get_realworld_measure_wrapper()
 
 	def _broadcast_training_mode(self, in_training):
 		# Set local flag (read by driver-side _apply_capacity_headroom) and
@@ -3903,12 +3434,14 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 			self.load_optimization_state()
 			_log_mem('solve_post_load_state', iter=self.iter, mode='hotstart')
 			if self.iter >= self.max_n_iter:
-				self.reset_ugs()
 				return False
 		except ValueError:
 			print("\n=====NOT HOT STARTING======\n")
 			_log_mem('solve_cold_start')
-			self.modify_ugs()
+			# modify_ugs removed (Tom 2026-08-25; it was DEPRECATED and
+			# no-op except for recording og_deployment for state saves)
+			if not hasattr(self, 'og_deployment'):
+				self.og_deployment = self.output_deployment()
 			_log_mem('solve_post_modify_ugs')
 			self.optimization_advertisement = self.init_advertisement()
 			self.last_advertisement = copy.copy(self.optimization_advertisement)
@@ -4108,7 +3641,10 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# After finishing, end the optimization
 		self.output_optimization_state()
 
-		self.reset_ugs()
+		# reset_ugs removed (Tom 2026-08-25): with modify_ugs deprecated it
+		# re-pushed an identical deployment through full worker rebirth at
+		# solve end -- pure cost, and the prime suspect in the 2026-08-24
+		# finalize-phase ActorUnavailable crash.
 
 		if self.verbose:
 			print("Stopped train loop on {}, t per iter: {}s, {} path measures, O:{}, RD: {}, RDE: {}".format(

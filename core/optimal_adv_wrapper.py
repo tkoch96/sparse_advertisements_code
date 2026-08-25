@@ -26,7 +26,7 @@ np.set_printoptions(precision=5)
 from helpers.constants import *
 from helpers.helpers import *
 from subprocess import call, check_output
-from core.generic_objective import Generic_Objective
+from core.generic_objective import Generic_Objective, make_objective
 # Worker_Manager is set on instances externally via set_worker_manager()
 # from the driver (e.g. eval_all_solution_types, experiments.run_objective).
 # Importing it here would create a worker_comms ->
@@ -55,7 +55,11 @@ class Optimal_Adv_Wrapper:
 		self.with_capacity = kwargs.get('with_capacity', False)
 		self.n_prefixes = kwargs.get('n_prefixes')
 
-		self.generic_objective = Generic_Objective(self, kwargs.get('generic_objective', 'avg_latency'), **kwargs)
+		# gamma is a NAMED param (never lands in **kwargs): forward it
+		# explicitly or the objective sees gamma_target=0 (2026-08-25)
+		self.generic_objective = make_objective(
+			self, kwargs.get('generic_objective', 'avg_latency'),
+			gamma=gamma, **{k: v for k, v in kwargs.items() if k != 'gamma'})
 
 		self.calc_cache = Calc_Cache()
 
@@ -1225,7 +1229,7 @@ class Optimal_Adv_Wrapper:
 
 	def get_ground_truth_latency_benefit(self, a, **kwargs):
 		### Measures actual latency benefit as if we were to advertise 'a'
-		return self.generic_objective.get_ground_truth_latency_benefit(a, **kwargs)
+		return self.generic_objective.get_ground_truth_objective_value(a, **kwargs)
 
 	def get_ground_truth_latency_benefit_mp(self, advs, dep, **kwargs):
 		### Measures actual latency benefit as if we were to advertise 'a' in batches
