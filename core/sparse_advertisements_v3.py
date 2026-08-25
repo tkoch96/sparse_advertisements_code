@@ -69,11 +69,31 @@ def _log_mem(tag, **extra):
 					sys_avail_kb = int(line.split()[1]); break
 	except (FileNotFoundError, PermissionError):
 		return
+	# shm (Ray plasma object store lives here) + aggregate worker RSS:
+	# the 2026-08-25 actual-32 leak lost 3.5GB/iter of SYSTEM memory with
+	# a FLAT driver RSS -- these two columns are exactly the blind spot
+	# that made that undiagnosable from the logs.
+	shm_used_kb = workers_rss_kb = -1
+	try:
+		_st = _os.statvfs('/dev/shm')
+		shm_used_kb = (_st.f_blocks - _st.f_bavail) * _st.f_frsize // 1024
+	except (OSError, AttributeError):
+		pass
+	try:
+		import subprocess as _sp
+		_out = _sp.run(['bash', '-c',
+			"ps -o rss= $(pgrep -f _LocalPathDistribution | head -70) 2>/dev/null | awk '{s+=$1} END{print s+0}'"],
+			capture_output=True, text=True, timeout=10)
+		workers_rss_kb = int(_out.stdout.strip() or -1)
+	except Exception:
+		pass
 	bits = [f'tag={tag}',
 	        f'rss_mb={rss_kb//1024}',
 	        f'vms_mb={vms_kb//1024}',
 	        f'peak_mb={peak_kb//1024}',
 	        f'sys_avail_mb={sys_avail_kb//1024}',
+	        f'shm_mb={shm_used_kb//1024}',
+	        f'workers_rss_mb={workers_rss_kb//1024}',
 	        f'pid={_os.getpid()}',
 	        f't={time.time():.2f}']
 	for k, v in extra.items():
