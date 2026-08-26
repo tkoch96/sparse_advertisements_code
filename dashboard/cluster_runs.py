@@ -311,9 +311,13 @@ def _ramp_table(m):
     # during training segments at all (Tom 2026-08-26: table said sim
     # 1/20 while 18 sims had already trained). Early stop-v2 exits shown
     # so a fast size reads as progress, not as a stuck iter counter.
-    starts = len(re.findall(r'Initializing advertisement', txt))
-    early = len(re.findall(r'stop-v2.*EARLY EXIT', txt))
-    itm = re.findall(r'\[it\] t=\S+ iter=(\d+)', txt)
+    # scope counts to the CURRENT size: slice from the last size banner
+    # (otherwise size 5's 18 starts inflate size 10's counter)
+    _j = txt.rfind('[sweep] === dpsize=')
+    _cur_txt = txt[_j:] if _j > 0 else txt
+    starts = len(re.findall(r'Initializing advertisement', _cur_txt))
+    early = len(re.findall(r'stop-v2.*EARLY EXIT', _cur_txt))
+    itm = re.findall(r'\[it\] t=\S+ iter=(\d+)', _cur_txt if _j > 0 else txt)
     cur_iter = int(itm[-1]) if itm else None
     done = pj.get('done') or {}
     out = ['<table><thead><tr><th>size</th><th>sims</th>'
