@@ -12,9 +12,27 @@ LOCK=/tmp/sculptor_update_dashboard.lockdir
 LOG=$HOME/sculptor_dashboard/update_dashboard.log
 DASH_INSTANCES="i-09a6ff2823b0bb304 i-0428c395787bc3ca0"
 
+# FAST path every cycle (site build + push: ~15s); the SLOW path
+# (harvest pulls + every figure script: ~9 min measured 2026-08-26,
+# which silently turned the '30s loop' into a 10-minute one) runs at
+# most every SLOW_EVERY seconds.
+SLOW_EVERY=${SLOW_EVERY:-300}
+SLOW_STAMP=/tmp/sculptor_update_dashboard.slowstamp
+
 one_shot() {
   cd "$REPO"
   T0=$(date +%s)
+  NOW=$(date +%s)
+  LAST=$(cat "$SLOW_STAMP" 2>/dev/null || echo 0)
+  if [ $((NOW - LAST)) -ge "$SLOW_EVERY" ]; then
+    echo "$NOW" > "$SLOW_STAMP"
+    slow_refresh
+  fi
+  $PY -m dashboard.generate >/dev/null 2>&1
+  push_hosts
+}
+
+slow_refresh() {
   $PY -m cluster.harvest_all --quiet >/dev/null 2>&1
   # timing plots for every non-terminal run (manifest without a verdict)
   for RID in $($PY - <<'PYEOF'
@@ -30,7 +48,9 @@ PYEOF
   ); do
     $PY -m dashboard.plot_cluster_timing "$RID" >/dev/null 2>&1
   done
-  $PY -m dashboard.generate >/dev/null 2>&1
+}
+
+push_hosts() {
   for INST in $DASH_INSTANCES; do
     IP=$($PY -m cluster.vmctl ip "$INST" 2>/dev/null | tail -1 | tr -d ' ')
     if [[ "$IP" =~ ^[0-9.]+$ ]]; then
