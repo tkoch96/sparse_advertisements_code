@@ -289,6 +289,26 @@ _OLD_DASH_ENTRIES = [
 ]
 
 EXPERIMENTS = [
+    {'id': 'ablation_scout', 'title': 'Ablation scout (local)',
+     'sections': [
+         {'id': 'abl_scout', 'title': 'ablation scout', 'kind': 'static',
+          'heading': ('Ablation scout &mdash; seed 1, small, 100 iters, '
+                      'Mac-local ladder (Tom 2026-08-26)'),
+          'intro': ('Every active rung vs PAINTER on one deployment: '
+                    'final avg-latency gap to one-per-peering (left), '
+                    'wall + iterations (right); per-arm convergence '
+                    'panels below.'),
+          'figures': ['figures/dashboards/ablation_scout/'
+                      'ablation_scout_bars.png'],
+          'figures_glob': 'figures/dashboards/ablation_scout/conv_*.png',
+          'refresh': {'steps': [
+              {'in': ['figures/dashboards/ablation_scout/'
+                      'ablation_scout_bars.png'],
+               'always': True,
+               'out': ['figures/dashboards/ablation_scout/'
+                       'ablation_scout_bars.png'],
+               'argv': ['{py}', '-m', 'dashboard.plot_ablation_scout']}]}},
+     ]},
     {'id': 'ablation_v3', 'title': 'Ablation: policy ladder',
      'sections': [
          {'id': 'ladder_v3', 'title': '7-arm ladder v3',
@@ -1219,7 +1239,12 @@ def render_objective_ladder(exp):
            '(higher = better) &middot; {}</small></h2>'.format(
                exp['title'], exp['world'])]
     out.append('<p class="note">{}</p>'.format(exp.get('intro', '')))
-    for f in exp.get('figures', []):
+    _figs = list(exp.get('figures', []))
+    if exp.get('figures_glob'):
+        import glob as _g
+        _figs += sorted(os.path.relpath(x, REPO) for x in
+                        _g.glob(os.path.join(REPO, exp['figures_glob'])))
+    for f in _figs:
         if os.path.exists(os.path.join(REPO, f)):
             # mtime cache-buster like _img(); a raw same-named src lets
             # the browser serve yesterday's PNG under today's page

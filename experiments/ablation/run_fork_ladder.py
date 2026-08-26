@@ -108,10 +108,10 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # actually took (a stock worker answers 'ERROR' to the stats RPC).
     import ray
     import core.worker_comms as worker_comms
-    _stock_actor_cls = worker_comms_ray.ACTOR_CLS
+    _stock_actor_cls = worker_comms.ACTOR_CLS
     if os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0':
         from experiments.ablation.mc_off_worker import Abl_MC_Off_Worker
-        worker_comms_ray.ACTOR_CLS = ray.remote(Abl_MC_Off_Worker)
+        worker_comms.ACTOR_CLS = ray.remote(Abl_MC_Off_Worker)
         print('[ablation-fork] mc-off worker class injected', flush=True)
     wm = Worker_Manager(sas.get_init_kwa(), deployment)
     wm.start_workers()
@@ -288,7 +288,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             print('warning: stop_workers raised {}'.format(e))
         # revert the mc-off actor-class injection so the scoring stack
         # (wm2 below) is built from stock workers
-        worker_comms_ray.ACTOR_CLS = _stock_actor_cls
+        worker_comms.ACTOR_CLS = _stock_actor_cls
 
     # ---- scoring phase: PRISTINE eval stack ----
     # The solver's modify_ugs (pseudo-UG splitting, seed-dependent) mutates
