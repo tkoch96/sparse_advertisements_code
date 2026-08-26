@@ -54,6 +54,7 @@ def load(store):
         rows.append({'obj': obj, 'N': int(Ndir[1:]),
                      'seed': int(d.get('seed', -1)), 'rung': rung,
                      'final': final,
+                     'opp_obj': d.get('opp_objective'),
                      'diff_abs': mg.get('mean_abs'),
                      'diff_rel': mg.get('mean_rel'),
                      'gap_pts': mg.get('n_pts', 0)})
@@ -114,6 +115,35 @@ def main():
         len(rows), len(pairs)))
     if not pairs:
         return 1
+    # SENTINEL GUARD: a handful of finals carry no-route-scale values
+    # (|div| ~ 2e4 in joint_priority/max_util); drop |div| > 50x the
+    # objective's median |div| and report.
+    import collections
+    med = {}
+    for obj in {p['obj'] for p in pairs}:
+        d = np.abs([q['divergence'] for q in pairs if q['obj'] == obj])
+        med[obj] = max(float(np.median(d)), 1e-9)
+    kept = [p for p in pairs
+            if abs(p['divergence']) <= 50 * med[p['obj']]]
+    print('[difficulty] sentinel-filtered {} of {} pair points'.format(
+        len(pairs) - len(kept), len(pairs)))
+    pairs = kept
+    # UNIT NORMALIZATION (objectives differ 50x in scale/range):
+    #  - divergence -> relative: / objective's median |OPP objective|
+    #  - difficulty -> z-scored within objective
+    scale = {}
+    for obj in med:
+        o = [abs(r['opp_obj']) for r in rows
+             if r['obj'] == obj and r.get('opp_obj')]
+        scale[obj] = max(float(np.median(o)) if o else 1.0, 1e-9)
+    dstat = {}
+    for obj in med:
+        f = np.array([q['difficulty'] for q in pairs if q['obj'] == obj])
+        dstat[obj] = (float(f.mean()), max(float(f.std()), 1e-9))
+    for p in pairs:
+        p['div_rel'] = p['divergence'] / scale[p['obj']]
+        m, sd = dstat[p['obj']]
+        p['diff_z'] = (p['difficulty'] - m) / sd
     outdir = os.path.join(REPO, 'figures', 'dashboards', 'ablation_scout')
     os.makedirs(outdir, exist_ok=True)
 
@@ -125,26 +155,26 @@ def main():
             ss = [p for p in sub if p['obj'] == obj]
             if not ss:
                 continue
-            ax.scatter([p['difficulty'] for p in ss],
-                       [p['divergence'] for p in ss],
+            ax.scatter([p['diff_z'] for p in ss],
+                       [p['div_rel'] for p in ss],
                        s=[14 + 3 * p['N'] for p in ss],
                        color=OBJ_COLOR[obj], label=obj, alpha=.75)
         if sub:
-            x = np.array([p['difficulty'] for p in sub])
-            y = np.array([p['divergence'] for p in sub])
+            x = np.array([p['diff_z'] for p in sub])
+            y = np.array([p['div_rel'] for p in sub])
             if len(sub) > 2 and x.std() > 0:
                 b = np.polyfit(x, y, 1)
                 xs = np.linspace(x.min(), x.max(), 20)
                 ax.plot(xs, np.polyval(b, xs), 'k--', lw=1,
                         label='slope {:.2f}'.format(b[0]))
         ax.set_title('{} - {}'.format(*pr), fontsize=9)
-        ax.set_xlabel('difficulty (mean |GT-believed| / |GT|)')
-        ax.set_ylabel('divergence (worse-arm minus better-arm)')
+        ax.set_xlabel('difficulty (z within objective)')
+        ax.set_ylabel('relative divergence\n(worse minus better, / OPP scale)')
         ax.grid(alpha=.25)
         ax.legend(fontsize=6)
     ax = axes[2]
-    sc = ax.scatter([p['difficulty'] for p in pairs],
-                    [p['divergence'] for p in pairs],
+    sc = ax.scatter([p['diff_z'] for p in pairs],
+                    [p['div_rel'] for p in pairs],
                     c=[p['rank_delta'] for p in pairs], cmap='viridis',
                     s=[10 + 2.5 * p['N'] for p in pairs], alpha=.7)
     fig.colorbar(sc, ax=ax, label='rank delta')
@@ -157,8 +187,8 @@ def main():
     plt.close(fig)
 
     # -- regressions --
-    y = np.array([p['divergence'] for p in pairs], dtype=float)
-    diff = np.array([p['difficulty'] for p in pairs], dtype=float)
+    y = np.array([p['div_rel'] for p in pairs], dtype=float)
+    diff = np.array([p['diff_z'] for p in pairs], dtype=float)
     rd = np.array([p['rank_delta'] for p in pairs], dtype=float)
     lN = np.log2(np.array([p['N'] for p in pairs], dtype=float))
     models = {
@@ -170,11 +200,28 @@ def main():
                 ['difficulty', 'rank_delta', 'difficulty:rank_delta',
                  'log2N']),
     }
+    # CROSS-OBJECTIVE level (the hypothesis proper): per-objective
+    # median difficulty vs median relative divergence
+    print('\n== cross-objective (one point per objective) ==')
+    xo, yo = [], []
+    for obj in sorted(med):
+        sub = [p for p in pairs if p['obj'] == obj]
+        xo.append(float(np.median([p['difficulty'] for p in sub])))
+        yo.append(float(np.median([abs(p['div_rel']) for p in sub])))
+        print('   {:>20s} difficulty {:7.3f}  median |rel divergence| '
+              '{:7.4f}'.format(obj, xo[-1], yo[-1]))
+    if len(xo) > 2:
+        _r = np.corrcoef(xo, yo)[0, 1]
+        _rs = np.corrcoef(np.argsort(np.argsort(xo)),
+                          np.argsort(np.argsort(yo)))[0, 1]
+        print('   pearson r = {:+.3f}   spearman rho = {:+.3f}   (n={})'
+              .format(_r, _rs, len(xo)))
+
     per_pair_slopes = {}
     for pr in sorted({p['pair'] for p in pairs}):
         sub = [p for p in pairs if p['pair'] == pr]
-        x = np.array([p['difficulty'] for p in sub])
-        yy = np.array([p['divergence'] for p in sub])
+        x = np.array([p['diff_z'] for p in sub])
+        yy = np.array([p['div_rel'] for p in sub])
         if len(sub) > 2 and x.std() > 0:
             m = ols(yy, [x], ['difficulty'])
             per_pair_slopes['{}-{}'.format(*pr)] = {
