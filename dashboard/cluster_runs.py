@@ -306,8 +306,13 @@ def _ramp_table(m):
         txt = txt[i:]
     cur = str(pj.get('current'))
     # latest sim marker + iter in the current segment
-    sims = re.findall(r'deployment number =?\s*(\d+)', txt)
-    cur_sim = int(sims[-1]) if sims else 0
+    # count TRAINING STARTS ('Initializing advertisement' -> iter=0):
+    # 'deployment number' lines are family-eval markers that don't fire
+    # during training segments at all (Tom 2026-08-26: table said sim
+    # 1/20 while 18 sims had already trained). Early stop-v2 exits shown
+    # so a fast size reads as progress, not as a stuck iter counter.
+    starts = len(re.findall(r'Initializing advertisement', txt))
+    early = len(re.findall(r'stop-v2.*EARLY EXIT', txt))
     itm = re.findall(r'\[it\] t=\S+ iter=(\d+)', txt)
     cur_iter = int(itm[-1]) if itm else None
     done = pj.get('done') or {}
@@ -319,10 +324,12 @@ def _ramp_table(m):
         if d and d.get('ok'):
             st = 'done in {:.0f} min'.format(d.get('wall_s', 0) / 60)
         elif str(sz) == cur:
-            st = ('<b>training sim {}/{}</b>{}'.format(
-                cur_sim + 1, n,
-                ', iter {}'.format(cur_iter) if cur_iter is not None
-                else ' (setup)'))
+            st = ('<b>{} trainings started / {}</b>'
+                  '{}{}'.format(
+                      starts, n,
+                      ', {} converged early'.format(early) if early else '',
+                      ', current iter {}'.format(cur_iter)
+                      if cur_iter is not None else ' (setup)'))
         else:
             st = '<span class="mut">queued</span>'
         out.append('<tr><td>{}</td><td>{}</td><td>{}</td></tr>'.format(
