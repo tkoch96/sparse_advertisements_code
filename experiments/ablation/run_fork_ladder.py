@@ -241,6 +241,32 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 import traceback; traceback.print_exc()
                 print('component persist failed (non-fatal): {}'.format(e))
             result['n_iters'] = int(getattr(solver, 'iter', -1))
+            # OBJECTIVE-DIFFICULTY block (Tom 2026-08-26): rough measure =
+            # |ground truth - believed| over iterations, averaged. Compact
+            # aligned series persisted (capped) so downstream analysis can
+            # recompute variants without the run dirs.
+            try:
+                _bel = dict(solver.metrics.get('abl_belief_objective') or [])
+                _gt = solver.metrics.get('actual_nonconvex_objective') or []
+                _its = [i for i in range(min(len(_gt),
+                        (max(_bel) + 1) if _bel else 0)) if i in _bel]
+                _pairs = [(i, float(_gt[i]), float(_bel[i])) for i in _its
+                          if _gt[i] is not None
+                          and np.isfinite(_gt[i]) and np.isfinite(_bel[i])]
+                if _pairs:
+                    _gaps = [abs(g - b) for _, g, b in _pairs]
+                    _scale = max(np.mean([abs(g) for _, g, _b in _pairs]),
+                                 1e-9)
+                    result['model_gap'] = {
+                        'mean_abs': float(np.mean(_gaps)),
+                        'mean_rel': float(np.mean(_gaps) / _scale),
+                        'max_abs': float(np.max(_gaps)),
+                        'n_pts': len(_pairs),
+                        'series': [[i, round(g, 4), round(b, 4)]
+                                   for i, g, b in _pairs[:400]],
+                    }
+            except Exception as _e:
+                print('model_gap persist failed (non-fatal): {}'.format(_e))
             # anytime-performance (Tom 2026-08-19: quantify convergence
             # SPEED, not just exit iteration — exit includes the stop
             # rule's flat patience tail). First iteration reaching q of
