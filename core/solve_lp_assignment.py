@@ -323,6 +323,25 @@ def _is_avg_latency_obj(obj):
 	return name == 'avg_latency'
 
 
+def _joint_unsolved_ret(sas):
+	"""Unsolved joint LP: full sentinel-shaped dict (2026-08-26). The bare
+	{'solved': False, 'objective': None} returns crashed every consumer
+	that reads paths_by_ug/lats_by_ug (painter's actual-32 joint eval:
+	KeyError 'paths_by_ug'), and objective=None poisoned histograms.
+	Mirror the persistent path's no-route sentinel instead."""
+	n_ug = sas.whole_deployment_n_ug
+	return {'solved': False,
+			'objective': NO_ROUTE_LATENCY,
+			'raw_solution': {},
+			'paths_by_ug': {},
+			'bulk_paths_by_ug': {},
+			'lats_by_ug': np.full(n_ug, NO_ROUTE_LATENCY, dtype=float),
+			'available_paths': [],
+			'vols_by_poppi': {},
+			'fraction_congested_volume': 1.0,
+			'fraction_congested_volume_with_bulk': 1.0}
+
+
 def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs):
 	## minimizes average latency for low latency traffic and (sorta) amount of congested low latency traffic
 
@@ -336,7 +355,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		print("Didn't even solve low latency allocation ... ")
 		# was exit(0): process death with rc=0 (the silent-death pattern);
 		# return unsolved so callers can handle it (2026-08-14)
-		return {'solved': False, 'objective': None}
+		return _joint_unsolved_ret(sas)
 
 
 	available_paths, paths_by_ug = get_paths_by_ug(sas, routed_through_ingress)
@@ -424,7 +443,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	if model.status != 2: ## 2 is optimal
 		print("Didnt solve")
 		# was exit(0) followed by an unreachable return (2026-08-14)
-		return {'solved': False, 'objective': None}
+		return _joint_unsolved_ret(sas)
 	low_latency_path_distribution = x
 	bulk_path_distribution = b.X
 	# print("Solved!")

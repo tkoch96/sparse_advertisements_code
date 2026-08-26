@@ -106,7 +106,12 @@ def _joint_at_ratio(sas, adv, bv, rti=None):
         rti, _ = sas.calculate_ground_truth_ingress(a)
     ret = solve_joint_latency_bulk_download(sas, rti, 'joint_priority')
     if not ret.get('solved'):
-        raise ValueError('joint LP unsolved at bv={}'.format(bv))
+        # infeasible at this bulk ratio = the bulk cannot be placed at
+        # all -- for the bisection that IS 'fully congested', not an
+        # error. Raising here recorded None ('-') for exactly the GOOD
+        # strategies, whose critical ratios push into infeasible
+        # territory (Tom 2026-08-26: crit bulk ratio missing for most).
+        return 1.0, ret
     return float(ret['fraction_congested_volume_with_bulk']), ret
 
 

@@ -65,7 +65,8 @@ class Generic_Objective:
 		"""
 		
 		ret = self.get_latency_benefit_adv(a)
-		ug_ingress_decisions = ret['paths_by_ug']
+		# defensive: unsolved/sentinel rets may carry no path map
+		ug_ingress_decisions = ret.get('paths_by_ug') or {}
 		if kwargs.get('save_ug_ingress_decisions'):
 			self.sas.popp_to_users = {}
 			for ugi in ug_ingress_decisions:
