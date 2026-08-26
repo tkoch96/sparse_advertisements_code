@@ -742,12 +742,16 @@ def _pt_progress_table(m):
                 pass
     out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress '
            '<small>(cap {} iters/objective)</small></h3>'.format(cap),
+           '__PT_OVERALL__',
            '<div class="wrap"><table><thead><tr><th>objective</th>'
-           '<th>state</th><th>iter</th><th>last advance</th>'
+           '<th>state</th><th>iter</th><th>% of cap</th>'
+           '<th>last advance</th>'
            '<th>sec/iter (recent)</th><th>ETA to cap</th><th>popps/ugs</th>'
            '<th>probes/budget</th><th>valve</th><th>sparse</th>'
            '</tr></thead><tbody>']
     now = time.time()
+    _prog = []   # (objective, fraction of cap) for the overall line
+    _cur_eta_s = None
     for obj in _PT_OBJECTIVES:
         st, log = states[obj]
         it_n = last_age = spi = eta = popps = sparse = ''
@@ -768,7 +772,8 @@ def _pt_progress_table(m):
                     v = sum(d) / len(d)
                     spi = '{:.0f}'.format(v)
                     if st == 'running':
-                        eta = _fmt_dt((cap - pts[-1][1]) * v)
+                        _cur_eta_s = (cap - pts[-1][1]) * v
+                        eta = _fmt_dt(_cur_eta_s)
             mm = _SIM_OPT_RE.search(txt)
             if mm:
                 popps = '{}/{}'.format(mm.group(1), mm.group(2))
@@ -789,15 +794,40 @@ def _pt_progress_table(m):
         color = {'done': 'var(--ok,#2c7a2c)', 'cached': 'var(--ok,#2c7a2c)',
                  'running': 'var(--warn,#c9862b)',
                  'FAILED': 'var(--bad,#c0392b)'}.get(st, 'var(--mut)')
+        if st in ('done', 'cached'):
+            _frac = 1.0
+        elif it_n:
+            _frac = min(int(it_n) / float(cap), 1.0)
+        else:
+            _frac = 0.0
+        _prog.append((obj, _frac))
+        pct_cell = ('{:.0f}%'.format(100 * _frac)
+                    if (st in ('done', 'cached') or it_n) else '-')
         out.append('<tr><th>{}</th><td style="color:{}">{}</td>'
                    '<td class="c">{}</td><td class="c">{}</td>'
+                   '<td class="c">{}</td>'
                    '<td class="c">{}</td><td class="c">{}</td>'
                    '<td class="c">{}</td><td class="c">{}</td>'
                    '<td class="c">{}</td><td class="c">{}</td></tr>'.format(
-                       html.escape(obj), color, st, it_n, last_age,
-                       spi, eta, popps, probes, valve, sparse))
+                       html.escape(obj), color, st, it_n, pct_cell,
+                       last_age, spi, eta, popps, probes, valve, sparse))
     out.append('</tbody></table></div>')
-    return '\n'.join(out)
+    # overall line: % of total iteration budget, elapsed, measured ETA
+    # floor (current cell's ETA; queued cells honestly unpriced)
+    overall = (100.0 * sum(f for _, f in _prog) / max(len(_prog), 1))
+    started = m.get('created_epoch') or m.get('started_epoch')
+    elapsed = (now - started) if started else None
+    n_queued = sum(1 for _, f in _prog if f == 0.0)
+    hdr = ('<p class="note"><b>{:.0f}% of total iteration budget</b> '
+           '({} objectives) {}{}{}</p>'.format(
+               overall, len(_prog),
+               '&middot; elapsed {} '.format(_fmt_dt(elapsed))
+               if elapsed else '',
+               '&middot; current cell ETA {} '.format(_fmt_dt(_cur_eta_s))
+               if _cur_eta_s else '',
+               '&middot; {} objective(s) queued (unpriced)'.format(n_queued)
+               if n_queued else ''))
+    return '\n'.join(out).replace('__PT_OVERALL__', hdr)
 
 
 def _pt_phase_table(m):
