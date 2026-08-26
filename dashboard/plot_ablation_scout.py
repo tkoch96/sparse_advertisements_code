@@ -69,8 +69,8 @@ def render():
     a1.set_ylabel('avg latency - OPP (ms)\nlower is better')
     a1.set_title('ablation ladder: seed 1, small, 100 iters', fontsize=10)
     a1.grid(alpha=.25, axis='y')
-    walls = [rows[r].get('wall_s', 0) / 60 for r in rungs]
-    iters = [rows[r].get('n_iters', 0) for r in rungs]
+    walls = [(rows[r].get('wall_s') or 0) / 60 for r in rungs]
+    iters = [rows[r].get('n_iters') or 0 for r in rungs]
     a2.bar(xs - .2, walls, width=.4, label='wall (min)', color='#c9862b')
     a2b = a2.twinx()
     a2b.bar(xs + .2, iters, width=.4, label='iters', color='#2f9e6e')

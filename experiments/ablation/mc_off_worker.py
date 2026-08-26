@@ -60,10 +60,38 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
         self._abl_mc['pseudo_calls'] += 1
         self._abl_pseudo_price = {}
         rd = self.rti_data
+        blocks = rd.get('blocks') or []
+        meta = rd.get('block_meta') or []
+        out = {0: {}}
+        if blocks and meta:
+            # compact-block structures (post-2026-08-25 mainline; the
+            # legacy all_probs/meta_data lists are no longer populated).
+            # Mainline samples UNIFORMLY over each scenario's options, so
+            # the deterministic expectation is the plain mean.
+            n_scen = 0
+            for (lens_e, pad_e), (pref_i, names_e, uis_e) in zip(
+                    blocks, meta):
+                for j, ug_name in enumerate(names_e):
+                    n = int(lens_e[j])
+                    if n <= 0:
+                        continue
+                    poppis = pad_e[j, :n].astype(int)
+                    lats = self.lat_matrix[poppis, int(uis_e[j])]
+                    exp_lat = float(lats.mean())
+                    rep = int(poppis[int(np.argmin(lats))])
+                    prev = self._abl_pseudo_price.get((ug_name, rep))
+                    if prev is None or exp_lat < prev:
+                        self._abl_pseudo_price[ug_name, rep] = exp_lat
+                    try:
+                        out[0][pref_i][ug_name] = self.popps[rep]
+                    except KeyError:
+                        out[0][pref_i] = {ug_name: self.popps[rep]}
+                    n_scen += 1
+            rd['num_scenarios'] = n_scen
+            return out if n_scen else {}
         rd['num_scenarios'] = len(rd['all_probs'])
         if rd['num_scenarios'] == 0:
             return {}
-        out = {0: {}}
         perfs_all = self.whole_deployment_ug_perfs
         for (ui, pref_i, ug_name), probs, poppis in zip(
                 rd['meta_data'], rd['all_probs'], rd['all_poppis']):
