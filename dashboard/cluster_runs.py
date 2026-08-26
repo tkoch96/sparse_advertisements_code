@@ -387,9 +387,19 @@ def _progress_table(m):
     sims_done = sum(int(nsim.get(str(s2), 0) or 0) for s2 in sizes
                     if str(s2) in done) + cur_done_sims
     pct = 100.0 * sims_done / sims_total if sims_total else 0.0
-    hdr = ('<p class="note"><b>{:.0f}% of sims done</b> ({}/{}) &middot; '
-           'elapsed {} &middot; measured est &ge; {}{}{}</p>'.format(
-               pct, sims_done, sims_total,
+    hdr = ('<div style="border:1px solid var(--line,#444);border-radius:8px;'
+           'padding:.7rem .9rem;margin:.4rem 0 .6rem;background:'
+           'rgba(127,127,127,.08)">'
+           '<div style="font-size:1.15rem;font-weight:700">{pct:.0f}% of '
+           'sims done <span style="font-weight:400;font-size:.85rem">'
+           '({sd}/{st})</span></div>'
+           '<div style="height:10px;border-radius:5px;background:'
+           'rgba(127,127,127,.25);margin:.45rem 0">'
+           '<div style="height:10px;border-radius:5px;width:{pct:.0f}%;'
+           'background:var(--acc,#1baf7a)"></div></div>'
+           '<div class="note" style="margin:0">'.format(
+               pct=pct, sd=sims_done, st=sims_total)
+           + 'elapsed {} &middot; measured est &ge; {}{}{}</div></div>'.format(
                _fmt_dt(overall_elapsed) if overall_elapsed else '?',
                _fmt_dt(known_total) if known_total else '?',
                ' (+{} unmeasured queued sizes)'.format(n_unmeasured)
@@ -401,24 +411,30 @@ def _progress_table(m):
                if cur is not None and cur_n else ''))
     out = [hdr,
            '<div class="wrap"><table><thead><tr><th>deployment size</th>'
-           '<th>nsim</th><th>state</th><th>wall</th><th>sec / sim</th>'
+           '<th>nsim</th><th>state</th><th>% done</th><th>elapsed</th>'
+           '<th>est total</th><th>sec / sim</th>'
            '</tr></thead><tbody>']
     for s in sizes:
         e = done.get(str(s))
         if e is None:
             if p.get('current') == s:
                 st = ('<b style="color:var(--acc)">running</b> '
-                      '&mdash; sim {}/{}, ~{:.0f}% of size'.format(
+                      '&mdash; sim {}/{}'.format(
                           min(cur_starts, cur_n or cur_starts),
-                          cur_n or '?', 100 * cur_frac))
+                          cur_n or '?'))
+                pct_c = '<b>{:.0f}%</b>'.format(100 * cur_frac)
                 wall_c = _fmt_dt(cur_elapsed) if cur_elapsed else '-'
-                est_c = ('~{} total'.format(_fmt_dt(cur_est))
-                         if cur_est else '-')
+                est_c = ('~{}'.format(_fmt_dt(cur_est)) if cur_est else '-')
+                sps_c = (_fmt_dt(cur_elapsed / max(cur_done_sims, 1))
+                         if cur_elapsed and cur_done_sims else '-')
             else:
-                st, wall_c, est_c = '<span class="mut">queued</span>', '-', '-'
+                st = '<span class="mut">queued</span>'
+                pct_c, wall_c, est_c, sps_c = '0%', '-', '-', '-'
             out.append('<tr><th>{}</th><td>{}</td><td>{}</td>'
+                       '<td class="c">{}</td><td class="c">{}</td>'
                        '<td class="c">{}</td><td class="c">{}</td></tr>'
-                       .format(_szlabel(s), nsim.get(str(s), '?'), st, wall_c, est_c))
+                       .format(_szlabel(s), nsim.get(str(s), '?'), st,
+                               pct_c, wall_c, est_c, sps_c))
         else:
             ok = e.get('ok')
             # A cache hit is NOT a timing measurement: the size returned in
@@ -439,10 +455,11 @@ def _progress_table(m):
                 wall = '<s class="mut">{}</s>'.format(wall)
                 sps = '<s class="mut">{}</s>'.format(sps)
             out.append('<tr><th>{}</th><td>{}</td>'
-                       '<td style="color:{}">{}</td><td class="c">{}</td>'
+                       '<td style="color:{}">{}</td><td class="c">100%</td>'
+                       '<td class="c">{}</td><td class="c">{}</td>'
                        '<td class="c">{}</td></tr>'.format(
                            _szlabel(s), nsim.get(str(s), '?'), color,
-                           state, wall, sps))
+                           state, wall, wall, sps))
     out.append('</tbody></table></div>')
     if any((done.get(str(s)) or {}).get('cached') for s in sizes):
         out.append('<p class="note" style="color:#c9862b">Struck-through '
