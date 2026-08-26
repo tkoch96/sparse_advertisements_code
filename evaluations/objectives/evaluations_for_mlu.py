@@ -28,7 +28,28 @@ def _mlu(sas, adv):
     # the thresholded adv first; returns (mlu, routable_vol_frac).
     from helpers.helpers import threshold_a
     rti, _ = sas.calculate_ground_truth_ingress(threshold_a(adv))
-    ret = solve_min_mlu(sas, rti)
+    import os
+    os.environ.setdefault('SCULPTOR_MIN_MLU_TIMELIMIT', '120')
+    try:
+        ret = solve_min_mlu(sas, rti)
+    except RuntimeError as e:
+        if 'status 9' not in str(e):
+            raise
+        # TIME_LIMIT on huge advs (one_per_peering at actual-32 was the
+        # 2026-08-26 casualty: MLU column '-'). Fall back to the
+        # assignment-peak MLU from the steady latency LP -- defined for
+        # every advertisement, slightly conservative (upper bound).
+        from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
+        from core.hard_objectives import _max_util_from_ret
+        st = solve_generic_lp_with_failure_catch(sas, rti, 'avg_latency',
+                                                 no_persistent=True)
+        peak = _max_util_from_ret(st, sas.link_capacities_arr,
+                                  sas.n_popps, sas=sas)
+        if peak is None:
+            raise
+        print('[mlu] min-MLU timed out; assignment-peak fallback {:.3f}'
+              .format(peak))
+        return float(peak)
     if isinstance(ret, tuple):
         mlu, _routable = ret
         if mlu is None:

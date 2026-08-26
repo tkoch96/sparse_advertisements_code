@@ -1100,7 +1100,7 @@ def solve_min_mlu(sas, routed_through_ingress):
 		A_ub[i, nx] = -max(float(caps[i]), 1e-9)
 	model = gp.Model()
 	model.Params.LogToConsole = 0
-	model.Params.TimeLimit = 15.0
+	model.Params.TimeLimit = float(os.environ.get('SCULPTOR_MIN_MLU_TIMELIMIT', '15'))
 	model.Params.Threads = N_WORKERS_GENERIC
 	z = model.addMVar(nx + 1, lb=0)
 	model.addConstr(A_eq.tocsr() @ z == b_eq)
