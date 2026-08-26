@@ -103,3 +103,15 @@ live run. A watch pinned to a dead segment stamps stale verdicts.
   audit's "stale code" flag is usually RIGHT.
 - ENOSPC kills the local Ray GCS first; the dash pipeline dies with it.
   Watch `df` before long local campaigns; APFS purgeable hides usage.
+
+## Postscript (same day): the HTML itself was browser-cached
+
+Step 7 fired within the hour of writing this. Images were cache-busted;
+`index.html` was not — the browser happily kept an old page over a fresh
+server copy. Fixed at the source: both dash vhosts now send
+`Cache-Control: no-store, must-revalidate` for `*.html` (mod_headers,
+FilesMatch in `sites-available/dash.conf`). One final hard-refresh
+escapes an already-cached copy; after that plain reloads are always
+fresh. If a THIRD cache layer ever appears, the debug order still holds:
+prove server content first (grep the served file over ssh), then blame
+the client.
