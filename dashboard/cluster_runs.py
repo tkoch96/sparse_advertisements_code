@@ -441,7 +441,8 @@ def _progress_table(m):
             out.append('<tr><th>{}</th><td>{}</td>'
                        '<td style="color:{}">{}</td><td class="c">{}</td>'
                        '<td class="c">{}</td></tr>'.format(
-                           s, nsim.get(str(s), '?'), color, state, wall, sps))
+                           _szlabel(s), nsim.get(str(s), '?'), color,
+                           state, wall, sps))
     out.append('</tbody></table></div>')
     if any((done.get(str(s)) or {}).get('cached') for s in sizes):
         out.append('<p class="note" style="color:#c9862b">Struck-through '
