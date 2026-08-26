@@ -740,9 +740,22 @@ def _l1_paths(dpsize, objectives, run_tag):
     return out
 
 
-def _condensed_fresh(dpsize, objectives, run_tag):
+def _condensed_fresh(dpsize, objectives, run_tag, nsim=None):
     cp = _condensed_path(dpsize, run_tag)
     if not os.path.exists(cp):
+        return False
+    # the L3 key must cover the REQUEST, not just the artifacts: a
+    # follow-on asking for MORE sims or different objectives is not
+    # 'identical' (2026-08-26: the nsim=3 resume loaded the nsim=1
+    # table and exited in 0.0s without training anything)
+    try:
+        d = pickle.load(open(cp, 'rb'))
+        if nsim is not None and (d.get('nsim') or 0) < nsim:
+            return False
+        if objectives and set(sorted(objectives)) - set(d.get('objectives')
+                                                        or []):
+            return False
+    except Exception:
         return False
     ct = os.path.getmtime(cp)
     for p in _l1_paths(dpsize, objectives, run_tag):
@@ -751,10 +764,12 @@ def _condensed_fresh(dpsize, objectives, run_tag):
     return True
 
 
-def _save_condensed(dpsize, run_tag, labels, rows):
+def _save_condensed(dpsize, run_tag, labels, rows, nsim=None,
+                    objectives=None):
     with open(_condensed_path(dpsize, run_tag), 'wb') as f:
         pickle.dump({'labels': labels, 'rows': rows,
-                     'methods': METHODS}, f)
+                     'methods': METHODS, 'nsim': nsim,
+                     'objectives': sorted(objectives or [])}, f)
 
 
 def _load_condensed(dpsize, run_tag):
@@ -814,7 +829,8 @@ def main():
     # ---- 5-SECOND PATH: fresh condensed pickle and nothing forced ----
     if (not a.plan_only and not FORCE_RESOLVE and not FORCE_REAGGREGATE
             and not FORCE_RECOMPUTE_METRICS
-            and _condensed_fresh(dpsize, objectives, run_tag)):
+            and _condensed_fresh(dpsize, objectives, run_tag,
+                                 nsim=a.nsim)):
         labels, rows = _load_condensed(dpsize, run_tag)
         emit(labels, rows, a.format, a.out)
         emit_key(labels, rows, a.format, a.out)
@@ -868,7 +884,8 @@ def main():
             emit(labels, rows, a.format, a.out)
             emit_key(labels, rows, a.format, a.out)
             if not a.plan_only:
-                _save_condensed(dpsize, run_tag, labels, rows)
+                _save_condensed(dpsize, run_tag, labels, rows,
+                                nsim=a.nsim, objectives=objectives)
                 print('  [condensed] L3 pickle saved; next identical call '
                       'loads the table in seconds')
     else:
