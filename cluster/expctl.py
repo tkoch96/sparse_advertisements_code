@@ -186,6 +186,8 @@ def preset_papertable(a, run_id):
             '--out', 'figures/cluster/{}/paper_table'.format(run_id)]
     if getattr(a, 'hotstart', ''):
         argv += ['--hotstart', a.hotstart]
+    if getattr(a, 'objectives', ''):
+        argv += ['--objectives', a.objectives]
     env = {
         'PYTHONUNBUFFERED': '1',
         'SCULPTOR_REQUIRE_SOLNS': 'sparse',
@@ -934,6 +936,9 @@ def main(argv=None):
     p.add_argument('ref')
     p.add_argument('--preset', choices=sorted(PRESETS))
     p.add_argument('--label', default=None)
+    p.add_argument('--objectives', default='',
+                   help='papertable: comma list passed through to '
+                        'generate_paper_table --objectives')
     p.add_argument('--hotstart', default='',
                    help="papertable: 'obj:remote_runs_dir,...' passed "
                         "through to generate_paper_table --hotstart")
