@@ -228,7 +228,14 @@ class LatencyPlusResilienceObjective(Generic_Objective):
 			(quite slow)
 		"""
 		benefit = 0
-		return 0 #### TMPPPPPPPP
+		# GT RB is N_popps full LP sweeps -- huge, and production rarely
+		# wants it (Tom turned it off; was a bare 'return 0 ####TMP').
+		# SCULPTOR_GT_RB=1 overrides for experiments whose GT must be
+		# composition-consistent with the belief (e.g. the 2026-08-26
+		# objective-difficulty grid: RB-less GT vs gamma*RB-carrying
+		# belief inflated avg_latency's 'difficulty' to 5.28).
+		if os.environ.get('SCULPTOR_GT_RB', '0') != '1':
+			return 0
 		if self.sas.gamma == 0:
 			return benefit
 
