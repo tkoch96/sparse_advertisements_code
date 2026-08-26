@@ -265,8 +265,15 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 print('iters_to persist failed (non-fatal): {}'.format(_e))
             result['n_advs_measured'] = int(getattr(solver, 'path_measures', -1))
             result['nan_grad_iters'] = int(getattr(solver, 'abl_nan_grad_iters', 0))
-            result['probe_mode'] = getattr(solver, 'abl_probe_mode', 'fixed')
-            result['probes_spent'] = int(getattr(solver, 'abl_probes_spent', 0))
+            # post-consolidation mainline names probe_mode/probes_spent
+            # (fork-era abl_* first for L1-L5 arms; recording 'fixed'
+            # while the run gated made the queue audit flag stale code)
+            result['probe_mode'] = getattr(
+                solver, 'abl_probe_mode',
+                getattr(solver, 'probe_mode', 'fixed'))
+            result['probes_spent'] = int(getattr(
+                solver, 'abl_probes_spent',
+                getattr(solver, 'probes_spent', 0) or 0))
             result['exit_reason'] = getattr(solver, 'abl_exit_reason', None)
             result['probe_reasons'] = dict(getattr(
                 solver, '_abl_probe_reasons', {}) or {})
