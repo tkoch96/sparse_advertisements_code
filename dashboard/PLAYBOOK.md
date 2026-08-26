@@ -115,3 +115,28 @@ escapes an already-cached copy; after that plain reloads are always
 fresh. If a THIRD cache layer ever appears, the debug order still holds:
 prove server content first (grep the served file over ssh), then blame
 the client.
+
+## THE definitive test: render it and look (Tom 2026-08-26)
+
+Greps lie by omission (right string, wrong tab) and there are ~8 cache
+layers to misdirect you. The only test that closes the loop:
+
+1. Pull the exact served bytes:
+   `vmctl ssh <dash-instance> -- 'cat /var/www/dash/index.html' > /tmp/served.html`
+2. Serve locally (`.claude/launch.json` entry `served-dash-copy`,
+   python http.server) and open in a REAL browser.
+3. Click to the exact tab/subtab in question, and LOOK AT THE PIXELS.
+   Screenshot it. If you can't show a picture of the thing, it is not
+   verified.
+
+Browser-pane quirks learned doing this: screenshots capture the top of
+long pages regardless of scroll -- zoom out (body.style.zoom≈0.4) to get
+everything in frame; plots/ images 404 in a local copy (fine -- tables
+and text are what you're verifying).
+
+Client side is pre-solved: both vhosts send `Cache-Control: no-store`
+for HTML, so after ONE hard refresh a viewer can never be HTML-stale
+again. If someone reports staleness anyway, run this test FIRST and
+show them the screenshot -- it either exposes a real pipeline bug
+(mis-parsed section, clipped panel) or proves the content and isolates
+the client in one step.
