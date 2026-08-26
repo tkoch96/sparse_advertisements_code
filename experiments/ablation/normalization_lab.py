@@ -117,38 +117,46 @@ def main():
                    for x in row]))
 
     # ---- regressions per (D, V) combo ----
+    # avg_latency's GT was RB-less until SCULPTOR_GT_RB existed (its
+    # belief carries gamma*RB), so report each combo both WITH and
+    # WITHOUT it (Tom 2026-08-26: let the grid finish; exclude
+    # avg_latency from cross-objective difficulty claims)
     print('\n== hypothesis regression per combo: divergence ~ difficulty + '
           'rank_delta + log2N ==')
-    for dkey in ('D1', 'D2', 'D3'):
-        for vkey in ('V1', 'V2'):
-            xs, ys, rds, lns = [], [], [], []
-            for p in pairs:
-                m = meas.get((p['obj'], p['N'], p['seed']))
-                if not m or m.get(dkey) is None:
-                    continue
-                if vkey == 'V1':
-                    v = p['divergence'] / scale[p['obj']]
-                else:
-                    sp = span.get((p['obj'], p['N'], p['seed']))
-                    if sp is None:
+    for excl in (False, True):
+        if excl:
+            print('  --- excluding avg_latency (RB-less GT artifact) ---')
+        for dkey in ('D1', 'D2', 'D3'):
+            for vkey in ('V1', 'V2'):
+                xs, ys, rds, lns = [], [], [], []
+                for p in pairs:
+                    if excl and p['obj'] == 'avg_latency':
                         continue
-                    v = p['divergence'] / sp
-                xs.append(m[dkey]); ys.append(v)
-                rds.append(float(p['rank_delta']))
-                lns.append(np.log2(float(p['N'])))
-            if len(ys) < 20:
-                print('  {}/{}: n={} (too few)'.format(dkey, vkey, len(ys)))
-                continue
-            # standardize difficulty within objective? keep raw here --
-            # D2/D3 are already unit-free across objectives
-            mres = ols(np.array(ys), [np.array(xs), np.array(rds),
-                                      np.array(lns)],
-                       ['difficulty', 'rank_delta', 'log2N'])
-            b, t = mres['beta'][1], mres['t'][1]
-            print('  {}/{}: n={:3d} R2={:.3f}  difficulty {:+8.3f} '
-                  '(t {:+5.2f})   rank_delta t {:+5.2f}'.format(
-                      dkey, vkey, mres['n'], mres['r2'], b, t,
-                      mres['t'][2]))
+                    m = meas.get((p['obj'], p['N'], p['seed']))
+                    if not m or m.get(dkey) is None:
+                        continue
+                    if vkey == 'V1':
+                        v = p['divergence'] / scale[p['obj']]
+                    else:
+                        sp = span.get((p['obj'], p['N'], p['seed']))
+                        if sp is None:
+                            continue
+                        v = p['divergence'] / sp
+                    xs.append(m[dkey]); ys.append(v)
+                    rds.append(float(p['rank_delta']))
+                    lns.append(np.log2(float(p['N'])))
+                if len(ys) < 20:
+                    print('  {}/{}: n={} (too few)'.format(
+                        dkey, vkey, len(ys)))
+                    continue
+                mres = ols(np.array(ys), [np.array(xs), np.array(rds),
+                                          np.array(lns)],
+                           ['difficulty', 'rank_delta', 'log2N'])
+                b, t = mres['beta'][1], mres['t'][1]
+                print('  {}/{}: n={:3d} R2={:.3f}  difficulty {:+8.3f} '
+                      '(t {:+5.2f})   rank_delta t {:+5.2f}'.format(
+                          dkey, vkey, mres['n'], mres['r2'], b, t,
+                          mres['t'][2]))
 
     # ---- scatter for D2/V2 ----
     fig, ax = plt.subplots(figsize=(6.4, 4.2))
