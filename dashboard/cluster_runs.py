@@ -342,6 +342,11 @@ def _ramp_table(m):
     return ('<h3>deployment ramp</h3>' + '\n'.join(out))
 
 
+def _szlabel(s):
+    s = str(s)
+    return s if s.startswith('actual') else 'actual-{}'.format(s)
+
+
 def _progress_table(m):
     p = _read_json(os.path.join(RUNS_DIR, m['run_id'], 'logs',
                                 'progress.json'))
@@ -351,17 +356,69 @@ def _progress_table(m):
     sizes = p.get('sizes', [])
     done = p.get('done', {})
     nsim = p.get('nsim', {})
-    out = ['<div class="wrap"><table><thead><tr><th>deployment size</th>'
+    # ---- REAL progress (Tom 2026-08-26: 'state and goal' is not
+    # progress): elapsed, per-size % via sims completed, measured-only
+    # total estimate. Current-size sim counts ride the segment log
+    # (training starts), like the ramp table.
+    now = time.time()
+    started = p.get('current_started') or p.get('started')
+    txt = _read(os.path.join(RUNS_DIR, m['run_id'], 'logs', 'run.log')) or ''
+    i = txt.rfind('[expctl] run_id=')
+    if i > 0:
+        txt = txt[i:]
+    _j = txt.rfind('[sweep] === dpsize=')
+    _cur_txt = txt[_j:] if _j > 0 else txt
+    cur_starts = len(re.findall(r'Initializing advertisement', _cur_txt))
+    cur = p.get('current')
+    cur_n = int(nsim.get(str(cur), 0) or 0)
+    cur_elapsed = (now - started) if started else None
+    cur_done_sims = max(cur_starts - 1, 0)
+    cur_frac = (cur_done_sims / cur_n) if cur_n else 0.0
+    cur_est = (cur_elapsed / max(cur_frac, 1.0 / max(cur_n, 1) * 0.5)
+               if cur_elapsed and cur_n and cur_starts else None)
+    total_done_wall = sum((done.get(str(s2)) or {}).get('wall_s') or 0
+                          for s2 in sizes)
+    run_started = p.get('started')
+    overall_elapsed = (now - run_started) if run_started else None
+    n_sizes_done = sum(1 for s2 in sizes if str(s2) in done)
+    known_total = total_done_wall + (cur_est or 0)
+    n_unmeasured = len(sizes) - n_sizes_done - (1 if cur is not None else 0)
+    sims_total = sum(int(nsim.get(str(s2), 0) or 0) for s2 in sizes)
+    sims_done = sum(int(nsim.get(str(s2), 0) or 0) for s2 in sizes
+                    if str(s2) in done) + cur_done_sims
+    pct = 100.0 * sims_done / sims_total if sims_total else 0.0
+    hdr = ('<p class="note"><b>{:.0f}% of sims done</b> ({}/{}) &middot; '
+           'elapsed {} &middot; measured est &ge; {}{}{}</p>'.format(
+               pct, sims_done, sims_total,
+               _fmt_dt(overall_elapsed) if overall_elapsed else '?',
+               _fmt_dt(known_total) if known_total else '?',
+               ' (+{} unmeasured queued sizes)'.format(n_unmeasured)
+               if n_unmeasured > 0 else '',
+               ' &middot; current size ~{:.0f}% ({} of {} sims, ~{}/sim)'
+               .format(100 * cur_frac, cur_done_sims, cur_n,
+                       _fmt_dt(cur_elapsed / max(cur_done_sims, 1))
+                       if cur_elapsed and cur_done_sims else '?')
+               if cur is not None and cur_n else ''))
+    out = [hdr,
+           '<div class="wrap"><table><thead><tr><th>deployment size</th>'
            '<th>nsim</th><th>state</th><th>wall</th><th>sec / sim</th>'
            '</tr></thead><tbody>']
     for s in sizes:
         e = done.get(str(s))
         if e is None:
-            st = ('<b style="color:var(--acc)">running</b>'
-                  if p.get('current') == s else '<span class="mut">queued</span>')
-            out.append('<tr><th>actual-{}</th><td>{}</td><td>{}</td>'
-                       '<td>-</td><td>-</td></tr>'.format(
-                           s, nsim.get(str(s), '?'), st))
+            if p.get('current') == s:
+                st = ('<b style="color:var(--acc)">running</b> '
+                      '&mdash; sim {}/{}, ~{:.0f}% of size'.format(
+                          min(cur_starts, cur_n or cur_starts),
+                          cur_n or '?', 100 * cur_frac))
+                wall_c = _fmt_dt(cur_elapsed) if cur_elapsed else '-'
+                est_c = ('~{} total'.format(_fmt_dt(cur_est))
+                         if cur_est else '-')
+            else:
+                st, wall_c, est_c = '<span class="mut">queued</span>', '-', '-'
+            out.append('<tr><th>{}</th><td>{}</td><td>{}</td>'
+                       '<td class="c">{}</td><td class="c">{}</td></tr>'
+                       .format(_szlabel(s), nsim.get(str(s), '?'), st, wall_c, est_c))
         else:
             ok = e.get('ok')
             # A cache hit is NOT a timing measurement: the size returned in
@@ -381,7 +438,7 @@ def _progress_table(m):
             if cached:
                 wall = '<s class="mut">{}</s>'.format(wall)
                 sps = '<s class="mut">{}</s>'.format(sps)
-            out.append('<tr><th>actual-{}</th><td>{}</td>'
+            out.append('<tr><th>{}</th><td>{}</td>'
                        '<td style="color:{}">{}</td><td class="c">{}</td>'
                        '<td class="c">{}</td></tr>'.format(
                            s, nsim.get(str(s), '?'), color, state, wall, sps))
@@ -579,7 +636,7 @@ def _phase_table(m):
     for s in sizes:
         r = recs[s]
         tot = r.get('evals_total', 0)
-        out.append('<tr><th>actual-{}</th>{}</tr>'.format(
+        out.append('<tr><th>{}</th>{}</tr>'.format(
             s, ''.join(cell(r['evals'].get(x, 0), tot) for x in stages)))
     out.append('</tbody></table></div>')
 
@@ -595,7 +652,7 @@ def _phase_table(m):
             r = recs[s]
             if not r.get('others'):
                 continue
-            out.append('<tr><th>actual-{}</th>{}<td class="c">{:.1f}s</td>'
+            out.append('<tr><th>{}</th>{}<td class="c">{:.1f}s</td>'
                        '<td class="c">{:.1f}s</td></tr>'.format(
                            s,
                            ''.join('<td class="c">{:.2f}s</td>'.format(
