@@ -64,6 +64,8 @@ import sys
 import threading
 import time
 
+from evaluations import ablation_cell
+
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 # heavy rungs first so the queue's tail is a cheap cell, not a 'full' run
@@ -338,37 +340,11 @@ def main():
     last_launch = [0.0]
 
     def harvest_cell(sp, ws, N, s, rung):
-        """Inline artifact harvest (spec['artifacts_figs']): copy THIS
-        cell's convergence figure to the artifacts dir under the canonical
-        '<label>_<rundir-suffix>.pdf' name, then remove the run dir (keeps
-        head disk flat without an external harvest loop). Matches only the
-        cell's own run dir so shared slots can never cross-label specs."""
-        figs = sp.get('artifacts_figs')
-        if not figs:
-            return
-        os.makedirs(figs, exist_ok=True)
-        pat = os.path.join(ws, 'runs',
-                           'ablation-{}-{}-dep{}-*'.format(sp['dpsize'], rung, s))
-        hits = glob.glob(pat)
-        if not hits:
-            # actual-N runs create TIMESTAMPED dirs ('<ts>-actual-10-
-            # sparse') that escape the labeled glob (found 2026-08-18:
-            # a10x10 disk creep + zero harvested conv PDFs). Each slot
-            # runs ONE cell at a time and harvest_cell fires right after
-            # its own cell, so any dir in this slot's runs/ is ours.
-            hits = glob.glob(os.path.join(ws, 'runs', '*'))
-        for d in hits:
-            suffix = os.path.basename(d).replace(
-                'ablation-{}-'.format(sp['dpsize']), '', 1)
-            src = os.path.join(d, 'convergence_over_iterations.pdf')
-            if os.path.exists(src):
-                shutil.copy(src, os.path.join(
-                    figs, '{}_{}.pdf'.format(sp['label'], suffix)))
-            me = os.path.join(d, 'model_error_over_iterations.pdf')
-            if os.path.exists(me):
-                shutil.copy(me, os.path.join(
-                    figs, 'ME_{}_{}.pdf'.format(sp['label'], suffix)))
-            shutil.rmtree(d, ignore_errors=True)
+        """Figure harvest now lives in evaluations.ablation_cell (reusable
+        per-cell eval wrapper); run dir + ray-tmp cleanup happens inside
+        run_cell on EVERY exit path, not just rc==0."""
+        ablation_cell.harvest_figs(ws, sp.get('artifacts_figs'),
+                                   sp['label'], sp['dpsize'])
 
     def slot_worker(slot):
         ws = os.path.join(args.ws_root, 'S{}'.format(slot))
@@ -436,17 +412,19 @@ def main():
             except OSError:
                 pass
             timeout_s = float(os.environ.get('SCULPTOR_CELL_TIMEOUT', '7200'))
-            with open(log, 'w') as lf:
-                try:
-                    rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf,
-                                         stderr=subprocess.STDOUT,
-                                         timeout=timeout_s)
-                except subprocess.TimeoutExpired:
-                    rc = -99
-                    print('[queue] TIMEOUT {} N={} seed={} rung={} after '
-                          '{}s -> killed, re-queued next pass'.format(
-                              sp['label'], N, s, rung, int(timeout_s)),
-                          flush=True)
+            # per-cell eval wrapper: harvests figs + wipes run dir and the
+            # slot's ray sessions on every exit path (Tom 2026-08-27 --
+            # failed cells used to leak run dirs, ray_q_S* grew a dead
+            # session per cell until ENOSPC).
+            rc = ablation_cell.run_cell(
+                cmd, ws, env, log, timeout_s,
+                figs_dir=sp.get('artifacts_figs'),
+                label=sp['label'], dpsize=sp['dpsize'])
+            if rc == -99:
+                print('[queue] TIMEOUT {} N={} seed={} rung={} after '
+                      '{}s -> killed, re-queued next pass'.format(
+                          sp['label'], N, s, rung, int(timeout_s)),
+                      flush=True)
             try:
                 os.remove(marker)
             except OSError:
@@ -456,8 +434,6 @@ def main():
                     failures.append((sp['label'], N, s, rung, rc))
                     print('[queue] FAIL {} N={} seed={} rung={} rc={}'.format(
                         sp['label'], N, s, rung, rc), flush=True)
-            else:
-                harvest_cell(sp, ws, N, s, rung)
             gov.release()
             q.task_done()
 
