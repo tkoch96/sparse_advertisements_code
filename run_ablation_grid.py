@@ -79,6 +79,10 @@ def main():
                     help='gamma for avg_latency (others force 0 via '
                          'objective policy)')
     ap.add_argument('--launch-stagger', type=float, default=None)
+    ap.add_argument('--world', default='stock',
+                    help="canonical world from core/worlds.py (stock, "
+                         "georand, maxhard, ...); applied to deployment "
+                         "generation for INITS and every cell")
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
 
@@ -97,6 +101,14 @@ def main():
     # (the queue's ablation-fairness contract, extended to the objective
     # dimension): pre-generate deterministically so parallel first cells
     # never race to write them.
+    from core import worlds as _worlds
+    world_env = _worlds.env(a.world)
+    if world_env:
+        # inits and cells MUST share the world or numbers are garbage
+        # (core/worlds.py docstring; caught 2026-08-14)
+        os.environ.update(world_env)
+        print('[grid] world={} -> {}'.format(a.world, world_env))
+
     init_dir = os.path.join(ws_root, 'inits')
     _ensure_inits(range(1, a.deployments + 1), a.dpsize, init_dir,
                   dry=a.dry_run)
@@ -114,8 +126,9 @@ def main():
             'max_iter': a.num_iters,
             'dpsize': a.dpsize,
             'init_src': init_dir,
-            'env': {'SCULPTOR_XOBJS': '1',
-                    'SCULPTOR_ABLATION_OBJECTIVE': obj},
+            'env': dict({'SCULPTOR_XOBJS': '1',
+                         'SCULPTOR_ABLATION_OBJECTIVE': obj},
+                        **world_env),
             'artifacts_figs': os.path.join(
                 out_root + '_artifacts', 'figs'),
         })
