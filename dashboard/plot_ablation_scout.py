@@ -217,6 +217,9 @@ def refresh_hardobj_view():
                          'no_memory_dir:no mem+dir:#4a6fa5,'
                          'no_memory:no memory:#1baf7a,'
                          'no_mc:no MC:#c9862b'),
+        'HARDOBJ_TITLE': ('Hardness grid -- full ladder x 5 objectives, '
+                          '3 deployments, 250 iters '
+                          '(0 = one-per-peering; lower = better)'),
         'HARDOBJ_OBJS': ('avg_latency:latency + g*resilience,'
                          'per_site_cost:site cost,max_util:MLU,'
                          'frac_beyond_optimal:frac beyond optimal,'
