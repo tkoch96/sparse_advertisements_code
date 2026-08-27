@@ -109,7 +109,7 @@ def render_grid_bars():
     one bar per rung -- final gap vs same-seed OPP (lower better),
     mean over N with min-max whiskers. Painter included as reference."""
     import collections
-    store = os.path.join(REPO, 'cache', 'ablation', 'grid_objdim')
+    store = os.path.join(REPO, 'cache', 'ablation', 'grid_objdim_maxhard')
     vals = collections.defaultdict(list)   # (obj, seed, rung) -> [gap per N]
     objs, seeds = set(), set()
     for fn in glob.glob(os.path.join(store, '*', 'N*', 'seed_*_*.json')):
@@ -196,8 +196,8 @@ def refresh_hardobj_view():
     arm-directory symlink view the engine expects, then invokes it with
     the grid's rungs/objectives."""
     import subprocess
-    SRC = os.path.join(REPO, 'cache/ablation/grid_objdim')
-    DST = os.path.join(REPO, 'cache/ablation/grid_objdim_hardobjview')
+    SRC = os.path.join(REPO, 'cache/ablation/grid_objdim_maxhard')
+    DST = os.path.join(REPO, 'cache/ablation/grid_objdim_maxhard_hardobjview')
     for fn in glob.glob(os.path.join(SRC, '*', 'N*', 'seed_*_*.json')):
         parts = fn.split(os.sep)
         obj, ndir, base = parts[-3], parts[-2], parts[-1]
@@ -209,7 +209,7 @@ def refresh_hardobj_view():
             os.symlink(fn, lnk)
     env = dict(os.environ)
     env.update({
-        'HARDOBJ_ROOT': 'cache/ablation/grid_objdim_hardobjview',
+        'HARDOBJ_ROOT': 'cache/ablation/grid_objdim_maxhard_hardobjview',
         'HARDOBJ_OUT_PREFIX': 'grid_objdim',
         'HARDOBJ_ARMS': ('full:L6 SCULPTOR:#c026a8,'
                          'expl_none:no exploration:#e87ba4,'
@@ -217,7 +217,7 @@ def refresh_hardobj_view():
                          'no_memory_dir:no mem+dir:#4a6fa5,'
                          'no_memory:no memory:#1baf7a,'
                          'no_mc:no MC:#c9862b'),
-        'HARDOBJ_TITLE': ('Hardness grid -- full ladder x 5 objectives, '
+        'HARDOBJ_TITLE': ('Hardness grid (MAXHARD world) -- full ladder x 5 objectives, '
                           '3 deployments, 250 iters '
                           '(0 = one-per-peering; lower = better)'),
         'HARDOBJ_OBJS': ('avg_latency:latency + g*resilience,'

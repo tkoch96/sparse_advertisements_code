@@ -74,7 +74,7 @@ def _series_measures(store):
 
 
 def main():
-    store = os.path.join(REPO, 'cache', 'ablation', 'grid_objdim')
+    store = os.path.join(REPO, 'cache', 'ablation', 'grid_objdim_maxhard')
     rows = load(store)
     pairs = build_pairs(rows)
     med = {}

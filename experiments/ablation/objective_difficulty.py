@@ -107,7 +107,7 @@ def ols(y, X, names):
 def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument('--store', default=os.path.join(
-        REPO, 'cache', 'ablation', 'grid_objdim'))
+        REPO, 'cache', 'ablation', 'grid_objdim_maxhard'))
     a = ap.parse_args()
     rows = load(a.store)
     pairs = build_pairs(rows)

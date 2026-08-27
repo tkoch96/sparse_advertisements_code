@@ -70,7 +70,7 @@ def main():
     ap.add_argument('--rungs', default=DEFAULT_RUNGS)
     ap.add_argument('--out-root', default=None,
                     help='grid store root (default cache/ablation/'
-                         'grid_objdim under the repo)')
+                         'grid_objdim_maxhard under the repo)')
     ap.add_argument('--ws-root', default=None)
     ap.add_argument('--slots', type=int, default=4,
                     help='parallel cells (Mac default 4; VM: raise)')
@@ -96,7 +96,7 @@ def main():
     if bad:
         raise SystemExit('unknown objectives: {}'.format(bad))
     out_root = a.out_root or os.path.join(
-        _REPO, 'cache', 'ablation', 'grid_objdim')
+        _REPO, 'cache', 'ablation', 'grid_objdim_maxhard')
     ws_root = a.ws_root or os.path.join(out_root + '_ws')
     os.makedirs(ws_root, exist_ok=True)
 
@@ -106,7 +106,7 @@ def main():
     # never race to write them.
     from core import worlds as _worlds
     if a.world is None:
-        a.world = 'maxhard' if a.dpsize == 'small' else 'stock'
+        a.world = 'maxhard'   # ablation is ALWAYS maxhard (Tom 2026-08-27)
         print('[grid] world defaulted to {} for dpsize={}'.format(
             a.world, a.dpsize))
     world_env = _worlds.env(a.world)
