@@ -99,3 +99,91 @@ def render():
 
 if __name__ == '__main__':
     print(render())
+    print(render_grid_bars())
+
+
+def render_grid_bars():
+    """v5scout-style panels from the objective-dimension grid store
+    (Tom 2026-08-27): one panel per objective, bar groups per seed,
+    one bar per rung -- final gap vs same-seed OPP (lower better),
+    mean over N with min-max whiskers. Painter included as reference."""
+    import collections
+    store = os.path.join(REPO, 'cache', 'ablation', 'grid_objdim')
+    vals = collections.defaultdict(list)   # (obj, seed, rung) -> [gap per N]
+    objs, seeds = set(), set()
+    for fn in glob.glob(os.path.join(store, '*', 'N*', 'seed_*_*.json')):
+        try:
+            d = json.load(open(fn))
+        except Exception:
+            continue
+        rung = d.get('rung') or 'painter'
+        obj = fn.split(os.sep)[-3]
+        seed = int(d.get('seed', -1))
+        gap = d.get('diff_vs_opp')
+        if gap is None and d.get('repo_objective') is not None \
+                and d.get('opp_objective') is not None:
+            gap = d['repo_objective'] - d['opp_objective']
+        if gap is None or abs(gap) > 1e5:
+            continue
+        vals[(obj, seed, rung)].append(float(gap))
+        objs.add(obj); seeds.add(seed)
+    if not vals:
+        return None
+    # sentinel guard (same rule as the difficulty analyses): a NO_ROUTE-
+    # priced final is thousands of x the objective's real scale and
+    # squashes every honest bar. Clip per objective at 50x the median
+    # |gap| and annotate the clipped bars.
+    import numpy as _np
+    clip = {}
+    for obj in objs:
+        allv = [abs(v) for (o, _s, _r), vs in vals.items() if o == obj
+                for v in vs]
+        clip[obj] = 50 * max(float(_np.median(allv)), 1e-9)
+    objs = sorted(objs); seeds = sorted(seeds)
+    order = [r for r in RUNG_ORDER if any((o, s, r) in vals
+             for o in objs for s in seeds)]
+    colors = {'full': '#c026a8', 'expl_none': '#e87ba4',
+              'no_direction': '#4a3aa7', 'no_memory_dir': '#4a6fa5',
+              'no_memory': '#1baf7a', 'no_mc': '#c9862b',
+              'painter': '#1c2733'}
+    fig, axes = plt.subplots(1, len(objs), figsize=(3.1 * len(objs), 3.4),
+                             squeeze=False)
+    w = 0.8 / max(len(order), 1)
+    for ax, obj in zip(axes[0], objs):
+        for k, rung in enumerate(order):
+            xs, ys, lo, hi = [], [], [], []
+            clipped = []
+            for si, seed in enumerate(seeds):
+                v = vals.get((obj, seed, rung))
+                if not v:
+                    continue
+                cv = [min(x, clip[obj]) for x in v]
+                if max(v) > clip[obj]:
+                    clipped.append(si)
+                xs.append(si - 0.4 + w * (k + 0.5))
+                ys.append(np.mean(cv))
+                lo.append(np.mean(cv) - min(cv))
+                hi.append(max(cv) - np.mean(cv))
+            if xs:
+                ax.bar(xs, ys, width=w, color=colors.get(rung, '#999'),
+                       yerr=[lo, hi], error_kw={'lw': .6},
+                       label=LABELS.get(rung, rung))
+                for si in clipped:
+                    ax.annotate('^', (si - 0.4 + w * (k + 0.5),
+                                      clip[obj] * 0.98),
+                                ha='center', fontsize=7, color='#c0392b')
+        ax.set_xticks(range(len(seeds)))
+        ax.set_xticklabels(['dep {}'.format(s) for s in seeds], fontsize=8)
+        ax.set_title(obj, fontsize=9)
+        ax.grid(alpha=.25, axis='y')
+        ax.axhline(0, color='#888', lw=.6)
+    axes[0][0].set_ylabel('final objective - same-seed OPP\n(lower better)',
+                          fontsize=8)
+    axes[0][-1].legend(fontsize=5.5, loc='upper right')
+    fig.suptitle('objective-dimension ablation grid: 250 iters, N mean '
+                 '(whiskers = N range)', fontsize=10)
+    fig.tight_layout()
+    out = fig_path('ablation_scout_grid_bars.png')
+    fig.savefig(out, dpi=130)
+    plt.close(fig)
+    return out

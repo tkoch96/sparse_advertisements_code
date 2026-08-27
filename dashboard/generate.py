@@ -300,7 +300,7 @@ EXPERIMENTS = [
                     'panels below.'),
           'figures': ['figures/dashboards/ablation_scout/'
                       'ablation_scout_bars.png'],
-          'figures_glob': 'figures/dashboards/ablation_scout/conv_*.png',
+          'figures_glob': 'figures/dashboards/ablation_scout/*.png',
           'refresh': {'steps': [
               {'in': ['figures/dashboards/ablation_scout/'
                       'ablation_scout_bars.png'],
