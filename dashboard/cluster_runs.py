@@ -751,10 +751,16 @@ def _pt_progress_table(m):
     The dpsweep progress table with objective as the size axis."""
     states = _pt_cell_states(m)
     cap = 150
+    nsim = 1
     for i, tok in enumerate(m.get('cmd') or []):
         if tok == '--num_training_iter':
             try:
                 cap = int((m.get('cmd'))[i + 1])
+            except Exception:
+                pass
+        if tok == '--number_of_deployments':
+            try:
+                nsim = int((m.get('cmd'))[i + 1])
             except Exception:
                 pass
     out = ['<h3 style="font-size:.9rem;margin:1.2rem 0 .3rem">progress '
@@ -814,7 +820,13 @@ def _pt_progress_table(m):
         if st in ('done', 'cached'):
             _frac = 1.0
         elif it_n:
-            _frac = min(int(it_n) / float(cap), 1.0)
+            # nsim-aware: sims completed in this cell (training starts
+            # minus the one in flight) + the current sim's iter fraction
+            _starts = len(re.findall(r'Initializing advertisement',
+                                     _read(log) or '')) if log else 0
+            _frac = min((max(_starts - 1, 0)
+                         + min(int(it_n) / float(cap), 1.0))
+                        / max(nsim, 1), 1.0)
         else:
             _frac = 0.0
         _prog.append((obj, _frac))
@@ -835,15 +847,27 @@ def _pt_progress_table(m):
     started = m.get('created_epoch') or m.get('started_epoch')
     elapsed = (now - started) if started else None
     n_queued = sum(1 for _, f in _prog if f == 0.0)
-    hdr = ('<p class="note"><b>{:.0f}% of total iteration budget</b> '
-           '({} objectives) {}{}{}</p>'.format(
-               overall, len(_prog),
-               '&middot; elapsed {} '.format(_fmt_dt(elapsed))
-               if elapsed else '',
-               '&middot; current cell ETA {} '.format(_fmt_dt(_cur_eta_s))
-               if _cur_eta_s else '',
-               '&middot; {} objective(s) queued (unpriced)'.format(n_queued)
-               if n_queued else ''))
+    hdr = ('<div style="border:1px solid var(--line,#444);border-radius:'
+           '8px;padding:.7rem .9rem;margin:.4rem 0 .6rem;background:'
+           'rgba(127,127,127,.08)">'
+           '<div style="font-size:1.15rem;font-weight:700">{o:.0f}% done '
+           '<span style="font-weight:400;font-size:.85rem">({n} '
+           'objectives &times; {ns} deployment{pl} &times; {c} iters)'
+           '</span></div>'
+           '<div style="height:10px;border-radius:5px;background:'
+           'rgba(127,127,127,.25);margin:.45rem 0">'
+           '<div style="height:10px;border-radius:5px;width:{o:.0f}%;'
+           'background:var(--acc,#1baf7a)"></div></div>'
+           '<div class="note" style="margin:0">{el}{eta}{q}</div></div>'
+           .format(
+               o=overall, n=len(_prog), ns=nsim,
+               pl='s' if nsim != 1 else '', c=cap,
+               el=('elapsed {} '.format(_fmt_dt(elapsed))
+                   if elapsed else ''),
+               eta=('&middot; current cell ETA {} '
+                    .format(_fmt_dt(_cur_eta_s)) if _cur_eta_s else ''),
+               q=('&middot; {} objective(s) queued'.format(n_queued)
+                  if n_queued else '')))
     return '\n'.join(out).replace('__PT_OVERALL__', hdr)
 
 
