@@ -299,6 +299,10 @@ EXPERIMENTS = [
                     'wall + iterations (right); per-arm convergence '
                     'panels below.'),
           'figures': ['figures/dashboards/ablation_scout/'
+                      'grid_objdim_5panel.png',
+                      'figures/dashboards/ablation_scout/'
+                      'ablation_scout_grid_bars.png',
+                      'figures/dashboards/ablation_scout/'
                       'ablation_scout_bars.png'],
           'figures_glob': 'figures/dashboards/ablation_scout/*.png',
           'refresh': {'steps': [
@@ -1337,7 +1341,13 @@ def render_static(exp):
             live=exp.get('progress_live', True),
             src=exp.get('progress_src', 'progress.json'),
             scope=exp.get('progress_scope', '')))
-    for f in exp.get('figures', []):
+    _figs = list(exp.get('figures', []))
+    if exp.get('figures_glob'):
+        import glob as _g
+        _figs += sorted(os.path.relpath(x, REPO) for x in
+                        _g.glob(os.path.join(REPO, exp['figures_glob'])))
+    _figs = list(dict.fromkeys(_figs))   # dedupe, keep explicit order first
+    for f in _figs:
         if os.path.exists(os.path.join(REPO, f)):
             out.append(_img(f))
     out.append('<p class="note">{}</p>'.format(exp.get('intro', '')))
