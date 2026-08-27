@@ -17,6 +17,7 @@ import os
 
 # (filename prefix, dashboard subdirectory) -- ORDER MATTERS, longest first.
 _RULES = [
+    ('grid_objdim_', 'ablation_scout'),
     ('ablation_scout', 'ablation_scout'),
     ('conv_', 'ablation_scout'),
     ('policy_ladder_v3lbc_',        'ablation_v3lbc'),

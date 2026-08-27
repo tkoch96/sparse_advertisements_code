@@ -100,6 +100,7 @@ def render():
 if __name__ == '__main__':
     print(render())
     print(render_grid_bars())
+    refresh_hardobj_view()
 
 
 def render_grid_bars():
@@ -187,3 +188,41 @@ def render_grid_bars():
     fig.savefig(out, dpi=130)
     plt.close(fig)
     return out
+
+
+def refresh_hardobj_view():
+    """Recreate the v5scout house plots (plot_hardobj_v4 engine) over the
+    hardness grid (Tom 2026-08-27: 'same plots as scout v5'). Builds the
+    arm-directory symlink view the engine expects, then invokes it with
+    the grid's rungs/objectives."""
+    import subprocess
+    SRC = os.path.join(REPO, 'cache/ablation/grid_objdim')
+    DST = os.path.join(REPO, 'cache/ablation/grid_objdim_hardobjview')
+    for fn in glob.glob(os.path.join(SRC, '*', 'N*', 'seed_*_*.json')):
+        parts = fn.split(os.sep)
+        obj, ndir, base = parts[-3], parts[-2], parts[-1]
+        rung = base.split('_', 2)[2].rsplit('.', 1)[0]
+        d = os.path.join(DST, obj, rung, ndir)
+        os.makedirs(d, exist_ok=True)
+        lnk = os.path.join(d, base)
+        if not os.path.islink(lnk):
+            os.symlink(fn, lnk)
+    env = dict(os.environ)
+    env.update({
+        'HARDOBJ_ROOT': 'cache/ablation/grid_objdim_hardobjview',
+        'HARDOBJ_OUT_PREFIX': 'grid_objdim',
+        'HARDOBJ_ARMS': ('full:L6 SCULPTOR:#c026a8,'
+                         'expl_none:no exploration:#e87ba4,'
+                         'no_direction:no direction:#4a3aa7,'
+                         'no_memory_dir:no mem+dir:#4a6fa5,'
+                         'no_memory:no memory:#1baf7a,'
+                         'no_mc:no MC:#c9862b'),
+        'HARDOBJ_OBJS': ('avg_latency:latency + g*resilience,'
+                         'per_site_cost:site cost,max_util:MLU,'
+                         'frac_beyond_optimal:frac beyond optimal,'
+                         'joint_priority:joint priority'),
+    })
+    subprocess.run([os.environ.get('PYTHON',
+                    '/Users/tomkoch/Documents/venv312/bin/python'),
+                    '-m', 'dashboard.plot_hardobj_v4'],
+                   cwd=REPO, env=env, capture_output=True, timeout=600)
