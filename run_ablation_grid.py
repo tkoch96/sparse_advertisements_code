@@ -79,10 +79,13 @@ def main():
                     help='gamma for avg_latency (others force 0 via '
                          'objective policy)')
     ap.add_argument('--launch-stagger', type=float, default=None)
-    ap.add_argument('--world', default='stock',
+    ap.add_argument('--world', default=None,
                     help="canonical world from core/worlds.py (stock, "
                          "georand, maxhard, ...); applied to deployment "
-                         "generation for INITS and every cell")
+                         "generation for INITS and every cell. Default: "
+                         "maxhard when --dpsize small (Tom 2026-08-27 -- "
+                         "stock-small leaves congestion objectives "
+                         "trivially satisfiable), else stock.")
     ap.add_argument('--dry-run', action='store_true')
     a = ap.parse_args()
 
@@ -102,6 +105,10 @@ def main():
     # dimension): pre-generate deterministically so parallel first cells
     # never race to write them.
     from core import worlds as _worlds
+    if a.world is None:
+        a.world = 'maxhard' if a.dpsize == 'small' else 'stock'
+        print('[grid] world defaulted to {} for dpsize={}'.format(
+            a.world, a.dpsize))
     world_env = _worlds.env(a.world)
     if world_env:
         # inits and cells MUST share the world or numbers are garbage
