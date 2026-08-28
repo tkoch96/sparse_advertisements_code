@@ -745,6 +745,23 @@ _PT_ITER_T_RE = re.compile(
     r'\[mem\] tag=iter_start rss_mb=\d+ .*? t=([\d.]+) iter=(\d+)')
 
 
+
+def _pt_objectives(m):
+    """The run's OWN objective axis, from --objectives in its cmd. The
+    hardcoded _PT_OBJECTIVES axis pinned the papertable progress bar at
+    78% (2026-08-28): the nsim=3 follow-on covers 4 objectives, but the
+    excluded avg_latency's pass-1 cell log still existed and contributed
+    a frozen fraction forever."""
+    cmd = m.get('cmd') or []
+    for i, tok in enumerate(cmd):
+        if tok == '--objectives' and i + 1 < len(cmd):
+            objs = [o.strip() for o in cmd[i + 1].split(',') if o.strip()]
+            objs = [o for o in objs if o in _PT_OBJECTIVES]
+            if objs:
+                return objs
+    return list(_PT_OBJECTIVES)
+
+
 def _pt_progress_table(m):
     """The burning-money view: per objective -- live iteration, minutes
     since it last advanced, recent sec/iter, ETA to the iteration cap.
@@ -775,7 +792,7 @@ def _pt_progress_table(m):
     now = time.time()
     _prog = []   # (objective, fraction of cap) for the overall line
     _cur_eta_s = None
-    for obj in _PT_OBJECTIVES:
+    for obj in _pt_objectives(m):
         st, log = states[obj]
         it_n = last_age = spi = eta = popps = sparse = ''
         probes = ''; valve = '-'
