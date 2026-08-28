@@ -467,14 +467,28 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		x = x[1:]
 
 
-	#### Bulk traffic
-	b = model.addMVar(n_paths, name='bulk_traffic_volume_each_path', lb=0)
-	oversubscribe = cap_constraint_A @ (b + x) - caps
+	#### Bulk traffic + per-UG stranded-bulk slack, as ONE stacked var
+	# z = [b (n_paths) | slack (n_ug)] -- gpshim's matrix exprs only add
+	# constants, so the slack rides in block matrices instead of a
+	# second MVar.
+	#
+	# STRANDED-BULK SLACK (Tom 2026-08-28): stage-1 prices congestion
+	# softly and may legally pack x beyond stage-2's wall; the old hard
+	# equality then made the WHOLE LP infeasible (status 3) for ordinary
+	# advertisements (seed-1 maxhard forensics: x alone at 4.8x the wall
+	# on one popp -> 83k sentinel evals -> flat -231 objective). Bulk a
+	# user can't place rides slack priced at DOM x the user's own
+	# no-route rate -- a last resort only; the LP stays feasible and the
+	# objective continuous in the advertisement.
+	n_ug = sas.whole_deployment_n_ug
+	z = model.addMVar(n_paths + n_ug, name='bulk_and_stranded', lb=0)
 	significances = cap_constraint_A @ x
 
-
 	bulk_conservation_b = sas.whole_deployment_ug_bulk_vols
-	model.addConstr(volume_conservation_A @ b == bulk_conservation_b)
+	from scipy.sparse import hstack as _sp_hstack, identity as _sp_eye
+	_cons_A = _sp_hstack([volume_conservation_A,
+						  _sp_eye(n_ug, format='csr')], format='csr')
+	model.addConstr(_cons_A @ z == bulk_conservation_b)
 	## another constraint could be like bulk oversubscription is at most N X normal capacity, where N can be 10 or something
 	## BULK_CAP_LIMIT = 3.0 # sigcomm 2025 value
 	## BULK_CAP_LIMIT = 100.0 # historical default in this codebase (labeled "temporary to debug" but
@@ -482,10 +496,23 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 	## the default to avoid invalidating prior results. Override via kwargs.get('bulk_cap_limit', ...)
 	## from the objective spec.
 	bulk_cap_limit = kwargs.get('bulk_cap_limit', 100.0)
-	model.addConstr(cap_constraint_A @ (b + x) <= bulk_cap_limit * caps)
+	# RESIDUAL wall: bind only bulk's ADDITION. Charging x against the
+	# wall made stage-1's (allowed) congestion a stage-2 infeasibility.
+	_residual = np.maximum(bulk_cap_limit * caps - cap_constraint_A @ x, 0.0)
+	_wall_A = _sp_hstack([cap_constraint_A,
+						  csr_matrix((n_popps, n_ug))], format='csr')
+	model.addConstr(_wall_A @ z <= _residual)
 
-	obj_fn = oversubscribe @ significances #+ 100 * oversubscribe @ np.ones(n_popps)
-	
+	# objective, linearized over z: (capA b) . sig + slack_cost . slack
+	# (constants from the old oversubscribe form don't move the argmin).
+	# slack dominance: stranding must always lose to congested placement.
+	_ugmax = _ug_max_lat_arr(sas)
+	_slack_cost = (NO_ROUTE_PENALTY_MULT * _ugmax
+				   * float(_os.environ.get('SCULPTOR_BULK_SLACK_DOM', '1e3')))
+	_obj_coefs = np.concatenate([cap_constraint_A.T @ significances,
+								 _slack_cost])
+	obj_fn = _obj_coefs @ z
+
 	model.setObjective(obj_fn)
 	model.optimize()
 
@@ -499,7 +526,9 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		# was exit(0) followed by an unreachable return (2026-08-14)
 		return _joint_unsolved_ret(sas)
 	low_latency_path_distribution = x
-	bulk_path_distribution = b.X
+	_zX = np.asarray(z.X).flatten()
+	bulk_path_distribution = _zX[:n_paths]
+	_stranded_bulk = _zX[n_paths:]
 	# print("Solved!")
 	# print(x)
 	# print(b.X)
@@ -525,6 +554,8 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 				paths_by_ug[ugi] = [(poppi, vol_pct)]
 
 	bulk_lats_by_ug_arr = np.zeros((sas.whole_deployment_n_ug)) ## assumes we're assigning bulk traffic && low latency traffic
+	# stranded bulk keeps the marker in lats (detection), never a price
+	bulk_lats_by_ug_arr[_stranded_bulk > 1e-9] = NO_ROUTE_LATENCY
 	bulk_paths_by_ug = {}
 	bulk_vols_by_poppi = {poppi:vols_by_poppi[poppi] for poppi in range(sas.n_popps)} ## start with the low-latency allocation
 	for (ug,poppi),vol_amt in zip(available_paths, bulk_path_distribution):
@@ -616,7 +647,7 @@ def solve_joint_latency_bulk_download(sas, routed_through_ingress, obj, **kwargs
 		"objective": objective_val,
 		"solved": model.status,
 		"raw_low_latency_solution": x,
-		"raw_bulk_traffic_solution": b.X,
+		"raw_bulk_traffic_solution": bulk_path_distribution,
 		"paths_by_ug": paths_by_ug,
 		"lats_by_ug" : lats_by_ug_arr,
 		"vols_by_poppi": vols_by_poppi,
