@@ -701,7 +701,10 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						dtype=np.float64)
 					self._site_cost_by_poppi = _scbp
 				coeffs = coeffs + site_cost_alpha * _scbp[_pc]
-			coeffs[_is_np] = NO_ROUTE_LATENCY
+			# bounded PRICE for the no-route dummy (Tom 2026-08-28): a
+			# stranded user costs NO_ROUTE_PENALTY_MS in every gradient
+			# LP -- pushes descent away without the 30000-marker cliff.
+			coeffs[_is_np] = NO_ROUTE_PENALTY_MS
 			# stale-path forensics survive: a real path priced NO_ROUTE
 			# means the ug had no perf entry for it -- log loudly (rare)
 			_stale = np.where((~_is_np)
@@ -719,7 +722,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		_no_path = NO_PATH_INGRESS(self)
 		for ug, poppi in available_paths:
 			if poppi == _no_path:
-				obj_coeffs.append(NO_ROUTE_LATENCY)
+				obj_coeffs.append(NO_ROUTE_PENALTY_MS)
 			else:
 				if obj == "avg_latency":
 					try:
@@ -734,7 +737,7 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						# NO_ROUTE-priced path among ~100k biases one LP
 						# call, aborting loses the whole strategy.
 						self._log_stale_path(ug, poppi, available_paths)
-						obj_coeffs.append(NO_ROUTE_LATENCY)
+						obj_coeffs.append(NO_ROUTE_PENALTY_MS)
 				elif obj == "per_site_cost":
 					pop, _ = self.popps[poppi]
 					site_cost = self.site_costs[pop]
@@ -848,8 +851,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# already treat NO_ROUTE_LATENCY as the infeasible signal.
 			print("Infeasible problem, returning no-route sentinel (was exit(0))")
 			n_ug = self.whole_deployment_n_ug
+			# objective is the bounded PRICE, lats keep the MARKER (Tom
+			# 2026-08-28): the flat 30000 objective here zeroed gradients
+			# for any adv stuck in an infeasible region (maxhard joint,
+			# stuck-at-iter-2 forensics).
 			return {
-				"objective": NO_ROUTE_LATENCY,
+				"objective": NO_ROUTE_PENALTY_MS,
 				"raw_solution": {},
 				"paths_by_ug": {},
 				"lats_by_ug": np.full(n_ug, NO_ROUTE_LATENCY, dtype=float),
@@ -1000,9 +1007,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		min_vol,max_vol = np.min(self.ug_vols), np.max(self.ug_vols)
 		total_deployment_volume = np.sum(self.ug_vols)
 		if self.simulated:
-			min_lbx = np.maximum(-.1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
+			min_lbx = np.maximum(-.1,-1 * NO_ROUTE_PENALTY_MS * max_vol / total_deployment_volume)
 		else:
-			min_lbx = np.maximum(-.1,-1 * NO_ROUTE_LATENCY * max_vol / total_deployment_volume)
+			min_lbx = np.maximum(-.1,-1 * NO_ROUTE_PENALTY_MS * max_vol / total_deployment_volume)
 
 		max_lbx = 0
 

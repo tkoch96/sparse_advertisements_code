@@ -80,6 +80,18 @@ MAX_LATENCY = 300
 # processes only: trusted rescoring/eval must keep the canonical default so
 # reported numbers stay comparable.
 NO_ROUTE_LATENCY = int(float(_os.environ.get('SCULPTOR_NO_ROUTE_LATENCY', 100*MAX_LATENCY)))
+# Penalty PRICES vs the sentinel MARKER (Tom 2026-08-28): NO_ROUTE_LATENCY
+# stays a huge value used only to MARK unroutable entries in lats arrays
+# (failure/flash evals detect on it). Objective SCALARS and gradient-LP
+# path prices must never use the marker -- they price bad volume at these
+# bounded, gradient-friendly latencies instead: a stranded user costs
+# NO_ROUTE_PENALTY_MS, a congested user about half that. High enough to
+# dominate any real path (~10-250ms), low enough to keep gradients on the
+# same scale as latency (the 30000 marker made every infeasible/stranded
+# state a flat cliff -- zero gradient signal, see the maxhard joint
+# stuck-at-iter-2 forensics 2026-08-28).
+NO_ROUTE_PENALTY_MS = float(_os.environ.get('SCULPTOR_NO_ROUTE_PENALTY_MS', '800'))
+CONGESTED_PENALTY_MS = float(_os.environ.get('SCULPTOR_CONGESTED_PENALTY_MS', '350'))
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
 
 import re

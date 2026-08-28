@@ -300,7 +300,6 @@ def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 	SCULPTOR_CONGESTION_AWARE_OBJ=0 restores legacy."""
 	if _os.environ.get('SCULPTOR_CONGESTION_AWARE_OBJ', '1') == '0':
 		return obj_round(legacy_objective)
-	_soft_P = float(_os.environ.get('SCULPTOR_SOFT_CONG_PENALTY', '50'))
 	vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float)
 	lats = np.asarray(lats_by_ug_arr, dtype=float).flatten()
 	_tv = float(np.sum(vols))
@@ -310,7 +309,18 @@ def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 	_B = float(np.sum(_bad_w * vols))
 	_R = max(0.0, _S - NO_ROUTE_LATENCY * _B)
 	_routed_v = max(_tv - _B, 1e-9)
-	return obj_round(-1 * (_R / _routed_v + _soft_P * _B / _tv))
+	# Two-tier bounded pricing (Tom 2026-08-28): bad volume splits into a
+	# congested share (the caller's accounting, capped by what the lats
+	# actually mark bad) priced CONGESTED_PENALTY_MS, and a no-route
+	# share priced NO_ROUTE_PENALTY_MS. Replaces the flat _soft_P=50 --
+	# high enough to dominate real latencies, low enough that gradients
+	# stay on the latency scale (the 30000 marker never enters scalars).
+	_fb = _B / _tv
+	_fc = min(max(float(fraction_congested_volume or 0.0), 0.0), _fb)
+	_fnr = _fb - _fc
+	return obj_round(-1 * (_R / _routed_v
+						   + NO_ROUTE_PENALTY_MS * _fnr
+						   + CONGESTED_PENALTY_MS * _fc))
 
 
 def _is_avg_latency_obj(obj):
@@ -330,8 +340,12 @@ def _joint_unsolved_ret(sas):
 	KeyError 'paths_by_ug'), and objective=None poisoned histograms.
 	Mirror the persistent path's no-route sentinel instead."""
 	n_ug = sas.whole_deployment_n_ug
+	# objective is the bounded PRICE (not the marker): an all-stranded
+	# state costs NO_ROUTE_PENALTY_MS, so gradient consumers see a deep
+	# but finite-scale value with slope back to feasibility. lats keep
+	# the NO_ROUTE_LATENCY marker for downstream infeasibility DETECTION.
 	return {'solved': False,
-			'objective': NO_ROUTE_LATENCY,
+			'objective': NO_ROUTE_PENALTY_MS,
 			'raw_solution': {},
 			'paths_by_ug': {},
 			'bulk_paths_by_ug': {},
@@ -1216,7 +1230,32 @@ def _can_use_persistent_gurobi(sas):
 			and hasattr(sas, 'var_pool'))
 
 
-def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwargs):
+
+def _enforce_bounded_objective(ret, where):
+	"""Objective-contract enforcement (Tom 2026-08-28), applied at the LP
+	dispatch choke points so EVERY objective method inherits it:
+	  (a) a no-route/unsolved state prices at NO_ROUTE_PENALTY_MS;
+	  (b) nothing marker-scale (NO_ROUTE_LATENCY) ever leaves as an
+	      objective SCALAR -- markers live only in lats arrays.
+	Non-finite or absent objectives on unsolved returns become the bounded
+	no-route price; marker-scale magnitudes are clamped to it LOUDLY (a
+	clamp firing means some site still prices with the marker -- fix it)."""
+	if not isinstance(ret, dict):
+		return ret
+	o = ret.get('objective')
+	if o is None or not np.isfinite(o):
+		ret['objective'] = NO_ROUTE_PENALTY_MS
+		return ret
+	if abs(o) >= 0.5 * NO_ROUTE_LATENCY:
+		print('[objective-contract] CLAMP at {}: objective {} is marker-'
+			  'scale; pricing as no-route ({}). A clamp here means some '
+			  'return site still uses NO_ROUTE_LATENCY as a price.'.format(
+				  where, o, NO_ROUTE_PENALTY_MS), flush=True)
+		ret['objective'] = NO_ROUTE_PENALTY_MS if o > 0 else -NO_ROUTE_PENALTY_MS
+	return ret
+
+
+def _solve_generic_lp_with_failure_catch_impl(sas, routed_through_ingress, obj, **kwargs):
 	### Minmizes f(w) subject to capacity and volume constraints
 	### w is the amount of volume to place on each path where a path is a <user, routed ingress>
 
@@ -1440,6 +1479,17 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 		"fraction_congested_volume": fraction_congested_volume,
 		# "routed_through_ingress": routed_through_ingress,
 	}
+
+
+def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwargs):
+	"""Public dispatcher = impl + the bounded-objective contract. All
+	worker/gradient objective evaluations flow through here (persistent
+	Gurobi covers avg_latency/per_site_cost/max_util inline and enforces
+	the same contract at its own return sites)."""
+	return _enforce_bounded_objective(
+		_solve_generic_lp_with_failure_catch_impl(
+			sas, routed_through_ingress, obj, **kwargs),
+		'failure_catch:{}'.format(getattr(obj, 'obj', obj)))
 
 def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	### Minimizes average latency subject to not inundating a link,
