@@ -97,12 +97,6 @@ def render():
     return OUT
 
 
-if __name__ == '__main__':
-    print(render())
-    print(render_grid_bars())
-    refresh_hardobj_view()
-
-
 def render_grid_bars():
     """v5scout-style panels from the objective-dimension grid store
     (Tom 2026-08-27): one panel per objective, bar groups per seed,
@@ -229,3 +223,9 @@ def refresh_hardobj_view():
                     '/Users/tomkoch/Documents/venv312/bin/python'),
                     '-m', 'dashboard.plot_hardobj_v4'],
                    cwd=REPO, env=env, capture_output=True, timeout=600)
+
+
+if __name__ == '__main__':
+    print(render())
+    print(render_grid_bars())
+    refresh_hardobj_view()
