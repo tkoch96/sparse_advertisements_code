@@ -675,6 +675,20 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			return self.model
 		return None
 
+
+	def _ug_max_lat(self):
+		"""Per-ug max REAL latency from lat_matrix (marker entries
+		excluded; pathless ugs fall back to MAX_LATENCY). Base of the
+		user-specific penalty prices; cached per lat_matrix identity."""
+		key = id(self.lat_matrix)
+		c = getattr(self, '_ugmax_c', None)
+		if c is None or c[0] != key:
+			lm = self.lat_matrix
+			mx = np.where(lm < NO_ROUTE_LATENCY, lm, -np.inf).max(axis=0)
+			mx = np.where(np.isfinite(mx), mx, float(MAX_LATENCY))
+			self._ugmax_c = (key, mx.astype(np.float64))
+		return self._ugmax_c[1]
+
 	def _path_obj_coeffs(self, available_paths, obj, site_cost_alpha):
 		"""Per-path LP objective coefficients (latencies). Named sub-step of
 		solve_generic_lp_persistent so subclasses can override path pricing."""
@@ -701,10 +715,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						dtype=np.float64)
 					self._site_cost_by_poppi = _scbp
 				coeffs = coeffs + site_cost_alpha * _scbp[_pc]
-			# bounded PRICE for the no-route dummy (Tom 2026-08-28): a
-			# stranded user costs NO_ROUTE_PENALTY_MS in every gradient
-			# LP -- pushes descent away without the 30000-marker cliff.
-			coeffs[_is_np] = NO_ROUTE_PENALTY_MS
+			# USER-SPECIFIC no-route price (Tom 2026-08-28 v2): stranding
+			# a user costs 2x that user's own max path latency in every
+			# gradient LP -- scale-matched pressure, no marker cliff.
+			coeffs[_is_np] = (NO_ROUTE_PENALTY_MULT
+							  * self._ug_max_lat()[_uu[_is_np]])
 			# stale-path forensics survive: a real path priced NO_ROUTE
 			# means the ug had no perf entry for it -- log loudly (rare)
 			_stale = np.where((~_is_np)
@@ -720,9 +735,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# hoisted: NO_PATH_INGRESS(self) was re-evaluated per PATH --
 		# 1.68M calls per 13-job batch in the 2026-08-24 profile
 		_no_path = NO_PATH_INGRESS(self)
+		_ugmax = self._ug_max_lat()
+		_ug2i = {u: i for i, u in enumerate(self.whole_deployment_ugs)}
 		for ug, poppi in available_paths:
 			if poppi == _no_path:
-				obj_coeffs.append(NO_ROUTE_PENALTY_MS)
+				obj_coeffs.append(NO_ROUTE_PENALTY_MULT * _ugmax[_ug2i[ug]])
 			else:
 				if obj == "avg_latency":
 					try:
@@ -737,7 +754,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 						# NO_ROUTE-priced path among ~100k biases one LP
 						# call, aborting loses the whole strategy.
 						self._log_stale_path(ug, poppi, available_paths)
-						obj_coeffs.append(NO_ROUTE_PENALTY_MS)
+						obj_coeffs.append(NO_ROUTE_PENALTY_MULT
+										  * _ugmax[_ug2i[ug]])
 				elif obj == "per_site_cost":
 					pop, _ = self.popps[poppi]
 					site_cost = self.site_costs[pop]
@@ -855,8 +873,9 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			# 2026-08-28): the flat 30000 objective here zeroed gradients
 			# for any adv stuck in an infeasible region (maxhard joint,
 			# stuck-at-iter-2 forensics).
+			from core.solve_lp_assignment import _all_stranded_price
 			return {
-				"objective": NO_ROUTE_PENALTY_MS,
+				"objective": _all_stranded_price(self),
 				"raw_solution": {},
 				"paths_by_ug": {},
 				"lats_by_ug": np.full(n_ug, NO_ROUTE_LATENCY, dtype=float),

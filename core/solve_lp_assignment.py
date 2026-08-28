@@ -280,6 +280,40 @@ def obj_round(v):
 		return v
 
 
+
+def _ug_max_lat_arr(sas):
+	"""Per-user max REAL path latency, aligned with whole_deployment_ugs.
+	The base of the user-specific penalty prices (Tom 2026-08-28):
+	no-route = NO_ROUTE_PENALTY_MULT * max_lat(user), congested =
+	CONGESTED_PENALTY_MULT * max_lat(user). Marker entries excluded; a
+	user with no real path at all falls back to MAX_LATENCY. Cached per
+	perfs object identity (perfs are replaced, not mutated, on
+	deployment updates)."""
+	perfs = getattr(sas, 'whole_deployment_ug_perfs', None)
+	key = id(perfs)
+	c = getattr(sas, '_ugmaxlat_cache', None)
+	if c is not None and c[0] == key:
+		return c[1]
+	arr = np.array([
+		max((l for l in (perfs.get(ug, {}) if perfs else {}).values()
+			 if l < NO_ROUTE_LATENCY), default=MAX_LATENCY)
+		for ug in sas.whole_deployment_ugs], dtype=float)
+	sas._ugmaxlat_cache = (key, arr)
+	return arr
+
+
+def _all_stranded_price(sas):
+	"""Objective price for a fully-unroutable state: the vol-weighted mean
+	of the per-user no-route prices. Bounded, deployment-scaled."""
+	try:
+		mx = _ug_max_lat_arr(sas)
+		vols = np.asarray(sas.whole_deployment_ug_vols, dtype=float)
+		return float(NO_ROUTE_PENALTY_MULT * np.sum(mx * vols)
+					 / max(np.sum(vols), 1e-9))
+	except Exception:
+		return NO_ROUTE_PENALTY_MS
+
+
 def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 		legacy_objective):
 	"""Congestion-aware SOFT BOUNDED scalar (Tom 2026-08-14; see
@@ -318,9 +352,15 @@ def _soft_bounded_objective(sas, lats_by_ug_arr, fraction_congested_volume,
 	_fb = _B / _tv
 	_fc = min(max(float(fraction_congested_volume or 0.0), 0.0), _fb)
 	_fnr = _fb - _fc
+	# per-user pricing: the bad volume's vol-weighted mean max-latency is
+	# the price base; no-route share pays 2.0x it, congested share 1.5x.
+	_mx = _ug_max_lat_arr(sas)
+	_mean_mx_bad = (float(np.sum(_bad_w * vols * _mx)) / _B) if _B > 0 \
+		else 0.0
 	return obj_round(-1 * (_R / _routed_v
-						   + NO_ROUTE_PENALTY_MS * _fnr
-						   + CONGESTED_PENALTY_MS * _fc))
+						   + _mean_mx_bad * (NO_ROUTE_PENALTY_MULT * _fnr
+											 + CONGESTED_PENALTY_MULT * _fc)
+						   / max(_fb, 1e-12) * _fb))
 
 
 def _is_avg_latency_obj(obj):
@@ -345,7 +385,7 @@ def _joint_unsolved_ret(sas):
 	# but finite-scale value with slope back to feasibility. lats keep
 	# the NO_ROUTE_LATENCY marker for downstream infeasibility DETECTION.
 	return {'solved': False,
-			'objective': NO_ROUTE_PENALTY_MS,
+			'objective': _all_stranded_price(sas),
 			'raw_solution': {},
 			'paths_by_ug': {},
 			'bulk_paths_by_ug': {},
@@ -1231,7 +1271,7 @@ def _can_use_persistent_gurobi(sas):
 
 
 
-def _enforce_bounded_objective(ret, where):
+def _enforce_bounded_objective(ret, where, sas=None):
 	"""Objective-contract enforcement (Tom 2026-08-28), applied at the LP
 	dispatch choke points so EVERY objective method inherits it:
 	  (a) a no-route/unsolved state prices at NO_ROUTE_PENALTY_MS;
@@ -1243,15 +1283,16 @@ def _enforce_bounded_objective(ret, where):
 	if not isinstance(ret, dict):
 		return ret
 	o = ret.get('objective')
+	_price = _all_stranded_price(sas) if sas is not None else NO_ROUTE_PENALTY_MS
 	if o is None or not np.isfinite(o):
-		ret['objective'] = NO_ROUTE_PENALTY_MS
+		ret['objective'] = _price
 		return ret
 	if abs(o) >= 0.5 * NO_ROUTE_LATENCY:
 		print('[objective-contract] CLAMP at {}: objective {} is marker-'
 			  'scale; pricing as no-route ({}). A clamp here means some '
 			  'return site still uses NO_ROUTE_LATENCY as a price.'.format(
-				  where, o, NO_ROUTE_PENALTY_MS), flush=True)
-		ret['objective'] = NO_ROUTE_PENALTY_MS if o > 0 else -NO_ROUTE_PENALTY_MS
+				  where, o, _price), flush=True)
+		ret['objective'] = _price if o > 0 else -_price
 	return ret
 
 
@@ -1489,7 +1530,7 @@ def solve_generic_lp_with_failure_catch(sas, routed_through_ingress, obj, **kwar
 	return _enforce_bounded_objective(
 		_solve_generic_lp_with_failure_catch_impl(
 			sas, routed_through_ingress, obj, **kwargs),
-		'failure_catch:{}'.format(getattr(obj, 'obj', obj)))
+		'failure_catch:{}'.format(getattr(obj, 'obj', obj)), sas=sas)
 
 def solve_generic_lp(sas, routed_through_ingress, obj, **kwargs):
 	### Minimizes average latency subject to not inundating a link,

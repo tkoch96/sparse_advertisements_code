@@ -90,6 +90,15 @@ NO_ROUTE_LATENCY = int(float(_os.environ.get('SCULPTOR_NO_ROUTE_LATENCY', 100*MA
 # same scale as latency (the 30000 marker made every infeasible/stranded
 # state a flat cliff -- zero gradient signal, see the maxhard joint
 # stuck-at-iter-2 forensics 2026-08-28).
+# v2 (Tom 2026-08-28, same day): static MS prices were still cliff-scale
+# for normalized objectives (joint healthy ~0.4 vs 800). Penalties are
+# now USER-SPECIFIC multiples of each user's own max path latency:
+#   no-route  = NO_ROUTE_PENALTY_MULT  * max_lat(user)   (2.0x)
+#   congested = CONGESTED_PENALTY_MULT * max_lat(user)   (1.5x)
+# The MS constants remain only as last-resort fallbacks where per-user
+# latencies are unavailable.
+NO_ROUTE_PENALTY_MULT = float(_os.environ.get('SCULPTOR_NO_ROUTE_PENALTY_MULT', '2.0'))
+CONGESTED_PENALTY_MULT = float(_os.environ.get('SCULPTOR_CONGESTED_PENALTY_MULT', '1.5'))
 NO_ROUTE_PENALTY_MS = float(_os.environ.get('SCULPTOR_NO_ROUTE_PENALTY_MS', '800'))
 CONGESTED_PENALTY_MS = float(_os.environ.get('SCULPTOR_CONGESTED_PENALTY_MS', '350'))
 NO_ROUTE_BENEFIT = -1 * NO_ROUTE_LATENCY
