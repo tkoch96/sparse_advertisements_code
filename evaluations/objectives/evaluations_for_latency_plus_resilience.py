@@ -582,6 +582,9 @@ def run(ctx):
 		actually_all_vol = 0
 		vol_congested = 0
 		vol_best_case_congested = 0
+		vol_high_latency = 0
+		vol_no_route = 0
+		with_high_extra = []
 		## storing latency threshold statistics
 		threshold_stats = {i:{} for i in SIM_INDS_TO_PLOT}
 
@@ -611,10 +614,25 @@ def run(ctx):
 					perf2 = perf1
 				else:
 					this_sim_total_volume += vol
-					if perf2 != NO_ROUTE_LATENCY and perf1 != NO_ROUTE_LATENCY:
+					# HIGH-LATENCY classification by THRESHOLD, not marker
+					# equality (Tom 2026-08-29): a ug with a fraction of its
+					# volume stranded carries a marker-BLENDED latency (e.g.
+					# half stranded ~ 15015ms) that passed the old equality
+					# filter and skewed the mean by 1000x at small sizes.
+					# Any >=1% marker blend classifies as high-latency; those
+					# users feed the *_with_high aggregate + the frac fields,
+					# never the headline mean.
+					_hi_cut = 200.0 + 0.01 * (NO_ROUTE_LATENCY - 200.0)
+					_is_high = (perf2 >= _hi_cut)
+					if not _is_high:
 						avg_ret.append((perf1-perf2,vol))
 						this_diffs.append(perf1-perf2)
 						this_vols.append(vol)
+					else:
+						vol_high_latency += vol
+						with_high_extra.append((perf1-perf2, vol))
+						if perf2 == NO_ROUTE_LATENCY:
+							vol_no_route += vol
 					if perf2 == NO_ROUTE_LATENCY:
 						vol_congested += vol
 						this_sim_total_volume_congested += vol
@@ -648,14 +666,25 @@ def run(ctx):
 			avg_latency_difference = np.average([el[0] for el in avg_ret], weights=[el[1] for el in avg_ret])
 		except ZeroDivisionError:
 			print("Problem doing {} {}".format(k,solution))
-			avg_latency_difference = NO_ROUTE_LATENCY
+			# was NO_ROUTE_LATENCY -- injecting the marker as a STAT put
+			# 30000 into downstream averages/plots. NaN renders as a gap.
+			avg_latency_difference = float('nan')
+		try:
+			avg_latency_difference_with_high = np.average(
+				[el[0] for el in avg_ret + with_high_extra],
+				weights=[el[1] for el in avg_ret + with_high_extra])
+		except ZeroDivisionError:
+			avg_latency_difference_with_high = float('nan')
 		print("Average latency difference {},{}: {}".format(solution, k, avg_latency_difference))
 		print("{} pct. volume congested".format(round(100 * vol_congested / (actually_all_vol + .00001), 2)))
 		print("{} pct. optimally congested, all volume: {}".format(round(100 * vol_best_case_congested / (actually_all_vol+.00001), 2), actually_all_vol))
 
 		return ret, x, {
 			'avg_latency_difference': avg_latency_difference, 
+			'avg_latency_difference_with_high': avg_latency_difference_with_high,
 			'frac_vol_congested': vol_congested / (all_vol+.0000001), 
+			'frac_vol_high_latency': vol_high_latency / (all_vol+.0000001),
+			'frac_vol_no_route': vol_no_route / (all_vol+.0000001),
 			'frac_vol_bestcase_congested': vol_best_case_congested / (actually_all_vol+.0000001),
 		}, threshold_stats
 

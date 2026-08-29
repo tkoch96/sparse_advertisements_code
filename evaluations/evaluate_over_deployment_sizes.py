@@ -363,8 +363,17 @@ def make_paper_plots(cache_fn, **kwargs):
 
 	for lp_tp, tp, tp_k in zip(['mlu','mlu'], ['Ingress', 'Site'],
 		['stats_popp_failures_latency_optimal_specific', 'stats_pop_failures_latency_optimal_specific']):
-		for metric_k, outer_k, ylab in zip(['avg_latency_difference', 'frac_vol_congested'], ['latency', 'congestion'], 
-			['Avg Suboptimality\n During {} Failure (ms)'.format(tp), 'Pct Volume Congested\nDuring {} Failure'.format(tp)]):
+		# avg_latency_difference is the WITHOUT-high-latency mean (the
+		# sub-eval routes marker-blended users into the frac fields, Tom
+		# 2026-08-29); the new pct-high-latency figure shows what was
+		# excluded, so the skew is visible instead of baked into means.
+		for metric_k, outer_k, ylab in zip(
+			['avg_latency_difference', 'frac_vol_congested',
+			 'frac_vol_high_latency'],
+			['latency', 'congestion', 'high_latency'],
+			['Avg Suboptimality\n During {} Failure (ms)'.format(tp),
+			 'Pct Volume Congested\nDuring {} Failure'.format(tp),
+			 'Pct Volume High-Latency\n(no-route blend) During {} Failure'.format(tp)]):
 			f,ax = get_figure()
 			fig_fn = 'average_{}_over_{}_fail_{}_{}.pdf'.format(outer_k, evaluate_over, tp.lower(), lp_tp)
 			metric_by_solution = {}
@@ -373,11 +382,15 @@ def make_paper_plots(cache_fn, **kwargs):
 				for dpsize in dpsizes:
 					try:
 						these_metrics = metrics_by_dpsize[dpsize][tp_k][solution]
-						if outer_k == 'congestion':
+						if outer_k in ('congestion', 'high_latency'):
 							agg_metrics.append(100*these_metrics[metric_k])
 						else:
 							agg_metrics.append(-1*these_metrics[metric_k])
 					except KeyError:
+						# frac_vol_high_latency absent in pre-2026-08-29
+						# pickles: render a gap, not a crash
+						if outer_k == 'high_latency':
+							agg_metrics.append(float('nan'))
 						continue
 				ax.plot(dpsizes[0:len(agg_metrics)], agg_metrics, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
 				metric_by_solution[solution] = np.array(agg_metrics)
