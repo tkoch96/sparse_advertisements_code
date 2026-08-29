@@ -493,14 +493,12 @@ def make_paper_plots(cache_fn, **kwargs):
 	print('\n')
 
 
-	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
-	f,ax = get_figure()
-	for solution in solutions:
-		ax.plot(dpsizes, this_resiliences, label=solution_to_plot_label[solution], marker=solution_to_marker[solution], color=solution_to_line_color[solution])
-	ax.set_xlabel(xlab)
-	ax.set_ylabel("Rate of\nLatency Increase (ms/byte)")
-	ax.legend(fontsize=12)
-	save_figure('latency_increase_up_to_threshold_over_{}.pdf'.format(evaluate_over))
+	# latency_increase_up_to_threshold figure RETIRED (2026-08-29): it had
+	# always plotted the flash-crowd loop's leftover series identically for
+	# all six methods (copy-paste bug), and no per-solution scalar metric
+	# exists in the pickle to draw it from ('stats_latency_thresholds_*'
+	# are distribution structures feeding the percent-within figures).
+	# Emitting a garbage figure is worse than emitting none.
 
 	solutions = list(reversed(solutions))
 	f,ax = get_figure()
