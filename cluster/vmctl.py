@@ -576,6 +576,28 @@ def cmd_protect(a):
     return 0
 
 
+
+def cmd_resize(a):
+    """Change instance type (must be stopped; use vmctl stop first).
+    Added 2026-08-29 (Tom: downsize the main vm to ~16 cores) -- resizing
+    was the one lifecycle action still requiring hand-rolled boto3."""
+    d = V.resolve(a.ref)
+    if isinstance(d, str):
+        d = V.describe(d)[0]
+    iid = d['id']
+    if d['state'] != 'stopped':
+        print('instance is {} -- vmctl stop it first (harvest-gated), '
+              'then resize'.format(d['state']))
+        return 1
+    V.ec2().modify_instance_attribute(
+        InstanceId=iid, InstanceType={'Value': a.type})
+    rate = V.HOURLY_USD.get(a.type)
+    print('resized {} {} -> {}{}'.format(
+        iid, d['type'], a.type,
+        ' (~${}/hr)'.format(rate) if rate else ' (rate unknown -- add to '
+        'HOURLY_USD)'))
+    return 0
+
 def cmd_status(a):
     inst = V.resolve(a.ref)
     gb = V.volume_size(inst['volumes'][0]) if inst['volumes'] else 0
@@ -655,6 +677,9 @@ def main(argv=None):
     p.add_argument('--yes', action='store_true')
     p.set_defaults(fn=cmd_terminate)
 
+    p = sub.add_parser('resize', help='change instance type (stopped only)')
+    p.add_argument('ref'); p.add_argument('type')
+    p.set_defaults(fn=cmd_resize)
     p = sub.add_parser('ip'); p.add_argument('ref'); p.set_defaults(fn=cmd_ip)
     p = sub.add_parser('df'); p.add_argument('ref'); p.set_defaults(fn=cmd_df)
     p = sub.add_parser('status'); p.add_argument('ref')

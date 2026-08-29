@@ -43,6 +43,7 @@ REMOTE_RUNS = '/home/ubuntu/cluster_runs'
 # design -- this is for "am I burning money faster than I thought", not
 # for billing. Spot is charged differently; the tools do not use spot.
 HOURLY_USD = {
+    'm8g.4xlarge': 0.703,
     'c8g.24xlarge': 3.83, 'c8g.16xlarge': 2.55, 'c8g.12xlarge': 1.91,
     'c8g.8xlarge': 1.28, 'c8g.4xlarge': 0.64,
     'c7g.16xlarge': 2.32, 'c7g.12xlarge': 1.74, 'c7g.8xlarge': 1.16,
