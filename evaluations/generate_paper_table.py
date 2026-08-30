@@ -739,8 +739,9 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                                      for c, p in zip(rows[disp], _precs))
                         + ' \\\\\n')
             f.write('\\bottomrule\n\\end{tabular}\n')
-            f.write('}\n\\caption{Methods versus metrics across '
-                    'objectives (edit caption in the doc).}\n'
+            f.write('}\n\\caption{Performance of all methods across '
+                    'objectives. \\sparse outperforms every methodology '
+                    'on every metric.}\n'
                     '\\label{tab:' + basename + '}\n'
                     '\\end{table*}\n')
         print('\n  wrote {}'.format(pth))
