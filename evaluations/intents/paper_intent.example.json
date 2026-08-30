@@ -46,7 +46,7 @@
           "percent_traffic_within_10_ms_site_failure_over_deployment_size.pdf",
           "percent_traffic_within_50_ms_normal_over_deployment_size.pdf"
         ],
-        "dst": "figures/paper"
+        "dst": "figures/paper_artifacts"
       },
       "outputs": [
         "figures/cluster/20260822_220131-prefixbudget3/*over_deployment_size*.pdf"
@@ -70,7 +70,7 @@
           "flash_crowd_blowup_before_congestion_over_prefix_budget.pdf",
           "diurnal_blowup_before_congestion_over_prefix_budget.pdf"
         ],
-        "dst": "figures/paper"
+        "dst": "figures/paper_artifacts"
       },
       "prefixes": [
         10,
@@ -110,7 +110,7 @@
           "paper_table_key.csv",
           "paper_table_key.tex"
         ],
-        "dst": "figures/paper_table"
+        "dst": "figures/paper_artifacts"
       },
       "outputs": [
         "figures/cluster/20260823_130342-papertable32b/paper_table_full/*"
@@ -127,7 +127,7 @@
           "ablation_scout_grid_bars.png",
           "ablation_scout_difficulty_scatter.png"
         ],
-        "dst": "figures/paper"
+        "dst": "figures/paper_artifacts"
       },
       "runbook": "SCULPTOR_LOG_MEM=0 python run_ablation_grid.py --number_measurements_allowed '[5,10]' --deployments 3 --num_iters 250 --objectives all --dpsize small && python -m dashboard.plot_ablation_scout"
     }
