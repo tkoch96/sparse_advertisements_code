@@ -242,7 +242,43 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 						import traceback
 						traceback.print_exc()
 			metrics['deployment'][random_iter] = deployment
-	
+
+			# ---- depstore lookup (SCULPTOR_DEPSTORE=1, Tom 2026-08-30):
+			# a full compare_ret for THIS deployment (content-id keyed, so
+			# random deployments can never collide) under the current
+			# semantic fingerprint skips solving entirely.
+			_ds_on = os.environ.get('SCULPTOR_DEPSTORE', '0') == '1'
+			if _ds_on:
+				from core import depstore as _dstore
+				_ds = _dstore.Depstore()
+				_dcfg = {'dpsize': str(dpsize),
+						 'dep_id': _dstore.deployment_id(deployment)}
+				_want_iters = int(os.environ.get('SCULPTOR_MAX_ITER') or 0)
+				_art = _ds.get_training(min_iters=_want_iters, config=_dcfg)
+				_blob = (_ds.get_eval(_art.fp, 'compare_ret')
+						 if _art is not None else None)
+				if _blob is not None and 'latencies' not in _blob:
+					print('[depstore] stale blob (pre-latencies era) for '
+						  'sim {} -- treating as MISS'.format(random_iter),
+						  flush=True)
+					_blob = None
+				if _blob is not None:
+					print('[depstore] HIT sim {}: fp={} n_iters={} -- '
+						  'skipping solve'.format(random_iter, _art.fp,
+												  _art.n_iters), flush=True)
+					metrics['compare_rets'][random_iter] = _blob['ret']
+					metrics['save_run_dir'][random_iter] = None
+					metrics['ug_to_vol'][random_iter] = _blob['ug_to_vol']
+					metrics['best_latencies'][random_iter] = _blob['best_latencies']
+					metrics['settings'][random_iter] = _blob.get('settings')
+					metrics['adv'][random_iter] = _blob['adv']
+					metrics['latencies'][random_iter] = _blob['latencies']
+					continue
+				print('[depstore] MISS sim {}: {}'.format(
+					random_iter,
+					_ds.why_miss(min_iters=_want_iters, config=_dcfg)),
+					flush=True)
+
 			n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 	
 			sas = Sparse_Advertisement_Eval(deployment, verbose=True,
@@ -298,6 +334,26 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			ug_vols = sas.ug_to_vol
 			metrics['ug_to_vol'][random_iter] = sas.ug_vols
 			metrics['best_latencies'][random_iter] = copy.copy(sas.best_lats_by_ug)
+			if _ds_on:
+				try:
+					_adv = np.asarray(ret['adv_solns']['sparse'][0])
+					_trained_iters = int(getattr(sas.sas, 'iter', 0) or
+										 os.environ.get('SCULPTOR_MAX_ITER') or 0)
+					_fp = _ds.put_training(
+						_adv, _trained_iters, deployment=deployment,
+						config=_dcfg,
+						provenance={'src': 'eval_all_solution_types',
+									'dpsize': str(dpsize)})
+					if _fp:
+						_ds.put_eval(_fp, 'compare_ret', {
+							'ret': ret, 'ug_to_vol': sas.ug_vols,
+							'best_latencies': copy.copy(sas.best_lats_by_ug),
+							'settings': metrics['settings'][random_iter]})
+						print('[depstore] PUT sim {}: fp={} it={}'.format(
+							random_iter, _fp, _trained_iters), flush=True)
+				except Exception as _e:
+					print('[depstore] put failed (non-fatal): {}'.format(_e),
+						  flush=True)
 			for solution in soln_types:
 				try:
 					adv = ret['adv_solns'][solution][0]
@@ -308,6 +364,22 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 
 				metrics['adv'][random_iter][solution] = adv
 				metrics['latencies'][random_iter][solution] = pre_lats_by_ug
+
+			if _ds_on and '_fp' in dir() and _fp:
+				try:
+					_ds.put_eval(_fp, 'compare_ret', {
+						'ret': metrics['compare_rets'][random_iter],
+						'ug_to_vol': metrics['ug_to_vol'][random_iter],
+						'best_latencies': metrics['best_latencies'][random_iter],
+						'settings': metrics['settings'][random_iter],
+						'adv': metrics['adv'][random_iter],
+						'latencies': metrics['latencies'][random_iter]})
+					print('[depstore] PUT complete blob for sim {} '
+						  '(incl. adv/latencies)'.format(random_iter),
+						  flush=True)
+				except Exception as _e:
+					print('[depstore] blob update failed (non-fatal): '
+						  '{}'.format(_e), flush=True)
 
 			pickle.dump(metrics, open(performance_metrics_fn,'wb'))
 
