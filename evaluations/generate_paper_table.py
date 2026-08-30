@@ -121,6 +121,14 @@ def _fail_delta(key):
     return _x
 
 
+def _pct_key(key):
+    base = _mean_key(key)
+    def _x(m, sim, soln):
+        v = base(m, sim, soln)
+        return None if v is None else 100.0 * v
+    return _x
+
+
 def _mean_key(key):
     def _x(m, sim, soln):
         v = (m.get(key) or {}).get(sim, {}).get(soln)
@@ -338,16 +346,19 @@ def _lat_res_objective(m, sim, soln):
 # pulled from GROUPS, in print order. Edit this list to change what the
 # key table shows -- labels must match GROUPS exactly.
 KEY_COLUMNS = [
-    ('MLU', 'MLU'),
+    # THE paper table (Tom 2026-08-30): curated subset per objective
     ('MLU', 'Latency (ms)'),
+    ('MLU', 'MLU'),
     ('Latency + g*Resilience', 'Latency (ms)'),
+    ('Latency + g*Resilience', 'Subopt PoPP-fail (ms)'),
     ('Latency + g*Resilience', '% cong PoPP-fail'),
+    ('Latency + g*Resilience', 'Subopt PoP-fail (ms)'),
     ('Latency + g*Resilience', '% cong PoP-fail'),
     ('Latency + g*Resilience', 'Flash-crowd resilience'),
     ('Latency + g*Resilience', 'Diurnal resilience'),
-    ('Frac beyond optimal', 'Objective'),
     ('High + Low Priority Traffic', 'HPrio latency (ms)'),
     ('High + Low Priority Traffic', 'Crit bulk ratio'),
+    ('Frac beyond optimal', '% within 10ms'),
     ('Site cost', 'Wgt avg site cost'),
 ]
 
@@ -384,6 +395,7 @@ GROUPS = [
         ('Objective (lat+g*RB)',    '<', _lat_res_objective),
     ]),
     ('Frac beyond optimal', 'frac_beyond_optimal', [
+        ('% within 10ms',         '>', _pct_key('frac_within_threshold_by_strategy')),
         ('Objective',             '>', _mean_key('objective_value_by_strategy')),
         ('Congested vol',         '<', _lat_split('congested')),
         ('Stranded vol',          '<', _lat_split('stranded')),
@@ -668,8 +680,13 @@ TEX_GROUP_DISPLAY = {
     'Site cost': 'Traffic Cost Across Sites',
 }
 TEX_SUB_DISPLAY = {
-    'Subopt PoPP-fail (ms)': 'Subopt Ingress-fail (ms)',
-    '% cong PoPP-fail': '% cong Ingress-fail',
+    'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
+    '% cong PoPP-fail': '% cong ingress-fail',
+    'Subopt PoP-fail (ms)': 'Subopt site-fail (ms)',
+    '% cong PoP-fail': '% cong site-fail',
+    'Flash-crowd resilience': 'Flash crowd intensity',
+    'Diurnal resilience': 'Diurnal intensity',
+    '% within 10ms': '% within 10ms of optimal',
     'HPrio cong @SWAN': 'HPrio cong @SWAN',
 }
 # house macros defined in the paper's macros.tex
@@ -681,6 +698,28 @@ TEX_METHOD_DISPLAY = {
     'Anycast': '\\acast',
     'Unicast': '\\ucast',
 }
+
+def _wrap_tex_header(text, width=None):
+    """Thin auto-wrapped header cell (Tom 2026-08-30): break on spaces
+    into lines of <= SCULPTOR_TEX_HEADER_WIDTH chars (default 12),
+    emitted as \\makecell (the paper loads makecell). Escapes % and &."""
+    if width is None:
+        width = int(_os.environ.get('SCULPTOR_TEX_HEADER_WIDTH', '12'))
+    words = text.split()
+    lines, cur = [], ''
+    for w in words:
+        if cur and len(cur) + 1 + len(w) > width:
+            lines.append(cur)
+            cur = w
+        else:
+            cur = (cur + ' ' + w) if cur else w
+    if cur:
+        lines.append(cur)
+    esc = [l.replace('%', '\\%').replace('&', '\\&') for l in lines]
+    if len(esc) <= 1:
+        return esc[0] if esc else ''
+    return '\\makecell{' + '\\\\'.join(esc) + '}'
+
 
 def emit(labels, rows, fmt, out_dir, basename='paper_table'):
     os.makedirs(out_dir, exist_ok=True)
@@ -722,7 +761,7 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             f.write('\\begin{tabular}{l' + 'r' * len(labels) + '}\n\\toprule\n')
             f.write(' & ' + ' & '.join(
                 '\\multicolumn{{{}}}{{c}}{{{}}}'.format(
-                    n, TEX_GROUP_DISPLAY.get(g, g))
+                    n, _wrap_tex_header(TEX_GROUP_DISPLAY.get(g, g)))
                 for g, n in groups) + ' \\\\\n')
             # cmidrules under each supersection
             col = 2
@@ -734,8 +773,7 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             # LaTeX-escape header labels (a bare % in '% cong ...'
             # comments out the row terminator -- found compiling the
             # pasted table in the paper, 2026-08-30)
-            _esc = [TEX_SUB_DISPLAY.get(x, x)
-                    .replace('%', '\\%').replace('&', '\\&')
+            _esc = [_wrap_tex_header(TEX_SUB_DISPLAY.get(x, x))
                     for x in subs]
             f.write('Method & ' + ' & '.join(_esc) + ' \\\\\n\\midrule\n')
             for _key, disp in METHODS:
