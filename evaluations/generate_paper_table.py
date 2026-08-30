@@ -634,13 +634,14 @@ def build_table(cov):
     return labels, rows
 
 
-def _fmt(cell, latex=False):
+def _fmt(cell, latex=False, prec=2):
     mean, std, n, best = cell
     if mean is None:
         return '-'
-    s = '{:.2f}'.format(mean)
+    s = '{:.{p}f}'.format(mean, p=prec)
     if std is not None:
-        s += ('\\pm{:.2f}' if latex else '+/-{:.2f}').format(std)
+        s += (('\\pm{:.{p}f}' if latex else '+/-{:.{p}f}')
+              .format(std, p=prec))
     if best:
         s = ('\\textbf{{{}}}'.format(s)) if latex else '*{}*'.format(s)
     return ('${}$'.format(s) if (latex and '\\pm' in s) else s)
@@ -659,6 +660,9 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             groups.append([g, 1])
     subs = [HEADER_TEXT.get(l.split('|', 1)[1], l.split('|', 1)[1])
             for l in labels]
+    # per-column precision (Tom 2026-08-30): site-cost differences live
+    # in the 3rd/4th decimal
+    _precs = [4 if 'Wgt avg site cost' in l else 2 for l in labels]
     w = max(len(d) for _k, d in METHODS) + 2
     line = '  ' + ' ' * w
     for g, n in groups:
@@ -667,7 +671,8 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
     print('  ' + ' ' * w + ' | '.join('{:>22s}'.format(x[:22]) for x in subs))
     for _key, disp in METHODS:
         print('  {:<{w}s}'.format(disp, w=w)
-              + ' | '.join('{:>22s}'.format(_fmt(c)) for c in rows[disp]))
+              + ' | '.join('{:>22s}'.format(_fmt(c, prec=p))
+                           for c, p in zip(rows[disp], _precs)))
     if fmt in ('latex', 'all'):
         pth = os.path.join(out_dir, basename + '.tex')
         with open(pth, 'w') as f:
@@ -686,7 +691,8 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             f.write('Method & ' + ' & '.join(subs) + ' \\\\\n\\midrule\n')
             for _key, disp in METHODS:
                 f.write(disp + ' & '
-                        + ' & '.join(_fmt(c, latex=True) for c in rows[disp])
+                        + ' & '.join(_fmt(c, latex=True, prec=p)
+                                     for c, p in zip(rows[disp], _precs))
                         + ' \\\\\n')
             f.write('\\bottomrule\n\\end{tabular}\n')
         print('\n  wrote {}'.format(pth))

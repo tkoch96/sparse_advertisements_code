@@ -98,8 +98,11 @@ def _render_csv(path):
         for j in range(1, ncol):
             v = r[j] if j < len(r) else ''
             mark = best[j] == r[0] and v not in ('', None)
+            # per-column display precision (Tom 2026-08-30: site-cost
+            # deltas live in the 3rd/4th decimal)
+            _prec = 4 if 'Wgt avg site cost' in (header[j] if j < len(header) else '') else 2
             try:
-                disp = '{:.2f}'.format(float(v))
+                disp = '{:.{p}f}'.format(float(v), p=_prec)
             except ValueError:
                 disp = html.escape(v) or '-'
             style = ('font-weight:700;color:var(--go)' if mark
