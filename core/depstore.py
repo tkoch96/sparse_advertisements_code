@@ -52,6 +52,7 @@ CORE_ERA = 'era1-20260830-peruser-penalty'
 # Bump per eval family when that family's EVAL code changes meaning.
 EVAL_ERAS = {
     'compare_ret': 'e1-20260830',
+    'paper_evals_done': 'e1-20260830',
     'failure_grids': 'e2-20260830-highlat-split',
     'flash_bisect': 'e2-20260823-reference-first',
     'diurnal_bisect': 'e2-20260823-reference-first',
@@ -65,6 +66,10 @@ EVAL_ERAS = {
 # Semantic: changes what a trained advertisement IS. name -> default (the
 # value assumed when the env var is unset; defaults mirror the code).
 SEMANTIC_KNOBS = {
+    # integration-test namespace flag (Tom 2026-08-30): default
+    # off; the depstore pipeline test sets =1 so its artifacts
+    # hash into a disjoint namespace and are purgeable by key.
+    'SCULPTOR_DEPSTORE_TEST': '0',
     'SCULPTOR_DEPLOYMENT_SEED': '',
     'SCULPTOR_GENERIC_OBJECTIVE': 'avg_latency',
     'SCULPTOR_LAT_MODEL': '',
@@ -171,6 +176,7 @@ OPERATIONAL_KNOBS = {
     'SCULPTOR_CELL_TIMEOUT', 'SCULPTOR_RECALC', 'SCULPTOR_QUEUE_PASSES',
     'SCULPTOR_MAX_ITER', 'SCULPTOR_MIN_ITER',   # iters handled separately
     'SCULPTOR_DEPSTORE', 'SCULPTOR_DEPSTORE_LOCAL',
+    'SCULPTOR_DEPSTORE_MODE',
     'SCULPTOR_DEPSTORE_ROOT', 'SCULPTOR_DEPSTORE_BUDGET_MB',
     'SCULPTOR_DEPSTORE_S3', 'SCULPTOR_EODS_INCLUDE_SIZE3',
     'SCULPTOR_EODS_HOTSTART_DIR', 'SCULPTOR_DEPLOYMENT_SWEEP_NSIM',
@@ -455,6 +461,34 @@ class Depstore:
                 return None
         import pickle
         return pickle.load(open(p, 'rb'))
+
+    def purge_test_artifacts(self):
+        """Delete every artifact whose fingerprint key was created with
+        SCULPTOR_DEPSTORE_TEST=1 (step (b)/(j) of the pipeline
+        integration test). Returns the number of artifact dirs removed.
+        SKELETON NOTE: eval blobs live under evals/<fp>/ and are removed
+        with their training's fp; orphan eval dirs (training already
+        gone) are swept too."""
+        removed = 0
+        test_fps = set()
+        for e in self.index():
+            if e.get('kind') != 'training':
+                continue
+            mfn = os.path.join(self.root, e['path'], 'manifest.json')
+            if not os.path.exists(mfn):
+                continue
+            key = (json.load(open(mfn)).get('key') or {})
+            if key.get('SCULPTOR_DEPSTORE_TEST', '0') not in ('', '0'):
+                test_fps.add(e['fp'])
+                shutil.rmtree(os.path.join(self.root, e['path']),
+                              ignore_errors=True)
+                removed += 1
+        for fp in test_fps:
+            d = os.path.join(self.root, 'evals', fp)
+            if os.path.isdir(d):
+                shutil.rmtree(d, ignore_errors=True)
+                removed += 1
+        return removed
 
     # ---- diagnostics -----------------------------------------------
     def why_miss(self, min_iters=0, config=None):

@@ -1,0 +1,85 @@
+{
+  "_comment": "LOCAL SMOKE intent: the whole pipeline end-to-end on the Mac in minutes -- tiny sizes, 3 iters, local depstore (50MB budget). One call: python evaluations/run_all_paper_evaluations.py evaluations/intents/paper_intent.smoke.json",
+  "run_id": "papersmoke",
+  "where": "local",
+  "env": {
+    "SCULPTOR_DEPSTORE": "1",
+    "SCULPTOR_DEPSTORE_LOCAL": "1",
+    "SCULPTOR_LOG_MEM": "0",
+    "SCULPTOR_MAX_ITER": "3",
+    "SCULPTOR_EVAL_SEED": "77",
+    "MPLBACKEND": "Agg"
+  },
+  "stages": {
+    "deployment_sizes": {
+      "enabled": true,
+      "dpsizes": [
+        5
+      ],
+      "nsim": [
+        1
+      ],
+      "cache_fn": "cache/papersmoke/metrics_by_dpsize.pkl",
+      "figures_subdir": "papersmoke",
+      "plot": true,
+      "port": 31650,
+      "env": {},
+      "artifacts": {
+        "local_dir": "figures/papersmoke",
+        "files": [],
+        "_comment": "smoke outputs land here; file list intentionally empty (smoke checks the pipeline, not the set)",
+        "dst": "figures/papersmoke_out"
+      },
+      "outputs": [
+        "figures/papersmoke/*over_deployment_size*.pdf"
+      ]
+    },
+    "paper_table": {
+      "enabled": true,
+      "dpsize": "small",
+      "nsim": 1,
+      "iters": 3,
+      "run_tag": "papersmoke",
+      "objectives": [
+        "avg_latency"
+      ],
+      "out": "figures/papersmoke/paper_table",
+      "port": 31652,
+      "env": {},
+      "artifacts": {
+        "local_dir": "figures/papersmoke/paper_table",
+        "files": [
+          "paper_table.csv",
+          "paper_table.tex"
+        ],
+        "dst": "figures/papersmoke_out"
+      },
+      "outputs": [
+        "figures/papersmoke/paper_table/*"
+      ]
+    },
+    "n_prefixes": {
+      "enabled": true,
+      "dpsize": "small",
+      "prefixes": [
+        2,
+        3
+      ],
+      "nsim": 1,
+      "max_iter": 3,
+      "cache_fn": "cache/papersmoke/prefix_metrics.pkl",
+      "figures_subdir": "papersmoke",
+      "plot": true,
+      "port": 31654,
+      "env": {},
+      "artifacts": {
+        "local_dir": "figures/papersmoke",
+        "files": [],
+        "dst": "figures/papersmoke_out"
+      },
+      "outputs": [
+        "figures/papersmoke/*over_prefix_budget*.pdf"
+      ]
+    }
+  }
+}

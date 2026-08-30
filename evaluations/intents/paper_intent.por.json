@@ -54,7 +54,8 @@
     },
     "n_prefixes": {
       "enabled": false,
-      "dpsize": "32",
+      "_comment": "skeleton: flags below are passed through verbatim once we settle evaluate_over_n_prefixes' CLI",
+      "dpsize": "small",
       "n_prefixes": [
         2,
         4,
@@ -65,27 +66,10 @@
       "env": {},
       "artifacts": {
         "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/n_prefixes",
-        "files": [
-          "average_latency_over_prefix_budget_normal.pdf",
-          "flash_crowd_blowup_before_congestion_over_prefix_budget.pdf",
-          "diurnal_blowup_before_congestion_over_prefix_budget.pdf"
-        ],
+        "files": [],
+        "_comment": "skeleton: fill once the stage runs for real",
         "dst": "figures/paper"
-      },
-      "prefixes": [
-        10,
-        20,
-        30,
-        40,
-        50,
-        60
-      ],
-      "nsim": 1,
-      "figures_subdir": "cluster/prefix_sweep",
-      "plot": true,
-      "outputs": [
-        "figures/cluster/prefix_sweep/*over_prefix_budget*.pdf"
-      ]
+      }
     },
     "paper_table": {
       "enabled": true,

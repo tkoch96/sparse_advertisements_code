@@ -526,6 +526,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		try:
 			from core import depstore as _dstore
 			_ds2 = _dstore.Depstore()
+			_n_stamped = 0
 			for _ri, _dep in (metrics.get('deployment') or {}).items():
 				if not _dep:
 					continue
@@ -535,7 +536,9 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 				if _a2 is not None:
 					_ds2.put_eval(_a2.fp, 'paper_evals_done',
 								  {'sim': _ri, 'done': True})
-			print('[depstore] paper_evals_done stamped', flush=True)
+					_n_stamped += 1
+			print('[depstore] paper_evals_done stamped for {} sim(s)'
+				  .format(_n_stamped), flush=True)
 		except Exception as _e:
 			print('[depstore] marker stamp failed (non-fatal): {}'.format(
 				_e), flush=True)

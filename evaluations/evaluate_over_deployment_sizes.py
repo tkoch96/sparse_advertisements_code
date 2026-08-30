@@ -322,7 +322,8 @@ def make_paper_plots(cache_fn, **kwargs):
 	# flash/diurnal + pre-split failure stats, and today's code cannot
 	# re-evaluate the May cache without retraining (deployment generation
 	# drifted). SCULPTOR_EODS_INCLUDE_SIZE3=1 restores it.
-	if os.environ.get('SCULPTOR_EODS_INCLUDE_SIZE3', '0') != '1':
+	if (kwargs.get('evaluate_over', 'deployment_size') == 'deployment_size'
+			and os.environ.get('SCULPTOR_EODS_INCLUDE_SIZE3', '0') != '1'):
 		dpsizes = [d for d in dpsizes
 				   if int(re.search(r'\d+', str(d)).group()) != 3]
 	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
