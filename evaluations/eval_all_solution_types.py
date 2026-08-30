@@ -251,8 +251,22 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			if _ds_on:
 				from core import depstore as _dstore
 				_ds = _dstore.Depstore()
+				# kwargs-borne SEMANTIC config must enter the key (Tom
+				# 2026-08-30 review caught it): n_prefixes etc. arrive as
+				# function args, not env -- without them, two prefix
+				# budgets on the SAME deployment share a fingerprint and
+				# cross-hit. Resolved values, over-keyed.
 				_dcfg = {'dpsize': str(dpsize),
-						 'dep_id': _dstore.deployment_id(deployment)}
+						 'dep_id': _dstore.deployment_id(deployment),
+						 'n_prefixes': str(kwargs.get('n_prefixes',
+													  'auto')),
+						 'generic_objective': str(kwargs.get(
+							 'generic_objective',
+							 os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
+											'avg_latency'))),
+						 'gamma': str(gamma),
+						 'lambduh': str(lambduh),
+						 'capacity': str(capacity)}
 				_want_iters = int(os.environ.get('SCULPTOR_MAX_ITER') or 0)
 				_art = _ds.get_training(min_iters=_want_iters, config=_dcfg)
 				_blob = (_ds.get_eval(_art.fp, 'compare_ret')

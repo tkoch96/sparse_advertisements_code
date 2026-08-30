@@ -6,17 +6,19 @@
     "SCULPTOR_DEPSTORE": "1",
     "SCULPTOR_DEPSTORE_LOCAL": "1",
     "SCULPTOR_LOG_MEM": "0",
-    "SCULPTOR_MAX_ITER": "3",
     "SCULPTOR_EVAL_SEED": "77",
-    "MPLBACKEND": "Agg"
+    "MPLBACKEND": "Agg",
+    "SCULPTOR_RUN_TAG": "papersmoke"
   },
   "stages": {
     "deployment_sizes": {
       "enabled": true,
       "dpsizes": [
+        3,
         5
       ],
       "nsim": [
+        1,
         1
       ],
       "cache_fn": "cache/papersmoke/metrics_by_dpsize.pkl",
@@ -38,7 +40,6 @@
       "enabled": true,
       "dpsize": "small",
       "nsim": 1,
-      "iters": 3,
       "run_tag": "papersmoke",
       "objectives": [
         "avg_latency"
@@ -66,7 +67,6 @@
         3
       ],
       "nsim": 1,
-      "max_iter": 3,
       "cache_fn": "cache/papersmoke/prefix_metrics.pkl",
       "figures_subdir": "papersmoke",
       "plot": true,
@@ -81,5 +81,6 @@
         "figures/papersmoke/*over_prefix_budget*.pdf"
       ]
     }
-  }
+  },
+  "iters": 3
 }

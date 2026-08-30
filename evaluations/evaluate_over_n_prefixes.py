@@ -80,7 +80,12 @@ def pull_results(dpsize, port=None, prefixes=None, nsim=1, worker_n=0,
 		if only_recalc is not None and prefix_num not in only_recalc:
 			continue
 		print("Worker {} evaluating over {} prefixes".format(worker_n, prefix_num))
-		inner_metrics_fn = os.path.join(CACHE_DIR,
+		# inner per-prefix pickles namespace NEXT TO cache_fn (Tom
+		# 2026-08-30: the global-CACHE_DIR path silently short-circuited
+		# hermetic reruns and starved the depstore layer)
+		_inner_dir = os.path.dirname(cache_fn) or CACHE_DIR
+		os.makedirs(_inner_dir, exist_ok=True)
+		inner_metrics_fn = os.path.join(_inner_dir,
 			'{}_over_prefixes-{}.pkl'.format(dpsize_str, prefix_num))
 		metrics = evaluate_all_metrics(dpsize_str, port,
 			prefix_deployment=deployment, n_prefixes=prefix_num, nsim=nsim,

@@ -42,10 +42,13 @@ ARTIFACT_FAMILY = 'paper_files'
 
 
 # ---------------------------------------------------------------- cmd --
-def _stage_cmd(name, spec, where):
+def _stage_cmd(name, spec, where, default_iters=None):
     """argv for one stage. A 'cmd' template in the intent wins (stages
-    as data); built-ins cover the three original stages."""
+    as data); built-ins cover the three original stages. Iteration count
+    is ONE concept: per-stage 'iters' overriding the intent-level
+    'iters' (Tom 2026-08-30: it had three spellings across stages)."""
     py = PY_VM if where == 'vm' else PY_LOCAL
+    iters = spec.get('iters', default_iters)
     if spec.get('cmd'):
         return [t.replace('{py}', py) for t in spec['cmd']]
     if name == 'deployment_sizes':
@@ -55,6 +58,8 @@ def _stage_cmd(name, spec, where):
                '--figures-subdir', spec['figures_subdir'],
                '--dpsizes', ','.join(str(d) for d in spec['dpsizes']),
                '--nsim', ','.join(str(n) for n in spec['nsim'])]
+        if iters:
+            cmd += ['--max-iter', str(iters)]
         if spec.get('plot'):
             cmd.append('--plot')
         return cmd
@@ -64,8 +69,8 @@ def _stage_cmd(name, spec, where):
                '--dpsize', str(spec['dpsize']),
                '--prefixes', ','.join(str(p) for p in spec['prefixes']),
                '--nsim', str(spec.get('nsim', 1))]
-        if spec.get('max_iter'):
-            cmd += ['--max-iter', str(spec['max_iter'])]
+        if iters:
+            cmd += ['--max-iter', str(iters)]
         if spec.get('cache_fn'):
             cmd += ['--cache-fn', spec['cache_fn']]
         if spec.get('figures_subdir'):
@@ -77,7 +82,7 @@ def _stage_cmd(name, spec, where):
         return [py, '-u', 'evaluations/generate_paper_table.py',
                 '--dpsize', str(spec['dpsize']),
                 '--number_of_deployments', str(spec['nsim']),
-                '--num_training_iter', str(spec['iters']),
+                '--num_training_iter', str(iters or spec.get('iters', 150)),
                 '--run_id', spec['run_tag'],
                 '--objectives', ','.join(spec['objectives']),
                 '--out', spec['out']]
@@ -89,7 +94,8 @@ def _runbook(name, spec, intent):
     if spec.get('runbook'):
         return spec['runbook']
     where = intent.get('where', 'local')
-    cmd = _stage_cmd(name, spec, where)
+    cmd = _stage_cmd(name, spec, where,
+                     intent.get('iters'))
     if where == 'vm':
         env = dict(intent.get('env') or {}, **(spec.get('env') or {}))
         envs = ' '.join('--env {}={}'.format(k, v) for k, v in env.items())
@@ -323,7 +329,7 @@ def verb_run(intent, a):
             results[name] = 0
             continue
         env = dict(genv, **(spec.get('env') or {}))
-        cmd = _stage_cmd(name, spec, where)
+        cmd = _stage_cmd(name, spec, where, intent.get('iters'))
         if a.dry_run:
             print('[{}] DRY: env={} cmd={}'.format(name, env,
                                                    ' '.join(cmd)))
@@ -395,6 +401,13 @@ def main():
         verb = 'run'
         intent_path = a.verb_or_intent
     intent = json.load(open(intent_path))
+    # the runner itself stores/resolves paper_files artifacts, so the
+    # intent's depstore env must bind in THIS process too (found
+    # 2026-08-30: runner wrote to the repo store while stages wrote to
+    # the local one)
+    for k, v in (intent.get('env') or {}).items():
+        if k.startswith('SCULPTOR_DEPSTORE'):
+            os.environ[k] = str(v)
     if verb == 'run':
         return verb_run(intent, a)
     return verb_grab(intent, a, pull=(verb == 'grab'))
