@@ -544,8 +544,22 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			for _ri, _dep in (metrics.get('deployment') or {}).items():
 				if not _dep:
 					continue
+				# MUST mirror the lookup/PUT key exactly (2026-08-30: the
+				# stamp kept the old 2-key config after the kwargs
+				# widening -> fingerprint mismatch -> no stamp -> eval_only
+				# permanently failed; caught by the suite run of the
+				# pipeline choreography test)
 				_cfg2 = {'dpsize': str(dpsize),
-						 'dep_id': _dstore.deployment_id(_dep)}
+						 'dep_id': _dstore.deployment_id(_dep),
+						 'n_prefixes': str(kwargs.get('n_prefixes',
+													  'auto')),
+						 'generic_objective': str(kwargs.get(
+							 'generic_objective',
+							 os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
+											'avg_latency'))),
+						 'gamma': str(gamma),
+						 'lambduh': str(lambduh),
+						 'capacity': str(capacity)}
 				_a2 = _ds2.get_training(min_iters=0, config=_cfg2)
 				if _a2 is not None:
 					_ds2.put_eval(_a2.fp, 'paper_evals_done',

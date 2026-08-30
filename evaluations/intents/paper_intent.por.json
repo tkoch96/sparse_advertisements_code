@@ -55,11 +55,11 @@
     },
     "n_prefixes": {
       "enabled": true,
-      "_comment": "SHIM scale for now (Tom 2026-08-30)",
+      "_comment": "SHIM (Tom 2026-08-30). Budget 2 is structurally infeasible for SCULPTOR on a 3-PoP deployment (init needs anycast + one prefix per PoP), so the floor is 3.",
       "dpsize": "testing_feature-actual-3",
       "prefixes": [
-        2,
         3,
+        4,
         5
       ],
       "nsim": 1,

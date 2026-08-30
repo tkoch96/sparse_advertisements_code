@@ -63,8 +63,8 @@
       "enabled": true,
       "dpsize": "small",
       "prefixes": [
-        2,
-        3
+        4,
+        5
       ],
       "nsim": 1,
       "cache_fn": "cache/papersmoke/prefix_metrics.pkl",
@@ -79,7 +79,8 @@
       },
       "outputs": [
         "figures/papersmoke/*over_prefix_budget*.pdf"
-      ]
+      ],
+      "_comment": "floor on small = 1 anycast + 3 PoP prefixes = 4 (budgets 2/3 make sparse init raise by design)"
     }
   },
   "iters": 3

@@ -139,6 +139,10 @@ def main():
         # them would let run2 'pass' without touching the unified cache
         shutil.rmtree(os.path.join(_REPO, 'cache', 'papersmoke'),
                       ignore_errors=True)
+        # RUN_TAG-suffixed metrics pickles live in the GLOBAL cache dir
+        # and also sit in front of the depstore -- wipe them too
+        for f in glob.glob(os.path.join(_REPO, 'cache', '*papersmoke*')):
+            os.remove(f)
         rc, dt2, log2 = _run(os.path.join(logd, 'paperfig_run2.log'))
         step('run2 exits 0', rc == 0, 'rc={} ({:.0f}s)'.format(rc, dt2))
         step('run2 trains NOTHING',
