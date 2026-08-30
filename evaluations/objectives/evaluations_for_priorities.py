@@ -180,4 +180,151 @@ def run(ctx):
                    title='High-priority latency by solution type',
                    out_name='priority_hprio_latency_{}.pdf'.format(ctx.dpsize),
                    lower_is_better=True)
+    _bulk_sweep_all(ctx)
+    _gen_priority_paper_figures(ctx)
     return ctx.metrics
+
+
+# ---- bulk-volume sweep + the B4/SWAN paper figures --------------------
+# Ported from old_scripts/testing_priorities.py:gen_paper_plots (Tom
+# 2026-08-30): congestion-vs-ratio curves and the HPrio-latency CDF at
+# the ratio of interest, emitted as priority_bulk_traffic_congestion.pdf
+# and priority_bulk_traffic_latency.pdf.
+import numpy as _np
+
+BULK_SWEEP_VALS = [round(float(x), 3) for x in _np.linspace(0.1, 9.0, 20)]
+_BV_OF_INTEREST = 5.0     # latency CDF slice
+_B4_RATIO, _SWAN_RATIO = 6.0, 4.0
+
+
+def _bulk_sweep_all(ctx):
+    """metrics['bulk_sweep_by_strategy'][sim][strategy] =
+    {'congestion_over_bulk_vals': {bv: frac},
+     'bulk_latencies_over_bulk_vals': {bv: lats_array}}.
+    EXPENSIVE (~20 joint LPs per strategy): cached in the metrics pickle
+    and skipped when complete unless SCULPTOR_RECALC contains
+    'bulk_sweep'. Sim count capped by SCULPTOR_BULK_SWEEP_SIMS (default
+    1 -- the paper figure plots sim 0, matching the legacy script)."""
+    import os
+    from helpers.helpers import threshold_a
+    metrics = ctx.metrics
+    key = 'bulk_sweep_by_strategy'
+    metrics.setdefault(key, {})
+    recalc = 'bulk_sweep' in os.environ.get('SCULPTOR_RECALC', '')
+    n_sims = min(ctx.N_TO_SIM,
+                 int(os.environ.get('SCULPTOR_BULK_SWEEP_SIMS', '1')))
+    cache = getattr(ctx, '_per_sim_sas', None) or {}
+    for sim in range(n_sims):
+        rets = (metrics.get('compare_rets') or {}).get(sim) or {}
+        advs = rets.get('adv_solns') or {}
+        metrics[key].setdefault(sim, {})
+        sas = cache.get(sim) or ctx.sas
+        for strategy in ctx.soln_types:
+            have = metrics[key][sim].get(strategy)
+            if (not recalc and have
+                    and set(have.get('congestion_over_bulk_vals') or {})
+                    >= set(BULK_SWEEP_VALS)):
+                continue
+            try:
+                adv = advs[strategy][0]
+            except (KeyError, IndexError):
+                metrics[key][sim][strategy] = None
+                continue
+            print('[bulk_sweep] sim {} strategy {} ({} ratios)'.format(
+                sim, strategy, len(BULK_SWEEP_VALS)), flush=True)
+            try:
+                rti, _ = sas.calculate_ground_truth_ingress(
+                    threshold_a(adv))
+                cong, lats = {}, {}
+                for bv in BULK_SWEEP_VALS:
+                    f, ret = _joint_at_ratio(sas, adv, bv, rti=rti)
+                    cong[bv] = f
+                    lats[bv] = _np.asarray(
+                        ret.get('bulk_lats_by_ug')
+                        if isinstance(ret, dict) else None)
+                metrics[key][sim][strategy] = {
+                    'congestion_over_bulk_vals': cong,
+                    'bulk_latencies_over_bulk_vals': lats}
+            except Exception:
+                import traceback
+                traceback.print_exc()
+                metrics[key][sim][strategy] = None
+    return metrics[key]
+
+
+def _gen_priority_paper_figures(ctx):
+    """The two paper figures from the sweep (legacy names/format)."""
+    from helpers.helpers import get_cdf_xy
+    from helpers.paper_plotting_functions import (
+        get_figure, save_figure, solution_to_marker,
+        solution_to_line_color, solution_to_plot_label)
+    metrics = ctx.metrics
+    sweep = metrics.get('bulk_sweep_by_strategy') or {}
+    sims = [s for s, d in sweep.items()
+            if d and any(v for v in d.values())]
+    if not sims:
+        print('[priority figs] no sweep data -- skipping', flush=True)
+        return
+    solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter',
+                 'sparse', 'one_per_peering']
+
+    # -- congestion vs LPrio/HPrio ratio
+    f, ax = get_figure(l=3.5)
+    for solution in solutions:
+        ys = []
+        for bv in BULK_SWEEP_VALS:
+            vals = [sweep[s][solution]['congestion_over_bulk_vals'][bv]
+                    for s in sims if sweep[s].get(solution)]
+            if vals:
+                ys.append(float(_np.mean(vals)))
+        if len(ys) != len(BULK_SWEEP_VALS):
+            continue
+        ax.plot(BULK_SWEEP_VALS, ys,
+                marker=solution_to_marker[solution],
+                color=solution_to_line_color[solution],
+                label=solution_to_plot_label[solution])
+    ax.set_xlabel('LPrio/HPrio Ratio', fontsize=18)
+    ax.set_ylabel('Fraction HPrio\nTraffic Congested', fontsize=18)
+    ax.set_yticks([0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1.0])
+    ax.text(_B4_RATIO - .75, .7, 'B4\nRatio', fontsize=18)
+    ax.axvline(_B4_RATIO, 0, 1, linestyle='--', color='black')
+    ax.text(_SWAN_RATIO - 2.7, .6, 'SWAN\nRatio', fontsize=18)
+    ax.axvline(_SWAN_RATIO, 0, 1, linestyle='--', color='black')
+    ax.grid(True)
+    save_figure('priority_bulk_traffic_congestion.pdf')
+
+    # -- HPrio latency CDF at the ratio of interest
+    bv = min(BULK_SWEEP_VALS, key=lambda x: abs(x - _BV_OF_INTEREST))
+    f, ax = get_figure(l=3.5)
+    for solution in solutions[::-1]:
+        diffs, wts = [], []
+        for s in sims:
+            d = sweep[s].get(solution)
+            if not d:
+                continue
+            lats = d['bulk_latencies_over_bulk_vals'].get(bv)
+            vols = (metrics.get('ug_to_vol') or {}).get(s)
+            if lats is None or vols is None:
+                continue
+            for lat, vol in zip(_np.asarray(lats).flatten(),
+                                _np.asarray(vols).flatten()):
+                diffs.append(float(lat))
+                wts.append(float(vol))
+        if solution == 'anycast' or not diffs:
+            x = _np.linspace(0, 250, num=100)
+            cdf_x = _np.zeros(100)
+        else:
+            x, cdf_x = get_cdf_xy(list(zip(diffs, wts)), weighted=True)
+        ax.plot(x[::10], cdf_x[::10],
+                marker=solution_to_marker[solution],
+                color=solution_to_line_color[solution],
+                label=solution_to_plot_label[solution])
+    ax.legend(fontsize=11, loc='lower right')
+    ax.set_xlabel('HPrio Latency (ms)', fontsize=18)
+    ax.set_ylabel('CDF of Traffic', fontsize=18)
+    ax.set_yticks([0, .1, .2, .3, .4, .5, .6, .7, .8, .9, 1.0])
+    ax.set_xlim([0, 250])
+    ax.grid(True)
+    save_figure('priority_bulk_traffic_latency.pdf')
+    print('[priority figs] wrote priority_bulk_traffic_{congestion,'
+          'latency}.pdf', flush=True)

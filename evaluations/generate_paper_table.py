@@ -338,16 +338,16 @@ def _lat_res_objective(m, sim, soln):
 # pulled from GROUPS, in print order. Edit this list to change what the
 # key table shows -- labels must match GROUPS exactly.
 KEY_COLUMNS = [
+    ('MLU', 'MLU'),
+    ('MLU', 'Latency (ms)'),
     ('Latency + g*Resilience', 'Latency (ms)'),
     ('Latency + g*Resilience', '% cong PoPP-fail'),
     ('Latency + g*Resilience', '% cong PoP-fail'),
     ('Latency + g*Resilience', 'Flash-crowd resilience'),
     ('Latency + g*Resilience', 'Diurnal resilience'),
+    ('Frac beyond optimal', 'Objective'),
     ('High + Low Priority Traffic', 'HPrio latency (ms)'),
     ('High + Low Priority Traffic', 'Crit bulk ratio'),
-    ('Frac beyond optimal', 'Objective'),
-    ('MLU', 'MLU'),
-    ('MLU', 'Latency (ms)'),
     ('Site cost', 'Wgt avg site cost'),
 ]
 
@@ -360,6 +360,16 @@ HEADER_TEXT = {
 
 
 GROUPS = [
+    # section order per the paper narrative (Tom 2026-08-30):
+    # Latency+MLU, Failure Robustness, Latency-Sensitive, Traffic Classes,
+    # Site Cost
+    ('MLU', 'max_util', [
+        ('Latency (ms)',          '<', _mlu_cell_latency),
+        ('MLU',                   '<', _mean_key('mlu_by_strategy')),
+        ('Congested vol',         '<', _lat_split('congested')),
+        ('Stranded vol',          '<', _lat_split('stranded')),
+        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
+    ]),
     ('Latency + g*Resilience', 'avg_latency', [
         ('Latency (ms)',            '<', _lat_split('clean')),
         ('Congested vol',           '<', _lat_split('congested')),
@@ -373,23 +383,16 @@ GROUPS = [
         ('Diurnal resilience',      '>', _stats_key('stats_diurnal')),
         ('Objective (lat+g*RB)',    '<', _lat_res_objective),
     ]),
-    ('High + Low Priority Traffic', 'joint_priority', [
-        ('Frac HPrio routed',     '>', _mean_key('hprio_frac_routed_by_strategy')),
-        ('HPrio latency (ms)',    '<', _mean_key('hprio_latency_by_strategy')),
-        ('Crit bulk ratio',       '>', _mean_key('critical_bulk_ratio_by_strategy')),
-        ('HPrio cong @SWAN',      '<', _mean_key('hprio_cong_swan_by_strategy')),
-        ('Congested vol',         '<', _lat_split('congested')),
-        ('Stranded vol',          '<', _lat_split('stranded')),
-        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
-    ]),
     ('Frac beyond optimal', 'frac_beyond_optimal', [
         ('Objective',             '>', _mean_key('objective_value_by_strategy')),
         ('Congested vol',         '<', _lat_split('congested')),
         ('Stranded vol',          '<', _lat_split('stranded')),
     ]),
-    ('MLU', 'max_util', [
-        ('Latency (ms)',          '<', _mlu_cell_latency),
-        ('MLU',                   '<', _mean_key('mlu_by_strategy')),
+    ('High + Low Priority Traffic', 'joint_priority', [
+        ('Frac HPrio routed',     '>', _mean_key('hprio_frac_routed_by_strategy')),
+        ('HPrio latency (ms)',    '<', _mean_key('hprio_latency_by_strategy')),
+        ('Crit bulk ratio',       '>', _mean_key('critical_bulk_ratio_by_strategy')),
+        ('HPrio cong @SWAN',      '<', _mean_key('hprio_cong_swan_by_strategy')),
         ('Congested vol',         '<', _lat_split('congested')),
         ('Stranded vol',          '<', _lat_split('stranded')),
         ('Objective',             '>', _mean_key('objective_value_by_strategy')),
@@ -401,6 +404,7 @@ GROUPS = [
         ('Stranded vol',          '<', _lat_split('stranded')),
         ('Objective',             '>', _mean_key('objective_value_by_strategy')),
     ]),
+
 ]
 # flat view for coverage/build compatibility
 COLUMNS = [(obj, '{}|{}'.format(g, lab), d, fn)
@@ -657,6 +661,7 @@ def _fmt(cell, latex=False, prec=2, with_std=True):
 # Applied ONLY in the .tex emit: stored labels / CSV headers / dash keys
 # stay stable so caches and merge tooling never re-key.
 TEX_GROUP_DISPLAY = {
+    'MLU': 'Latency + MLU',
     'Latency + g*Resilience': 'Failure Robustness',
     'High + Low Priority Traffic': 'Traffic Classes',
     'Frac beyond optimal': 'Latency Sensitive Services',

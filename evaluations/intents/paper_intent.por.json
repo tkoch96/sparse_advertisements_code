@@ -99,12 +99,16 @@
           "paper_table.csv",
           "paper_table.tex",
           "paper_table_key.csv",
-          "paper_table_key.tex"
+          "paper_table_key.tex",
+          "priority_bulk_traffic_congestion.pdf",
+          "priority_bulk_traffic_latency.pdf"
         ],
         "dst": "figures/paper_artifacts"
       },
       "outputs": [
-        "figures/cluster/20260823_130342-papertable32b/paper_table_full/*"
+        "figures/cluster/20260823_130342-papertable32b/paper_table_full/*",
+        "figures/paper/priority_bulk_traffic_congestion.pdf",
+        "figures/paper/priority_bulk_traffic_latency.pdf"
       ]
     },
     "hardness_figures": {
