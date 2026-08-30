@@ -273,11 +273,31 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 					metrics['settings'][random_iter] = _blob.get('settings')
 					metrics['adv'][random_iter] = _blob['adv']
 					metrics['latencies'][random_iter] = _blob['latencies']
+					if (os.environ.get('SCULPTOR_DEPSTORE_MODE') ==
+							'eval_only' and _ds.get_eval(
+							_art.fp, 'paper_evals_done') is None):
+						print('[depstore] eval_only: training cached but '
+							  'paper evals never ran for fp {} -- run the '
+							  'eval pass (full pipeline) first'.format(
+								  _art.fp), flush=True)
+						os._exit(3)
 					continue
 				print('[depstore] MISS sim {}: {}'.format(
 					random_iter,
 					_ds.why_miss(min_iters=_want_iters, config=_dcfg)),
 					flush=True)
+				# SCULPTOR_DEPSTORE_MODE=eval_only (Tom 2026-08-30
+				# skeleton): evals must consume CACHED training only --
+				# a miss means the training script has not run; fail
+				# loudly instead of silently retraining.
+				if os.environ.get('SCULPTOR_DEPSTORE_MODE') == 'eval_only':
+					# os._exit: the surrounding bare except swallows
+					# SystemExit (caught by the pipeline test step (d))
+					print('[depstore] eval_only: training cache MISS for '
+						  'sim {} -- run the training pass first '
+						  '(SCULPTOR_DEPSTORE_MODE=train_only)'.format(
+							  random_iter), flush=True)
+					os._exit(3)
 
 			n_prefixes = kwargs.get('n_prefixes', deployment_to_prefixes(deployment))
 	
@@ -387,6 +407,14 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 		import traceback
 		traceback.print_exc()
 
+	# SCULPTOR_DEPSTORE_MODE=train_only (Tom 2026-08-30 skeleton): the
+	# training pass ends here -- solutions are trained + PUT into the
+	# depstore, family evals are the eval pass's job.
+	if os.environ.get('SCULPTOR_DEPSTORE_MODE') == 'train_only':
+		print('[depstore] train_only: stopping before family evals',
+			  flush=True)
+		return metrics
+
 	# RECALC_LATENCY_WITH_PENALTY = False
 	# try:
 	# 	changed=False
@@ -490,6 +518,27 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	except Exception:
 		import traceback
 		traceback.print_exc()
+
+	# depstore: stamp 'paper evals ran' per trained fp so eval_only can
+	# distinguish trained-but-never-evaluated from fully done (skeleton;
+	# the marker payload will grow into a real eval-artifact index).
+	if os.environ.get('SCULPTOR_DEPSTORE', '0') == '1':
+		try:
+			from core import depstore as _dstore
+			_ds2 = _dstore.Depstore()
+			for _ri, _dep in (metrics.get('deployment') or {}).items():
+				if not _dep:
+					continue
+				_cfg2 = {'dpsize': str(dpsize),
+						 'dep_id': _dstore.deployment_id(_dep)}
+				_a2 = _ds2.get_training(min_iters=0, config=_cfg2)
+				if _a2 is not None:
+					_ds2.put_eval(_a2.fp, 'paper_evals_done',
+								  {'sim': _ri, 'done': True})
+			print('[depstore] paper_evals_done stamped', flush=True)
+		except Exception as _e:
+			print('[depstore] marker stamp failed (non-fatal): {}'.format(
+				_e), flush=True)
 
 	return metrics
 

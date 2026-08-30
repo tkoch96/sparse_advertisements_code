@@ -64,11 +64,13 @@ PAPER_MANIFEST = {
         'runbook': ("python -m cluster.expctl launch {vm} --label tableredo "
                     "--port 31601 -- /home/ubuntu/venv312/bin/python -u "
                     "evaluations/generate_paper_table.py --dpsize 32 "
-                    "--number_of_deployments 3 --num_training_iter 150 "
+                    "--number_of_deployments 1 --num_training_iter 150 "
                     "--run_id 20260823_130342_papertable32b "
-                    "--objectives per_site_cost,max_util,frac_beyond_optimal,"
-                    "joint_priority --out figures/cluster/"
-                    "20260823_130342-papertable32b/paper_table"),
+                    "--objectives avg_latency,joint_priority,"
+                    "frac_beyond_optimal,max_util,per_site_cost "
+                    "--out figures/cluster/20260823_130342-papertable32b/"
+                    "paper_table_full   # full 5-section emit; then cp into "
+                    "paper_artifacts/paper_table/"),
     },
     'hardness_figures': {
         'desc': 'maxhard ablation grid figures (local store, synced to dash)',

@@ -1,0 +1,42 @@
+{
+  "_comment": "Intent file for run_all_paper_evaluations.py (skeleton, Tom 2026-08-30). 'where': 'local' runs each stage as a local subprocess; 'vm' launches via cluster.expctl on storage_vm. Per-stage 'env' merges over the global 'env'.",
+  "run_id": "paper_v1",
+  "where": "vm",
+  "storage_vm": "i-0428c395787bc3ca0",
+  "env": {
+    "SCULPTOR_DEPSTORE": "1",
+    "SCULPTOR_LOG_MEM": "0"
+  },
+  "stages": {
+    "deployment_sizes": {
+      "enabled": true,
+      "dpsizes": [5, 10, 15, 20, 25, "actual-32"],
+      "nsim": [20, 20, 12, 5, 4, 3],
+      "cache_fn": "cache/cluster_runs/20260822_220131-prefixbudget3/metrics_by_dpsize.pkl",
+      "figures_subdir": "cluster/20260822_220131-prefixbudget3",
+      "plot": true,
+      "port": 31600,
+      "env": {}
+    },
+    "n_prefixes": {
+      "enabled": false,
+      "_comment": "skeleton: flags below are passed through verbatim once we settle evaluate_over_n_prefixes' CLI",
+      "dpsize": "small",
+      "n_prefixes": [2, 4, 6, 8],
+      "port": 31602,
+      "env": {}
+    },
+    "paper_table": {
+      "enabled": true,
+      "dpsize": 32,
+      "nsim": 3,
+      "iters": 150,
+      "run_tag": "20260823_130342_papertable32b",
+      "objectives": ["per_site_cost", "max_util", "frac_beyond_optimal",
+                     "joint_priority"],
+      "out": "figures/cluster/20260823_130342-papertable32b/paper_table",
+      "port": 31604,
+      "env": {}
+    }
+  }
+}
