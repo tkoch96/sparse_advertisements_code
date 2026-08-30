@@ -643,7 +643,11 @@ def _fmt(cell, latex=False, prec=2):
         s += (('\\pm{:.{p}f}' if latex else '+/-{:.{p}f}')
               .format(std, p=prec))
     if best:
-        s = ('\\textbf{{{}}}'.format(s)) if latex else '*{}*'.format(s)
+        # \mathbf inside math -- \textbf drops to text mode and a \pm
+        # inside it dies with 'missing $' (found compiling the pasted
+        # table in the paper, 2026-08-30)
+        _bf = '\\mathbf' if '\\pm' in s else '\\textbf'
+        s = ('{}{{{}}}'.format(_bf, s)) if latex else '*{}*'.format(s)
     return ('${}$'.format(s) if (latex and '\\pm' in s) else s)
 
 
