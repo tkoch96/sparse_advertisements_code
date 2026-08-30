@@ -1,5 +1,5 @@
 {
-  "_comment": "Intent file for run_all_paper_evaluations.py (skeleton, Tom 2026-08-30). 'where': 'local' runs each stage as a local subprocess; 'vm' launches via cluster.expctl on storage_vm. Per-stage 'env' merges over the global 'env'.",
+  "_comment": "Intent file: the single declaration of every paper evaluation -- how to RUN each stage (run_all_paper_evaluations.py) and what artifacts it PRODUCES / where to grab them (grab_paper_artifacts.py). Per-stage env merges over global env.",
   "run_id": "paper_v1",
   "where": "vm",
   "storage_vm": "i-0428c395787bc3ca0",
@@ -10,33 +10,105 @@
   "stages": {
     "deployment_sizes": {
       "enabled": true,
-      "dpsizes": [5, 10, 15, 20, 25, "actual-32"],
-      "nsim": [20, 20, 12, 5, 4, 3],
+      "dpsizes": [
+        5,
+        10,
+        15,
+        20,
+        25,
+        "actual-32"
+      ],
+      "nsim": [
+        20,
+        20,
+        12,
+        5,
+        4,
+        3
+      ],
       "cache_fn": "cache/cluster_runs/20260822_220131-prefixbudget3/metrics_by_dpsize.pkl",
       "figures_subdir": "cluster/20260822_220131-prefixbudget3",
       "plot": true,
       "port": 31600,
-      "env": {}
+      "env": {},
+      "artifacts": {
+        "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/eods",
+        "files": [
+          "average_latency_over_deployment_size_normal.pdf",
+          "average_latency_over_deployment_size_fail_ingress_mlu.pdf",
+          "average_latency_over_deployment_size_fail_site_mlu.pdf",
+          "average_congestion_over_deployment_size_fail_ingress_mlu.pdf",
+          "average_congestion_over_deployment_size_fail_site_mlu.pdf",
+          "average_high_latency_over_deployment_size_fail_ingress_mlu.pdf",
+          "average_high_latency_over_deployment_size_fail_site_mlu.pdf",
+          "flash_crowd_blowup_before_congestion_over_deployment_size.pdf",
+          "diurnal_blowup_before_congestion_over_deployment_size.pdf",
+          "percent_traffic_within_10_ms_site_failure_over_deployment_size.pdf",
+          "percent_traffic_within_50_ms_normal_over_deployment_size.pdf"
+        ],
+        "dst": "figures/paper"
+      }
     },
     "n_prefixes": {
       "enabled": false,
       "_comment": "skeleton: flags below are passed through verbatim once we settle evaluate_over_n_prefixes' CLI",
       "dpsize": "small",
-      "n_prefixes": [2, 4, 6, 8],
+      "n_prefixes": [
+        2,
+        4,
+        6,
+        8
+      ],
       "port": 31602,
-      "env": {}
+      "env": {},
+      "artifacts": {
+        "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/n_prefixes",
+        "files": [],
+        "_comment": "skeleton: fill once the stage runs for real",
+        "dst": "figures/paper"
+      }
     },
     "paper_table": {
       "enabled": true,
       "dpsize": 32,
-      "nsim": 3,
+      "nsim": 1,
       "iters": 150,
       "run_tag": "20260823_130342_papertable32b",
-      "objectives": ["per_site_cost", "max_util", "frac_beyond_optimal",
-                     "joint_priority"],
-      "out": "figures/cluster/20260823_130342-papertable32b/paper_table",
+      "objectives": [
+        "avg_latency",
+        "joint_priority",
+        "frac_beyond_optimal",
+        "max_util",
+        "per_site_cost"
+      ],
+      "out": "figures/cluster/20260823_130342-papertable32b/paper_table_full",
       "port": 31604,
-      "env": {}
+      "env": {},
+      "artifacts": {
+        "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/paper_table",
+        "files": [
+          "paper_table.csv",
+          "paper_table.tex",
+          "paper_table_key.csv",
+          "paper_table_key.tex"
+        ],
+        "dst": "figures/paper_table"
+      }
+    },
+    "hardness_figures": {
+      "enabled": false,
+      "kind": "local_artifact",
+      "_comment": "produced by run_ablation_grid + plot_ablation_scout locally; artifact-only stage (no runner command)",
+      "artifacts": {
+        "local_dir": "figures/dashboards/ablation_scout",
+        "files": [
+          "grid_objdim_5panel.png",
+          "ablation_scout_grid_bars.png",
+          "ablation_scout_difficulty_scatter.png"
+        ],
+        "dst": "figures/paper"
+      },
+      "runbook": "SCULPTOR_LOG_MEM=0 python run_ablation_grid.py --number_measurements_allowed '[5,10]' --deployments 3 --num_iters 250 --objectives all --dpsize small && python -m dashboard.plot_ablation_scout"
     }
   }
 }

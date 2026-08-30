@@ -1,94 +1,53 @@
-"""grab_paper_artifacts -- pull the paper's artifact set from the
-central storage VM, or fail with a runbook of what still needs to run.
+"""grab_paper_artifacts -- pull the paper's artifact set, as declared by
+the SAME intent file that runs the evaluations.
 
-    python evaluations/grab_paper_artifacts.py            # pull everything
-    python evaluations/grab_paper_artifacts.py --check    # report only
-    python evaluations/grab_paper_artifacts.py --only eods_figures
+    python evaluations/grab_paper_artifacts.py                       # pull all
+    python evaluations/grab_paper_artifacts.py --check               # report only
+    python evaluations/grab_paper_artifacts.py --only paper_table
+    python evaluations/grab_paper_artifacts.py --intent evaluations/intents/other.json
 
-Run LOCALLY on the Mac. Talks to the storage VM (cluster/vmlib transport,
-same key/instance resolution as vmctl -- no hand-rolled ssh). For every
-artifact in PAPER_MANIFEST it checks the VM-side source files, pulls the
-satisfied ones into figures/paper/ (and figures/paper_table/), and for
-anything missing prints WHY plus the ready-to-paste expctl command that
-would produce it. Exit code 0 only when the whole set landed.
+One declaration, two verbs (Tom 2026-08-30): each stage in the intent
+file says how to RUN it (run_all_paper_evaluations.py) and, via its
+'artifacts' block, what it PRODUCES and where. This script checks the
+declared sources (storage VM via vmlib, or local for
+kind=local_artifact stages), pulls what exists, and for anything missing
+prints a runbook DERIVED FROM the stage's own run command -- never a
+hand-maintained duplicate. Exit 0 only when the whole set landed.
 """
 import argparse
+import json
 import os
-import subprocess
 import sys
 
 _REPO = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _REPO)
 
 from cluster import vmlib as V  # noqa: E402
+from evaluations.run_all_paper_evaluations import _stage_cmd  # noqa: E402
 
-STORAGE_INSTANCE = os.environ.get('SCULPTOR_STORAGE_VM',
-                                  'i-0428c395787bc3ca0')
-VM_REPO = '/home/ubuntu/sparse_advertisements_code'
-
-# Each artifact: VM-side sources (glob-free, explicit), local destination
-# dir, and the runbook command that produces it when absent.
-PAPER_MANIFEST = {
-    'eods_figures': {
-        'desc': 'evaluate_over_deployment_sizes figure set (full ramp)',
-        'src_dir': VM_REPO + '/paper_artifacts/eods',
-        'src_files': [
-            'average_latency_over_deployment_size_normal.pdf',
-            'average_latency_over_deployment_size_fail_ingress_mlu.pdf',
-            'average_latency_over_deployment_size_fail_site_mlu.pdf',
-            'average_congestion_over_deployment_size_fail_ingress_mlu.pdf',
-            'average_congestion_over_deployment_size_fail_site_mlu.pdf',
-            'average_high_latency_over_deployment_size_fail_ingress_mlu.pdf',
-            'average_high_latency_over_deployment_size_fail_site_mlu.pdf',
-            'flash_crowd_blowup_before_congestion_over_deployment_size.pdf',
-            'diurnal_blowup_before_congestion_over_deployment_size.pdf',
-            'percent_traffic_within_10_ms_site_failure_over_deployment_size.pdf',
-            'percent_traffic_within_50_ms_normal_over_deployment_size.pdf',
-        ],
-        'dst': 'figures/paper',
-        'runbook': ("python -m cluster.expctl launch {vm} --label eodsredo "
-                    "--port 31600 -- /home/ubuntu/venv312/bin/python -u "
-                    "evaluations/evaluate_over_deployment_sizes.py --port 31600 "
-                    "--cache-fn cache/cluster_runs/20260822_220131-prefixbudget3/"
-                    "metrics_by_dpsize.pkl --figures-subdir "
-                    "cluster/20260822_220131-prefixbudget3 "
-                    "--dpsizes 5,10,15,20,25,actual-32 --nsim 20,20,12,5,4,3 "
-                    "--plot"),
-    },
-    'paper_table': {
-        'desc': 'methods x metrics supersection table (nsim=3, healed)',
-        'src_dir': VM_REPO + '/paper_artifacts/paper_table',
-        'src_files': ['paper_table.csv', 'paper_table.tex',
-                      'paper_table_key.csv', 'paper_table_key.tex'],
-        'dst': 'figures/paper_table',
-        'runbook': ("python -m cluster.expctl launch {vm} --label tableredo "
-                    "--port 31601 -- /home/ubuntu/venv312/bin/python -u "
-                    "evaluations/generate_paper_table.py --dpsize 32 "
-                    "--number_of_deployments 1 --num_training_iter 150 "
-                    "--run_id 20260823_130342_papertable32b "
-                    "--objectives avg_latency,joint_priority,"
-                    "frac_beyond_optimal,max_util,per_site_cost "
-                    "--out figures/cluster/20260823_130342-papertable32b/"
-                    "paper_table_full   # full 5-section emit; then cp into "
-                    "paper_artifacts/paper_table/"),
-    },
-    'hardness_figures': {
-        'desc': 'maxhard ablation grid figures (local store, synced to dash)',
-        'src_dir': None,   # local-only artifact
-        'local_dir': 'figures/dashboards/ablation_scout',
-        'src_files': ['grid_objdim_5panel.png', 'ablation_scout_grid_bars.png',
-                      'ablation_scout_difficulty_scatter.png'],
-        'dst': 'figures/paper',
-        'runbook': ("SCULPTOR_LOG_MEM=0 python run_ablation_grid.py "
-                    "--number_measurements_allowed '[5,10]' --deployments 3 "
-                    "--num_iters 250 --objectives all --dpsize small && "
-                    "python -m dashboard.plot_ablation_scout"),
-    },
-}
+DEFAULT_INTENT = os.path.join(
+    _REPO, 'evaluations', 'intents', 'paper_intent.example.json')
 
 
-def _vm_ip():
-    d = V.resolve(STORAGE_INSTANCE)
+def _runbook(name, spec, intent):
+    """The command that produces this stage's artifacts, derived from the
+    stage's own runner definition (single source of truth)."""
+    if spec.get('runbook'):
+        return spec['runbook']
+    where = intent.get('where', 'local')
+    cmd = _stage_cmd(name, spec, where)
+    if where == 'vm':
+        env = dict(intent.get('env') or {}, **(spec.get('env') or {}))
+        envs = ' '.join('--env {}={}'.format(k, v) for k, v in env.items())
+        return ('python -m cluster.expctl launch {} --label {} {} -- {}'
+                .format(intent.get('storage_vm', '<vm>'),
+                        '{}-{}'.format(intent.get('run_id', 'paper'), name),
+                        envs, ' '.join(cmd)))
+    return ' '.join(cmd)
+
+
+def _vm_ip(instance):
+    d = V.resolve(instance)
     if isinstance(d, str):
         d = V.describe(d)[0]
     if d['state'] != 'running':
@@ -109,38 +68,44 @@ def _remote_stat(ip, paths):
 
 def main():
     ap = argparse.ArgumentParser()
+    ap.add_argument('--intent', default=DEFAULT_INTENT)
     ap.add_argument('--check', action='store_true',
                     help='report only; pull nothing')
-    ap.add_argument('--only', default=None,
-                    help='comma list of manifest keys')
+    ap.add_argument('--only', default=None, help='comma list of stages')
     a = ap.parse_args()
+    intent = json.load(open(a.intent))
+    stages = intent.get('stages') or {}
     want = ([k.strip() for k in a.only.split(',')] if a.only
-            else list(PAPER_MANIFEST))
-    bad = [k for k in want if k not in PAPER_MANIFEST]
+            else [k for k, s in stages.items() if s.get('artifacts')])
+    bad = [k for k in want if k not in stages]
     if bad:
-        raise SystemExit('unknown artifact(s): {} (have: {})'.format(
-            bad, sorted(PAPER_MANIFEST)))
+        raise SystemExit('unknown stage(s): {} (have: {})'.format(
+            bad, sorted(stages)))
 
-    ip = state = None
-    if any(PAPER_MANIFEST[k].get('src_dir') for k in want):
-        ip, state = _vm_ip()
+    need_vm = any((stages[k].get('artifacts') or {}).get('src_dir')
+                  for k in want)
+    ip = None
+    if need_vm:
+        vm = intent.get('storage_vm')
+        ip, state = _vm_ip(vm)
         if ip is None:
             print('storage VM {} is {} -- start it first:\n'
-                  '  python -m cluster.vmctl start {}'.format(
-                      STORAGE_INSTANCE, state, STORAGE_INSTANCE))
+                  '  python -m cluster.vmctl start {}'.format(vm, state, vm))
             return 2
 
-    missing = {}
-    pulled = 0
+    missing, pulled = {}, 0
     for k in want:
-        spec = PAPER_MANIFEST[k]
-        print('== {} -- {}'.format(k, spec['desc']))
-        if spec.get('src_dir'):
-            paths = [os.path.join(spec['src_dir'], f)
-                     for f in spec['src_files']]
+        spec = stages[k]
+        art = spec.get('artifacts') or {}
+        files = art.get('files') or []
+        print('== {}'.format(k))
+        if not files:
+            print('   (no files declared -- skeleton stage)')
+            continue
+        if art.get('src_dir'):
+            paths = [os.path.join(art['src_dir'], f) for f in files]
             st = _remote_stat(ip, paths)
-            absent = [f for f, p in zip(spec['src_files'], paths)
-                      if st[p] is None]
+            absent = [f for f, p in zip(files, paths) if st[p] is None]
             if absent:
                 missing[k] = absent
                 print('   MISSING on VM: {}'.format(', '.join(absent)))
@@ -148,48 +113,47 @@ def main():
             if a.check:
                 print('   ok ({} files on VM)'.format(len(paths)))
                 continue
-            dst = os.path.join(_REPO, spec['dst'])
+            dst = os.path.join(_REPO, art['dst'])
             os.makedirs(dst, exist_ok=True)
-            src = 'ubuntu@{}:{}/'.format(ip, spec['src_dir'])
             includes = []
-            for f in spec['src_files']:
+            for f in files:
                 includes += ['--include', f]
-            rc, _o, err = V.rsync(src, dst + '/', ip=ip,
-                                  extra=tuple(includes + ['--exclude', '*']))
+            rc, _o, err = V.rsync(
+                'ubuntu@{}:{}/'.format(ip, art['src_dir']), dst + '/',
+                ip=ip, extra=tuple(includes + ['--exclude', '*']))
             if rc != 0:
                 print('   rsync FAILED: {}'.format((err or '')[:200]))
                 missing[k] = ['<rsync failure>']
                 continue
             pulled += len(paths)
             print('   pulled {} file(s) -> {}'.format(len(paths),
-                                                      spec['dst']))
+                                                      art['dst']))
         else:
-            ld = os.path.join(_REPO, spec['local_dir'])
-            absent = [f for f in spec['src_files']
+            ld = os.path.join(_REPO, art['local_dir'])
+            absent = [f for f in files
                       if not os.path.exists(os.path.join(ld, f))]
             if absent:
                 missing[k] = absent
                 print('   MISSING locally: {}'.format(', '.join(absent)))
                 continue
             if a.check:
-                print('   ok ({} local files)'.format(len(spec['src_files'])))
+                print('   ok ({} local files)'.format(len(files)))
                 continue
-            dst = os.path.join(_REPO, spec['dst'])
-            os.makedirs(dst, exist_ok=True)
             import shutil
-            for f in spec['src_files']:
+            dst = os.path.join(_REPO, art['dst'])
+            os.makedirs(dst, exist_ok=True)
+            for f in files:
                 shutil.copy(os.path.join(ld, f), os.path.join(dst, f))
-            pulled += len(spec['src_files'])
-            print('   copied {} file(s) -> {}'.format(
-                len(spec['src_files']), spec['dst']))
+            pulled += len(files)
+            print('   copied {} file(s) -> {}'.format(len(files),
+                                                      art['dst']))
 
     if missing:
-        print('\nINCOMPLETE -- {} artifact set(s) need runs:'.format(
-            len(missing)))
+        print('\nINCOMPLETE -- {} stage(s) need runs:'.format(len(missing)))
         for k, files in missing.items():
             print('\n  [{}] missing: {}'.format(k, ', '.join(files)))
             print('  produce it with:\n    {}'.format(
-                PAPER_MANIFEST[k]['runbook'].format(vm=STORAGE_INSTANCE)))
+                _runbook(k, stages[k], intent)))
         return 1
     print('\nALL PAPER ARTIFACTS {} ({} files)'.format(
         'PRESENT' if a.check else 'PULLED', pulled))

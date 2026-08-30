@@ -1,6 +1,6 @@
 """run_all_paper_evaluations -- one intent file drives every paper eval.
 
-    python evaluations/run_all_paper_evaluations.py evaluations/paper_intent.example.json
+    python evaluations/run_all_paper_evaluations.py evaluations/intents/paper_intent.example.json
     python evaluations/run_all_paper_evaluations.py intent.json --only paper_table
     python evaluations/run_all_paper_evaluations.py intent.json --dry-run
 
@@ -101,6 +101,11 @@ def main():
         spec = stages.get(name)
         if spec is None:
             raise SystemExit('stage {!r} not in intent file'.format(name))
+        if spec.get('kind') == 'local_artifact':
+            print('[{}] artifact-only stage -- nothing to run '
+                  '(see its runbook / grab_paper_artifacts)'.format(name))
+            results[name] = 0
+            continue
         env = dict(genv, **(spec.get('env') or {}))
         cmd = _stage_cmd(name, spec, where)
         if a.dry_run:
