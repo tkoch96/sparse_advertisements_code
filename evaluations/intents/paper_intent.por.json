@@ -1,8 +1,9 @@
 {
-  "_comment": "Intent file: the single declaration of every paper evaluation -- how to RUN each stage (run_all_paper_evaluations.py) and what artifacts it PRODUCES / where to grab them (grab_paper_artifacts.py). Per-stage env merges over global env.",
-  "run_id": "paper_v1",
+  "_comment": "PAPER OF RECORD intent (Tom 2026-08-30). Real deployments; everything should cache-hit since the campaigns are done. n_prefixes is a SHIM for now: prefixes 2,3,5 on the actual-3 deployment at 10 iters. All artifacts land locally in figures/paper_artifacts.",
+  "run_id": "paperv1",
   "where": "vm",
   "storage_vm": "i-0428c395787bc3ca0",
+  "iters": 150,
   "env": {
     "SCULPTOR_DEPSTORE": "1",
     "SCULPTOR_LOG_MEM": "0"
@@ -29,7 +30,7 @@
       "cache_fn": "cache/cluster_runs/20260822_220131-prefixbudget3/metrics_by_dpsize.pkl",
       "figures_subdir": "cluster/20260822_220131-prefixbudget3",
       "plot": true,
-      "port": 31600,
+      "port": 31700,
       "env": {},
       "artifacts": {
         "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/eods",
@@ -46,36 +47,41 @@
           "percent_traffic_within_10_ms_site_failure_over_deployment_size.pdf",
           "percent_traffic_within_50_ms_normal_over_deployment_size.pdf"
         ],
-        "dst": "figures/paper"
+        "dst": "figures/paper_artifacts"
       },
       "outputs": [
         "figures/cluster/20260822_220131-prefixbudget3/*over_deployment_size*.pdf"
       ]
     },
     "n_prefixes": {
-      "enabled": false,
-      "_comment": "skeleton: flags below are passed through verbatim once we settle evaluate_over_n_prefixes' CLI",
-      "dpsize": "small",
-      "n_prefixes": [
+      "enabled": true,
+      "_comment": "SHIM scale for now (Tom 2026-08-30)",
+      "dpsize": "testing_feature-actual-3",
+      "prefixes": [
         2,
-        4,
-        6,
-        8
+        3,
+        5
       ],
-      "port": 31602,
+      "nsim": 1,
+      "iters": 10,
+      "cache_fn": "cache/paperv1/prefix_metrics.pkl",
+      "figures_subdir": "cluster/prefix_sweep",
+      "plot": true,
+      "port": 31702,
       "env": {},
       "artifacts": {
         "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/n_prefixes",
         "files": [],
-        "_comment": "skeleton: fill once the stage runs for real",
-        "dst": "figures/paper"
-      }
+        "dst": "figures/paper_artifacts"
+      },
+      "outputs": [
+        "figures/cluster/prefix_sweep/*over_prefix_budget*.pdf"
+      ]
     },
     "paper_table": {
       "enabled": true,
       "dpsize": 32,
       "nsim": 1,
-      "iters": 150,
       "run_tag": "20260823_130342_papertable32b",
       "objectives": [
         "avg_latency",
@@ -85,7 +91,7 @@
         "per_site_cost"
       ],
       "out": "figures/cluster/20260823_130342-papertable32b/paper_table_full",
-      "port": 31604,
+      "port": 31704,
       "env": {},
       "artifacts": {
         "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/paper_table",
@@ -95,7 +101,7 @@
           "paper_table_key.csv",
           "paper_table_key.tex"
         ],
-        "dst": "figures/paper_table"
+        "dst": "figures/paper_artifacts"
       },
       "outputs": [
         "figures/cluster/20260823_130342-papertable32b/paper_table_full/*"
@@ -104,7 +110,6 @@
     "hardness_figures": {
       "enabled": false,
       "kind": "local_artifact",
-      "_comment": "produced by run_ablation_grid + plot_ablation_scout locally; artifact-only stage (no runner command)",
       "artifacts": {
         "local_dir": "figures/dashboards/ablation_scout",
         "files": [
@@ -112,7 +117,7 @@
           "ablation_scout_grid_bars.png",
           "ablation_scout_difficulty_scatter.png"
         ],
-        "dst": "figures/paper"
+        "dst": "figures/paper_artifacts"
       },
       "runbook": "SCULPTOR_LOG_MEM=0 python run_ablation_grid.py --number_measurements_allowed '[5,10]' --deployments 3 --num_iters 250 --objectives all --dpsize small && python -m dashboard.plot_ablation_scout"
     }
