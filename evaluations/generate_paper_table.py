@@ -688,7 +688,12 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                 rules.append('\\cmidrule(lr){{{}-{}}}'.format(col, col + n - 1))
                 col += n
             f.write(''.join(rules) + '\n')
-            f.write('Method & ' + ' & '.join(subs) + ' \\\\\n\\midrule\n')
+            # LaTeX-escape header labels (a bare % in '% cong ...'
+            # comments out the row terminator -- found compiling the
+            # pasted table in the paper, 2026-08-30)
+            _esc = [x.replace('%', '\\%').replace('&', '\\&')
+                    for x in subs]
+            f.write('Method & ' + ' & '.join(_esc) + ' \\\\\n\\midrule\n')
             for _key, disp in METHODS:
                 f.write(disp + ' & '
                         + ' & '.join(_fmt(c, latex=True, prec=p)
