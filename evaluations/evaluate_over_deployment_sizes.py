@@ -317,6 +317,14 @@ def make_paper_plots(cache_fn, **kwargs):
 	# (e.g. prefixbudget3 after the 2026-08-25 resume) still plot
 	dpsizes = sorted(metrics_by_dpsize,
 					 key=lambda k: int(re.search(r'\d+', str(k)).group()))
+	# size 3 DROPPED from all paper plots (Tom 2026-08-30): its data is
+	# May-era (never part of the prefixbudget3 ramp), carries placeholder
+	# flash/diurnal + pre-split failure stats, and today's code cannot
+	# re-evaluate the May cache without retraining (deployment generation
+	# drifted). SCULPTOR_EODS_INCLUDE_SIZE3=1 restores it.
+	if os.environ.get('SCULPTOR_EODS_INCLUDE_SIZE3', '0') != '1':
+		dpsizes = [d for d in dpsizes
+				   if int(re.search(r'\d+', str(d)).group()) != 3]
 	solutions = sorted(list(metrics_by_dpsize[dpsizes[0]]['stats_best_latencies']))
 
 	solutions = ['anycast', 'anyopt', 'one_per_pop', 'painter', 'sparse', 'one_per_peering']
