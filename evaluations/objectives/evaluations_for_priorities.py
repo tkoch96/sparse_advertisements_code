@@ -181,7 +181,13 @@ def run(ctx):
                    out_name='priority_hprio_latency_{}.pdf'.format(ctx.dpsize),
                    lower_is_better=True)
     _bulk_sweep_all(ctx)
-    _gen_priority_paper_figures(ctx)
+    try:
+        # a plotting bug must never kill the cell (and lose the ~26min
+        # sweep compute -- it did once, 2026-08-30: float(None))
+        _gen_priority_paper_figures(ctx)
+    except Exception:
+        import traceback
+        traceback.print_exc()
     return ctx.metrics
 
 
@@ -304,12 +310,22 @@ def _gen_priority_paper_figures(ctx):
                 continue
             lats = d['bulk_latencies_over_bulk_vals'].get(bv)
             vols = (metrics.get('ug_to_vol') or {}).get(s)
-            if lats is None or vols is None:
-                continue
+            if lats is None or vols is None or \
+                    getattr(lats, 'shape', None) == ():
+                continue   # scalar/None array = unsolved at this ratio
             for lat, vol in zip(_np.asarray(lats).flatten(),
                                 _np.asarray(vols).flatten()):
-                diffs.append(float(lat))
-                wts.append(float(vol))
+                # unsolved ratios carry None lats -- skip, don't crash
+                if lat is None or vol is None:
+                    continue
+                try:
+                    lat, vol = float(lat), float(vol)
+                except (TypeError, ValueError):
+                    continue
+                if not _np.isfinite(lat) or lat >= 29999:
+                    continue   # no-route marker stays out of the CDF
+                diffs.append(lat)
+                wts.append(vol)
         if solution == 'anycast' or not diffs:
             x = _np.linspace(0, 250, num=100)
             cdf_x = _np.zeros(100)
