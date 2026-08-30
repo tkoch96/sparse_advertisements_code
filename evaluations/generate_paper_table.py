@@ -635,12 +635,12 @@ def build_table(cov):
     return labels, rows
 
 
-def _fmt(cell, latex=False, prec=2):
+def _fmt(cell, latex=False, prec=2, with_std=True):
     mean, std, n, best = cell
     if mean is None:
         return '-'
     s = '{:.{p}f}'.format(mean, p=prec)
-    if std is not None:
+    if std is not None and with_std:
         s += (('\\pm{:.{p}f}' if latex else '+/-{:.{p}f}')
               .format(std, p=prec))
     if best:
@@ -734,8 +734,11 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                     for x in subs]
             f.write('Method & ' + ' & '.join(_esc) + ' \\\\\n\\midrule\n')
             for _key, disp in METHODS:
+                # tex = the paste-into-the-paper artifact: means only
+                # (Tom 2026-08-30: no +/- in the paper table)
                 f.write(TEX_METHOD_DISPLAY.get(disp, disp) + ' & '
-                        + ' & '.join(_fmt(c, latex=True, prec=p)
+                        + ' & '.join(_fmt(c, latex=True, prec=p,
+                                          with_std=False)
                                      for c, p in zip(rows[disp], _precs))
                         + ' \\\\\n')
             f.write('\\bottomrule\n\\end{tabular}\n')
