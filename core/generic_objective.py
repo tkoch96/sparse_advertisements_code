@@ -188,6 +188,16 @@ class Generic_Objective:
 		"""Base objectives have no auxiliary resilience term."""
 		return (0, None) if with_lb else 0
 
+	def per_call_lp_kwargs(self, base_adv=None):
+		"""Extra kwargs the flush stamps onto every worker LB job this
+		call (rides as kwa['lp_kwargs_extra'] -> worker LP **kwargs).
+		Base objectives ship nothing. Objectives whose LP consumes
+		per-iteration state (e.g. frozen_prefix's rotating kill set)
+		override this; the returned dict MUST be identical for every job
+		in one flush so finite-difference probe pairs score against the
+		same scenario set."""
+		return {}
+
 
 class LatencyPlusResilienceObjective(Generic_Objective):
 	"""latency + gamma * resilience -- the one objective whose training
@@ -722,12 +732,114 @@ class LatencyPlusResilienceObjective(Generic_Objective):
 			grad_pop_failure = 0
 		return grad_link_failure + alpha * grad_pop_failure
 
+class FrozenPrefixObjective(Generic_Objective):
+	"""frozen_prefix training policy (Tom 2026-09-05): the failure term is
+	baked into the joint LP scalar (core/frozen_prefix.py), so training is
+	pure own-gradient (base behavior). What this subclass owns is the
+	PER-ITERATION failure sampling: a kill set of popps, resampled each
+	iteration with an explore/exploit mix, held fixed within the iteration
+	so probe pairs difference cleanly, and shipped to workers via the
+	flush's lp_kwargs_extra (env vars don't reach live Ray actors).
+
+	Exploit half: sample popps proportional to their estimated load under
+	the CURRENT advertisement (ground-truth ingress of the thresholded base
+	adv; falls back to static volume-reach weights, then uniform, on any
+	failure -- the sampler must never kill the training loop).
+	Explore half: uniform over the remaining popps.
+
+	Knobs: SCULPTOR_FROZEN_PREFIX_N_FAIL (20),
+	SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC (0.5).
+	"""
+
+	def __init__(self, sas, obj, **kwargs):
+		super().__init__(sas, obj, **kwargs)
+		self._kill_iter = None
+		self._kill_list = None
+		self._reach_weights = None
+
+	def _volume_reach_weights(self):
+		"""Static fallback exploit signal: per-popp sum of volume of users
+		that can reach it at all."""
+		if self._reach_weights is not None:
+			return self._reach_weights
+		sas = self.sas
+		w = np.zeros(sas.n_popps)
+		for ug, perfs in sas.whole_deployment_ug_perfs.items():
+			vol = sas.whole_deployment_ug_to_vol.get(ug, 0.0)
+			for popp in perfs:
+				poppi = sas.popp_to_ind.get(popp)
+				if poppi is not None:
+					w[poppi] += vol
+		self._reach_weights = w
+		return w
+
+	def _load_weights(self, base_adv):
+		"""Exploit signal: estimated per-popp load under the current adv
+		(each user's volume counted at every prefix's winning popp --
+		overcounts multi-prefix users, fine as a sampling weight)."""
+		sas = self.sas
+		from helpers.helpers import threshold_a
+		rti, _ = sas.calculate_ground_truth_ingress(threshold_a(base_adv))
+		w = np.zeros(sas.n_popps)
+		for _prefix_i, ug_to_popp in rti.items():
+			for ug, popp in ug_to_popp.items():
+				poppi = sas.popp_to_ind.get(popp)
+				if poppi is not None:
+					w[poppi] += sas.whole_deployment_ug_to_vol.get(ug, 0.0)
+		return w
+
+	def _sample_kill_set(self, it, base_adv):
+		sas = self.sas
+		n_popps = sas.n_popps
+		n_fail = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_N_FAIL', '20'))
+		explore_frac = float(os.environ.get(
+			'SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC', '0.5'))
+		if n_fail >= n_popps:
+			return list(range(n_popps))
+		rng = np.random.RandomState(2718 + 31 * int(it))
+		try:
+			weights = None
+			if base_adv is not None:
+				weights = self._load_weights(base_adv)
+			if weights is None or weights.sum() <= 0:
+				weights = self._volume_reach_weights()
+			if weights.sum() <= 0:
+				raise ValueError('no volume weights')
+			n_exploit = int(round(n_fail * (1.0 - explore_frac)))
+			p = weights / weights.sum()
+			# without-replacement exploit draw, weight-proportional
+			exploit = rng.choice(n_popps, size=min(n_exploit, (p > 0).sum()),
+								 replace=False, p=p)
+			rest = np.setdiff1d(np.arange(n_popps), exploit)
+			n_explore = n_fail - len(exploit)
+			explore = rng.choice(rest, size=min(n_explore, len(rest)),
+								 replace=False)
+			kill = sorted(set(int(x) for x in np.concatenate([exploit, explore])))
+		except Exception as e:  # sampler must never kill training
+			print('[frozen_prefix] kill sampler fell back to uniform: {}'.format(e))
+			kill = sorted(int(x) for x in
+						  np.random.RandomState(2718 + 31 * int(it)).choice(
+							  n_popps, size=n_fail, replace=False))
+		return kill
+
+	def per_call_lp_kwargs(self, base_adv=None):
+		it = int(getattr(self.sas, 'iter', 0) or 0)
+		if self._kill_iter != it or self._kill_list is None:
+			self._kill_list = self._sample_kill_set(it, base_adv)
+			self._kill_iter = it
+		# frozen_kill_tag keys the worker LB cache: same adv + different
+		# kill set must never collide (the cache outlives the iteration).
+		return {'frozen_kill_popps': list(self._kill_list),
+				'frozen_kill_tag': it}
+
+
 # objective name -> objective class; anything unregistered gets the base
 # (pure own-gradient training). A new objective with special training
 # behavior registers its subclass here.
-OBJECTIVE_CLASSES = {
-	'avg_latency': LatencyPlusResilienceObjective,
-}
+# DERIVED from the central registry (core/objective_registry.py): a plugin's
+# `training_class` names its subclass here by dotted path.
+from core.objective_registry import training_classes as _training_classes
+OBJECTIVE_CLASSES = _training_classes()
 
 
 def make_objective(sas, obj, **kwargs):

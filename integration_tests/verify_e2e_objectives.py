@@ -8,8 +8,10 @@
 Runs the canonical `generate_paper_table.py --dpsize small
 --number_of_deployments 1 --num_training_iter 10 --run_id e2etable` (the
 "paper_table_demo1" smoke of 2026-08-23) in a throwaway workspace: one
-training+eval cell per objective (avg_latency, per_site_cost, max_util,
-frac_beyond_optimal, joint_priority), metrics recomputed, table emitted.
+training+eval cell per objective (every registry objective with
+paper_table_default=True: avg_latency, per_site_cost, max_util,
+frac_beyond_optimal, joint_priority, frozen_prefix), metrics recomputed,
+table emitted.
 Judged on artifacts, never on rc (the bare-except trap, see _common). The
 finished table is printed so a green run ends with the thing you wanted to
 see.
@@ -36,8 +38,12 @@ _LABEL = 'paper_table'   # figures/integration_tests/<_LABEL>/
 DEFAULT_ITERS = 3       # the demo1 config: small, 1 deployment, 10 iters
 RUN_ID = 'e2etable'
 
-OBJECTIVES = ['avg_latency', 'per_site_cost', 'max_util',
-              'frac_beyond_optimal', 'joint_priority']
+# DERIVED from the central registry: every objective the paper table runs
+# by default (core/objective_registry.py paper_table_default=True) is
+# exercised here, so a newly declared objective is integration-tested by
+# construction.
+from core.objective_registry import paper_table_defaults as _paper_table_defaults
+OBJECTIVES = _paper_table_defaults()
 METHODS = ['One-per-peering', 'SCULPTOR', 'PAINTER', 'AnyOpt',
            'Anycast', 'Unicast']
 
@@ -130,9 +136,11 @@ def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
             res.check('RB grad skipped' in cl,
                       '{}: skip gate visibly engaged'.format(obj))
 
-    # the table itself
+    # the table itself. paper_table.* is the PRUNED paper table (key
+    # columns, since 2026-08-30); paper_table_full.* carries every column.
     tex = os.path.join(table_out, 'paper_table.tex')
     csv_fn = os.path.join(table_out, 'paper_table.csv')
+    full_csv = os.path.join(table_out, 'paper_table_full.csv')
     res.check(os.path.exists(tex), 'paper_table.tex written')
     if res.check(os.path.exists(csv_fn), 'paper_table.csv written'):
         rows = [r for r in csv.reader(open(csv_fn))]
@@ -141,10 +149,37 @@ def run_case(root, iters, ndeps, dpsize, run_id=RUN_ID, force_env=None):
         missing = [m for m in METHODS if m not in names]
         res.check(not missing, 'all 6 methods in table',
                   'missing {}'.format(missing) if missing else '')
+        # every registry key column for every objective this run covers
+        # must be a real number on the SCULPTOR row -- a '-' here is the
+        # silent-miswiring signature (unrouted suite / wrong metric key)
+        from core.objective_registry import key_columns, get as _plugin
+        hdr = rows[0]
+        sr = next((r for r in rows if r and r[0] == 'SCULPTOR'), None)
+        groups_run = {_plugin(o).table_group for o in OBJECTIVES}
+        want = ['{}|{}'.format(g, sub) for g, sub in key_columns()
+                if g in groups_run]
+        empty = [c for c in want
+                 if c not in hdr or not sr
+                 or sr[hdr.index(c)] in ('', '-')]
+        res.check(sr is not None and not empty,
+                  'SCULPTOR row has every key column ({} expected)'
+                  .format(len(want)),
+                  'empty/missing: {}'.format(empty) if empty else '')
+        # frozen_prefix: the One-per-peering row is the reactive-optimal
+        # anchor (never strands) -- proves the frozen_anchor extractor ran
+        if 'frozen_prefix' in OBJECTIVES:
+            col = 'Frozen failover|% no-route fail'
+            opp = next((r for r in rows if r and r[0] == 'One-per-peering'), None)
+            v = opp[hdr.index(col)] if (opp and col in hdr) else None
+            res.check(v is not None and v not in ('', '-') and float(v) == 0.0,
+                      'frozen anchor engaged (One-per-peering no-route = 0)',
+                      'got {!r}'.format(v))
+    if res.check(os.path.exists(full_csv), 'paper_table_full.csv written'):
+        rows = [r for r in csv.reader(open(full_csv))]
         sr = next((r for r in rows if r and r[0] == 'SCULPTOR'), None)
         filled = sum(1 for v in (sr or [])[1:] if v not in ('', '-'))
         res.check(sr is not None and filled >= 20,
-                  'SCULPTOR row substantially populated',
+                  'SCULPTOR row substantially populated (full table)',
                   '{} filled cells'.format(filled))
 
     C.collect(ws, res, _LABEL, [tex, csv_fn])
@@ -176,7 +211,14 @@ def main():
         return 2
     iters = 5 if a.quick else (a.iters or DEFAULT_ITERS)
     root = tempfile.mkdtemp(prefix='verify_e2e_paper_table_')
-    run_id, force_env = RUN_ID, None
+    run_id = RUN_ID
+    # ALWAYS rebuild the condensed L3 pickle (Tom 2026-09-05): it caches
+    # the (group, sub-label) SET, so a stale one written before a
+    # KEY_COLUMNS/GROUPS rename makes the key-table check trip with
+    # "not in GROUPS" even though the fresh emit is correct. Reaggregation
+    # is seconds and reuses the training/eval caches; only --no-cache also
+    # forces a full retrain/recompute.
+    force_env = {'FORCE_REAGGREGATE': '1'}
     if a.no_cache:
         run_id = 'e2etable_{}'.format(time.strftime('%m%d%H%M%S'))
         force_env = {'FORCE_RESOLVE': '1',

@@ -18,6 +18,10 @@ So each objective gets its own module, and this file routes to it:
     evaluations_for_priorities.py                joint_priority
     evaluations_for_site_cost.py                 per_site_cost
     evaluations_for_frac_beyond_optimal.py       frac_beyond_optimal
+    evaluations_for_frozen_prefix.py             frozen_prefix
+
+(The routing table itself lives in core/objective_registry.py -- the list
+above is documentation.)
 
 Each module exposes:
 
@@ -64,15 +68,12 @@ class EvalContext(object):
         self.objective = kw.get('objective', 'avg_latency')
 
 
-# objective name -> module basename (all under evaluations/)
-_ROUTES = {
-    'avg_latency':         'evaluations_for_latency_plus_resilience',
-    'max_util':            'evaluations_for_mlu',
-    'lat_plus_max_util':   'evaluations_for_mlu',
-    'joint_priority':      'evaluations_for_priorities',
-    'per_site_cost':       'evaluations_for_site_cost',
-    'frac_beyond_optimal': 'evaluations_for_frac_beyond_optimal',
-}
+# objective name -> module basename (all under evaluations/objectives/).
+# DERIVED from the central registry (core/objective_registry.py): an
+# objective is routed here iff its plugin declares `eval_module`. Adding a
+# route = adding it to the plugin, nothing here.
+from core.objective_registry import eval_routes as _eval_routes
+_ROUTES = _eval_routes()
 
 def module_name_for(objective):
     try:

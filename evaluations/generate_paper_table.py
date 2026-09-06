@@ -4,9 +4,10 @@
         --number_of_deployments 1 --run_id demo1
 
 Does, in order, reusing everything already on disk:
-  (a) optimize every solution type under every objective (5 total:
+  (a) optimize every solution type under every objective (the
+      registry's paper-table defaults, core/objective_registry.py:
       avg_latency, per_site_cost, max_util, frac_beyond_optimal,
-      joint_priority), for the requested deployments x training iters
+      joint_priority, frozen_prefix), for the requested deployments x iters
   (b) compute every evaluation metric (failure, sticky, flash/diurnal
       via batched bisection, priority placement, site-cost loads, ...)
   (c) emit the methods x metrics supersection table: terminal + LaTeX
@@ -72,13 +73,11 @@ METHODS = [
 # color that one green, color next most optimal green").
 REFERENCE_METHODS = {'One-per-peering'}
 
-OBJECTIVE_ALIASES = {
-    'priorities': 'joint_priority',
-    'latency': 'avg_latency', 'latency_resilience': 'avg_latency',
-    'site_cost': 'per_site_cost', 'mlu': 'max_util',
-}
-DEFAULT_OBJECTIVES = ['avg_latency', 'per_site_cost', 'max_util',
-                      'frac_beyond_optimal', 'joint_priority']
+# DERIVED from the central registry (core/objective_registry.py): aliases
+# and the default cell list are plugin fields.
+from core import objective_registry as _registry
+OBJECTIVE_ALIASES = _registry.aliases()
+DEFAULT_OBJECTIVES = _registry.paper_table_defaults()
 BLOCKED_OBJECTIVES = {}  # joint_priority registered 2026-08-22; none blocked
 
 # -------------------------------------------------------------- columns --
@@ -345,22 +344,11 @@ def _lat_res_objective(m, sim, soln):
 # The SECOND, condensed table ("key metrics"): (group, sub-label) pairs
 # pulled from GROUPS, in print order. Edit this list to change what the
 # key table shows -- labels must match GROUPS exactly.
-KEY_COLUMNS = [
-    # THE paper table (Tom 2026-08-30): curated subset per objective
-    ('MLU', 'Latency (ms)'),
-    ('MLU', 'MLU'),
-    ('Latency + g*Resilience', 'Latency (ms)'),
-    ('Latency + g*Resilience', 'Subopt PoPP-fail (ms)'),
-    ('Latency + g*Resilience', '% cong PoPP-fail'),
-    ('Latency + g*Resilience', 'Subopt PoP-fail (ms)'),
-    ('Latency + g*Resilience', '% cong PoP-fail'),
-    ('Latency + g*Resilience', 'Flash-crowd resilience'),
-    ('Latency + g*Resilience', 'Diurnal resilience'),
-    ('High + Low Priority Traffic', 'HPrio latency (ms)'),
-    ('High + Low Priority Traffic', 'Crit bulk ratio'),
-    ('Frac beyond optimal', '% within 10ms'),
-    ('Site cost', 'Wgt avg site cost'),
-]
+# THE paper table's column picks (Tom 2026-09-02: trimmed again -- subopt-
+# fail ms columns dropped; failure robustness = latency + congestion + the
+# two intensity metrics). DERIVED from each plugin's `key_columns`, in
+# plugin `key_order` (paper narrative order), core/objective_registry.py.
+KEY_COLUMNS = _registry.key_columns()
 
 # Display-text overrides for BOTH tables (stdout, LaTeX and CSV): map an
 # original group or sub label to the text you want printed. Examples:
@@ -370,54 +358,61 @@ HEADER_TEXT = {
 }
 
 
-GROUPS = [
-    # section order per the paper narrative (Tom 2026-08-30):
-    # Latency+MLU, Failure Robustness, Latency-Sensitive, Traffic Classes,
-    # Site Cost
-    ('MLU', 'max_util', [
-        ('Latency (ms)',          '<', _mlu_cell_latency),
-        ('MLU',                   '<', _mean_key('mlu_by_strategy')),
-        ('Congested vol',         '<', _lat_split('congested')),
-        ('Stranded vol',          '<', _lat_split('stranded')),
-        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
-    ]),
-    ('Latency + g*Resilience', 'avg_latency', [
-        ('Latency (ms)',            '<', _lat_split('clean')),
-        ('Congested vol',           '<', _lat_split('congested')),
-        ('Stranded vol',            '<', _lat_split('stranded')),
-        ('Subopt normal (ms)',      '<', _stats_key('stats_best_latencies', scale=-1.0)),
-        ('Subopt PoPP-fail (ms)',   '<', _stats_key('stats_popp_failures_latency_optimal_specific', 'avg_latency_difference', scale=-1.0)),
-        ('% cong PoPP-fail',        '<', _stats_key('stats_popp_failures_latency_optimal_specific', 'frac_vol_congested', scale=100.0)),
-        ('Subopt PoP-fail (ms)',    '<', _stats_key('stats_pop_failures_latency_optimal_specific', 'avg_latency_difference', scale=-1.0)),
-        ('% cong PoP-fail',         '<', _stats_key('stats_pop_failures_latency_optimal_specific', 'frac_vol_congested', scale=100.0)),
-        ('Flash-crowd resilience',  '>', _stats_key('stats_resilience_to_congestion')),
-        ('Diurnal resilience',      '>', _stats_key('stats_diurnal')),
-        ('Objective (lat+g*RB)',    '<', _lat_res_objective),
-    ]),
-    ('Frac beyond optimal', 'frac_beyond_optimal', [
-        ('% within 10ms',         '>', _pct_key('frac_within_threshold_by_strategy')),
-        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
-        ('Congested vol',         '<', _lat_split('congested')),
-        ('Stranded vol',          '<', _lat_split('stranded')),
-    ]),
-    ('High + Low Priority Traffic', 'joint_priority', [
-        ('Frac HPrio routed',     '>', _mean_key('hprio_frac_routed_by_strategy')),
-        ('HPrio latency (ms)',    '<', _mean_key('hprio_latency_by_strategy')),
-        ('Crit bulk ratio',       '>', _mean_key('critical_bulk_ratio_by_strategy')),
-        ('HPrio cong @SWAN',      '<', _mean_key('hprio_cong_swan_by_strategy')),
-        ('Congested vol',         '<', _lat_split('congested')),
-        ('Stranded vol',          '<', _lat_split('stranded')),
-        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
-    ]),
-    ('Site cost', 'per_site_cost', [
-        ('Wgt max site cost',     '<', _mean_key('max_site_cost_load_by_strategy')),
-        ('Wgt avg site cost',     '<', _mean_key('weighted_site_cost_by_strategy')),
-        ('Congested vol',         '<', _lat_split('congested')),
-        ('Stranded vol',          '<', _lat_split('stranded')),
-        ('Objective',             '>', _mean_key('objective_value_by_strategy')),
-    ]),
+def _frozen_anchor(frozen_key, reactive_key, scale=1.0):
+    """frozen_prefix columns: every method's FROZEN metric, except the
+    One-per-peering row shows the REACTIVE-OPTIMAL ceiling (assignment
+    re-optimized per failure) -- frozen one-per-peering has a single popp
+    per prefix, hence no backup, and strands users (Tom 2026-09-06)."""
+    fz = _mean_key(frozen_key)
+    rc = _mean_key(reactive_key)
+    def _x(m, sim, soln):
+        v = rc(m, sim, soln) if soln == 'one_per_peering' else None
+        if v is None:
+            v = fz(m, sim, soln)
+        return None if v is None else v * scale
+    return _x
 
-]
+
+# Column extractors by NAME -- what an ObjectivePlugin.table_columns spec
+# refers to. Each entry is called with the spec's trailing args and must
+# return an extractor fn(metrics, sim, soln) -> float|None.
+_EXTRACTORS = {
+    'mean': _mean_key,
+    'pct': _pct_key,
+    'stats': _stats_key,
+    'lat_split': _lat_split,
+    'mlu_cell_latency': lambda: _mlu_cell_latency,
+    'lat_res_objective': lambda: _lat_res_objective,
+    'flash_crowd': lambda: _flash_crowd,
+    'diurnal': lambda: _diurnal,
+    'final_obj': lambda: _final_obj,
+    'site_cost_stat': _site_cost_stat,
+    'frozen_anchor': _frozen_anchor,
+}
+
+
+def _build_groups():
+    """[(group label, objective, [(sublabel, direction, extractor)])] in the
+    paper's full-table section order -- DERIVED from the registry
+    (core/objective_registry.py table_groups())."""
+    out = []
+    for group, obj, cols in _registry.table_groups():
+        subs = []
+        for spec in cols:
+            lab, direction, name = spec[0], spec[1], spec[2]
+            args = spec[3:]
+            try:
+                fn = _EXTRACTORS[name](*args)
+            except KeyError:
+                raise KeyError('objective {!r} column {!r}: unknown extractor '
+                               '{!r} (known: {})'.format(
+                                   obj, lab, name, sorted(_EXTRACTORS)))
+            subs.append((lab, direction, fn))
+        out.append((group, obj, subs))
+    return out
+
+
+GROUPS = _build_groups()
 # flat view for coverage/build compatibility
 COLUMNS = [(obj, '{}|{}'.format(g, lab), d, fn)
            for g, obj, subs in GROUPS for lab, d, fn in subs]
@@ -447,13 +442,7 @@ def pickle_path(dpsize, run_tag=None):
 # a pickle only counts for an objective if it actually holds that
 # objective's metric key -- otherwise the shared avg_latency pickle
 # satisfies every fallback and coverage lies "fully covered"
-OBJECTIVE_REQUIRED_KEY = {
-    'per_site_cost': 'active_sites_by_strategy',
-    'max_util': 'mlu_by_strategy',
-    'lat_plus_max_util': 'mlu_by_strategy',
-    'frac_beyond_optimal': 'frac_within_threshold_by_strategy',
-    'joint_priority': 'priority_by_strategy',
-}
+OBJECTIVE_REQUIRED_KEY = _registry.required_metric_keys()
 
 
 def load_metrics(dpsize, objective, run_tag=None):
@@ -672,23 +661,8 @@ def _fmt(cell, latex=False, prec=2, with_std=True):
 # ---- LaTeX display maps (Tom's paper wording, 2026-08-30) -------------
 # Applied ONLY in the .tex emit: stored labels / CSV headers / dash keys
 # stay stable so caches and merge tooling never re-key.
-TEX_GROUP_DISPLAY = {
-    'MLU': 'Latency + MLU',
-    'Latency + g*Resilience': 'Failure Robustness',
-    'High + Low Priority Traffic': 'Traffic Classes',
-    'Frac beyond optimal': 'Latency Sensitive Services',
-    'Site cost': 'Traffic Cost Across Sites',
-}
-TEX_SUB_DISPLAY = {
-    'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
-    '% cong PoPP-fail': '% cong ingress-fail',
-    'Subopt PoP-fail (ms)': 'Subopt site-fail (ms)',
-    '% cong PoP-fail': '% cong site-fail',
-    'Flash-crowd resilience': 'Flash crowd intensity',
-    'Diurnal resilience': 'Diurnal intensity',
-    '% within 10ms': '% within 10ms of optimal',
-    'HPrio cong @SWAN': 'HPrio cong @SWAN',
-}
+TEX_GROUP_DISPLAY = _registry.tex_group_display()
+TEX_SUB_DISPLAY = _registry.tex_sub_display()
 # house macros defined in the paper's macros.tex
 TEX_METHOD_DISPLAY = {
     'One-per-peering': '\\expensive',
@@ -785,9 +759,14 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                                      for c, p in zip(rows[disp], _precs))
                         + ' \\\\\n')
             f.write('\\bottomrule\n\\end{tabular}\n')
-            f.write('}\n\\caption{Performance of all methods across '
-                    'objectives. \\sparse outperforms every methodology '
-                    'on every metric.}\n'
+            _cap = ('Performance of all methods across objectives. '
+                    '\\sparse outperforms every methodology on every metric.')
+            if any(l.split('|')[0] == 'Frozen failover' for l in labels):
+                _cap += (' Frozen failover columns fix each user\'s prefix '
+                         'allocation before the failure (no re-steering); '
+                         'the \\expensive row there is the re-optimized '
+                         'ceiling.')
+            f.write('}\n\\caption{' + _cap + '}\n'
                     '\\label{tab:' + basename + '}\n'
                     '\\end{table*}\n')
         print('\n  wrote {}'.format(pth))
@@ -825,8 +804,9 @@ def emit_key(labels, rows, fmt, out_dir):
         return
     klabels = [labels[i] for i in idx]
     krows = {disp: [rows[disp][i] for i in idx] for _k, disp in METHODS}
-    print('\n  -- key metrics --')
-    emit(klabels, krows, fmt, out_dir, basename='paper_table_key')
+    print('\n  -- key metrics (this IS paper_table; everything-table '
+          'is paper_table_full) --')
+    emit(klabels, krows, fmt, out_dir, basename='paper_table')
 
 def _condensed_path(dpsize, run_tag):
     return os.path.join(CACHE_DIR, 'paper_table_condensed_{}_{}.pkl'.format(
@@ -906,8 +886,9 @@ def main():
     ap.add_argument('--out',
                     default=os.path.join(_REPO, 'figures', 'paper_table'))
     a = ap.parse_args()
-    objectives = [OBJECTIVE_ALIASES.get(o.strip(), o.strip())
-                  for o in a.objectives.split(',') if o.strip()]
+    objectives = _registry.validate_names(
+        [o.strip() for o in a.objectives.split(',') if o.strip()],
+        where='--objectives')
     hotstart = {}
     for tok in (t for t in a.hotstart.split(',') if t.strip()):
         if ':' not in tok:
@@ -933,7 +914,7 @@ def main():
             and _condensed_fresh(dpsize, objectives, run_tag,
                                  nsim=a.nsim)):
         labels, rows = _load_condensed(dpsize, run_tag)
-        emit(labels, rows, a.format, a.out)
+        emit(labels, rows, a.format, a.out, basename='paper_table_full')
         emit_key(labels, rows, a.format, a.out)
         print('\n  [condensed] table from L3 pickle in {:.1f}s'.format(
             _t.time() - t0))
@@ -982,7 +963,7 @@ def main():
     if any(c[0] is not None for c in cov.values()):
         labels, rows = build_table(cov)
         if labels:
-            emit(labels, rows, a.format, a.out)
+            emit(labels, rows, a.format, a.out, basename='paper_table_full')
             emit_key(labels, rows, a.format, a.out)
             if not a.plan_only:
                 _save_condensed(dpsize, run_tag, labels, rows,

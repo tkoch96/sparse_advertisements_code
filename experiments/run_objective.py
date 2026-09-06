@@ -26,8 +26,8 @@ import numpy as np
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from experiments.objectives import get as get_spec, all_specs
-# Late-load specs so their register() runs even when run --list-only.
-import experiments.site_failure  # noqa: F401
+# All specs (incl. site_failure / frozen_prefix) come from core/objective_registry.py
+# via experiments.objectives; nothing to late-load.
 
 
 def _format_table(rows, headers):

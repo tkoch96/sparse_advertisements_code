@@ -1628,9 +1628,12 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 			else:
 				ts = time.time()
 				# Pass the adv matrix `a` through so multi-LP objectives
-				# (static_failure, backup_capacity) can recover it. Plain
-				# objectives ignore the kwarg.
-				total_obj = solve_generic_lp_with_failure_catch(self, routed_through_ingress, obj, adv=a)['objective']
+				# (static_failure, backup_capacity, frozen_prefix) can recover
+				# it. Plain objectives ignore the kwarg. lp_kwargs_extra rides
+				# the same way (frozen_prefix's per-iteration kill set).
+				total_obj = solve_generic_lp_with_failure_catch(
+					self, routed_through_ingress, obj, adv=a,
+					**(kwargs.get('lp_kwargs_extra') or {}))['objective']
 				self.timing['solve_generic_lp_not_persistent'] += time.time() - ts
 			# Non-finite objective (e.g. maxhard prio: stage-2 bulk LP
 			# infeasible in-worker returns objective=None) previously
@@ -1691,11 +1694,21 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		# step (stock/fixed mode) that's harmless; under gated/starved probing
 		# nothing clears it, so beliefs -- including the uncertainty the probe
 		# gate consumes -- become stale frozen snapshots.
+		# Per-call LP kwargs (e.g. frozen_prefix kill set) change the
+		# objective VALUE for the same adv, so they must participate in the
+		# LB cache key -- otherwise a rotated kill set silently reads the
+		# previous iteration's cached benefit. frozen_kill_tag is the
+		# compact per-iteration identity the driver stamps for this.
+		lp_kwargs_extra = kwargs.get('lp_kwargs_extra') or None
+		_extra_tag = lp_kwargs_extra.get('frozen_kill_tag') if lp_kwargs_extra else None
+
 		_use_lb_cache = os.environ.get('SCULPTOR_LB_CACHE', '1') != '0'
 		if not verb and not subset_ugs and _use_lb_cache:
 			## don't rely on caching if we want to log / print statistics
 			try:
 				cache_rep = get_a_cache_rep(a_effective)
+				if _extra_tag is not None:
+					cache_rep = (cache_rep, _extra_tag)
 				benefit, (xsumx_cache_rep, psumx_cache_rep) = self.calc_cache.all_caches['lb'][cache_rep]
 				xsumx = np.linspace(xsumx_cache_rep[0], xsumx_cache_rep[1], num=LBX_DENSITY)
 				psumx = np.zeros(LBX_DENSITY)
@@ -1724,9 +1737,11 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 
 		## Calculate pdf of the generic objective
 		if subset_ugs:
-			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective, which_ugs_i=which_ugs_i)
+			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective,
+				which_ugs_i=which_ugs_i, lp_kwargs_extra=lp_kwargs_extra)
 		else:
-			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective)
+			xsumx, psumx = self.generic_objective_pdf(f_w, a_effective,
+				lp_kwargs_extra=lp_kwargs_extra)
 
 		xsumx = xsumx.flatten(); psumx = psumx.flatten()
 		benefit = np.sum(xsumx * psumx)
@@ -1734,6 +1749,8 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		if not subset_ugs:
 			### Store compressed versions of these variables
 			cache_rep = get_a_cache_rep(a_effective)
+			if _extra_tag is not None:
+				cache_rep = (cache_rep, _extra_tag)
 			xsumx_cache_rep = (xsumx[0], xsumx[-1])
 			psumx_cache_rep = {}
 			for i in np.where(psumx)[0]:
@@ -1744,8 +1761,14 @@ class Path_Distribution_Computer(Optimal_Adv_Wrapper):
 		return benefit, (xsumx, psumx)  
 
 	def latency_benefit(self, a, **kwargs):
-		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of 
+		"""Calculates distribution of latency benefit at a given advertisement. Benefit is the sum of
 			benefits across all users. Closed form calculation."""
+		# Forward ONLY lp_kwargs_extra (per-call LP kwargs, e.g. frozen_prefix's
+		# kill set). Other kwargs (notably ugs) are deliberately NOT forwarded
+		# here -- preserving the long-standing behavior of this call site.
+		if kwargs.get('lp_kwargs_extra'):
+			return self.generic_benefit(a, kwargs.get('generic_obj'),
+				lp_kwargs_extra=kwargs['lp_kwargs_extra'])
 		return self.generic_benefit(a, kwargs.get('generic_obj'))
 
 	def log(self,s):

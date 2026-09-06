@@ -8,6 +8,32 @@
     "SCULPTOR_DEPSTORE": "1",
     "SCULPTOR_LOG_MEM": "0"
   },
+  "paper_repo_copy": {
+    "_comment": "post-grab hook: these basenames (from figures/paper_artifacts) are copied into the paper repo. Add figures here as you see fit.",
+    "dst": "~/Documents/resilient_advertisements_paper/figures",
+    "files": [
+      "average_congestion_over_deployment_size_fail_ingress_mlu.pdf",
+      "average_congestion_over_deployment_size_fail_site_mlu.pdf",
+      "average_latency_over_deployment_size_fail_ingress_mlu.pdf",
+      "average_latency_over_deployment_size_fail_site_mlu.pdf",
+      "average_latency_over_prefix_budget_normal.pdf",
+      "average_latency_over_deployment_size_normal.pdf",
+      "diurnal_blowup_before_congestion_over_deployment_size.pdf",
+      "flash_crowd_blowup_before_congestion_over_deployment_size.pdf",
+      "percent_traffic_within_100_ms_link_failure_over_deployment_size.pdf",
+      "percent_traffic_within_100_ms_normal_over_deployment_size.pdf",
+      "percent_traffic_within_100_ms_site_failure_over_deployment_size.pdf",
+      "percent_traffic_within_10_ms_link_failure_over_deployment_size.pdf",
+      "percent_traffic_within_10_ms_normal_over_deployment_size.pdf",
+      "percent_traffic_within_10_ms_site_failure_over_deployment_size.pdf",
+      "percent_traffic_within_50_ms_link_failure_over_deployment_size.pdf",
+      "percent_traffic_within_50_ms_normal_over_deployment_size.pdf",
+      "percent_traffic_within_50_ms_site_failure_over_deployment_size.pdf",
+      "percent_traffic_within_50_ms_site_failure_over_prefix_budget.pdf",
+      "priority_bulk_traffic_congestion.pdf",
+      "priority_bulk_traffic_latency.pdf"
+    ]
+  },
   "stages": {
     "deployment_sizes": {
       "enabled": true,
@@ -55,17 +81,19 @@
     },
     "n_prefixes": {
       "enabled": true,
-      "_comment": "SHIM (Tom 2026-08-30). Budget 2 is structurally infeasible for SCULPTOR on a 3-PoP deployment (init needs anycast + one prefix per PoP), so the floor is 3.",
-      "dpsize": "testing_feature-actual-3",
+      "_comment": "REAL actual-32 sweep (Tom 2026-08-31): budgets sites/2..2*sites on the papertable32b deployment, 150 iters, 1 sim. Ran on i-09a6 2026-09-01..02; artifacts synced to the storage VM, so this stage is a cache-load. Sub-floor budgets (<33) use the grouped init. Old actual-3 shim retired 2026-09-02.",
+      "dpsize": "testing_feature-actual-32",
       "prefixes": [
-        3,
-        4,
-        5
+        16,
+        24,
+        32,
+        40,
+        64
       ],
       "nsim": 1,
-      "iters": 10,
-      "cache_fn": "cache/paperv1/prefix_metrics.pkl",
-      "figures_subdir": "cluster/prefix_sweep",
+      "iters": 150,
+      "cache_fn": "cache/paperv1/prefix_metrics_a32.pkl",
+      "figures_subdir": "cluster/prefix_sweep_a32",
       "plot": true,
       "port": 31702,
       "env": {},
@@ -75,7 +103,7 @@
         "dst": "figures/paper_artifacts"
       },
       "outputs": [
-        "figures/cluster/prefix_sweep/*over_prefix_budget*.pdf"
+        "figures/cluster/prefix_sweep_a32/*over_prefix_budget*.pdf"
       ]
     },
     "paper_table": {
@@ -88,7 +116,8 @@
         "joint_priority",
         "frac_beyond_optimal",
         "max_util",
-        "per_site_cost"
+        "per_site_cost",
+        "frozen_prefix"
       ],
       "out": "figures/cluster/20260823_130342-papertable32b/paper_table_full",
       "port": 31704,
@@ -98,8 +127,8 @@
         "files": [
           "paper_table.csv",
           "paper_table.tex",
-          "paper_table_key.csv",
-          "paper_table_key.tex",
+          "paper_table_full.csv",
+          "paper_table_full.tex",
           "priority_bulk_traffic_congestion.pdf",
           "priority_bulk_traffic_latency.pdf"
         ],
@@ -109,6 +138,68 @@
         "figures/cluster/20260823_130342-papertable32b/paper_table_full/*",
         "figures/paper/priority_bulk_traffic_congestion.pdf",
         "figures/paper/priority_bulk_traffic_latency.pdf"
+      ]
+    },
+    "scaling_summary": {
+      "enabled": true,
+      "_comment": "quick-look CSV: per metric, does SCULPTOR's lead grow/hold/shrink with scale (Tom 2026-08-30). Runs after the sweeps; reads their cached pickles.",
+      "cmd": [
+        "{py}",
+        "-u",
+        "evaluations/deployment_scaling_summary.py",
+        "--cache-fn",
+        "cache/cluster_runs/20260822_220131-prefixbudget3/metrics_by_dpsize.pkl",
+        "--prefix-cache-fn",
+        "cache/paperv1/prefix_metrics_a32.pkl",
+        "--out-dir",
+        "figures/paper/scaling_summary"
+      ],
+      "artifacts": {
+        "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/scaling_summary",
+        "files": [
+          "deployment_scaling_summary.csv",
+          "prefix_scaling_summary.csv"
+        ],
+        "dst": "figures/paper_artifacts"
+      },
+      "outputs": [
+        "figures/paper/scaling_summary/*.csv"
+      ]
+    },
+    "ablation_cdf": {
+      "enabled": true,
+      "_comment": "Ablation ladder CDF over the 20 actual-10 paper deployments (Tom 2026-08-31/09-01). L6 ('full') served from depstore paper trainings (all 20 HIT); other arms trained fresh on the same pinned deployments (dep-file mode). Campaign completed 2026-09-02; re-running this stage is a fast no-op (cells cached) that redraws figures.",
+      "cmd": [
+        "{py}",
+        "-u",
+        "evaluations/run_ablation_cdf.py",
+        "--dpsize",
+        "testing_feature-actual-10",
+        "--deployments",
+        "20",
+        "--max-iter",
+        "100",
+        "--slots",
+        "8",
+        "--dep-dir",
+        "cache/ablation/cdf_a10_deps",
+        "--cell-timeout",
+        "36000",
+        "--out-root",
+        "cache/ablation/cdf_a10",
+        "--ws-root",
+        "/home/ubuntu/abl_cdf10_ws"
+      ],
+      "artifacts": {
+        "src_dir": "/home/ubuntu/sparse_advertisements_code/paper_artifacts/ablation_cdf",
+        "files": [
+          "ablation_ladder_cdf_actual-10.pdf",
+          "ablation_ladder_cdf_actual-10_fullobj.pdf"
+        ],
+        "dst": "figures/paper_artifacts"
+      },
+      "outputs": [
+        "figures/paper/ablation_ladder_cdf_actual-10*.pdf"
       ]
     },
     "hardness_figures": {

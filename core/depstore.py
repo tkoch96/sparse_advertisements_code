@@ -111,25 +111,13 @@ SEMANTIC_KNOBS = {
     'SCULPTOR_MAXINFO_TARGET': '',
     'SCULPTOR_STARTUP_RB': '',
     'SCULPTOR_OPP_ONCE': '',
-    'SCULPTOR_GT_RB': '0',
-    'SCULPTOR_USE_RESILIENCE': '1',
     'SCULPTOR_XOBJS': '',
     'SCULPTOR_OBJ_ROUND': '',
-    'SCULPTOR_OBJ_MAXUTIL_ALPHA': '',
-    'SCULPTOR_MLU_WEIGHT_MULT': '',
-    'SCULPTOR_LATMLU_TERM': '',
-    'SCULPTOR_LATMLU_STRAND_MULT': '',
-    'SCULPTOR_HINGE_NOROUTE_MS': '',
-    'SCULPTOR_FRACB_SCALAR': '',
-    'SCULPTOR_FRAC_BEYOND_REL': '',
-    'SCULPTOR_FROZEN_GAMMA': '',
-    'SCULPTOR_FROZEN_WHICH': '',
     'SCULPTOR_NO_ROUTE_LATENCY': '30000',
     'SCULPTOR_NO_ROUTE_PENALTY_MULT': '2.0',
     'SCULPTOR_CONGESTED_PENALTY_MULT': '1.5',
     'SCULPTOR_NO_ROUTE_PENALTY_MS': '800',
     'SCULPTOR_CONGESTED_PENALTY_MS': '350',
-    'SCULPTOR_BULK_SLACK_DOM': '1e3',
     'SCULPTOR_SOFT_CONG_PENALTY': '50',
     'SCULPTOR_CONGESTION_AWARE_OBJ': '1',
     'SCULPTOR_ROUTE_VIOLATION': '',
@@ -149,6 +137,12 @@ SEMANTIC_KNOBS = {
     'SCULPTOR_ABLATION_PROBE_TCONV': '',
     'SCULPTOR_EVAL_VOLSCEN': '',
 }
+
+# Objective-specific semantic knobs are declared on each ObjectivePlugin
+# (core/objective_registry.py) and merged here, so a new objective's knobs
+# enter the fingerprint by construction.
+from core.objective_registry import semantic_knobs as _objective_semantic_knobs
+SEMANTIC_KNOBS.update(_objective_semantic_knobs())
 
 # Operational: affects wall time, memory, logging -- never the result.
 OPERATIONAL_KNOBS = {
@@ -198,6 +192,26 @@ def deployment_id(deployment):
     except Exception:
         blob = repr(sorted(deployment.keys()))
     return hashlib.sha256(blob.encode()).hexdigest()[:16]
+
+
+def choke_config(dpsize, deployment, gamma, lambduh, capacity,
+                 n_prefixes='auto', generic_objective=None):
+    """The ONE way to build the eval-choke-point lookup config. Any
+    trainer that wants its artifacts to interoperate with the paper
+    evals (eval_all_solution_types) or vice versa MUST key through here
+    -- a hand-rolled dict with str(4.0) where this writes str(4) is a
+    silent permanent miss (or worse). Values are stringified exactly as
+    the original inline block did (Tom 2026-08-30)."""
+    if generic_objective is None:
+        generic_objective = os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
+                                           'avg_latency')
+    return {'dpsize': str(dpsize),
+            'dep_id': deployment_id(deployment),
+            'n_prefixes': str(n_prefixes),
+            'generic_objective': str(generic_objective),
+            'gamma': str(gamma),
+            'lambduh': str(lambduh),
+            'capacity': str(capacity)}
 
 
 def fingerprint(config=None, _warn=True):

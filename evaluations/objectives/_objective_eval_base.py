@@ -23,6 +23,65 @@ from helpers.helpers import save_fig
 from helpers.figpaths import fig_path  # noqa: F401  (kept for callers)
 
 
+def sim_sas(ctx, sim):
+    """THE SIM'S OWN deployment, not ctx.sas's (2026-08-23): ctx.sas is
+    whichever object was current when the hook ran -- the LAST sim's.
+    Scoring sim 0's advs against sim 2's caps/priorities gave anycast MLU
+    2.82 where the cap-sizing math says 0.91. Driver-side LPs only, so no
+    worker pool is attached. Cached per sim on the ctx."""
+    cache = getattr(ctx, '_per_sim_sas', None)
+    if cache is None:
+        cache = ctx._per_sim_sas = {}
+    sas = cache.get(sim)
+    if sas is None:
+        dep = (ctx.metrics.get('deployment') or {}).get(sim)
+        if dep is not None:
+            from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+            kwa = dict(ctx.sas.get_init_kwa()) if ctx.sas is not None else {}
+            kwa.pop('save_run_dir', None)
+            sas = Sparse_Advertisement_Eval(dep, **kwa)
+        else:
+            sas = ctx.sas   # single-sim / legacy pickles
+        cache[sim] = sas
+    return sas
+
+
+def score_all_strategies_multi(ctx, score_multi, metric_keys):
+    """Like score_all_strategies but ONE evaluation per advertisement fills
+    SEVERAL metric keys: `score_multi(sas, adv, strategy) -> {key: float|None}`.
+    Use when the per-adv computation is expensive (e.g. an exhaustive
+    failure sweep) and several columns fall out of it. A strategy that
+    raises gets None under every key and is reported, not fatal."""
+    metrics = ctx.metrics
+    for k in metric_keys:
+        metrics.setdefault(k, {})
+    for sim in range(ctx.N_TO_SIM):
+        rets = (metrics.get('compare_rets') or {}).get(sim) or {}
+        advs = rets.get('adv_solns') or {}
+        for k in metric_keys:
+            metrics[k].setdefault(sim, {})
+        sas = sim_sas(ctx, sim)
+        for strategy in ctx.soln_types:
+            try:
+                adv = advs[strategy][0]
+            except (KeyError, IndexError):
+                print("[{}] no solution for {}".format(metric_keys[0], strategy))
+                for k in metric_keys:
+                    metrics[k][sim][strategy] = None
+                continue
+            try:
+                out = score_multi(sas, adv, strategy) or {}
+            except Exception:
+                print("[{}] scoring failed for {}".format(metric_keys[0], strategy))
+                traceback.print_exc()
+                out = {}
+            for k in metric_keys:
+                v = out.get(k)
+                metrics[k][sim][strategy] = (None if v is None or not np.isfinite(v)
+                                             else float(v))
+    return {k: metrics[k] for k in metric_keys}
+
+
 def score_all_strategies(ctx, score_one, metric_key):
     """Score every solved advertisement with `score_one(sas, adv) -> float`.
 
@@ -33,31 +92,11 @@ def score_all_strategies(ctx, score_one, metric_key):
     """
     metrics = ctx.metrics
     metrics.setdefault(metric_key, {})
-    _sim_sas_cache = getattr(ctx, '_per_sim_sas', None)
-    if _sim_sas_cache is None:
-        _sim_sas_cache = ctx._per_sim_sas = {}
     for sim in range(ctx.N_TO_SIM):
         rets = (metrics.get('compare_rets') or {}).get(sim) or {}
         advs = rets.get('adv_solns') or {}
         metrics[metric_key].setdefault(sim, {})
-        # THE SIM'S OWN deployment, not ctx.sas's (2026-08-23): ctx.sas is
-        # whichever object was current when the hook ran -- the LAST
-        # sim's. Scoring sim 0's advs against sim 2's caps/priorities gave
-        # anycast MLU 2.82 where the cap-sizing math says 0.91 (nsim=1
-        # runs, which cannot cross sims, scored exactly 0.91). Fourth
-        # instance of the cross-sim staleness family. Driver-side LPs
-        # only, so no worker pool is attached.
-        sas = _sim_sas_cache.get(sim)
-        if sas is None:
-            dep = (metrics.get('deployment') or {}).get(sim)
-            if dep is not None:
-                from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
-                kwa = dict(ctx.sas.get_init_kwa()) if ctx.sas is not None else {}
-                kwa.pop('save_run_dir', None)
-                sas = Sparse_Advertisement_Eval(dep, **kwa)
-            else:
-                sas = ctx.sas   # single-sim / legacy pickles
-            _sim_sas_cache[sim] = sas
+        sas = sim_sas(ctx, sim)
         for strategy in ctx.soln_types:
             try:
                 adv = advs[strategy][0]

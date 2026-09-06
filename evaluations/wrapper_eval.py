@@ -92,6 +92,14 @@ default_metrics = {
 	'fraction_congested_volume': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 	'diurnal': {i:{k:[] for k in global_soln_types} for i in range(N_TO_SIM)},
 }
+# Per-objective suite keys (metrics[key][sim][strategy] = float), declared
+# on each ObjectivePlugin (core/objective_registry.py). Listing them here
+# keeps them across resumes -- the loader in eval_all_solution_types deletes
+# any pickle key absent from this schema (the trap that ate the 2026-08-23
+# bisect results).
+from core.objective_registry import default_metric_keys as _objective_metric_keys
+for _k in _objective_metric_keys():
+	default_metrics.setdefault(_k, {i: {} for i in range(N_TO_SIM)})
 
 def check_calced_everything(metrics, random_iter, k_of_interest):
 	havent_calced_everything = False

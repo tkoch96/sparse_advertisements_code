@@ -171,7 +171,7 @@ Newer per-objective + per-experiment drivers. Each script has its own docstring.
 |---|---|
 | `experiments/objectives.py` | Registry: `ObjectiveSpec` dataclass + map of all objectives |
 | `experiments/run_objective.py` | Single CLI driver (`python -m experiments.run_objective --obj <name> --dpsize <size>`) |
-| `experiments/site_failure.py` | `site_failure` objective spec (steady + mean-over-PoP-failures with frozen user→prefix) |
+| `core/objective_registry.py` | THE objective registry: every objective (incl. `site_failure`, `frozen_prefix`) declared once; all consumers derive from it |
 | `experiments/static_failure_eval.py` | BGP-fallback failure eval phase shared by site_failure |
 | `experiments/painter_hypothesis_sweep.py` | 2D sweep of (scale_factor, vol_spread) testing the painter-degradation hypothesis |
 
@@ -299,39 +299,62 @@ or `dpsize=actual-3` first, then scale up.
 
 ### A new objective function
 
-Two pieces: register it + implement the LP.
+ONE declaration: an `ObjectivePlugin` in `core/objective_registry.py`.
+Every consumer -- the extension-LP registry, the training-policy map, the
+eval-suite router, the paper table (columns, key columns, required key,
+TeX labels, defaults, aliases), the resume-stability metric schema, the
+depstore fingerprint knobs, the `experiments/run_objective.py` spec, and
+the `verify_e2e_objectives` integration test -- derives its list from that
+one entry. Nothing else to edit.
 
 ```python
-# 1. In experiments/<name>.py:
-from experiments.objectives import ObjectiveSpec, register
-register(ObjectiveSpec(
-    name='my_new_objective',
-    lp_obj_string='my_new_objective',     # the string sas.compare_different_solutions's LP layer expects
+# 1. core/objective_registry.py -- declare it (this is the only list):
+register(ObjectivePlugin(
+    name='my_objective',
     description='What this minimises',
-    lp_kwargs={'my_knob': 1.0},
-    eval_phases=('static_failure_resilience',),  # plus whatever post-training evals
-    gamma=0, using_resilience_benefit=True,
+    aliases=('myobj',),
+    lp='core.my_objective:solve_lp_my_objective',   # extension LP ('' if
+                                                    # built into solve_lp_assignment)
+    training_class='',                # '' = base Generic_Objective; else
+                                      # 'core.generic_objective:MySubclass'
+    experiment=dict(lp_kwargs={'my_knob': 1.0},
+                    eval_phases=('strategy_compare',)),   # run_objective.py
+    eval_module='evaluations_for_my_objective',   # evaluations/objectives/
+    required_metric_key='my_metric_by_strategy',  # pickle must hold this
+    metric_keys=('my_metric_by_strategy', 'objective_value_by_strategy'),
+    table_group='My objective', group_order=6, key_order=6,
+    table_columns=(('My metric', '<', 'mean', 'my_metric_by_strategy'),
+                   ('Objective', '>', 'mean', 'objective_value_by_strategy')),
+    key_columns=('My metric',),
+    tex_group='My Objective',
+    paper_table_default=True,
+    semantic_knobs={'SCULPTOR_MY_OBJECTIVE_KNOB': ''},
 ))
 
-# 2. In core/solve_lp_assignment.py: add a function
-def solve_lp_assignment_my_new_objective(sas, routed_through_ingress, obj, **kwargs):
-    """Return dict with keys:
-        objective: float (final LP value)
-        solved:    str (Gurobi solution status)
-        paths_by_ug: {ug_index: [(poppi, vol_pct), ...]}
-        lats_by_ug: numpy array of per-UG latencies
-        ... plus any objective-specific fields
-    """
-    paths_by_ug, available_paths = get_paths_by_ug(sas, routed_through_ingress)
-    # ... build Gurobi model, optimize, extract solution ...
+# 2. the LP, same signature/return contract as solve_lp_assignment's
+#    registered objectives (objective is a BENEFIT, higher better; never a
+#    NO_ROUTE_LATENCY-scale scalar -- see _soft_bounded_objective):
+def solve_lp_my_objective(sas, routed_through_ingress, obj, **kwargs):
+    """Return {objective, solved, paths_by_ug, lats_by_ug, ...}."""
 
-# 3. Register the LP function:
-generic_lp_functions['my_new_objective'] = solve_lp_assignment_my_new_objective
+# 3. the eval suite, evaluations/objectives/evaluations_for_my_objective.py:
+OBJECTIVES = ('my_objective',)
+def run(ctx):
+    score_all_strategies(ctx, scorer, 'my_metric_by_strategy')   # see _objective_eval_base
+    return ctx.metrics
 
-# 4. Import the spec module from experiments/run_objective.py so it registers at import time.
+# 4. (if the LP is an extension) SCULPTOR_XOBJS=1 must be in the env of
+#    EVERY process (driver and Ray workers) at import time; the paper
+#    cells and cluster launches already export it.
 
-# 5. (optional) Unit-test in tests/test_lp_correctness.py for a hand-verifiable case.
+# 5. unit_tests/test_objective_registry.py checks the wiring is complete
+#    (route importable, LP registered, column extractors resolve).
 ```
+
+Column extractor names (`table_columns`): `mean`, `pct`, `stats`,
+`lat_split`, `mlu_cell_latency`, `lat_res_objective`, `flash_crowd`,
+`diurnal`, `frozen_anchor` -- resolved in
+`evaluations/generate_paper_table._EXTRACTORS`.
 
 ### A new strategy
 

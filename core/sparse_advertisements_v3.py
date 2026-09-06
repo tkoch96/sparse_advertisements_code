@@ -566,6 +566,18 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 		base_adv = threshold_a(base_adv)
 		base_args = (base_adv,)
 
+		# Per-call LP kwargs from the objective (e.g. frozen_prefix's
+		# per-iteration kill set). Stamped identically on EVERY job in this
+		# flush so finite-difference probe pairs score against the same
+		# scenario set; the worker forwards it into the LP call.
+		try:
+			lp_kwargs_extra = self.generic_objective.per_call_lp_kwargs(base_adv)
+		except Exception as e:
+			print('[flush] per_call_lp_kwargs failed ({}); shipping none'.format(e))
+			lp_kwargs_extra = {}
+		if lp_kwargs_extra:
+			base_kwa['lp_kwargs_extra'] = lp_kwargs_extra
+
 		all_worker_jobs_seq = split_seq(self.lb_args_queue[1:], n_workers)
 		
 		all_workers_jobs = [[(base_args, base_kwa)] for _ in range(n_workers)]
@@ -578,6 +590,8 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 					kwa['ugs'] = ugs
 				kwa['verbose_workers'] = is_verb or kwa.get('verbose_workers',False)
 				kwa['generic_obj'] = self.generic_objective.obj
+				if lp_kwargs_extra:
+					kwa['lp_kwargs_extra'] = lp_kwargs_extra
 				all_workers_jobs[i].append((np.where(base_adv!=other_adv), kwa))
 
 		msgs = list([pickle.dumps(['calc_compressed_lb', subset]) for subset in all_workers_jobs])
@@ -634,6 +648,19 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 
 	def init_advertisement(self):
 		print("Initializing advertisement...")
+		# SCULPTOR_INIT_ADV_FILE (Tom 2026-09-02, ablation continuation):
+		# start from a SPECIFIC advertisement (e.g. a prior run's final)
+		# instead of deriving one. Shape-checked; used verbatim so a
+		# continuation run picks up exactly where the parent stopped.
+		_init_file = os.environ.get('SCULPTOR_INIT_ADV_FILE')
+		if _init_file:
+			a = np.load(_init_file)
+			assert a.shape == (self.n_popp, self.n_prefixes), \
+				('SCULPTOR_INIT_ADV_FILE shape {} != ({}, {})'.format(
+					a.shape, self.n_popp, self.n_prefixes))
+			print("[init] advertisement loaded from {} (continuation)"
+				  .format(_init_file))
+			return a.astype(float)
 		# SCULPTOR_DEPLOYMENT_SEED also pins the initial advertisement so an A/B
 		# pair starts from the same point. Offset by 1 to decorrelate from the
 		# deployment-build RNG state without exposing a second env var.
@@ -672,22 +699,28 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 			# the run reports "[INCOMPLETE] sparse" with no cause. Say it
 			# plainly instead (Tom 2026-08-21, found by the prefix-budget
 			# integration test at budget 3 on `small`, which has 3 PoPs).
-			if self.n_prefixes < self.n_pops + 1:
+			if self.n_prefixes < 2:
 				raise ValueError(
-					"n_prefixes={} is too small for this deployment: "
-					"init_advertisement assigns prefix 0 to anycast and one "
-					"prefix per PoP, so it needs at least n_pops + 1 = {}."
-					.format(self.n_prefixes, self.n_pops + 1))
+					"n_prefixes={} is too small: init_advertisement needs "
+					"prefix 0 for anycast plus at least one PoP prefix."
+					.format(self.n_prefixes))
 
 			# everything off, to start, with some jitter
 			a = .35 * np.ones((self.n_popp, self.n_prefixes)) + (.2 * (np.random.uniform(size=(self.n_popp, self.n_prefixes)) - .5 ))
 			a[:,0] = .55 # anycast on the first prefix
+			# One prefix per PoP when the budget allows (the historical
+			# init). Below n_pops + 1 -- which used to be a hard error --
+			# group PoPs round-robin over the non-anycast prefixes (Tom
+			# 2026-08-31, prefix sweep at budgets below one-per-site):
+			# same total mass, prefixes just start with 2+ PoPs each.
+			n_pop_prefs = min(self.n_pops, self.n_prefixes - 1)
 			for i in range(self.n_pops):
 				these_popps = np.array([self.popp_to_ind[popp] for popp in self.popps if popp[0] == self.pops[i]])
-				a[these_popps,i+1] = .55
-			## linear decrease to the end
-			start_ind = self.n_pops + 1
-			prob_ons = np.linspace(.05,.005,num=(self.n_prefixes-start_ind))
+				a[these_popps, 1 + (i % n_pop_prefs)] = .55
+			## linear decrease to the end (no spare prefixes when the
+			## budget is at/below n_pops + 1 -- num=0 loops zero times)
+			start_ind = min(self.n_pops + 1, self.n_prefixes)
+			prob_ons = np.linspace(.05,.005,num=max(self.n_prefixes-start_ind, 0))
 			for i in range(self.n_prefixes-start_ind):
 				prob_on = prob_ons[i]
 				is_on = np.random.random(size=(self.n_popp)) < prob_on

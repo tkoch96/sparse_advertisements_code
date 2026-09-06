@@ -70,48 +70,10 @@ def all_specs() -> List[ObjectiveSpec]:
 	return list(_REGISTRY.values())
 
 
-# --- Built-in objectives ---------------------------------------------------
+# --- Built-in objectives: DERIVED from the central registry -------------
+# Every ObjectivePlugin with an `experiment` block (core/objective_registry.py)
+# becomes an ObjectiveSpec here. Declare new objectives THERE, not here.
+from core.objective_registry import experiment_specs as _registry_experiment_specs
 
-register(ObjectiveSpec(
-	name='avg_latency',
-	lp_obj_string='avg_latency',
-	description='Minimize traffic-weighted average user latency. Baseline objective.',
-	eval_phases=(
-		'strategy_compare', 'pct_volume_within_latency',
-		'failure_resilience',
-		'diurnal', 'flash_crowd',
-	),
-))
-
-register(ObjectiveSpec(
-	name='per_site_cost',
-	lp_obj_string='per_site_cost',
-	lp_kwargs={'site_cost_alpha': 100.0},  # was constants.DEFAULT_SITE_COST
-	deployment_kwargs={'cost_type': 'carbon'},
-	description=(
-		'Minimize traffic-weighted (latency + site_cost_alpha * site_cost). '
-		'Weighted-sum scalarization; alpha is the cost-vs-latency tradeoff knob.'
-	),
-	eval_phases=('strategy_compare', 'pct_volume_within_latency', 'site_cost_summary'),
-))
-
-register(ObjectiveSpec(
-	name='joint_priority',
-	lp_obj_string='joint_latency_bulk_download',
-	# bulk_cap_limit: max total (HPrio + LPrio) volume per link as multiple of
-	# capacity. SIGCOMM 2025 paper value is 3.0; existing experiments here ran
-	# under 100.0 so that is preserved as the default. Override per-experiment
-	# if reproducing the paper exactly.
-	lp_kwargs={'bulk_cap_limit': 100.0},
-	description=(
-		'Joint optimization of HPrio (latency-sensitive) and LPrio (bulk) '
-		'traffic on a shared link layer. HPrio LP is solved first, then bulk '
-		'fills around it minimizing HPrio-weighted oversubscription -- de '
-		'facto strict priority queueing. NOTE: this is NOT an SLO formulation; '
-		'plots labeled "SLO" actually report HPrio congestion fraction.'
-	),
-	eval_phases=('strategy_compare', 'priority_bulk_sweep'),
-))
-
-# 'site_failure' is registered in experiments/site_failure.py to keep the
-# spec colocated with its LP-function file path and avoid circular imports.
+for _name, _spec in _registry_experiment_specs().items():
+	register(ObjectiveSpec(name=_name, **_spec))

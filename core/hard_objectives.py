@@ -431,13 +431,20 @@ def solve_lp_frozen_failure(sas, routed_through_ingress, obj, **kwargs):
     return out
 
 
-REGISTERED_OBJECTIVES = {
-    'frac_beyond_optimal': solve_lp_frac_beyond_optimal,
-    'lat_plus_max_util': solve_lp_lat_plus_max_util,
-    'max_util': solve_lp_max_util,
-    'popp_failure_congestion': solve_lp_popp_failure_congestion,
-    'frozen_failure_latency': solve_lp_frozen_failure,
-}
+def solve_lp_frozen_prefix(sas, routed_through_ingress, obj, **kwargs):
+    """(e) joint per-(ug, prefix) LP over normal + sampled popp-failure
+    scenarios with ONE shared allocation (the freeze is structural; Tom
+    2026-09-05). Implementation in core/frozen_prefix.py; lazy import to
+    keep this module's import graph flat."""
+    from core.frozen_prefix import solve_lp_frozen_prefix as _impl
+    return _impl(sas, routed_through_ingress, obj, **kwargs)
+
+
+# DERIVED from the central registry (core/objective_registry.py): every
+# plugin whose `lp` points at a function in this module lands here. Adding
+# an extension objective = defining its function above + one plugin entry.
+from core.objective_registry import extension_lp_functions as _extension_lps
+REGISTERED_OBJECTIVES = _extension_lps()
 
 
 def register():
