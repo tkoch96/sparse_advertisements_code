@@ -46,6 +46,14 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
         super().__init__(*args, **kwargs)
         self.MC_NUM = 1  # one deterministic pseudo-realization per LB call
         self._abl_pseudo_price = {}   # (ug, poppi) -> expected latency; single-use
+        # Deterministic-realization caches (Tom 2026-08-31: the per-
+        # scenario python loop below ran on EVERY latency-benefit call --
+        # ~75% of no_mc's worker wall at actual-10, vs ~10% rti share for
+        # the MC arms whose sampling is vectorized). Everything here is a
+        # pure function of the block content, so caching cannot change
+        # results -- only skip recomputation.
+        self._abl_blk_cache = {}   # block bytes -> (ug->rep, [(ug,rep,exp)], n_scen)
+        self._abl_adv_cache = {}   # per-adv tuple of (pref_i, block key) -> (out, prices, n_scen)
         self._abl_mc = {
             'pseudo_calls': 0,          # _sample_scenario_realizations invocations
             'stock_sample_calls': 0,    # any stock MC sampler reached (must stay 0)
@@ -68,26 +76,85 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
             # legacy all_probs/meta_data lists are no longer populated).
             # Mainline samples UNIFORMLY over each scenario's options, so
             # the deterministic expectation is the plain mean.
-            n_scen = 0
-            for (lens_e, pad_e), (pref_i, names_e, uis_e) in zip(
+            #
+            # Two-level deterministic cache (Tom 2026-08-31): the whole
+            # composed realization is a pure function of the block
+            # contents, so key blocks by their bytes and the full adv by
+            # the tuple of (pref_i, block key).
+            blk_keys = []
+            for (lens_e, pad_e), (pref_i, _names_e, _uis_e) in zip(
                     blocks, meta):
-                for j, ug_name in enumerate(names_e):
-                    n = int(lens_e[j])
-                    if n <= 0:
-                        continue
-                    poppis = pad_e[j, :n].astype(int)
-                    lats = self.lat_matrix[poppis, int(uis_e[j])]
-                    exp_lat = float(lats.mean())
-                    rep = int(poppis[int(np.argmin(lats))])
+                blk_keys.append((int(pref_i),
+                                 lens_e.tobytes() + pad_e.tobytes()))
+            adv_key = tuple(blk_keys)
+            hit = self._abl_adv_cache.get(adv_key)
+            if hit is not None and os.environ.get(
+                    'SCULPTOR_ABL_RTI_CACHE_CHECK', '0') == '1':
+                # smoke-mode self-check: recompute uncached and compare;
+                # count mismatches (never raise -- handle_msg would
+                # swallow it into 'ERROR')
+                c_out, c_prices, c_n = hit
+                f_out, f_prices, f_n = self._abl_uncached_realization(
+                    blocks, meta)
+                if (f_out != c_out or f_prices != c_prices
+                        or f_n != c_n):
+                    self._abl_mc['rti_cache_mismatch'] = \
+                        self._abl_mc.get('rti_cache_mismatch', 0) + 1
+                    print('[ablation-fork] RTI CACHE MISMATCH (adv key '
+                          'len {})'.format(len(adv_key)), flush=True)
+                else:
+                    ok = self._abl_mc.get('rti_cache_check_ok', 0) + 1
+                    self._abl_mc['rti_cache_check_ok'] = ok
+                    if ok == 1 or ok % 200 == 0:
+                        print('[ablation-fork] rti cache self-check: {} '
+                              'hit(s) verified equal'.format(ok),
+                              flush=True)
+            if hit is not None:
+                cached_out, cached_prices, n_scen = hit
+                # inner dicts copied: downstream owns the realization;
+                # prices are read-only then REBOUND (never mutated), so
+                # the cached dict itself is safe to hand over
+                self._abl_pseudo_price = cached_prices
+                rd['num_scenarios'] = n_scen
+                return ({0: {pi: dict(d)
+                             for pi, d in cached_out.items()}}
+                        if n_scen else {})
+            n_scen = 0
+            for bk, ((lens_e, pad_e), (pref_i, names_e, uis_e)) in zip(
+                    blk_keys, zip(blocks, meta)):
+                ent = self._abl_blk_cache.get(bk[1])
+                if ent is None:
+                    ug_to_rep, scen_list = {}, []
+                    for j, ug_name in enumerate(names_e):
+                        n = int(lens_e[j])
+                        if n <= 0:
+                            continue
+                        poppis = pad_e[j, :n].astype(int)
+                        lats = self.lat_matrix[poppis, int(uis_e[j])]
+                        exp_lat = float(lats.mean())
+                        rep = int(poppis[int(np.argmin(lats))])
+                        ug_to_rep[ug_name] = self.popps[rep]
+                        scen_list.append((ug_name, rep, exp_lat))
+                    ent = (ug_to_rep, scen_list)
+                    self._abl_blk_cache[bk[1]] = ent
+                ug_to_rep, scen_list = ent
+                for ug_name, rep, exp_lat in scen_list:
                     prev = self._abl_pseudo_price.get((ug_name, rep))
                     if prev is None or exp_lat < prev:
                         self._abl_pseudo_price[ug_name, rep] = exp_lat
-                    try:
-                        out[0][pref_i][ug_name] = self.popps[rep]
-                    except KeyError:
-                        out[0][pref_i] = {ug_name: self.popps[rep]}
-                    n_scen += 1
+                out[0].setdefault(pref_i, {}).update(ug_to_rep)
+                n_scen += len(scen_list)
             rd['num_scenarios'] = n_scen
+            # bounded: candidate advs churn; insertion-order eviction
+            # keeps the recent working set (candidates recur within and
+            # across adjacent rounds) without unbounded growth
+            if len(self._abl_adv_cache) >= 512:
+                del self._abl_adv_cache[next(iter(self._abl_adv_cache))]
+            if len(self._abl_blk_cache) >= 4096:
+                del self._abl_blk_cache[next(iter(self._abl_blk_cache))]
+            self._abl_adv_cache[adv_key] = (
+                {pi: dict(d) for pi, d in out[0].items()},
+                dict(self._abl_pseudo_price), n_scen)
             return out if n_scen else {}
         rd['num_scenarios'] = len(rd['all_probs'])
         if rd['num_scenarios'] == 0:
@@ -107,6 +174,27 @@ class Abl_MC_Off_Worker(_LocalPathDistributionComputer):
             except KeyError:
                 out[0][pref_i] = {ug_name: self.popps[rep]}
         return out
+
+    def _abl_uncached_realization(self, blocks, meta):
+        """The ORIGINAL per-scenario loop, kept verbatim as the reference
+        implementation for the cache self-check (and nothing else)."""
+        prices, out0 = {}, {}
+        n_scen = 0
+        for (lens_e, pad_e), (pref_i, names_e, uis_e) in zip(blocks, meta):
+            for j, ug_name in enumerate(names_e):
+                n = int(lens_e[j])
+                if n <= 0:
+                    continue
+                poppis = pad_e[j, :n].astype(int)
+                lats = self.lat_matrix[poppis, int(uis_e[j])]
+                exp_lat = float(lats.mean())
+                rep = int(poppis[int(np.argmin(lats))])
+                prev = prices.get((ug_name, rep))
+                if prev is None or exp_lat < prev:
+                    prices[ug_name, rep] = exp_lat
+                out0.setdefault(pref_i, {})[ug_name] = self.popps[rep]
+                n_scen += 1
+        return out0, prices, n_scen
 
     # Stock samplers must be unreachable; count instead of raising (handle_msg
     # would swallow an exception into 'ERROR') and let the driver assert.

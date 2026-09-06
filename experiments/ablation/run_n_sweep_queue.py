@@ -479,6 +479,12 @@ def main():
                     (r.get('n_iters') or 0) < sp['max_iter'] + 1 and not early_ok):
                 print('[audit] BAD:', fn, r.get('n_iters'), str(r.get('solve_error'))[:40])
                 bad += 1
+            if r.get('depstore_hit'):
+                # depstore-served L6 cells (run_fork_ladder's cache hook,
+                # Tom 2026-08-31) never run the probing framework -- the
+                # adv IS the paper's cached mainline training, so the
+                # stale-code probing guard doesn't apply to them.
+                continue
             if sp['probe_mode'] != 'fixed' and r.get('probe_mode') != sp['probe_mode']:
                 print('[audit] BAD (stale code, probe_mode={}):'.format(r.get('probe_mode')), fn)
                 bad += 1
@@ -492,8 +498,12 @@ def main():
 
         def rescore(sp, N, s):
             with sem:
+                # spec env rides along: dep-file mode etc. must reach the
+                # rescorer or it scores a different deployment than the
+                # cells ran on (Tom 2026-08-31)
                 env = dict(os.environ, RAY_ADDRESS='local', MPLBACKEND='Agg',
                            RAY_TMPDIR='/tmp/ray_qrs_{}_{}_{}'.format(sp['label'], N, s))
+                env.update(sp['env'])
                 subprocess.call([args.py, '-m', 'experiments.ablation.rescore_fork',
                                  '--in-dir', os.path.join(sp['out_root'], 'N{}'.format(N)),
                                  '--dpsize', sp['dpsize'], '--seed', str(s)],

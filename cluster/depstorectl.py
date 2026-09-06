@@ -158,10 +158,6 @@ def cmd_ingest(a):
         print('cannot ingest {}: not a metrics pickle ({})'.format(
             a.pickle, e))
         return 1
-    cfg = _kv(a.config)
-    cfg['dpsize'] = a.dpsize
-    if a.legacy:
-        cfg['CORE_ERA'] = 'legacy:' + os.path.basename(a.pickle)
     n = 0
     crs = m.get('compare_rets') or {}
     deps = m.get('deployment') or {}
@@ -172,13 +168,31 @@ def cmd_ingest(a):
             adv = np.asarray(ret['adv_solns']['sparse'][0])
         except (KeyError, TypeError, IndexError):
             continue
-        c = dict(cfg, sim=str(sim))
+        dep = deps.get(sim)
+        if dep is None:
+            print('sim {}: no deployment stored -- skipped (a training '
+                  'without its deployment id is unkeyable)'.format(sim))
+            continue
+        # key EXACTLY like the eval choke point (choke_config is the one
+        # shared builder) -- dep_id disambiguates sims, so no 'sim' key:
+        # a sim-keyed config can never be hit by a choke lookup (the bug
+        # this rewrite fixes, Tom 2026-08-31 phase-2 prep)
+        c = depstore.choke_config(
+            a.dpsize, dep, gamma=a.gamma, lambduh=a.lambduh,
+            capacity=a.capacity, generic_objective=a.objective)
+        for k, v in _kv(a.config).items():
+            c[k] = v
+        if a.legacy:
+            c['CORE_ERA'] = 'legacy:' + os.path.basename(a.pickle)
         fp = st.put_training(
-            adv, a.n_iters, deployment=deps.get(sim), config=c,
+            adv, a.n_iters, deployment=dep, config=c,
             provenance={'ingested_from': os.path.basename(a.pickle),
+                        'sim': str(sim),
                         'era_tag': 'legacy' if a.legacy else 'modern'})
         if fp:
             n += 1
+            print('sim {} -> fp {} (dep_id {})'.format(
+                sim, fp, c['dep_id']))
     print('ingested {} training artifact(s) from {}'.format(n, a.pickle))
     return 0
 
@@ -201,6 +215,11 @@ def main():
     p.add_argument('--n-iters', type=int, default=150)
     p.add_argument('--legacy', action='store_true')
     p.add_argument('--config', nargs='*', default=[])
+    # choke_config parity knobs; defaults = wrapper_eval / paper evals
+    p.add_argument('--gamma', default=4, type=int)
+    p.add_argument('--lambduh', default=0, type=int)
+    p.add_argument('--capacity', default=True)
+    p.add_argument('--objective', default='avg_latency')
     p.set_defaults(fn=cmd_ingest)
     a = ap.parse_args()
     sys.exit(a.fn(a))

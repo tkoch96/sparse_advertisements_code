@@ -383,7 +383,49 @@ def verb_grab(intent, a, pull=True):
         return 1
     print('\nALL PAPER ARTIFACTS {}'.format(
         'PULLED' if pull else 'PRESENT'))
+    if pull:
+        _paper_repo_copy(intent)
     return 0
+
+
+def _paper_repo_copy(intent):
+    """Post-grab hook (Tom 2026-09-02): copy a curated subset of the
+    grabbed artifacts into the paper repo's figures dir. Configured by
+    the intent's top-level 'paper_repo_copy' block:
+
+        "paper_repo_copy": {
+          "dst": "~/Documents/resilient_advertisements_paper/figures",
+          "files": ["<basename in the artifacts dst dir>", ...]
+        }
+
+    Add/remove basenames in the intent's files list as you see fit --
+    they are looked up in each stage's artifacts 'dst' dir (usually
+    figures/paper_artifacts). Missing files WARN, never fail the grab."""
+    import shutil
+    cfg = intent.get('paper_repo_copy') or {}
+    files = cfg.get('files') or []
+    if not files:
+        return
+    dst_dir = os.path.expanduser(cfg.get(
+        'dst', '~/Documents/resilient_advertisements_paper/figures'))
+    os.makedirs(dst_dir, exist_ok=True)
+    src_dirs = []
+    for spec in (intent.get('stages') or {}).values():
+        d = (spec.get('artifacts') or {}).get('dst')
+        if d and d not in src_dirs:
+            src_dirs.append(d)
+    n = 0
+    for fn in files:
+        src = next((os.path.join(d, fn) for d in src_dirs
+                    if os.path.exists(os.path.join(d, fn))), None)
+        if src is None:
+            print('[paper-copy] WARN: {} not found in {}'.format(
+                fn, src_dirs))
+            continue
+        shutil.copy(src, os.path.join(dst_dir, fn))
+        n += 1
+        print('[paper-copy] {} -> {}'.format(fn, dst_dir))
+    print('[paper-copy] {} file(s) copied'.format(n))
 
 
 def main():

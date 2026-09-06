@@ -41,7 +41,13 @@ def rescore_seed(seed, in_dir, dpsize):
     for fn in fns:
         with open(fn) as f:
             r = json.load(f)
-        if 'adv' in r and r.get('fail_eval') != MARKER:
+        # SCULPTOR_RESCORE_REDO_CONG=1: additive backfill pass -- re-score
+        # cells that were rescored BEFORE congestion harvesting existed
+        # (Tom 2026-08-31: congested-volume columns for the ladder table)
+        _redo_cong = os.environ.get('SCULPTOR_RESCORE_REDO_CONG', '0') == '1'
+        if 'adv' in r and (r.get('fail_eval') != MARKER
+                           or (_redo_cong
+                               and 'steady_frac_congested' not in r)):
             todo.append((fn, r))
     if not todo:
         print('[rescore seed {}] nothing to do'.format(seed), flush=True)
@@ -59,7 +65,18 @@ def rescore_seed(seed, in_dir, dpsize):
     from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
     from helpers.helpers import deployment_to_prefixes
 
-    dep = get_random_deployment(dpsize)
+    # dep-file mode (Tom 2026-08-31, ablation CDF on paper deployments):
+    # score on the SAME pinned deployment the cells ran on, not a fresh
+    # seeded draw ('{seed}' in the path expands)
+    _dep_file = os.environ.get('SCULPTOR_ABLATION_DEP_FILE', '')
+    if _dep_file:
+        import pickle as _pickle
+        _dep_file = _dep_file.format(seed=seed)
+        dep = _pickle.load(open(_dep_file, 'rb'))
+        print('[rescore seed {}] deployment from {} (dep-file mode)'
+              .format(seed, _dep_file), flush=True)
+    else:
+        dep = get_random_deployment(dpsize)
     dep['generic_objective'] = 'avg_latency'
     sas = Sparse_Advertisement_Eval(
         dep, verbose=False, lambduh=0, with_capacity=capacity,
@@ -67,9 +84,17 @@ def rescore_seed(seed, in_dir, dpsize):
         n_prefixes=deployment_to_prefixes(dep), generic_objective='avg_latency')
     vols = np.asarray(sas.ug_vols)
 
-    def steady(adv):
+    NO_ROUTE_MARK = 29999.0   # lats >= this are NO_ROUTE/congested charges
+
+    def score(adv):
         ret = sas.solve_lp_with_failure_catch(np.asarray(adv, dtype=float))
-        return float(np.average(np.asarray(ret['lats_by_ug']), weights=vols))
+        lats = np.asarray(ret['lats_by_ug'])
+        mean = float(np.average(lats, weights=vols))
+        frac_cong = float(vols[lats >= NO_ROUTE_MARK].sum() / vols.sum())
+        return mean, frac_cong
+
+    def steady(adv):
+        return score(adv)[0]
 
     def scenarios(which):
         if which == 'popps':
@@ -86,33 +111,39 @@ def rescore_seed(seed, in_dir, dpsize):
 
     def fail_abs(adv, which):
         a = np.asarray(adv, dtype=float)
-        per_s = []
+        per_s, per_s_cong = [], []
         for failed in scenarios(which):
             a2 = np.copy(a)
             a2[failed, :] = 0
             if a2.sum() == 0:
                 per_s.append(float(np.average(
                     np.full(len(vols), 30000.0), weights=vols)))
+                per_s_cong.append(1.0)
                 continue
-            per_s.append(steady(a2))
-        return float(np.mean(per_s)), per_s
+            m, fc = score(a2)
+            per_s.append(m)
+            per_s_cong.append(fc)
+        return float(np.mean(per_s)), per_s, float(np.mean(per_s_cong))
 
     opp_adv = np.eye(sas.n_popps)
-    opp_steady = steady(opp_adv)
-    opp_fail, opp_fail_scen = {}, {}
+    opp_steady, opp_steady_cong = score(opp_adv)
+    opp_fail, opp_fail_scen, opp_fail_cong = {}, {}, {}
     for w in ('popps', 'pops'):
-        opp_fail[w], opp_fail_scen[w] = fail_abs(opp_adv, w)
+        opp_fail[w], opp_fail_scen[w], opp_fail_cong[w] = fail_abs(opp_adv, w)
 
     for fn, r in todo:
         old = r.get('diff_vs_opp')
-        r['avg_lat'] = steady(r['adv'])
+        r['avg_lat'], r['steady_frac_congested'] = score(r['adv'])
         r['opp_avg_lat'] = opp_steady
+        r['opp_steady_frac_congested'] = opp_steady_cong
         r['diff_vs_opp'] = r['avg_lat'] - opp_steady
         for which, key in (('popps', 'fail_popp'), ('pops', 'fail_pop')):
-            mean_abs, per_scen = fail_abs(r['adv'], which)
+            mean_abs, per_scen, mean_cong = fail_abs(r['adv'], which)
             r[key] = {
                 'avg_lat_under_failure_abs': mean_abs,
                 'opp_avg_lat_under_failure_abs': opp_fail[which],
+                'avg_frac_congested': mean_cong,
+                'opp_avg_frac_congested': opp_fail_cong[which],
             }
             if store_scen:
                 r[key]['per_scenario_lats'] = per_scen

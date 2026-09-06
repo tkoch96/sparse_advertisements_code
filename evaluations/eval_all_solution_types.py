@@ -256,17 +256,11 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 				# function args, not env -- without them, two prefix
 				# budgets on the SAME deployment share a fingerprint and
 				# cross-hit. Resolved values, over-keyed.
-				_dcfg = {'dpsize': str(dpsize),
-						 'dep_id': _dstore.deployment_id(deployment),
-						 'n_prefixes': str(kwargs.get('n_prefixes',
-													  'auto')),
-						 'generic_objective': str(kwargs.get(
-							 'generic_objective',
-							 os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
-											'avg_latency'))),
-						 'gamma': str(gamma),
-						 'lambduh': str(lambduh),
-						 'capacity': str(capacity)}
+				_dcfg = _dstore.choke_config(
+					dpsize, deployment, gamma=gamma, lambduh=lambduh,
+					capacity=capacity,
+					n_prefixes=kwargs.get('n_prefixes', 'auto'),
+					generic_objective=kwargs.get('generic_objective'))
 				_want_iters = int(os.environ.get('SCULPTOR_MAX_ITER') or 0)
 				_art = _ds.get_training(min_iters=_want_iters, config=_dcfg)
 				_blob = (_ds.get_eval(_art.fp, 'compare_ret')
@@ -549,17 +543,11 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 				# widening -> fingerprint mismatch -> no stamp -> eval_only
 				# permanently failed; caught by the suite run of the
 				# pipeline choreography test)
-				_cfg2 = {'dpsize': str(dpsize),
-						 'dep_id': _dstore.deployment_id(_dep),
-						 'n_prefixes': str(kwargs.get('n_prefixes',
-													  'auto')),
-						 'generic_objective': str(kwargs.get(
-							 'generic_objective',
-							 os.environ.get('SCULPTOR_GENERIC_OBJECTIVE',
-											'avg_latency'))),
-						 'gamma': str(gamma),
-						 'lambduh': str(lambduh),
-						 'capacity': str(capacity)}
+				_cfg2 = _dstore.choke_config(
+					dpsize, _dep, gamma=gamma, lambduh=lambduh,
+					capacity=capacity,
+					n_prefixes=kwargs.get('n_prefixes', 'auto'),
+					generic_objective=kwargs.get('generic_objective'))
 				_a2 = _ds2.get_training(min_iters=0, config=_cfg2)
 				if _a2 is not None:
 					_ds2.put_eval(_a2.fp, 'paper_evals_done',

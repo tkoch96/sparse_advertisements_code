@@ -59,6 +59,30 @@
         "figures/papersmoke/paper_table/*"
       ]
     },
+    "scaling_summary": {
+      "enabled": true,
+      "cmd": [
+        "{py}",
+        "-u",
+        "evaluations/deployment_scaling_summary.py",
+        "--cache-fn",
+        "cache/papersmoke/metrics_by_dpsize.pkl",
+        "--prefix-cache-fn",
+        "cache/papersmoke/prefix_metrics.pkl",
+        "--out-dir",
+        "figures/papersmoke/scaling_summary"
+      ],
+      "artifacts": {
+        "local_dir": "figures/papersmoke/scaling_summary",
+        "files": [
+          "deployment_scaling_summary.csv"
+        ],
+        "dst": "figures/papersmoke_out"
+      },
+      "outputs": [
+        "figures/papersmoke/scaling_summary/*.csv"
+      ]
+    },
     "n_prefixes": {
       "enabled": true,
       "dpsize": "small",

@@ -54,11 +54,62 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # SCULPTOR_ABLATION_MIN_ITER (the stop-v2 flow, Tom 2026-08-16)
     os.environ['SCULPTOR_MIN_ITER'] = os.environ.get(
         'SCULPTOR_ABLATION_MIN_ITER', str(max_iter))
+    if rung == 'full':
+        # L6 == mainline SCULPTOR exactly as the paper evals run it (Tom
+        # 2026-08-30): strip the fork knobs the queue injects. Mainline
+        # reads several through SCULPTOR_ABLATION_* fallbacks (probe
+        # trio, grad-scale, alpha0), so leaving them changes what "L6"
+        # means; they also over-key the depstore fingerprint and the L6
+        # cell could then never hit the paper evals' cached trainings.
+        # GAMMA/OBJECTIVE stay: mainline never reads them (they map to
+        # explicit constructor args below) and the depstore lookup pops
+        # them for keying. DEP_FILE/INIT_FILE stay for the same reason.
+        _keep = {'SCULPTOR_ABLATION_GAMMA', 'SCULPTOR_ABLATION_OBJECTIVE',
+                 'SCULPTOR_ABLATION_DEP_FILE', 'SCULPTOR_ABLATION_INIT_FILE',
+                 'SCULPTOR_ABLATION_RESUME_FROM'}
+        _gone = sorted(k for k in os.environ
+                       if k.startswith('SCULPTOR_ABLATION_')
+                       and k not in _keep)
+        for k in _gone:
+            del os.environ[k]
+        if _gone:
+            print('[ladder] rung=full: scrubbed fork env {}'.format(_gone),
+                  flush=True)
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
     # canonical per-seed init: first rung writes it, all others assert equality
     os.makedirs(out_dir, exist_ok=True)
     os.environ['SCULPTOR_ABLATION_INIT_FILE'] = os.path.abspath(
         os.path.join(out_dir, 'init_dep{}.npy'.format(seed)))
+    # ---- continuation mode (Tom 2026-09-02): SCULPTOR_ABLATION_RESUME_FROM
+    # names a prior out-dir; every non-painter arm hot-starts from ITS OWN
+    # final advertisement there (via SCULPTOR_INIT_ADV_FILE) and runs
+    # max_iter MORE iterations with whatever probe budget the env grants
+    # (the "0.5x remaining" of the 1.5x total). Painter has no
+    # continuation semantics -- it re-runs fresh under its env budget.
+    # Init-equality is per-CELL here (arms deliberately start from
+    # different advs), so the canonical per-seed file is redirected.
+    _resume_from = os.environ.get('SCULPTOR_ABLATION_RESUME_FROM', '')
+    _resumed_prior = None
+    if _resume_from and rung != 'painter':
+        import json as _json
+        _prior_fn = os.path.join(_resume_from,
+                                 'seed_{}_{}.json'.format(seed, rung))
+        with open(_prior_fn) as _pf:
+            _prior = _json.load(_pf)
+        _adv0 = np.asarray(_prior['adv'], dtype=float)
+        _resume_npy = os.path.abspath(os.path.join(
+            out_dir, 'resume_adv_{}_{}.npy'.format(seed, rung)))
+        np.save(_resume_npy, _adv0)
+        os.environ['SCULPTOR_INIT_ADV_FILE'] = _resume_npy
+        os.environ['SCULPTOR_ABLATION_INIT_FILE'] = os.path.abspath(
+            os.path.join(out_dir, 'init_res_{}_{}.npy'.format(seed, rung)))
+        _resumed_prior = {'from': _prior_fn,
+                          'prior_n_iters': _prior.get('n_iters'),
+                          'prior_repo_objective': _prior.get('repo_objective')}
+        print('[ladder] CONTINUATION: seed {} {} resumes from {} '
+              '(prior n_iters={} obj={})'.format(
+                  seed, rung, _prior_fn, _prior.get('n_iters'),
+                  _prior.get('repo_objective')), flush=True)
     os.environ['SCULPTOR_DISABLE_PARALLEL_STRATEGIES'] = '1'
     os.environ.setdefault('MPLBACKEND', 'Agg')
 
@@ -92,7 +143,19 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # checkpoint dirs (the 105-run massacre + a smoke casualty).
     _runs_root = os.path.abspath('runs')
     _runs_before = set(os.listdir(_runs_root)) if os.path.isdir(_runs_root) else set()
-    deployment = get_random_deployment(dpsize)
+    # dep-file mode (Tom 2026-08-30, ablation CDF over paper deployments):
+    # load a pinned deployment pickle instead of drawing by seed, so cells
+    # can run on the EXACT deployments other evaluations trained on (e.g.
+    # exported from depstore trainings). '{seed}' in the path expands.
+    _dep_file = os.environ.get('SCULPTOR_ABLATION_DEP_FILE', '')
+    if _dep_file:
+        import pickle as _pickle
+        _dep_file = _dep_file.format(seed=seed)
+        deployment = _pickle.load(open(_dep_file, 'rb'))
+        print('[ladder] deployment loaded from {} (dep-file mode)'.format(
+            _dep_file), flush=True)
+    else:
+        deployment = get_random_deployment(dpsize)
     deployment['port'] = port
     n_prefixes = deployment_to_prefixes(deployment)
 
@@ -117,6 +180,8 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     wm.start_workers()
     result = {'seed': seed, 'rung': rung, 'max_iter': max_iter,
               'using_resilience': use_res, 'gamma': float(gamma_val)}
+    if _resumed_prior is not None:
+        result['continued_from'] = _resumed_prior
     try:
         sas.set_worker_manager(wm)
         sas.update_deployment(deployment)
@@ -176,19 +241,79 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
                 sas.output_deployment(), **sas.get_init_kwa())
             solver.set_worker_manager(sas.get_worker_manager())
             solver.compute_one_per_peering_solution()
-            try:
-                solver.solve()
-            except Exception as e:
-                import traceback; traceback.print_exc()
-                result['solve_error'] = str(e)
-            try:
-                # writes convergence_over_iterations.pdf etc. into the run
-                # dir (same call + guard as the repo's solve_sparse; it can
-                # IndexError on some runs -- old diagnostic code)
-                solver.make_plots()
-            except Exception as e:
-                print('make_plots failed (non-fatal): {}'.format(e))
-            adv = threshold_a(np.asarray(solver.optimization_advertisement, dtype=float))
+            # ---- depstore consult, L6 only (Tom 2026-08-30): the paper
+            # evals train the SAME problem (mainline solver, same
+            # deployment/gamma/objective), so an existing training with
+            # >= max_iter iterations IS the L6 arm. Keyed via the shared
+            # choke_config; SCULPTOR_ABLATION_* popped around the call so
+            # the fingerprint matches the eval-side env exactly.
+            _ds_art = _ds_l6 = _dcfg_l6 = None
+            if (rung == 'full' and _resumed_prior is None
+                    and os.environ.get('SCULPTOR_DEPSTORE', '0') == '1'):
+                from core import depstore as _dstore
+                # pop the fork env AND the deployment seed: choke_config
+                # pins the deployment by CONTENT (dep_id), so the seed is
+                # redundant here -- and the paper evals' PUTs have it
+                # unset (it only enters their env under SCULPTOR_EVAL_SEED
+                # pairing, which the .por campaigns don't use)
+                _saved_abl = {k: os.environ.pop(k)
+                              for k in list(os.environ)
+                              if k.startswith('SCULPTOR_ABLATION_')
+                              or k == 'SCULPTOR_DEPLOYMENT_SEED'}
+                try:
+                    _ds_l6 = _dstore.Depstore()
+                    _gk = (int(gamma_val)
+                           if float(gamma_val) == int(gamma_val)
+                           else gamma_val)
+                    _dcfg_l6 = _dstore.choke_config(
+                        dpsize, deployment, gamma=_gk, lambduh=0,
+                        capacity=capacity)
+                    _ds_art = _ds_l6.get_training(min_iters=max_iter,
+                                                  config=_dcfg_l6)
+                finally:
+                    os.environ.update(_saved_abl)
+                print('[ladder] depstore L6 lookup: {} (fp key dpsize={} '
+                      'dep_id={})'.format(
+                          'HIT n_iters={}'.format(_ds_art.n_iters)
+                          if _ds_art is not None else 'MISS',
+                          _dcfg_l6['dpsize'], _dcfg_l6['dep_id']),
+                      flush=True)
+            if _ds_art is not None:
+                result['depstore_hit'] = {'fp': _ds_art.fp,
+                                          'n_iters': int(_ds_art.n_iters)}
+                adv = threshold_a(np.asarray(_ds_art.adv, dtype=float))
+            else:
+                try:
+                    solver.solve()
+                except Exception as e:
+                    import traceback; traceback.print_exc()
+                    result['solve_error'] = str(e)
+                try:
+                    # writes convergence_over_iterations.pdf etc. into the run
+                    # dir (same call + guard as the repo's solve_sparse; it can
+                    # IndexError on some runs -- old diagnostic code)
+                    solver.make_plots()
+                except Exception as e:
+                    print('make_plots failed (non-fatal): {}'.format(e))
+                adv = threshold_a(np.asarray(solver.optimization_advertisement, dtype=float))
+                if (_dcfg_l6 is not None
+                        and result.get('solve_error') is None):
+                    _saved_abl = {k: os.environ.pop(k)
+                                  for k in list(os.environ)
+                                  if k.startswith('SCULPTOR_ABLATION_')
+                                  or k == 'SCULPTOR_DEPLOYMENT_SEED'}
+                    try:
+                        _fp = _ds_l6.put_training(
+                            adv, int(getattr(solver, 'iter', max_iter)),
+                            deployment=deployment, config=_dcfg_l6,
+                            provenance={'src': 'ablation_ladder_L6',
+                                        'seed': int(seed)})
+                        result['depstore_put'] = _fp
+                    except Exception as _e:
+                        print('[ladder] depstore PUT failed (non-fatal): '
+                              '{}'.format(_e), flush=True)
+                    finally:
+                        os.environ.update(_saved_abl)
             try:
                 result['repo_objective'] = float(solver.measured_objective(adv))
             except Exception as e:
@@ -240,7 +365,25 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             except Exception as e:
                 import traceback; traceback.print_exc()
                 print('component persist failed (non-fatal): {}'.format(e))
-            result['n_iters'] = int(getattr(solver, 'iter', -1))
+            result['n_iters'] = (int(_ds_art.n_iters)
+                                 if _ds_art is not None
+                                 else int(getattr(solver, 'iter', -1)))
+            # GT-objective trajectory for ALL solved arms (Tom 2026-09-03:
+            # convergence comparison plots). The model_gap block below
+            # needs the fork's belief series, which mainline lacks -- so
+            # the L6/'full' rung never persisted ANY per-iteration data
+            # and its convergence was unplottable. Record the raw GT
+            # series here, capped like model_gap's.
+            try:
+                _gts = (getattr(solver, 'metrics', {}) or {}).get(
+                    'actual_nonconvex_objective') or []
+                _pts = [[i, round(float(v), 4)]
+                        for i, v in enumerate(_gts)
+                        if v is not None and np.isfinite(v)]
+                if _pts:
+                    result['gt_objective_series'] = _pts[:400]
+            except Exception as _e:
+                print('gt series persist failed (non-fatal): {}'.format(_e))
             # OBJECTIVE-DIFFICULTY block (Tom 2026-08-26): rough measure =
             # |ground truth - believed| over iterations, averaged. Compact
             # aligned series persisted (capped) so downstream analysis can
@@ -328,7 +471,18 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     # the deployment held by the shared workers, which silently corrupts
     # any scoring done through the same stack. Rebuild everything fresh.
     os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
-    deployment2 = get_random_deployment(dpsize)
+    if _dep_file:
+        # dep-file mode: the pristine stack must score on the SAME pinned
+        # deployment the arms trained on -- a fresh seeded draw here is a
+        # DIFFERENT deployment: advs index popps that don't exist (seed-1
+        # IndexError crash) or, worse, silently score against the wrong
+        # topology (Tom 2026-08-31, actual-10 launch)
+        import pickle as _pickle
+        deployment2 = _pickle.load(open(_dep_file, 'rb'))
+        print('[ladder] pristine scoring stack from {} (dep-file mode)'
+              .format(_dep_file), flush=True)
+    else:
+        deployment2 = get_random_deployment(dpsize)
     deployment2['port'] = port + 400
     sas2 = Sparse_Advertisement_Eval(
         deployment2, verbose=False, lambduh=0, with_capacity=capacity,

@@ -34,13 +34,14 @@ import matplotlib.pyplot as plt  # noqa: E402
 from experiments.ablation.plot_normalized import combined_diffs  # noqa: E402
 
 LADDER = [
-    ('painter',      'painter',                              'tab:red'),
-    ('no_mc',        'painter + one-flip search',            'tab:brown'),
-    ('no_memory',    'monte-carlo',                          'tab:orange'),
-    ('no_direction', '+ memory (continuous adv)',            'tab:olive'),
-    ('expl_none',    '+ direction (full-vector step)',       'tab:blue'),
-    ('expl_random',  '+ random exploration',                 'tab:cyan'),
-    ('full',         '+ entropic exploration (= SCULPTOR)',  'tab:green'),
+    ('painter',       'painter',                              'tab:red'),
+    ('no_mc',         'painter + one-flip search',            'tab:brown'),
+    ('no_memory',     'monte-carlo',                          'tab:orange'),
+    ('no_memory_dir', '+ direction (flip-threshold step)',    'tab:purple'),
+    ('no_direction',  '+ memory (continuous adv)',            'tab:olive'),
+    ('expl_none',     '+ memory (continuous adv)',            'tab:blue'),
+    ('expl_random',   '+ random exploration',                 'tab:cyan'),
+    ('full',          '+ entropic exploration (= SCULPTOR)',  'tab:green'),
 ]
 
 
@@ -104,6 +105,10 @@ def main():
     ap.add_argument('--in-dir', required=True)
     ap.add_argument('--gamma', type=float, default=0.1)
     ap.add_argument('--out', default=None)
+    ap.add_argument('--paper-out', default=None,
+                    help='also write a clean single-panel across-'
+                         'deployment CDF (combined objective vs OPP) '
+                         'for the paper')
     args = ap.parse_args()
 
     diffs = combined_diffs(args.in_dir, args.gamma)
@@ -199,6 +204,29 @@ def main():
     fig.tight_layout()
     fig.savefig(out, bbox_inches='tight')
     print('\nwrote {}'.format(out))
+
+    if args.paper_out:
+        # paper artifact (Tom 2026-08-30): one panel, CDF over
+        # deployments of the final combined objective per ladder arm,
+        # expressed vs OPP (raw objectives mix per-deployment scales)
+        pf, pax = plt.subplots(1, 1, figsize=(5.2, 3.4))
+        for rung, label, color in LADDER:
+            if rung not in abs_by_rung:
+                continue
+            x, y = _cdf_xy(abs_by_rung[rung])
+            pax.step(x, y, where='post', label=label, color=color,
+                     marker='o', ms=3)
+        pax.set_xscale('symlog', linthresh=1.0)
+        pax.axvline(0, color='k', lw=.6, ls=':')
+        pax.set_xlabel('Final objective vs optimal (ms; optimal = 0)')
+        pax.set_ylabel('CDF over deployments')
+        pax.legend(fontsize=7)
+        pax.grid(alpha=.3)
+        os.makedirs(os.path.dirname(os.path.abspath(args.paper_out)),
+                    exist_ok=True)
+        pf.tight_layout()
+        pf.savefig(args.paper_out, bbox_inches='tight')
+        print('wrote {}'.format(args.paper_out))
 
 
 if __name__ == '__main__':
