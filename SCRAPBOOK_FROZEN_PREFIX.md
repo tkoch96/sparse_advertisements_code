@@ -178,3 +178,29 @@ Relaunched --resume with SCULPTOR_N_WORKERS=40.
 rebuild treadmill). The joint LP carries n_fail scenario blocks of
 per-popp overflow vars. At actual-32: cap workers (~40-48 on this box)
 and/or lower SCULPTOR_FROZEN_PREFIX_N_FAIL from 20; measure RSS first.
+
+### RESULT (run 20260906_105413-frozen_a10_smoke, complete 19:50Z; VM stopped)
+actual-10, nsim=2, 100 iters, HiGHS, 40 workers (0 rebuilds). Harvested to
+cache/cluster_runs/20260906_105413-frozen_a10_smoke/ (pickle + table + logs).
+Frozen failover columns (nsim=2 means; One-per-peering row = reactive anchor):
+  method            steady  fail_lat  %cong   %no-route  objective
+  OPP (reactive)    37.00   38.97     0.00    0.000      -74.87
+  SCULPTOR          37.21   37.14     9.90    0.066      -75.55
+  PAINTER           36.35   36.43    16.17    0.059      -77.01
+  Unicast           37.32   37.27    15.64    0.012      -80.03
+  AnyOpt            40.88   40.80    12.38    0.005      -94.26
+  Anycast           56.84   55.99     1.25    0.000     -114.05
+Frozen OPP (pickle, not table): no-route 0.32-0.35% (stranding pathology,
+small at actual-10 because ~300 popps give backups). Per-sim spread is wide
+(SCULPTOR cong 5.3% vs 14.5%; painter 12.1% vs 20.2%) -> nsim=2 is thin.
+Reads: SCULPTOR best of the practical methods on the objective (closest to
+OPP) and on % congested (9.9 vs painter 16.2); painter ~0.7ms better on
+frozen latency here. CAVEAT for the table: frozen rows' latency is over
+UNCONGESTED volume only while the reactive anchor has 0% congestion and pays
+latency to stay under hard caps -- so "SCULPTOR 37.1 < anchor 39.0" is not
+a win over the ceiling; state this in the caption or report the anchor's
+latency alongside its %cong.
+Ops: ~4.9h VM (~$14 incl. two wasted relaunches). expctl verdict says
+"exited 0 WITHOUT a completion banner" for papertable runs -- banner-string
+mismatch with generate_paper_table, not a failure; worth teaching expctl
+the papertable driver's final line ('total Xs').
