@@ -574,6 +574,20 @@ class Worker_Manager:
 		print("[adaptive-workers] pool now {} workers; kill={:.1f}s".format(
 			len(self.worker_sockets), time.time() - t0), flush=True)
 
+	def sync_respawn_state(self, deployment, kwa_settings=None):
+		"""Record the deployment (+ init kwa) every FUTURE respawn must use
+		(_rebuild_worker_pool -> start_workers, request_add_workers). Called
+		by the driver whenever it pushes a new deployment to the live
+		workers; without it a crash rebuild resurrects the pool on the
+		deployment it was born with."""
+		self.deployment = deployment
+		try:
+			self.dpsize = deployment['dpsize']
+		except (KeyError, TypeError):
+			pass
+		if kwa_settings is not None:
+			self.kwa_settings = kwa_settings
+
 	def update_worker_deployments(self, new_deployment):
 		# Every worker receives the same full deployment.
 		self.deployment = new_deployment
@@ -653,12 +667,13 @@ class Worker_Manager:
 		which takes ~30-120s. Raises RuntimeError if capacity never returns
 		within SCULPTOR_RECOVER_NODE_TIMEOUT_S (default 900s).
 
-		Re-spawn uses self.deployment (the pool's init deployment). Any
-		per-run state pushed later via update_deployment is NOT replayed here;
-		the retried operation re-applies it (update_deployment messages carry
-		the full deployment, and the eval phase re-runs update_deployment
-		before each strategy), so the retry is self-correcting for the call
-		paths that reach this.
+		Re-spawn uses self.deployment / self.kwa_settings, which the driver
+		keeps CURRENT via sync_respawn_state() from
+		Optimal_Adv_Wrapper.update_deployment (2026-09-06). Before that they
+		were the pool's BIRTH values: a mid-training actor death on
+		deployment 2+ of an nsim>1 cell rebuilt the whole pool on deployment
+		1's data, and the retried flush (which only re-sends the adv, unlike
+		the eval phases that re-run update_deployment) died with IndexError.
 		"""
 		print("[ray-recover] worker actor death detected; rebuilding pool", flush=True)
 		for w, sock in list(self.worker_sockets.items()):

@@ -1146,6 +1146,16 @@ class Optimal_Adv_Wrapper:
 			ts=time.time()
 			self.worker_manager.send_receive_messages_workers(msgs)
 			print("Send/rcv deployment took {}s".format(time.time()-ts))
+			# Keep the pool's RESPAWN state current (2026-09-06). The manager
+			# re-spawns actors from its own `deployment`/`kwa_settings` on a
+			# crash rebuild ([ray-recover]) or a pool grow; those were still
+			# the pool's BIRTH values, so a worker death on deployment 2+ of
+			# an nsim>1 cell rebuilt every worker on deployment 1's data and
+			# the next flush died with IndexError (popp index from the old
+			# deployment into the new adv). Seen on the frozen_prefix
+			# actual-10 nsim=2 smoke at iteration 10 of deployment 2.
+			self.worker_manager.sync_respawn_state(self.deployment,
+												   self.get_init_kwa())
 			
 		except AttributeError:
 			pass
