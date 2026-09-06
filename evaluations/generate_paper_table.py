@@ -489,17 +489,24 @@ def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
         n = 0
         failed = []
         if m:
-            advs = m.get('adv') or {}
-            for sim, soldict in (advs.items() if isinstance(advs, dict)
-                                 else enumerate(advs)):
-                if isinstance(soldict, dict) and any(
-                        v is not None and np.size(v)
-                        for v in soldict.values()):
-                    n += 1
+            # a sim with a FAILED strategy is not covered (2026-09-06): the
+            # baselines of the aborted deployment 2 had left advertisements,
+            # so 'any strategy has an adv' counted it, the cell was
+            # 'covered -- reusing', and sparse was never re-solved
             for sim, cr in (m.get('compare_rets') or {}).items():
                 fs = cr.get('failed_strategies') if isinstance(cr, dict) else None
                 if fs:
                     failed.append((sim, sorted(set(fs))))
+            failed_sims = {sim for sim, _ in failed}
+            advs = m.get('adv') or {}
+            for sim, soldict in (advs.items() if isinstance(advs, dict)
+                                 else enumerate(advs)):
+                if sim in failed_sims:
+                    continue
+                if isinstance(soldict, dict) and any(
+                        v is not None and np.size(v)
+                        for v in soldict.values()):
+                    n += 1
         status = 'MISSING' if not m else '{} sim(s){}'.format(
             n, ' [FAILED strategies in sims: {}]'.format(
                 [s for s, _ in failed]) if failed else '')
@@ -966,10 +973,27 @@ def main():
             emit(labels, rows, a.format, a.out, basename='paper_table_full')
             emit_key(labels, rows, a.format, a.out)
             if not a.plan_only:
-                _save_condensed(dpsize, run_tag, labels, rows,
-                                nsim=a.nsim, objectives=objectives)
-                print('  [condensed] L3 pickle saved; next identical call '
-                      'loads the table in seconds')
+                # Record the ACHIEVED coverage, never the request (2026-09-06):
+                # an aborted cell (deployment 2 of an nsim=2 run died) saved
+                # an L3 stamped nsim=2 and the --resume relaunch took the
+                # 5-second path and exited without retraining anything. A
+                # failed strategy anywhere means no L3 at all -- the table
+                # it would cache is the incomplete one.
+                _ns = [n for o, (m, _p, n, _f) in cov.items()
+                       if o in objectives and m is not None]
+                _failed = [o for o, (m, _p, n, f) in cov.items()
+                           if o in objectives and f]
+                if _failed:
+                    print('  [condensed] NOT saved: failed strategies in {} '
+                          '-- the next call must re-solve, not reuse'
+                          .format(_failed))
+                else:
+                    _achieved = min(_ns) if _ns else 0
+                    _save_condensed(dpsize, run_tag, labels, rows,
+                                    nsim=_achieved, objectives=objectives)
+                    print('  [condensed] L3 pickle saved (nsim={}); next '
+                          'identical call loads the table in seconds'
+                          .format(_achieved))
     else:
         print('\n  no pickles found -- nothing to tabulate yet.')
     print('  total {:.1f}s'.format(_t.time() - t0))

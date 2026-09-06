@@ -160,3 +160,21 @@ fallback until then). unit_tests/test_objective_registry.py pins the
 legacy literals (snapshot) + complete wiring per plugin. README recipe
 rewritten. Per-objective KNOWN GAP: eval_all_solution_types --objective
 help text still lists names by hand (cosmetic).
+
+## actual-10 cloud smoke (2026-09-06, i-09a6 m8g.16xlarge, run 20260906_105413-frozen_a10_smoke)
+
+nsim=2, 100 iters, HiGHS, papertable preset. Deployment 1 (308 popps,
+3127 ugs): sparse to it 100 (~1.2 min/iter, obj 20.74 -> 20.67, converged
+by ~it 30) + all 6 baselines, banked. Deployment 2 (286 popps) died at
+it 10: [ray-recover] rebuilt the pool from the pool's BIRTH deployment
+(deployment 1) -> worker IndexError (popp 303 into a 286-row adv).
+Latent nsim>1 infra bug, made deterministic by frozen_prefix's memory
+footprint. FIXED: Worker_Manager.sync_respawn_state (commit c8d9e73).
+Relaunched --resume with SCULPTOR_N_WORKERS=40.
+
+**Sizing finding for the actual-32 cell**: frozen_prefix workers are
+~3.2 GB RSS each at actual-10 (64 workers -> 107-205 GB sawtooth on a
+247 GB box; Ray's memory monitor reaps at 95% ~ every 3-4 iters -> pool
+rebuild treadmill). The joint LP carries n_fail scenario blocks of
+per-popp overflow vars. At actual-32: cap workers (~40-48 on this box)
+and/or lower SCULPTOR_FROZEN_PREFIX_N_FAIL from 20; measure RSS first.
