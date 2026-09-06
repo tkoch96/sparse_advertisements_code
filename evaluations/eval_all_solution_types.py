@@ -197,7 +197,28 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 			try:
 				if save_run_dirs[random_iter] is not None: ## we want to hotstart on a save run dir and continue training
 					raise TypeError
-				metrics['compare_rets'][random_iter]['n_advs'] ## if this field is populated, we've already computed this iteration's solution
+				_cr = metrics['compare_rets'][random_iter]
+				_cr['n_advs'] ## if this field is populated, we've already computed this iteration's solution
+				# ...unless a REQUIRED strategy failed in that compare
+				# (2026-09-06): deployment 2 of the frozen_prefix actual-10
+				# smoke finished compare_different_solutions with sparse in
+				# failed_strategies (worker pool rebuilt on stale data), so
+				# n_advs was populated and every --resume skipped straight to
+				# eval and died '[FATAL] required solution(s) missing'. A sim
+				# whose required strategies failed is NOT computed: re-solve.
+				# Test adv PRESENCE, not the failed_strategies bookkeeping: the
+				# per-strategy checkpoints that survive an abort predate it
+				# (deployment 2's pickle had failed_strategies=None yet
+				# adv_solns['sparse'] == []).
+				_req_resume = [x.strip() for x in os.environ.get(
+					'SCULPTOR_REQUIRE_SOLNS', '').split(',') if x.strip()]
+				_advs_stored = _cr.get('adv_solns') or {}
+				_missing_req = [x for x in _req_resume if not _advs_stored.get(x)]
+				if _missing_req:
+					print('[resume] sim {}: required strategy(ies) {} have NO stored '
+						  'advertisement -- re-solving this deployment instead of '
+						  'reusing it'.format(random_iter, _missing_req), flush=True)
+					raise KeyError('required strategies missing from stored compare')
 				continue
 			except (TypeError, KeyError):
 				# TypeError: hotstart requested, or compare_rets slot is None.
