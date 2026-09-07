@@ -422,3 +422,13 @@ Training smokes with the lifted default (same box, concurrent): actual-10
 20260907_123220-frozen_a10_lifted 32 workers ~35 s/iter vs stacked G1 run 40
 workers ~97 s/iter (~3.5x worker-normalized); actual-5 20260907_123206-
 frozen_a5_lifted 16 workers ~45 s/iter. Both clean through iter 25/37.
+actual-10 lifted smoke DONE (20260907_123220-frozen_a10_lifted, 32 workers,
+100 it, total 3862 s vs stacked G1 9403 s at 40 workers -> ~3x worker-
+normalized; 0 tracebacks; harvested to cache/cluster_runs/...). Table
+(within-cell; deployment draw differs slightly from G1):
+  OPP(reactive) 41.80ms 0.00% 0.000% | SCULPTOR 42.01 1.05% 0.029% |
+  PAINTER 44.00 0.88% 0.031% | Unicast 44.99 1.02% 0.004% | AnyOpt 50.64 1.09% |
+  Anycast 53.44 1.29% 0
+Same read as G1: SCULPTOR best-of-practical on latency + no-route,
+congestion a wash. Size-32 cell launch (nsim 3 x 150 it, 32 workers,
+~2.5-3.5 d / $170-240) blocked by the permission classifier -> needs Tom.
