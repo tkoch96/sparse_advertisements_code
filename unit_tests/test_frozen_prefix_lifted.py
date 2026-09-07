@@ -164,3 +164,34 @@ def test_eval_pin_is_exhaustive_by_default():
 	finally:
 		fp.solve_lp_frozen_prefix = orig
 		os.environ.pop('SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL', None)
+
+
+@pytest.mark.unit
+def test_penalty_sum_modes_equal_mean_with_scaled_penalties():
+	"""frozen_penalty_sum weights each failure scenario's summed penalty at
+	gamma instead of gamma/K: 'no_route' == mean semantics with P_nr*K;
+	'both' == mean semantics with P_nr*K and P_c*K (LP part; the constant
+	all-scenario no-route term differs by construction and is removed)."""
+	worker, dep, _, _ = _setup()
+	adv = _advs(worker.n_popps)['random6']
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+	kill = list(range(0, worker.n_popps, 3))
+	K = len(kill)
+	g, pnr, pc = 4.0, 50.0, 100.0
+	for form in ('lifted', 'stacked'):
+		for mode, pnr_b, pc_b in (('no_route', pnr * K, pc), ('both', pnr * K, pc * K)):
+			a = _solve(worker, adv, rti, form, kill, frozen_gamma=g, frozen_no_route_penalty=pnr,
+					   frozen_congestion_penalty=pc, frozen_penalty_sum=mode)
+			b = _solve(worker, adv, rti, form, kill, frozen_gamma=g, frozen_no_route_penalty=pnr_b,
+					   frozen_congestion_penalty=pc_b, frozen_penalty_sum='none')
+			u = a['frozen_prefix_unroutable_frac']
+			raw_a = -a['objective'] - (1 + g * K) * pnr * u
+			raw_b = -b['objective'] - (1 + g) * pnr_b * u
+			assert math.isclose(raw_a, raw_b, rel_tol=1e-6, abs_tol=1e-6), (form, mode, raw_a, raw_b)
+	d = _solve(worker, adv, rti, 'lifted', kill)
+	assert d['frozen_prefix_penalty_sum'] == 'no_route', 'default must sum no-route'
+	from core.objective_registry import lp_kwargs_for
+	assert lp_kwargs_for('frozen_prefix')['frozen_penalty_sum'] == 'no_route'
+	assert lp_kwargs_for('frozen_prefix', env={'SCULPTOR_FROZEN_PREFIX_PENALTY_SUM': 'both'})['frozen_penalty_sum'] == 'both'
+	with pytest.raises(ValueError):
+		_solve(worker, adv, rti, 'lifted', kill, frozen_penalty_sum='sometimes')

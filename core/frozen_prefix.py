@@ -75,6 +75,28 @@ def _knob(kwargs, key, env, default, cast=float):
 	return cast(os.environ.get(env, default))
 
 
+def _penalty_sum_mode(kwargs):
+	"""frozen_penalty_sum: which failure-scenario PENALTIES are summed over
+	the K sampled failures (weight gamma each) instead of averaged (gamma/K):
+	'no_route' (default; Tom 2026-09-07 "stranding is worse"), 'both'
+	(no-route + overflow), 'none' (pre-2026-09-07 mean semantics). Latency
+	is always a mean. Rationale: with the mean, stranding one unit in one of
+	K failures cost P_nr/K while one unit of excess in normal operation cost
+	P_c undiluted, so the assignment LP preferred stranding users who had
+	safe alternatives (small ÷100 arm: 6 users; P_nr*K -> 0.000% no-route)."""
+	v = kwargs.get('frozen_penalty_sum')
+	if v is None:
+		v = os.environ.get('SCULPTOR_FROZEN_PREFIX_PENALTY_SUM', 'no_route')
+	v = str(v).strip().lower()
+	if v in ('1', 'true', 'yes', 'on'):
+		return 'no_route'
+	if v in ('0', 'false', 'no', 'off', 'none', 'mean'):
+		return 'none'
+	if v not in ('no_route', 'both'):
+		raise ValueError("frozen_penalty_sum must be none|no_route|both, got {!r}".format(v))
+	return v
+
+
 def default_kill_popps(n_popps, n_fail):
 	"""Deterministic stride sample over ALL popp indices (advertised or
 	not -- killing an unadvertised popp is a no-op scenario, but keying off
@@ -228,6 +250,7 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	# (exhaustive failure set at size 32) legitimately needs longer.
 	time_limit = _knob(kwargs, 'frozen_time_limit',
 					   'SCULPTOR_FROZEN_PREFIX_TIME_LIMIT', 30.0)
+	penalty_sum = _penalty_sum_mode(kwargs)
 
 	from core.solve_lp_assignment import obj_round
 	from scipy.sparse import hstack as sp_hstack, vstack as sp_vstack
@@ -247,7 +270,9 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 		kill_popps = default_kill_popps(n_popps, n_fail)
 	kill_popps = sorted(set(int(k) for k in kill_popps))
 	K = len(kill_popps)
-	w_k = gamma / K if K else 0.0
+	w_k = gamma / K if K else 0.0                 # latency weight per failure scenario
+	w_nr = (gamma if penalty_sum in ('no_route', 'both') else w_k) if K else 0.0
+	w_c = (gamma if penalty_sum == 'both' else w_k) if K else 0.0
 	in_kill = np.zeros(n_popps, dtype=bool)
 	in_kill[kill_popps] = True
 	kpos = np.full(n_popps, -1, dtype=int)
@@ -273,7 +298,8 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	routable_ugis = set(pair_ugi)
 	unroutable_vol = float(sum(v for ug, v in ug_to_vol.items()
 							   if ug_to_ind[ug] not in routable_ugis))
-	const_term = (1.0 + gamma) * p_nr * unroutable_vol / total_vol
+	# users no-route in EVERY scenario: normal + each failure scenario's weight
+	const_term = (1.0 + w_nr * K) * p_nr * unroutable_vol / total_vol
 
 	lats_by_ug_arr = np.zeros(n_ug)
 	for ug, vol in ug_to_vol.items():
@@ -317,8 +343,8 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	# pair keeps its winner; its own failure scenario prices the fallback
 	n_keep = K - moved.astype(int)
 	c_x = (1.0 + w_k * n_keep) * base_lat * lat_scale / total_vol
-	c_x = c_x + w_k * np.where(moved_live, fb_lat * lat_scale,
-							   np.where(moved_dead, p_nr, 0.0)) / total_vol
+	c_x = c_x + (w_k * np.where(moved_live, fb_lat * lat_scale, 0.0)
+				 + w_nr * np.where(moved_dead, p_nr, 0.0)) / total_vol
 
 	# ---- rows
 	keep = np.asarray(sorted(routable_ugis), dtype=int)
@@ -373,8 +399,8 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	# is untouched: all K sampled scenarios minus its own failure (if
 	# sampled) minus the m_j scenarios in which it receives fallback volume.
 	m_j = np.bincount(aff_popp, minlength=n_popps) if n_aff else np.zeros(n_popps, dtype=int)
-	c_o0 = (1.0 + w_k * (K - in_kill.astype(int) - m_j)) * p_c / total_vol
-	c_oa = np.full(n_aff, w_k * p_c / total_vol)
+	c_o0 = (1.0 + w_c * (K - in_kill.astype(int) - m_j)) * p_c / total_vol
+	c_oa = np.full(n_aff, w_c * p_c / total_vol)
 	c_z = np.concatenate([c_x, np.zeros(n_popps), c_o0, c_oa])
 
 	ts = time.time()
@@ -454,6 +480,7 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 		'frozen_prefix_lat_scale': lat_scale,
 		'frozen_prefix_cap_headroom': cap_headroom,
 		'frozen_prefix_formulation': 'lifted',
+		'frozen_prefix_penalty_sum': penalty_sum,
 		'frozen_prefix_n_rows': int(eq_A.shape[0] + le_A.shape[0]),
 		'frozen_prefix_n_vars': int(n_z),
 		'frozen_prefix_nnz': int(eq_A.nnz + le_A.nnz),
@@ -498,6 +525,7 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 	# for displaced traffic. 1.0 = off.
 	cap_headroom = _knob(kwargs, 'frozen_cap_headroom',
 						 'SCULPTOR_FROZEN_PREFIX_CAP_HEADROOM', 1.0)
+	penalty_sum = _penalty_sum_mode(kwargs)
 
 	from core.solve_lp_assignment import obj_round
 
@@ -515,7 +543,9 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 		kill_popps = default_kill_popps(n_popps, n_fail)
 	kill_popps = [int(k) for k in kill_popps]
 	K = len(kill_popps)
-	weights = [1.0] + ([gamma / K] * K if K else [])
+	weights = [1.0] + ([gamma / K] * K if K else [])            # latency
+	nr_weights = [1.0] + ([gamma if penalty_sum in ('no_route', 'both') else gamma / K] * K if K else [])
+	c_weights = [1.0] + ([gamma if penalty_sum == 'both' else gamma / K] * K if K else [])
 
 	# ---- pairs: every (ug, prefix) routable in the NORMAL scenario. A pair
 	# unroutable normally stays unroutable under failure (failures only
@@ -545,7 +575,7 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 							   if ug_to_ind[ug] not in routable_ugis))
 	# Users with no route on any prefix are no-route in EVERY scenario:
 	# constant bounded penalty (never a marker-scale scalar).
-	const_term = (1.0 + gamma) * p_nr * unroutable_vol / total_vol
+	const_term = sum(nr_weights) * p_nr * unroutable_vol / total_vol
 
 	lats_by_ug_arr = np.zeros(n_ug)
 	for ug, vol in ug_to_vol.items():
@@ -612,7 +642,8 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 	c_x = np.zeros(n_pairs)
 	for s in range(n_scen):
 		live = scen_winner[s] >= 0
-		c_x += weights[s] * np.where(live, scen_lat[s] * lat_scale, p_nr) / total_vol
+		c_x += (weights[s] * np.where(live, scen_lat[s] * lat_scale, 0.0)
+				+ nr_weights[s] * np.where(live, 0.0, p_nr)) / total_vol
 
 	# ---- constraints
 	# volume conservation: one row per routable ug
@@ -639,7 +670,7 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 						shape=(n_scen * n_popps, n_pairs))
 	caps_tiled = np.tile(caps * cap_headroom, n_scen)
 
-	c_o = np.repeat(np.asarray(weights) * p_c / total_vol, n_popps)
+	c_o = np.repeat(np.asarray(c_weights) * p_c / total_vol, n_popps)
 
 	# Single stacked variable vector z = [x ; o] -- the gpshim facade
 	# supports csr @ MVar (in)equalities but not MVar-expression algebra
