@@ -506,3 +506,27 @@ advs have fewer backups so the pin can only do so much for them). The
 "congestion a wash" read of the earlier tables was the stride-pin artifact.
 size-32 cell 20260907_143058 will need this re-score on its stored advs
 (its eval code may still stride-pin).
+
+## Summed no-route penalty + lat_scale 0.01 = Tom's extreme (2026-09-07 ~19:50Z)
+Why no-route did not reach 0 at lat_scale 0.01 (small ÷100 arm): NOT a
+local minimum. All 6 stranded users had a safe alternative prefix; the
+assignment LP stranded them on purpose because stranding one unit in one of
+K=45 failures cost P_nr*gamma/K = 4.4 while pushing a popp over cap costs
+P_c*(1+gamma) = 500 per unit excess, with 19/45 popps at 99-100% cap in
+normal operation. Re-pin with P_nr*45 -> 0.000% no-route (proof).
+Tom: "sum over scenarios ... maybe just stranding, it's worse" -> lever
+frozen_penalty_sum = none|no_route|both (default no_route): the no-route
+penalty is weighted gamma per failure scenario (sum), latency stays a mean.
+Both formulations, equivalence-tested (commit b1d29e1). Small arms, same
+seeded deployment (hash 0e53d06081), 30 it, pinned under own levers:
+  S10   lat .1  mean     | 10.28ms 0.08% 0.204%
+  S10N  lat .1  sum-nr   | 11.85   0.82% 0.000%   (stranding gone, congestion bought)
+  S100  lat .01 mean     | 12.65   0.00% 0.025%
+  S100N lat .01 sum-nr   | 12.75   0.00% 0.000%   <- NEW DEFAULTS (lat_scale 0.01)
+  S100B lat .01 sum-both | 13.29   0.00% 0.006%   (summing congestion too: no gain)
+  painter                | 13.49   4.04% 0.024% ; reactive anchor 7.65 / 0 / 0
+Plugin defaults now: gamma 4, n_fail 20, top_load 5, P_nr 50, P_c 100,
+lat_scale 0.01, penalty_sum no_route, cap_headroom 1.0; eval pin exhaustive.
+Runs launched BEFORE this (size-32 20260907_143058 = lat .1/mean; storage-VM
+a5 20260907_151844 = lat .01/mean) are off-default: their stored advs need a
+re-score, and the size-32 cell should be judged as the lat-.1/mean arm.

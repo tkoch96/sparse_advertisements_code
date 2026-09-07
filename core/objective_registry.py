@@ -496,7 +496,7 @@ register(ObjectivePlugin(
 		frozen_congestion_penalty=100.0,# ms-equivalent per unit overflow
 										# (above stranding: the LP otherwise
 										# prefers to congest rather than strand)
-		frozen_lat_scale=0.1,           # latency weight in the scalar (= the
+		frozen_lat_scale=0.01,          # latency weight in the scalar (= the
 										# penalties x10, small numbers)
 		frozen_penalty_sum='no_route',  # failure penalties SUMMED over the
 										# sampled failures (gamma each; latency
