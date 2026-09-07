@@ -310,3 +310,24 @@ and re-emits the table; `grab` pulls artifacts. Lever defaults for the
 cell: set on the plugin after the actual-10 arm-G run reads out (pending).
 Cost: unknown at 32 -- quote from the first ~20 iterations' pace; frozen
 LP is heavier than avg_latency (non-persistent, 21 scenario blocks).
+
+### Size-32 execution plan, refined (2026-09-07)
+The pipeline's `run` executes AND stores on intent['storage_vm'] (i-0428,
+16 vCPU/61 GB -- the dash box) with no per-stage override; the campaign's
+five size-32 pickles exist on BOTH i-0428 and i-09a6. The storage VM had
+OLD code and reported `frozen_prefix ok 1 sim(s)` -- the avg_latency-pickle
+fallback (no required key) -- pushed new code there: now MISSING/want 3.
+joint_priority shows "2 sim(s) [FAILED strategies in sims: [0]]" on both
+boxes: the 09-03 backfill fixed the metrics but left failed_strategies in
+compare_rets[0]; coverage now excludes that sim (n=2>=1 still ok) -- table
+aggregation is unaffected but worth cleaning.
+Split: COMPUTE the frozen cell on i-09a6 via
+  expctl launch i-09a6 --preset papertable --run-tag 20260823_130342_papertable32b
+    --dpsizes 32 --nsim 3 --max-iter 150 --objectives frozen_prefix
+    --env SCULPTOR_XOBJS=1 --env SCULPTOR_LP_BACKEND=highs --env SCULPTOR_N_WORKERS=24
+(preset now has --run-tag/--nsim-by-objective; harvest scoped to the
+objective), then move the ONE frozen pickle to the storage VM and run the
+intent `run --only paper_table` THERE (frozen covered at 3 -> no training;
+emit table -> depstore store -> grab -> paper repo). Lever defaults for the
+cell = whatever the actual-10 arm-G run supports; set on the plugin first
+so the cell needs no lever env.
