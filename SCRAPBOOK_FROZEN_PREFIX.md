@@ -345,3 +345,12 @@ over-cap popps, +85ms; widest prefix 206 popps. Memory: 40 workers grew
 131->197 GB over 80 iters (~4.9 GB/worker, cache growth; the 2/iter refresh
 does not reclaim) -> size-32 cell starts at 20 workers. Plugin lp_defaults
 set to arm G. Run 2.7h ~$7.6 (+$0.6 abandoned nsim=2 start).
+
+### Size-32 campaign cell LAUNCHED 2026-09-07 05:48Z: run 20260907_014815-frozen32
+on i-09a6 (expctl papertable --run-tag 20260823_130342_papertable32b, nsim 3,
+150 it, --objectives frozen_prefix, highs, SCULPTOR_N_WORKERS=20, plugin
+defaults = arm G). Cost quote from the first ~20 iterations. Aftercare:
+expctl finish -> xfer_pickle.py (scratchpad) i-09a6 -> i-0428 for
+cache/popp_failure_latency_comparison_testing_feature-actual-32_20260823_130342_papertable32b_frozen_prefix.pkl
+-> on storage VM: run_all_paper_evaluations run <intent> --only paper_table
+(frozen covered at 3 -> aggregation only) -> grab -> paper repo figures.
