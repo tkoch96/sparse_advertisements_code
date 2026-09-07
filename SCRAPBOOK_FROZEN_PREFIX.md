@@ -487,3 +487,22 @@ exhaustive pin afterwards if needed; (c) with the exhaustive pin, Tom's
 extreme is reachable: lat_scale 0.001 -> 0.00% cong / 0.04% no-route at
 +3.5 ms vs lat_scale 0.1. Next: rerun a5/a10 at lat_scale 0.01 (storage
 VM) and re-score the existing a5/a10 lat-0.1 advs under the exhaustive pin.
+Exhaustive-pin RE-SCORE of the existing a5/a10 lifted smokes (lat_scale 0.1
+advs, same pickles; scratchpad rescore_pin.py; pin secs a10: 0.3 stride /
+2.8 exhaustive):
+  actual-5   strategy   stride20: lat %cong %nr    -> exhaustive: lat %cong %nr
+             SCULPTOR   54.66 1.77% 0.039%         -> 54.88 0.09% 0.036%
+             painter    55.53 1.46% 0.064%         -> 55.67 0.37% 0.087%
+             anyopt     60.96 2.00% 0.001%         -> 61.36 1.39% 0.001%
+             anycast    62.77 1.82% 0              -> unchanged (no options)
+             reactive anchor 54.37 / 0 / 0
+  actual-10  SCULPTOR   42.01 1.05% 0.029%         -> 42.28 0.10% 0.043%
+             painter    44.00 0.88% 0.031%         -> 44.03 0.44% 0.059%
+             anyopt     50.64 1.09% 0.001%         -> 50.50 1.17% 0.001%
+             reactive anchor 41.80 / 0 / 0
+With the pin hedged against every failure SCULPTOR DOMINATES painter on all
+three metrics at both sizes (congestion 0.09-0.10% vs 0.37-0.44%; painter's
+advs have fewer backups so the pin can only do so much for them). The
+"congestion a wash" read of the earlier tables was the stride-pin artifact.
+size-32 cell 20260907_143058 will need this re-score on its stored advs
+(its eval code may still stride-pin).
