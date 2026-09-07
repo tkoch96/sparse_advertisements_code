@@ -255,3 +255,25 @@ stranding but fallback onto small-cap popps. Both arms still fill the
 heaviest popp to exactly cap: the failure block is a MEAN over 20 scenarios
 at gamma=1, so the heaviest failure carries ~1/20 the weight of normal ->
 next lever = frozen_gamma (arms D: gamma 4; E: gamma 4 + lat 0.1 + top 5).
+  D   gamma=4 lat 1.0 top 0      |  7.72    7.80    7.74%   0.73%   (gamma alone: nothing)
+  E   gamma=4 lat 0.1 top 5      |  8.86    9.00    7.58%   0.23%   (best no-route, 3x vs A)
+No arm beats A's 6.2% congestion. Structural: the LP prices congestion on
+EXCESS volume (linear) while the metric flags ALL volume on a popp even 1%
+over cap -> at-cap loading is free to the LP and maximally fragile (every
+arm puts 70.0 on the 70.0-cap popp). Next lever: frozen_cap_headroom (LP
+solves against caps*h; try 0.9) -- arms F (E + headroom .9), F0 (A + .9).
+  F0  A + cap_headroom .9        |  8.05    8.14    7.36%   0.66%   (headroom: no help)
+  F   E + cap_headroom .9        |  9.52    9.60    7.99%   0.09%   (no-route ~solved)
+DIAGNOSIS (diag_cong.py): re-pinning against ALL 45 failures vs the 20-popp
+training sample barely moves congestion (A 6.21->6.43, F 7.99->7.29) -> NOT
+a train/eval sampling gap. Steady over-cap popps = 0 -> headroom had nothing
+to fix. Caps are not tiny at small (min 6.7 / median 32 / max 70); the bind
+is AGGREGATE: vol 1361 vs ~1450 total cap (the 1.1x provisioning). A 40-70
+unit popp failure dumps its users onto a few BGP-preferred same-site
+neighbours (('0','1') load 55.6 / cap 28.1); ~10% global slack can absorb
+that only if fallback is DIVERSIFIED, and single-winner BGP fallback within
+BROAD prefixes cannot diversify (same popp set -> same fallback for every
+prefix). All arms learned broader prefixes. => residual frozen congestion is
+structural at 1.1x unless the optimizer learns NARROWER, different-fallback
+prefixes. Arms G (P_c=100 > P_nr=50) / H (G + n_fail=45) test whether pricing
+congestion above stranding pushes it there.

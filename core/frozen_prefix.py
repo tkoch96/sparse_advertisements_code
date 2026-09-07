@@ -117,6 +117,14 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 	# in raw ms.
 	lat_scale = _knob(kwargs, 'frozen_lat_scale',
 					  'SCULPTOR_FROZEN_PREFIX_LAT_SCALE', 1.0)
+	# Capacity headroom INSIDE the LP (Tom 2026-09-06 A/B finding): the LP
+	# prices congestion on EXCESS volume, but the paper metric flags ALL
+	# volume on any popp over cap -- so loading a popp to exactly its cap is
+	# free to the LP and maximally fragile under failure (every A/B arm put
+	# 70.0 on a 70.0-cap popp). Solving against caps*headroom leaves slack
+	# for displaced traffic. 1.0 = off.
+	cap_headroom = _knob(kwargs, 'frozen_cap_headroom',
+						 'SCULPTOR_FROZEN_PREFIX_CAP_HEADROOM', 1.0)
 
 	from core.solve_lp_assignment import obj_round
 
@@ -256,7 +264,7 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 	load_cols = np.concatenate(load_cols)
 	load_A = csr_matrix((np.ones(len(load_rows)), (load_rows, load_cols)),
 						shape=(n_scen * n_popps, n_pairs))
-	caps_tiled = np.tile(caps, n_scen)
+	caps_tiled = np.tile(caps * cap_headroom, n_scen)
 
 	c_o = np.repeat(np.asarray(weights) * p_c / total_vol, n_popps)
 
@@ -355,6 +363,7 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 		'frozen_prefix_no_route_penalty': p_nr,
 		'frozen_prefix_congestion_penalty': p_c,
 		'frozen_prefix_lat_scale': lat_scale,
+		'frozen_prefix_cap_headroom': cap_headroom,
 		'frozen_prefix_normal_lat': (float(np.sum(xv * base_lat)) /
 									 max(float(np.sum(xv)), 1e-9)),
 		'frozen_prefix_fail_lat_mean': float(np.mean(fail_lat)) if fail_lat else 0.0,

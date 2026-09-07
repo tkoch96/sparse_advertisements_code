@@ -492,6 +492,8 @@ register(ObjectivePlugin(
 		frozen_lat_scale=1.0,           # latency weight in the scalar (0.1 =
 										# penalties bite 10x harder, same argmin
 										# as penalties x10, small numbers)
+		frozen_cap_headroom=1.0,        # LP solves against caps*this: <1 leaves
+										# slack so at-cap loading isn't "free"
 	),
 	lp_env_overrides=dict(
 		frozen_gamma='SCULPTOR_FROZEN_PREFIX_GAMMA',
@@ -501,6 +503,7 @@ register(ObjectivePlugin(
 		frozen_no_route_penalty='SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY',
 		frozen_congestion_penalty='SCULPTOR_FROZEN_PREFIX_CONGESTION_PENALTY',
 		frozen_lat_scale='SCULPTOR_FROZEN_PREFIX_LAT_SCALE',
+		frozen_cap_headroom='SCULPTOR_FROZEN_PREFIX_CAP_HEADROOM',
 	),
 	experiment=dict(eval_phases=('strategy_compare',)),
 	eval_module='evaluations_for_frozen_prefix',
@@ -541,5 +544,6 @@ register(ObjectivePlugin(
 		'SCULPTOR_FROZEN_PREFIX_ANCHOR_N_FAIL': '',
 		'SCULPTOR_FROZEN_PREFIX_LAT_SCALE': '',
 		'SCULPTOR_FROZEN_PREFIX_TOP_LOAD': '',
+		'SCULPTOR_FROZEN_PREFIX_CAP_HEADROOM': '',
 	},
 ))
