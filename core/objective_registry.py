@@ -63,6 +63,14 @@ class ObjectivePlugin:
 	# 'pkg.mod:Class' Generic_Objective subclass owning the TRAINING policy
 	# (gradient components, gamma annealing, per-call LP kwargs). '' = base.
 	training_class: str = ''
+	# --- the objective's own tunables -------------------------------------
+	# Default LP kwargs -- the objective's NATURAL levers (penalties, gamma,
+	# sample sizes ...), declared here and nowhere else. Flow: Generic_Objective
+	# uses them when the driver passes no lp_kwargs; the driver forwards them
+	# on every LP call and ships them to workers per flush; env vars named in
+	# `lp_env_overrides` may override a lever for one run.
+	lp_defaults: Dict[str, Any] = field(default_factory=dict)
+	lp_env_overrides: Dict[str, str] = field(default_factory=dict)  # kwarg -> ENV
 	# --- experiments/ driver (run_objective.py) ---------------------------
 	# extra ObjectiveSpec fields: lp_kwargs, using_resilience_benefit, gamma,
 	# deployment_kwargs, eval_phases, train_env. None = not runnable there.
@@ -217,6 +225,28 @@ def semantic_knobs():
 	return out
 
 
+def lp_kwargs_for(name, env=None):
+	"""The objective's effective LP kwargs: plugin lp_defaults, then any
+	env override named in lp_env_overrides (cast to the default's type).
+	Empty dict for objectives that declare no levers."""
+	import os as _os
+	p = PLUGINS.get(name)
+	if p is None or not p.lp_defaults:
+		return {}
+	env = _os.environ if env is None else env
+	out = dict(p.lp_defaults)
+	for k, var in p.lp_env_overrides.items():
+		v = env.get(var)
+		if v is None or v == '':
+			continue
+		d = out.get(k)
+		try:
+			out[k] = type(d)(v) if d is not None and not isinstance(d, bool) else v
+		except (TypeError, ValueError):
+			out[k] = v
+	return out
+
+
 def experiment_specs():
 	"""{name: ObjectiveSpec kwargs} for experiments/objectives.py."""
 	out = {}
@@ -224,6 +254,10 @@ def experiment_specs():
 		if p.experiment is None:
 			continue
 		spec = dict(p.experiment)
+		# NOTE: lp_defaults are NOT baked in here. Generic_Objective applies
+		# lp_kwargs_for(obj) (defaults + env overrides) underneath whatever a
+		# driver passes explicitly; baking defaults in as explicit kwargs would
+		# make them win over the env overrides (caught 2026-09-06).
 		spec.setdefault('lp_obj_string', p.lp_name or p.name)
 		spec.setdefault('description', p.description)
 		out[p.name] = spec
@@ -448,6 +482,26 @@ register(ObjectivePlugin(
 	aliases=('frozen',),
 	lp='core.hard_objectives:solve_lp_frozen_prefix',
 	training_class='core.generic_objective:FrozenPrefixObjective',
+	lp_defaults=dict(
+		frozen_gamma=1.0,               # failure-term weight vs normal
+		frozen_n_fail=20,               # popps failed per iteration
+		frozen_top_load=0,              # of which: heaviest-loaded always in
+		frozen_explore_frac=0.5,        # uniform share of the sampled rest
+		frozen_no_route_penalty=50.0,   # ms-equivalent per unit no-route
+		frozen_congestion_penalty=25.0, # ms-equivalent per unit overflow
+		frozen_lat_scale=1.0,           # latency weight in the scalar (0.1 =
+										# penalties bite 10x harder, same argmin
+										# as penalties x10, small numbers)
+	),
+	lp_env_overrides=dict(
+		frozen_gamma='SCULPTOR_FROZEN_PREFIX_GAMMA',
+		frozen_n_fail='SCULPTOR_FROZEN_PREFIX_N_FAIL',
+		frozen_top_load='SCULPTOR_FROZEN_PREFIX_TOP_LOAD',
+		frozen_explore_frac='SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC',
+		frozen_no_route_penalty='SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY',
+		frozen_congestion_penalty='SCULPTOR_FROZEN_PREFIX_CONGESTION_PENALTY',
+		frozen_lat_scale='SCULPTOR_FROZEN_PREFIX_LAT_SCALE',
+	),
 	experiment=dict(eval_phases=('strategy_compare',)),
 	eval_module='evaluations_for_frozen_prefix',
 	required_metric_key='frozen_fail_latency_by_strategy',
@@ -485,5 +539,7 @@ register(ObjectivePlugin(
 		'SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC': '',
 		'SCULPTOR_FROZEN_PREFIX_EVAL_N_FAIL': '',
 		'SCULPTOR_FROZEN_PREFIX_ANCHOR_N_FAIL': '',
+		'SCULPTOR_FROZEN_PREFIX_LAT_SCALE': '',
+		'SCULPTOR_FROZEN_PREFIX_TOP_LOAD': '',
 	},
 ))

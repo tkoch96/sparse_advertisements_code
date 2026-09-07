@@ -158,7 +158,7 @@ def announce(ctx, module_name, what):
     print('=' * 66)
 
 
-def objective_value_scorer(objective):
+def objective_value_scorer(objective, lp_kwargs=None):
     """score_one that RE-EVALUATES the objective function itself on a
     stored advertisement (Tom 2026-08-23: the solve-time 'objective' was
     recorded under per-strategy code paths -- e.g. Unicast's stranding
@@ -172,7 +172,8 @@ def objective_value_scorer(objective):
         from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
         a = threshold_a(adv)
         rti, _ = sas.calculate_ground_truth_ingress(a)
-        ret = solve_generic_lp_with_failure_catch(sas, rti, objective, adv=a)
+        ret = solve_generic_lp_with_failure_catch(sas, rti, objective, adv=a,
+                                                  **(lp_kwargs or {}))
         if not ret.get('solved'):
             raise ValueError('objective LP unsolved for this advertisement')
         return float(ret['objective'])

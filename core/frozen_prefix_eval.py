@@ -52,11 +52,15 @@ def _scenarios(sas, which, cap):
 def pin_pairs(sas, adv, routed_through_ingress, pin_kill_popps=None):
 	"""[(ug, prefix_i, vol)] -- the frozen_prefix LP's allocation for adv."""
 	from core.frozen_prefix import solve_lp_frozen_prefix, default_kill_popps
+	from core.objective_registry import lp_kwargs_for
+	levers = lp_kwargs_for('frozen_prefix')   # the objective's own tunables
 	if pin_kill_popps is None:
-		n_fail = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_N_FAIL', '20'))
-		pin_kill_popps = default_kill_popps(sas.n_popps, n_fail)
+		pin_kill_popps = default_kill_popps(sas.n_popps,
+											int(levers.get('frozen_n_fail', 20)))
 	ret = solve_lp_frozen_prefix(sas, routed_through_ingress, 'frozen_prefix',
-								 adv=adv, frozen_kill_popps=list(pin_kill_popps))
+								 adv=adv, frozen_kill_popps=list(pin_kill_popps),
+								 **{k: v for k, v in levers.items()
+									if k not in ('frozen_n_fail',)})
 	if not ret.get('solved'):
 		raise ValueError('frozen_prefix pin LP unsolved')
 	return ret.get('frozen_prefix_pairs') or []

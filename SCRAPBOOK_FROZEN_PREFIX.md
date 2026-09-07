@@ -204,3 +204,54 @@ Ops: ~4.9h VM (~$14 incl. two wasted relaunches). expctl verdict says
 "exited 0 WITHOUT a completion banner" for papertable runs -- banner-string
 mismatch with generate_paper_table, not a failure; worth teaching expctl
 the papertable driver's final line ('total Xs').
+
+### User-level trace of the actual-10 result (2026-09-06 evening)
+Failing the heaviest popp under SCULPTOR's frozen allocation (Miami/AS7195,
+62.7 vol, 122 shares): 100% of displaced traffic keeps a route on its pinned
+prefix (mechanics OK), but only 2/10 traced users get the good backup
+(another Miami popp, +5-9ms); 8/10 are sent to Madrid/Amsterdam at +80-120ms
+onto popps that are 1-4x OVER capacity. Why: (1) BGP preference is not
+latency-aligned -- user 1 has Madrid/1299 (pref 300, 237ms) ranked above
+Miami/1299 (pref 299, 139ms) on the same prefix; (2) SCULPTOR's 26 prefixes
+are ALL broad near-anycast variants (44-179 popps, 6-8 sites each), so the
+fallback is a BGP lottery -- for this failure SCULPTOR ~= painter ~= unicast
+(~+90ms, 82-98% onto over-cap popps); (3) low-anycast popps have caps of
+0.5-13 units, so absorbing a 62-unit displacement without congestion needs
+spreading that single-winner fallback cannot do. Best-available surviving
+latency was within ~1-3ms of the original for every user.
+Tom's read: objectives show it works; the knob question is how to bite
+harder on no-route/congestion without numerical trouble -> divide latency
+by 10, keep penalties (same argmin as penalties x10; smaller scalars).
+
+### Objective-native levers (Tom: "not some global thing")
+frozen_prefix's tunables are declared ONCE on its plugin
+(core/objective_registry.py lp_defaults): frozen_gamma, frozen_n_fail,
+frozen_top_load (heaviest-loaded popps ALWAYS in the kill set),
+frozen_explore_frac, frozen_no_route_penalty, frozen_congestion_penalty,
+frozen_lat_scale. Resolution: lp_kwargs_for(obj) = defaults + env
+overrides (lp_env_overrides, SCULPTOR_FROZEN_PREFIX_*) -> Generic_Objective.
+lp_kwargs (explicit driver kwargs still win) -> every driver LP call, and
+FrozenPrefixObjective.per_call_lp_kwargs ships the frozen_* levers to workers
+with the kill list, so actors price exactly as the driver (no env on the
+actor side). Eval pin + objective_value_scorer use lp_kwargs_for too.
+TRAP fixed same day: experiment_specs must NOT bake lp_defaults into the
+ObjectiveSpec's explicit lp_kwargs (explicit wins -> env overrides ignored;
+A/B arm B ran with lat_scale=1.0 and had to be redone as B2).
+Small A/B (same deployment/seed, 30 iters): A baseline, B2 lat_scale=0.1,
+C lat_scale=0.1 + top_load=5 -- results appended below when scored.
+
+### Small A/B results (same deployment/seed, 30 iters, exhaustive 45 failures)
+  arm  lat_scale top_load | steady fail_lat  %cong  %noroute   (effective lat_scale
+  A        1.0       0    |  7.71    7.81    6.21%   0.72%      read back from each
+  B2       0.1       0    |  8.25    8.41    6.93%   0.63%      arm's trained LP ->
+  C        0.1       5    |  8.60    8.69    8.69%   0.37%      levers flow end-to-end)
+  painter                 | 11.39   11.46   11.59%   0.18%
+  reactive anchor         |  7.00    7.36    0.00%   0.00%
+lat/10 helps no-route (-12%; -49% with top_load) at +0.5-0.9ms steady, but
+CONGESTION RISES: with latency de-weighted the LP leans on penalties, and
+P_nr:P_c = 50:25 makes congesting cheaper than stranding; prefixes got
+BROADER (A 20/19 -> B2 29/26 popps) = more surviving options = less
+stranding but fallback onto small-cap popps. Both arms still fill the
+heaviest popp to exactly cap: the failure block is a MEAN over 20 scenarios
+at gamma=1, so the heaviest failure carries ~1/20 the weight of normal ->
+next lever = frozen_gamma (arms D: gamma 4; E: gamma 4 + lat 0.1 + top 5).

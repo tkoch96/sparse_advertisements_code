@@ -43,7 +43,14 @@ class Generic_Objective:
 		# LP call. Set by the experiment driver from the ObjectiveSpec.lp_kwargs.
 		# Empty {} preserves prior behavior since the LP functions all use
 		# kwargs.get('foo', <existing_default>).
-		self.lp_kwargs = kwargs.get('lp_kwargs', {}) or {}
+		# Objective-native levers: the plugin's lp_defaults (+ env overrides)
+		# unless the driver passed explicit lp_kwargs (core/objective_registry).
+		explicit = kwargs.get('lp_kwargs') or {}
+		try:
+			from core.objective_registry import lp_kwargs_for
+			self.lp_kwargs = dict(lp_kwargs_for(obj), **explicit)
+		except Exception:
+			self.lp_kwargs = dict(explicit)
 
 	def get_latency_benefit_adv(self, a):
 		routed_through_ingress, _ = self.sas.calculate_ground_truth_ingress(a)
@@ -747,8 +754,9 @@ class FrozenPrefixObjective(Generic_Objective):
 	failure -- the sampler must never kill the training loop).
 	Explore half: uniform over the remaining popps.
 
-	Knobs: SCULPTOR_FROZEN_PREFIX_N_FAIL (20),
-	SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC (0.5).
+	Levers (objective-native, core/objective_registry.py frozen_prefix
+	lp_defaults; env overrides listed there): frozen_n_fail, frozen_top_load,
+	frozen_explore_frac.
 	"""
 
 	def __init__(self, sas, obj, **kwargs):
@@ -791,12 +799,16 @@ class FrozenPrefixObjective(Generic_Objective):
 	def _sample_kill_set(self, it, base_adv):
 		sas = self.sas
 		n_popps = sas.n_popps
-		n_fail = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_N_FAIL', '20'))
-		explore_frac = float(os.environ.get(
-			'SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC', '0.5'))
+		n_fail = int(self.lp_kwargs.get('frozen_n_fail', 20))
+		explore_frac = float(self.lp_kwargs.get('frozen_explore_frac', 0.5))
 		if n_fail >= n_popps:
 			return list(range(n_popps))
 		rng = np.random.RandomState(2718 + 31 * int(it))
+		# SCULPTOR_FROZEN_PREFIX_TOP_LOAD (default 0): ALWAYS include the K
+		# heaviest-loaded popps under the current adv, then explore/exploit
+		# the rest. The actual-10 trace (2026-09-06) showed the worst
+		# failure -- the top-load popp -- diluted 1/20 in a sampled mean.
+		n_top = int(self.lp_kwargs.get('frozen_top_load', 0))
 		try:
 			weights = None
 			if base_adv is not None:
@@ -805,16 +817,22 @@ class FrozenPrefixObjective(Generic_Objective):
 				weights = self._volume_reach_weights()
 			if weights.sum() <= 0:
 				raise ValueError('no volume weights')
-			n_exploit = int(round(n_fail * (1.0 - explore_frac)))
-			p = weights / weights.sum()
+			top = (np.argsort(-weights)[:min(n_top, n_fail)]
+				   if n_top > 0 else np.array([], dtype=int))
+			remaining = n_fail - len(top)
+			n_exploit = int(round(remaining * (1.0 - explore_frac)))
+			p = weights.copy()
+			p[top] = 0.0
+			p = p / p.sum() if p.sum() > 0 else None
 			# without-replacement exploit draw, weight-proportional
-			exploit = rng.choice(n_popps, size=min(n_exploit, (p > 0).sum()),
-								 replace=False, p=p)
-			rest = np.setdiff1d(np.arange(n_popps), exploit)
-			n_explore = n_fail - len(exploit)
-			explore = rng.choice(rest, size=min(n_explore, len(rest)),
-								 replace=False)
-			kill = sorted(set(int(x) for x in np.concatenate([exploit, explore])))
+			exploit = (rng.choice(n_popps, size=min(n_exploit, int((p > 0).sum())),
+								  replace=False, p=p)
+					   if p is not None and n_exploit > 0 else np.array([], dtype=int))
+			rest = np.setdiff1d(np.arange(n_popps), np.concatenate([top, exploit]))
+			n_explore = n_fail - len(top) - len(exploit)
+			explore = (rng.choice(rest, size=min(n_explore, len(rest)), replace=False)
+					   if n_explore > 0 and len(rest) else np.array([], dtype=int))
+			kill = sorted(set(int(x) for x in np.concatenate([top, exploit, explore])))
 		except Exception as e:  # sampler must never kill training
 			print('[frozen_prefix] kill sampler fell back to uniform: {}'.format(e))
 			kill = sorted(int(x) for x in
@@ -829,8 +847,12 @@ class FrozenPrefixObjective(Generic_Objective):
 			self._kill_iter = it
 		# frozen_kill_tag keys the worker LB cache: same adv + different
 		# kill set must never collide (the cache outlives the iteration).
-		return {'frozen_kill_popps': list(self._kill_list),
-				'frozen_kill_tag': it}
+		# The objective's levers ride along so workers price exactly as the
+		# driver does (no env dependence on the actor side).
+		out = {k: v for k, v in self.lp_kwargs.items() if k.startswith('frozen_')}
+		out.update({'frozen_kill_popps': list(self._kill_list),
+					'frozen_kill_tag': it})
+		return out
 
 
 # objective name -> objective class; anything unregistered gets the base

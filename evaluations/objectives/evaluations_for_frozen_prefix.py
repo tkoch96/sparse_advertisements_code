@@ -72,7 +72,9 @@ def run(ctx):
              'frozen user->prefix failover: latency / % congested / % no-route '
              'per solution type (One-per-peering row = reactive-optimal anchor)')
     score_all_strategies_multi(ctx, _score, FROZEN_KEYS + REACTIVE_KEYS)
-    score_all_strategies(ctx, objective_value_scorer('frozen_prefix'),
+    from core.objective_registry import lp_kwargs_for
+    score_all_strategies(ctx, objective_value_scorer('frozen_prefix',
+                                                     lp_kwargs=lp_kwargs_for('frozen_prefix')),
                          'objective_value_by_strategy')
     bar_comparison(ctx, 'frozen_fail_latency_by_strategy',
                    ylabel='latency under failure, frozen (ms)',

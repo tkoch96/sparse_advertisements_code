@@ -29,7 +29,10 @@ priced on EXCESS volume above capacity (linear via per-scenario overflow
 variables), not the volume-on-congested-links paper metric -- the eval
 suite reports the latter post-hoc.
 
-Knobs (kwargs override env override default):
+Levers are the objective's own (core/objective_registry.py frozen_prefix
+lp_defaults -> Generic_Objective.lp_kwargs -> every LP call, and stamped to
+workers per flush); the env names below are per-run OVERRIDES resolved
+there. Direct callers may still pass kwargs (kwargs > env > default):
   frozen_kill_popps / (deterministic stride)  popp indices to fail
   frozen_gamma  / SCULPTOR_FROZEN_PREFIX_GAMMA               (1.0)
   frozen_n_fail / SCULPTOR_FROZEN_PREFIX_N_FAIL              (20)
@@ -107,6 +110,13 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 				 'SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY', 50.0)
 	p_c = _knob(kwargs, 'frozen_congestion_penalty',
 				'SCULPTOR_FROZEN_PREFIX_CONGESTION_PENALTY', 25.0)
+	# Latency weight in the OBJECTIVE SCALAR only (Tom 2026-09-06): scaling
+	# latency down by 10x while holding P_nr/P_c is the same argmin as
+	# penalties x10, but keeps the penalties readable in ms-equivalents and
+	# the scalar small (no gradient blow-up). Reported *_lat diagnostics stay
+	# in raw ms.
+	lat_scale = _knob(kwargs, 'frozen_lat_scale',
+					  'SCULPTOR_FROZEN_PREFIX_LAT_SCALE', 1.0)
 
 	from core.solve_lp_assignment import obj_round
 
@@ -221,7 +231,7 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 	c_x = np.zeros(n_pairs)
 	for s in range(n_scen):
 		live = scen_winner[s] >= 0
-		c_x += weights[s] * np.where(live, scen_lat[s], p_nr) / total_vol
+		c_x += weights[s] * np.where(live, scen_lat[s] * lat_scale, p_nr) / total_vol
 
 	# ---- constraints
 	# volume conservation: one row per routable ug
@@ -344,6 +354,7 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 		'frozen_prefix_gamma': gamma,
 		'frozen_prefix_no_route_penalty': p_nr,
 		'frozen_prefix_congestion_penalty': p_c,
+		'frozen_prefix_lat_scale': lat_scale,
 		'frozen_prefix_normal_lat': (float(np.sum(xv * base_lat)) /
 									 max(float(np.sum(xv)), 1e-9)),
 		'frozen_prefix_fail_lat_mean': float(np.mean(fail_lat)) if fail_lat else 0.0,
