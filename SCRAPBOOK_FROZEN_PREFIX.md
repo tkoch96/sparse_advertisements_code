@@ -402,3 +402,23 @@ iterations). Solver modes on lifted (actual-10 SCULPTOR adv): dual simplex
 pdlp 12s. Python assembly ~0.05s/call.
 actual-32 rung: running on i-09a6 (VM restarted 16:16Z, Tom: "really scale
 this up ... fine to work on there").
+actual-32 rung (i-09a6, 777 popps / 5190 ugs, campaign avg_latency pickle's
+SCULPTOR adv = 204,195 pairs; gti cross-check on a 20-winner sample, 0
+mismatches; log ~/ladder_a32.log on the VM):
+  allon_1prefix  K=20   stacked 12.7s -> lifted 0.075s (169x)   obj equal 1e-16
+  allon_1prefix  K=777  stacked 424s  -> lifted 0.080s (5273x)  obj equal 8e-16
+  SCULPTOR adv   K=20   stacked 7.7s  -> lifted 3.1s  (2.5x)    obj equal 3e-12
+                        lifted rows 7.2k, vars 206k, nnz 418k
+  SCULPTOR adv   K=777  lifted > 30s TimeLimit (unsolved) -> exhaustive is NOT
+                        a training option at 32; stacked skipped (158M nnz).
+Read: at the training regime the remaining cost is the 200k-column pair LP
+itself (2.5x, same ratio as actual-10); n_fail barely matters for the lifted
+model (rows only), so keep n_fail=20 and forget the n_fail=10 lever. Next
+order-of-magnitude levers, not done: (a) column reduction -- most of a
+user's ~39 prefixes are dominated (bad winner AND bad fallback); column
+generation keeps it exact; (b) warm starts across probe pairs (persistent
+model) -- re-opens the HiGHS shared-state landmine.
+Training smokes with the lifted default (same box, concurrent): actual-10
+20260907_123220-frozen_a10_lifted 32 workers ~35 s/iter vs stacked G1 run 40
+workers ~97 s/iter (~3.5x worker-normalized); actual-5 20260907_123206-
+frozen_a5_lifted 16 workers ~45 s/iter. Both clean through iter 25/37.
