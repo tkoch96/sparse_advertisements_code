@@ -277,3 +277,19 @@ prefix). All arms learned broader prefixes. => residual frozen congestion is
 structural at 1.1x unless the optimizer learns NARROWER, different-fallback
 prefixes. Arms G (P_c=100 > P_nr=50) / H (G + n_fail=45) test whether pricing
 congestion above stranding pushes it there.
+  G   E + P_c=100 (> P_nr=50)    |  8.89    8.98    6.16%   0.41%   (congestion back to
+  H   G + n_fail=45 (all)        |  8.87    9.05    6.55%   0.26%    baseline; frontier)
+VERDICT (2026-09-06, small, 30 iters, nsim=1 -- directional): the levers
+move the solution along a no-route <-> congestion FRONTIER. No-route is
+tunable from 0.72% down to 0.09% (F); congestion has a floor ~6.2% that no
+pricing breaks (G matches baseline congestion while cutting no-route 43%;
+pricing congestion above stranding trades back). Prefixes stay/get BROADER
+in every arm (A 20 -> H 33 popps on the widest). Structural cause per the
+diag: 1.1x aggregate provisioning + single-winner BGP fallback inside broad
+prefixes cannot diversify a 40-70 unit displacement. Paper framing: frozen
+residual congestion is the price of NO re-steering at 1.1x; the reactive
+anchor's 0% exists only because it re-optimizes.
+Candidate defaults (Tom to pick): G-like (gamma 4, lat 0.1, top 5, P_c 100):
+baseline congestion, -43% no-route, +1.2ms; or F-like (headroom .9) if
+no-route matters most (0.09%, +1.8ms, +1.8pt congestion). Validate on
+actual-10 nsim>=2 before the paper cell -- small is tiny (45 popps, 3 sites).
