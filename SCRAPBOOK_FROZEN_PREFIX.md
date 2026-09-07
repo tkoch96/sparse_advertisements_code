@@ -331,3 +331,17 @@ intent `run --only paper_table` THERE (frozen covered at 3 -> no training;
 emit table -> depstore store -> grab -> paper repo). Lever defaults for the
 cell = whatever the actual-10 arm-G run supports; set on the plugin first
 so the cell needs no lever env.
+
+### actual-10 arm-G cell (run 20260906_225909-frozen_a10_G1, nsim=1, 100 it)
+CAVEAT: drew a DIFFERENT deployment than the baseline run's sim 0 (OPP steady
+41.8 vs 37.0 ms; painter frozen cong 1.05% vs 12.1%) -- per-cell deployment
+draws are how the pipeline works (strategies compared WITHIN a cell), so the
+lever A/B rests on the small sweep, not on this. Within its deployment:
+  OPP(reactive) 41.65ms 0.00% 0.000% | SCULPTOR 41.91 1.20% 0.028% |
+  PAINTER 43.56 1.05% 0.040% | Unicast 44.92 1.22% 0.004% | Anycast 53.70 1.36% 0
+SCULPTOR best-of-practical on all three (congestion a wash: this deployment
+has slack). Heaviest popp still at cap (63/63); its failure -> 92% onto
+over-cap popps, +85ms; widest prefix 206 popps. Memory: 40 workers grew
+131->197 GB over 80 iters (~4.9 GB/worker, cache growth; the 2/iter refresh
+does not reclaim) -> size-32 cell starts at 20 workers. Plugin lp_defaults
+set to arm G. Run 2.7h ~$7.6 (+$0.6 abandoned nsim=2 start).

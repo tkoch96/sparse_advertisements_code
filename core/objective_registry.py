@@ -482,18 +482,24 @@ register(ObjectivePlugin(
 	aliases=('frozen',),
 	lp='core.hard_objectives:solve_lp_frozen_prefix',
 	training_class='core.generic_objective:FrozenPrefixObjective',
+	# Defaults = small A/B "arm G" (Tom 2026-09-06/07): gamma 4, latency/10,
+	# heaviest 5 popps always failed, congestion priced above stranding.
+	# Small A/B: baseline congestion (6.2%), no-route -43% (0.72->0.41%),
+	# +1.2ms steady. actual-10 arm-G cell: SCULPTOR best-of-practical on all
+	# three frozen metrics. (Pre-A/B values: gamma 1, lat 1.0, top 0, P_c 25.)
 	lp_defaults=dict(
-		frozen_gamma=1.0,               # failure-term weight vs normal
+		frozen_gamma=4.0,               # failure-block weight vs normal
 		frozen_n_fail=20,               # popps failed per iteration
-		frozen_top_load=0,              # of which: heaviest-loaded always in
+		frozen_top_load=5,              # of which: heaviest-loaded ALWAYS in
 		frozen_explore_frac=0.5,        # uniform share of the sampled rest
 		frozen_no_route_penalty=50.0,   # ms-equivalent per unit no-route
-		frozen_congestion_penalty=25.0, # ms-equivalent per unit overflow
-		frozen_lat_scale=1.0,           # latency weight in the scalar (0.1 =
-										# penalties bite 10x harder, same argmin
-										# as penalties x10, small numbers)
-		frozen_cap_headroom=1.0,        # LP solves against caps*this: <1 leaves
-										# slack so at-cap loading isn't "free"
+		frozen_congestion_penalty=100.0,# ms-equivalent per unit overflow
+										# (above stranding: the LP otherwise
+										# prefers to congest rather than strand)
+		frozen_lat_scale=0.1,           # latency weight in the scalar (= the
+										# penalties x10, small numbers)
+		frozen_cap_headroom=1.0,        # LP solves against caps*this (<1 =
+										# slack; no measurable help in A/B)
 	),
 	lp_env_overrides=dict(
 		frozen_gamma='SCULPTOR_FROZEN_PREFIX_GAMMA',
