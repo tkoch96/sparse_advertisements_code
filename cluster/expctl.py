@@ -177,7 +177,10 @@ def preset_papertable(a, run_id):
     dpsize = (a.dpsizes or '32')
     if ',' in dpsize:
         raise SystemExit('papertable takes ONE size (got {})'.format(dpsize))
-    tag = run_id.replace('-', '_')
+    # --run-tag: write the cell under an EXISTING campaign's tag (e.g. add a
+    # new objective's cell to papertable32b) instead of this run's own id,
+    # so the campaign's paper_table stage aggregates it (Tom 2026-09-07).
+    tag = (getattr(a, 'run_tag', '') or run_id).replace('-', '_')
     argv = [V.REMOTE_PY, '-u', 'evaluations/generate_paper_table.py',
             '--dpsize', dpsize,
             '--number_of_deployments', str(a.nsim or 1),
@@ -188,6 +191,8 @@ def preset_papertable(a, run_id):
         argv += ['--hotstart', a.hotstart]
     if getattr(a, 'objectives', ''):
         argv += ['--objectives', a.objectives]
+    if getattr(a, 'nsim_by_objective', ''):
+        argv += ['--nsim-by-objective', a.nsim_by_objective]
     env = {
         'PYTHONUNBUFFERED': '1',
         'SCULPTOR_REQUIRE_SOLNS': 'sparse',
@@ -195,15 +200,25 @@ def preset_papertable(a, run_id):
         'SCULPTOR_WORKER_MEM_LOG_DIR': '{}/{}/workers'.format(
             V.REMOTE_RUNS, run_id),
     }
-    pulls = [
-        'figures/cluster/{}/'.format(run_id),
-        # per-objective cell logs + sweep caches (cache/, outside run dir)
-        'cache/table_generate_{}*'.format(tag),
-        # the L1 checkpoint pickles: solved advertisements + metrics per
-        # objective -- losing these wastes the run (same as dpsweep)
-        'cache/popp_failure_latency_comparison_*{}*.pkl'.format(tag),
-        'cache/paper_table_condensed_*{}*.pkl'.format(tag),
-    ]
+    pulls = ['figures/cluster/{}/'.format(run_id)]
+    objs = [o.strip() for o in (getattr(a, 'objectives', '') or '').split(',')
+            if o.strip()]
+    if getattr(a, 'run_tag', '') and objs:
+        # Adding objective(s) to an EXISTING campaign: harvest only THEIR
+        # cell logs/pickles, not every objective's size-32 pickle under the
+        # campaign tag (GBs the laptop can't hold; Tom 2026-09-07).
+        for o in objs:
+            pulls += ['cache/table_generate_{}_{}*'.format(tag, o),
+                      'cache/popp_failure_latency_comparison_*{}_{}*.pkl'.format(tag, o)]
+    else:
+        pulls += [
+            # per-objective cell logs + sweep caches (cache/, outside run dir)
+            'cache/table_generate_{}*'.format(tag),
+            # the L1 checkpoint pickles: solved advertisements + metrics per
+            # objective -- losing these wastes the run (same as dpsweep)
+            'cache/popp_failure_latency_comparison_*{}*.pkl'.format(tag),
+            'cache/paper_table_condensed_*{}*.pkl'.format(tag),
+        ]
     return argv, env, pulls
 
 
@@ -936,6 +951,12 @@ def main(argv=None):
     p.add_argument('ref')
     p.add_argument('--preset', choices=sorted(PRESETS))
     p.add_argument('--label', default=None)
+    p.add_argument('--run-tag', default='',
+                   help='papertable: write cells under this EXISTING campaign '
+                        'run tag instead of the new run id (adds an objective '
+                        'to a campaign)')
+    p.add_argument('--nsim-by-objective', default='',
+                   help="papertable: 'obj:n,...' passed through")
     p.add_argument('--objectives', default='',
                    help='papertable: comma list passed through to '
                         'generate_paper_table --objectives')
