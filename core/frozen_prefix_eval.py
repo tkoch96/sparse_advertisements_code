@@ -12,10 +12,15 @@ no-route at NO_ROUTE_LATENCY, conflating them):
   fail_frac_no_route fraction of volume whose pinned prefix has no surviving popp
 
 Pin = the frozen_prefix LP's own allocation for that advertisement (exact
-per-(ug, prefix) pairs it returns; no popp->prefix inversion). By default
-the pin is hedged against the same deterministic stride sample of failures
-training uses (SCULPTOR_FROZEN_PREFIX_N_FAIL); the measurement sweep is
-exhaustive unless SCULPTOR_FROZEN_PREFIX_EVAL_N_FAIL caps it.
+per-(ug, prefix) pairs it returns; no popp->prefix inversion). The pin is
+hedged against EVERY single-popp failure by default (the lifted LP makes
+that affordable; SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL=k samples k instead,
+which was the pre-2026-09-07 behaviour with k=20). Small-deployment A/B
+2026-09-07: stride-20 pin left 2.5-2.8% of volume on over-cap popps under
+the exhaustive sweep -- failures OUTSIDE the pin's sample landed on popps
+the pin had loaded to exactly cap; the exhaustive pin took that to
+0.0-0.08% at +0.3-1.3 ms. The measurement sweep is exhaustive unless
+SCULPTOR_FROZEN_PREFIX_EVAL_N_FAIL caps it.
 
 `reactive_optimal_metrics` is the upper ANCHOR: the same three metrics for
 a full-availability advertisement (one-per-peering by default) with the
@@ -55,12 +60,16 @@ def pin_pairs(sas, adv, routed_through_ingress, pin_kill_popps=None):
 	from core.objective_registry import lp_kwargs_for
 	levers = lp_kwargs_for('frozen_prefix')   # the objective's own tunables
 	if pin_kill_popps is None:
-		pin_kill_popps = default_kill_popps(sas.n_popps,
-											int(levers.get('frozen_n_fail', 20)))
+		pin_n = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL', '0'))
+		pin_kill_popps = (default_kill_popps(sas.n_popps, pin_n) if pin_n > 0
+						  else list(range(sas.n_popps)))
+	levers = {k: v for k, v in levers.items() if k not in ('frozen_n_fail',)}
+	# one pin per strategy per sim: let the exhaustive model finish
+	levers.setdefault('frozen_time_limit',
+					  float(os.environ.get('SCULPTOR_FROZEN_PREFIX_PIN_TIME_LIMIT', '1800')))
 	ret = solve_lp_frozen_prefix(sas, routed_through_ingress, 'frozen_prefix',
 								 adv=adv, frozen_kill_popps=list(pin_kill_popps),
-								 **{k: v for k, v in levers.items()
-									if k not in ('frozen_n_fail',)})
+								 **levers)
 	if not ret.get('solved'):
 		raise ValueError('frozen_prefix pin LP unsolved')
 	return ret.get('frozen_prefix_pairs') or []

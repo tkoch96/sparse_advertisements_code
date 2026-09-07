@@ -224,6 +224,10 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 					  'SCULPTOR_FROZEN_PREFIX_LAT_SCALE', 1.0)
 	cap_headroom = _knob(kwargs, 'frozen_cap_headroom',
 						 'SCULPTOR_FROZEN_PREFIX_CAP_HEADROOM', 1.0)
+	# Solver wall-clock cap. 30 s is right for training probes; the eval PIN
+	# (exhaustive failure set at size 32) legitimately needs longer.
+	time_limit = _knob(kwargs, 'frozen_time_limit',
+					   'SCULPTOR_FROZEN_PREFIX_TIME_LIMIT', 30.0)
 
 	from core.solve_lp_assignment import obj_round
 	from scipy.sparse import hstack as sp_hstack, vstack as sp_vstack
@@ -376,7 +380,7 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	ts = time.time()
 	model = gp.Model()
 	model.Params.LogToConsole = 0
-	model.Params.TimeLimit = 30.0
+	model.Params.TimeLimit = time_limit
 	model.Params.Threads = 1     # see the stacked reference: shared-scheduler hazard
 	z = model.addMVar(n_z, name='vol_ug_prefix_load_overflow', lb=0)
 	model.addConstr(eq_A @ z == eq_b)

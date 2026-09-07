@@ -136,3 +136,31 @@ def test_formulation_switch_and_default():
 		assert ret['frozen_prefix_formulation'] == 'lifted', 'kwarg beats env'
 	finally:
 		del os.environ['SCULPTOR_FROZEN_PREFIX_FORMULATION']
+
+
+@pytest.mark.unit
+def test_eval_pin_is_exhaustive_by_default():
+	"""The paper-table pin hedges against EVERY popp failure unless
+	SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL samples (2026-09-07 finding: a 20-popp
+	stride pin left 2.5-2.8% congested volume that the exhaustive pin removes)."""
+	from core.frozen_prefix_eval import pin_pairs
+	import core.frozen_prefix as fp
+	worker, dep, _, _ = _setup()
+	adv = _advs(worker.n_popps)['random6']
+	rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+	seen = {}
+	orig = fp.solve_lp_frozen_prefix
+	def spy(sas, r, obj, **kw):
+		seen['kill'] = list(kw['frozen_kill_popps']); seen['tl'] = kw.get('frozen_time_limit')
+		return orig(sas, r, obj, **kw)
+	fp.solve_lp_frozen_prefix = spy     # pin_pairs imports it at call time
+	try:
+		pin_pairs(worker, adv, rti)
+		assert seen['kill'] == list(range(worker.n_popps))
+		assert seen['tl'] and seen['tl'] > 30
+		os.environ['SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL'] = '7'
+		pin_pairs(worker, adv, rti)
+		assert len(seen['kill']) == 7
+	finally:
+		fp.solve_lp_frozen_prefix = orig
+		os.environ.pop('SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL', None)

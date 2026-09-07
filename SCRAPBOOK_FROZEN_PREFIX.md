@@ -444,3 +444,46 @@ rc=1, NO traceback anywhere (driver, workers, dmesg). The a10+a5 pair had
 survived only because the earlier-finishing one did not own the cluster.
 Rule: one SCULPTOR driver per box, or give the second its own Ray. Relaunched
 alone as 20260907_143058-frozen32_lifted2 (nsim 3 x 150 it, 32 workers).
+
+## Latency-weight lever proof on small + the PIN finding (2026-09-07 evening)
+Tom: "divide latencies by 100 ... prove that changing this lever changes the
+outputs; in theory near-0 no-route/congestion at the expense of latency".
+TWO HARNESS BUGS FOUND FIRST: (1) the A-H arms (2026-09-06) shared popps +
+volumes but had DIFFERENT link capacities and ingress priorities per arm
+(hash check) -- and score_arms pinned every arm on arm A's deployment, so
+the "6.2% congestion floor / no arm beats A" verdict is contaminated.
+(2) Even with SCULPTOR_DEPLOYMENT_SEED fixed, arms differed: Python string-
+hash randomization changes set/dict iteration order inside the deployment
+generator -> different RNG consumption -> different priorities/caps.
+PYTHONHASHSEED=0 + SCULPTOR_DEPLOYMENT_SEED=31415 gives identical
+deployments (hash 0e53d06081 on all four arms). Any cross-process A/B needs
+both; the paper table is unaffected (all strategies share one process).
+Arms (small, 30 it, 4 workers, lifted LP, gamma 4 top 5 P_c 100 P_nr 50;
+exhaustive 45-failure sweep; pin = stride-20 as the code then defaulted):
+  arm    lat_scale headroom | steady fail_lat  %cong  %noroute | LP%excess LP%noroute
+  S10      0.1      1.0     |  9.90   10.00    2.50%   0.252%  |  0.000%    0.070%
+  S100     0.01     1.0     | 10.97   11.06    2.46%   0.189%  |  0.000%    0.000%
+  S1000    0.001    1.0     | 12.18   12.20    2.82%   0.054%  |  0.000%    0.000%
+  S100H    0.01     0.9     | 11.22   11.28    2.60%   0.493%  |  0.863%    1.881%  (headroom HURTS)
+  painter                   | 13.28   13.36    4.68%   0.042%  | reactive anchor 7.29/7.65/0/0
+Lever works: latency up 2.3ms, no-route 0.25% -> 0.05% (LP-side no-route 0
+from 0.01 down). Congestion flat ~2.5-2.8% even though the LP sees 0.000%
+excess -> the LP is blind to what the table counts. DIAGNOSIS (exhaustive
+pin instead of stride-20 pin, same trained advs):
+  S10   stride pin 2.50% / 0.252%  ->  exhaustive pin 0.08% / 0.204%  (+0.3ms)
+  S1000 stride pin 2.82% / 0.054%  ->  exhaustive pin 0.00% / 0.038%  (+1.3ms)
+The residual congestion was FAILURES OUTSIDE THE PIN'S 20-POPP SAMPLE
+landing on popps the pin loaded to exactly cap (the one over-cap event left
+in S10: load/cap 1.017 flagging 3.6% of volume). Not structural; a sampling
+artifact of the eval pin. Now cheap to fix with the lifted LP -> pin_pairs
+defaults to ALL popps (SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL=k to sample;
+SCULPTOR_FROZEN_PREFIX_PIN_TIME_LIMIT default 1800 s via the new
+frozen_time_limit LP lever). Every strategy row gets the same exhaustive
+pin, so the table stays fair. Consequences: (a) the 2026-09-06 "structural
+6% floor" story is retracted; (b) the running size-32 cell
+(20260907_143058-frozen32_lifted2) trains fine but its END-OF-RUN EVAL will
+use whatever pin code is loaded then -> re-score its stored advs with the
+exhaustive pin afterwards if needed; (c) with the exhaustive pin, Tom's
+extreme is reachable: lat_scale 0.001 -> 0.00% cong / 0.04% no-route at
++3.5 ms vs lat_scale 0.1. Next: rerun a5/a10 at lat_scale 0.01 (storage
+VM) and re-score the existing a5/a10 lat-0.1 advs under the exhaustive pin.
