@@ -354,3 +354,19 @@ expctl finish -> xfer_pickle.py (scratchpad) i-09a6 -> i-0428 for
 cache/popp_failure_latency_comparison_testing_feature-actual-32_20260823_130342_papertable32b_frozen_prefix.pkl
 -> on storage VM: run_all_paper_evaluations run <intent> --only paper_table
 (frozen covered at 3 -> aggregation only) -> grab -> paper repo figures.
+
+### Size-32 cell KILLED at iteration 1 for a cost quote (2026-09-07 06:20Z)
+777 popps / 5169 ugs: 18.7 s per LB probe (worker log), ~40-45 min/iteration
+with 20 workers -> ~105 h/deployment -> nsim=3 x 150 it ~ 13 days ~ $900.
+Startup (belief calc + pool) ~14 min; ~$1.5 spent; VM stopped, EBS intact.
+Profile (actual-10, 308 popps/3127 ugs, 71,810 pairs): whole call 0.99 s of
+which HiGHS solve 0.96 s -> Python assembly negligible; the cost IS the LP.
+Levers measured (actual-10): n_fail 20/10/5 -> 0.99/0.52/0.33 s (linear;
+obj -21.09/-21.03/-20.95); HiGHS ipm 6x SLOWER (5.9 s) -> keep simplex.
+Options at size 32 (per-iteration ~42 min @ n_fail 20, ~21 min @ n_fail 10,
+20 workers; ~x1.3 faster with 24-28 workers if memory holds):
+  nsim3 x150it: n_fail20 ~13d/$900 | n_fail10 ~6.6d/$450
+  nsim3 x 80it:              ~7d/$480 |            ~3.5d/$240
+  nsim1 x150it:            ~4.4d/$300 |            ~2.2d/$150
+(actual-10 objective plateaued by iter ~30-50 -> 80 iterations likely enough.)
+Awaiting Tom's pick. Restart cost is trivial (belief memo).
