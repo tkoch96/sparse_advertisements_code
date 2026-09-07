@@ -538,3 +538,14 @@ OPP steady 53.81): SCULPTOR 54.97ms 0.00% cong 0.012% nr | PAINTER 56.54
 (different draw) SCULPTOR went 0.09%->0.00% cong, 0.036%->0.012% nr at
 ~equal latency. Next on storage VM: 20260907_173009-frozen_a5_newdef (lat
 0.01 + summed no-route = plugin defaults), then a10.
+actual-5 with the NEW DEFAULTS (lat 0.01 + summed no-route; 20260907_173009-
+frozen_a5_newdef, storage VM 12w, 4385 s, clean; new draw OPP steady 52.81):
+  OPP(reactive) 52.86ms 0 0 | SCULPTOR 55.52 0.026% 0.000% | PAINTER 59.47
+  0.40% 0.000% | Unicast 58.79 0.15% 0 | AnyOpt 60.25 0.96% 0 | Anycast 60.72 1.76% 0
+No-route is 0 for EVERY row (the summed penalty also drives every strategy's
+pin), congestion 0.026% for SCULPTOR vs 0.40% painter; latency gap to the
+reactive anchor 2.7 ms (this draw), painter 4 ms behind SCULPTOR. The fast
+64-worker copy on i-04d7 was redundant -> killed; a10 new-defaults launched
+there instead (20260907_184444-frozen_a10_newdef, 64w). a5 pace note: 64
+workers gave ~40 s/iter vs ~45 s/iter at 16 -> at a5 the iteration is
+driver-bound, not pool-bound.
