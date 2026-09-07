@@ -293,3 +293,20 @@ Candidate defaults (Tom to pick): G-like (gamma 4, lat 0.1, top 5, P_c 100):
 baseline congestion, -43% no-route, +1.2ms; or F-like (headroom .9) if
 no-route matters most (0.09%, +1.8ms, +1.8pt congestion). Validate on
 actual-10 nsim>=2 before the paper cell -- small is tiny (45 popps, 3 sites).
+
+## Size-32 paper cell plan (Tom 2026-09-07: "pop it onto paper table")
+Target: frozen_prefix at dpsize 32 with nsim=3 (like the other objectives),
+produced under the CAMPAIGN tag 20260823_130342_papertable32b so the paper
+table aggregates it. Trap: the intent's paper_table stage has nsim=1 (the
+avg_latency cell only ever ran at 1) and the driver used ONE global nsim --
+raising it to 3 would re-run the multi-day avg_latency cell. Fix (done):
+per-objective counts + env in generate_paper_table (--nsim-by-objective,
+--env-by-objective), passed through by run_all_paper_evaluations from the
+intent stage keys `nsim_by_objective` / `env_by_objective`. Intent now has
+frozen_prefix: 3 deployments, SCULPTOR_N_WORKERS=24 (memory: ~3.2 GB/worker
+at actual-10; heavier at 32). So `run_all_paper_evaluations run <intent>
+--only paper_table` on the VM launches exactly the frozen cell at nsim=3
+and re-emits the table; `grab` pulls artifacts. Lever defaults for the
+cell: set on the plugin after the actual-10 arm-G run reads out (pending).
+Cost: unknown at 32 -- quote from the first ~20 iterations' pace; frozen
+LP is heavier than avg_latency (non-persistent, 21 scenario blocks).

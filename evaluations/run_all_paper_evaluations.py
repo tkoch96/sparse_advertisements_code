@@ -79,13 +79,22 @@ def _stage_cmd(name, spec, where, default_iters=None):
             cmd.append('--plot')
         return cmd
     if name == 'paper_table':
-        return [py, '-u', 'evaluations/generate_paper_table.py',
-                '--dpsize', str(spec['dpsize']),
-                '--number_of_deployments', str(spec['nsim']),
-                '--num_training_iter', str(iters or spec.get('iters', 150)),
-                '--run_id', spec['run_tag'],
-                '--objectives', ','.join(spec['objectives']),
-                '--out', spec['out']]
+        cmd = [py, '-u', 'evaluations/generate_paper_table.py',
+               '--dpsize', str(spec['dpsize']),
+               '--number_of_deployments', str(spec['nsim']),
+               '--num_training_iter', str(iters or spec.get('iters', 150)),
+               '--run_id', spec['run_tag'],
+               '--objectives', ','.join(spec['objectives']),
+               '--out', spec['out']]
+        # per-objective deployment counts / cell env (a new objective can
+        # join the campaign at its own nsim + worker cap without touching
+        # the covered cells; Tom 2026-09-07)
+        if spec.get('nsim_by_objective'):
+            cmd += ['--nsim-by-objective', ','.join(
+                '{}:{}'.format(k, v) for k, v in spec['nsim_by_objective'].items())]
+        if spec.get('env_by_objective'):
+            cmd += ['--env-by-objective', json.dumps(spec['env_by_objective'])]
+        return cmd
     raise SystemExit('stage {!r} has no cmd template and no built-in'
                      .format(name))
 

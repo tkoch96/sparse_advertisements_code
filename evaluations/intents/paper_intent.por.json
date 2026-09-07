@@ -110,6 +110,14 @@
       "enabled": true,
       "dpsize": 32,
       "nsim": 1,
+      "nsim_by_objective": {
+        "frozen_prefix": 3
+      },
+      "env_by_objective": {
+        "frozen_prefix": {
+          "SCULPTOR_N_WORKERS": "24"
+        }
+      },
       "run_tag": "20260823_130342_papertable32b",
       "objectives": [
         "avg_latency",

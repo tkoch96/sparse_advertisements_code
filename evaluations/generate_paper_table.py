@@ -41,6 +41,7 @@ FORCE_RECOMPUTE_METRICS = _os.environ.get('FORCE_RECOMPUTE_METRICS', '')
 FORCE_REAGGREGATE = _os.environ.get('FORCE_REAGGREGATE', '0') == '1'
 
 import argparse
+import json
 import os
 import pickle
 import re
@@ -472,6 +473,44 @@ def load_metrics(dpsize, objective, run_tag=None):
 
 # ------------------------------------------------------------- coverage --
 
+def nsim_for(nsim_target, obj):
+    """nsim_target is an int (every objective) or {objective: n} with a
+    '*' default -- lets a NEW objective join an existing campaign at its
+    own deployment count without re-running the covered cells (Tom
+    2026-09-07: frozen_prefix at 3 while avg_latency stays at 1)."""
+    if isinstance(nsim_target, dict):
+        return int(nsim_target.get(obj, nsim_target.get('*', 1)))
+    return int(nsim_target)
+
+
+def parse_nsim_by_objective(default_nsim, spec):
+    """'obj:n,obj:n' (or a dict) -> {'*': default_nsim, obj: n, ...}."""
+    out = {'*': int(default_nsim)}
+    if not spec:
+        return out
+    if isinstance(spec, dict):
+        out.update({_registry.canonical(k): int(v) for k, v in spec.items()})
+        return out
+    for tok in spec.split(','):
+        tok = tok.strip()
+        if not tok:
+            continue
+        obj, _, n = tok.partition(':')
+        out[_registry.canonical(obj.strip())] = int(n)
+    return out
+
+
+def parse_env_by_objective(spec):
+    """JSON {'obj': {'K': 'V'}} (or a dict) -> {obj: {K: V}}; per-objective
+    cell env applied on top of the stage env (e.g. a worker cap for a
+    memory-heavy objective) without touching the other cells."""
+    if not spec:
+        return {}
+    d = json.loads(spec) if isinstance(spec, str) else dict(spec)
+    return {_registry.canonical(k): {str(a): str(b) for a, b in (v or {}).items()}
+            for k, v in d.items()}
+
+
 def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
     out = {}
     for obj in objectives:
@@ -511,7 +550,7 @@ def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
             n, ' [FAILED strategies in sims: {}]'.format(
                 [s for s, _ in failed]) if failed else '')
         print('  {:<22s} {:<8s} {}'.format(
-            obj, 'ok' if m and n >= nsim_target else
+            obj, 'ok' if m and n >= nsim_for(nsim_target, obj) else
             ('partial' if m else 'MISSING'), status))
         print('      {}'.format(p))
         out[obj] = (m, p, n, failed)
@@ -520,7 +559,7 @@ def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
 
 def plan(dpsize, objectives, nsim_target, run_tag, cov):
     todo = [(o, c) for o, c in cov.items()
-            if (c[0] is None or c[2] < nsim_target)
+            if (c[0] is None or c[2] < nsim_for(nsim_target, o))
             and o not in BLOCKED_OBJECTIVES]
     if not todo:
         print('\n  nothing missing -- table is fully covered.')
@@ -528,10 +567,11 @@ def plan(dpsize, objectives, nsim_target, run_tag, cov):
     print('\n  commands that produce the missing cells (NOT executed):')
     for obj, (_m, _p, n, _f) in todo:
         tag = run_tag if obj == 'avg_latency' else '{}_{}'.format(run_tag, obj)
-        print('\n  # {}: have {} sim(s), want {}'.format(obj, n, nsim_target))
+        want = nsim_for(nsim_target, obj)
+        print('\n  # {}: have {} sim(s), want {}'.format(obj, n, want))
         print('  python -m cluster.expctl launch head --preset dpsweep \\')
         print('      --label {} --dpsizes {} --nsim {} --max-iter 200 \\'.format(
-            tag, dpsize, nsim_target))
+            tag, dpsize, want))
         print('      --probe-n prefixes --nocache --objsize \\')
         print('      --env SCULPTOR_GENERIC_OBJECTIVE={} \\'.format(obj))
         print('      --env SCULPTOR_RUN_TAG={}'.format(tag))
@@ -879,6 +919,14 @@ def main():
     ap.add_argument('--run_id', '--run-tag', dest='run_tag',
                     default='papertable')
     ap.add_argument('--objectives', default=','.join(DEFAULT_OBJECTIVES))
+    ap.add_argument('--nsim-by-objective', default='',
+                    help="per-objective deployment count 'obj:n,obj:n' "
+                         "overriding --number_of_deployments for those "
+                         "objectives only (join a campaign at nsim=3 while "
+                         "covered cells stay at their own count)")
+    ap.add_argument('--env-by-objective', default='',
+                    help='JSON {"obj": {"K": "V"}}: extra cell env for '
+                         'named objectives only (e.g. a worker cap)')
     ap.add_argument('--hotstart', default='',
                     help="resume sparse solves from state-N checkpoints: "
                          "'obj:runs_dir[,obj:runs_dir]', e.g. "
@@ -914,6 +962,12 @@ def main():
         hotstart[obj] = d.strip()
     dpsize = normalize_dpsize(a.dpsize)
     run_tag = a.run_tag
+    nsim_by_obj = parse_nsim_by_objective(a.nsim, a.nsim_by_objective)
+    env_by_obj = parse_env_by_objective(a.env_by_objective)
+    if a.nsim_by_objective or a.env_by_objective:
+        print('  per-objective: nsim={} env={}'.format(
+            {k: v for k, v in nsim_by_obj.items() if k != '*'},
+            {k: sorted(v) for k, v in env_by_obj.items()}))
 
     # ---- 5-SECOND PATH: fresh condensed pickle and nothing forced ----
     if (not a.plan_only and not FORCE_RESOLVE and not FORCE_REAGGREGATE
@@ -928,10 +982,10 @@ def main():
         return
 
     print('== coverage (dpsize={} nsim>={}) =='.format(dpsize, a.nsim))
-    cov = coverage(dpsize, objectives, a.nsim, run_tag)
+    cov = coverage(dpsize, objectives, nsim_by_obj, run_tag)
 
     if a.plan_only:
-        plan(dpsize, objectives, a.nsim, run_tag, cov)
+        plan(dpsize, objectives, nsim_by_obj, run_tag, cov)
     else:
         env_extra = {}
         _forced_tags = {}
@@ -943,7 +997,7 @@ def main():
                 print('\n  [{}] SKIPPED: {}'.format(
                     obj, BLOCKED_OBJECTIVES[obj]))
                 continue
-            covered = (m is not None and n >= a.nsim
+            covered = (m is not None and n >= nsim_for(nsim_by_obj, obj)
                        and not FORCE_RESOLVE
                        and not FORCE_RECOMPUTE_METRICS)
             if covered:
@@ -959,12 +1013,13 @@ def main():
                 # said 'no pickles found' and emitted no table)
                 _forced_tags[obj] = tag
             cell_env = dict(env_extra)
+            cell_env.update(env_by_obj.get(obj, {}))
             if obj in hotstart:
                 cell_env['SCULPTOR_HOTSTART_RUN_DIR'] = hotstart[obj]
-            run_objective_cell(obj, dpsize, a.nsim, a.iters, tag,
-                               env_extra=cell_env)
+            run_objective_cell(obj, dpsize, nsim_for(nsim_by_obj, obj),
+                               a.iters, tag, env_extra=cell_env)
         print('\n== re-checking coverage ==')
-        cov = coverage(dpsize, objectives, a.nsim, run_tag,
+        cov = coverage(dpsize, objectives, nsim_by_obj, run_tag,
                        tag_overrides=_forced_tags)
 
     if any(c[0] is not None for c in cov.values()):
