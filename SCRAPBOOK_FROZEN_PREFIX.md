@@ -530,3 +530,11 @@ lat_scale 0.01, penalty_sum no_route, cap_headroom 1.0; eval pin exhaustive.
 Runs launched BEFORE this (size-32 20260907_143058 = lat .1/mean; storage-VM
 a5 20260907_151844 = lat .01/mean) are off-default: their stored advs need a
 re-score, and the size-32 cell should be judged as the lat-.1/mean arm.
+actual-5 at lat_scale 0.01 with MEAN penalties (20260907_151844-frozen_a5_lat001,
+storage VM 12 workers, 80 it to stop, exhaustive pin; new deployment draw,
+OPP steady 53.81): SCULPTOR 54.97ms 0.00% cong 0.012% nr | PAINTER 56.54
+0.054% 0.044% | Unicast 58.15 0.16% 0.008% | AnyOpt 60.98 1.06% 0 | Anycast
+61.51 1.79% 0 | reactive anchor 53.85/0/0. vs the lat-0.1 a5 cell
+(different draw) SCULPTOR went 0.09%->0.00% cong, 0.036%->0.012% nr at
+~equal latency. Next on storage VM: 20260907_173009-frozen_a5_newdef (lat
+0.01 + summed no-route = plugin defaults), then a10.
