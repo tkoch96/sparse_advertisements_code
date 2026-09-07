@@ -549,3 +549,24 @@ reactive anchor 2.7 ms (this draw), painter 4 ms behind SCULPTOR. The fast
 there instead (20260907_184444-frozen_a10_newdef, 64w). a5 pace note: 64
 workers gave ~40 s/iter vs ~45 s/iter at 16 -> at a5 the iteration is
 driver-bound, not pool-bound.
+
+## actual-10 with NEW DEFAULTS + size-32 pause/resize (2026-09-07 ~23:56Z)
+actual-10 (20260907_191201-frozen_a10_newdef3, i-04d7 c8g.16xlarge 64w, 43 min
+incl eval, clean; two earlier launches on that box sat idle behind ORPHANED
+evaluate_over_deployment children + Ray daemons of killed a5 runs -- see
+memory ray-shared-cluster-one-driver-per-box for the kill recipe):
+  OPP(reactive) 41.54ms 0 0 | SCULPTOR 44.12 0.018% 0.000% | PAINTER 49.95
+  0.15% 0 | Unicast 48.06 0.15% 0 | AnyOpt 52.62 0.66% 0 | Anycast 55.08 1.31% 0
+  (steady: OPP 41.43, SCULPTOR 43.98, painter 49.76)
+Summary of the new defaults across sizes (SCULPTOR): small 12.75ms/0/0;
+actual-5 55.52/0.026%/0; actual-10 44.12/0.018%/0. Stranding gone
+everywhere, congestion ~0.02%, latency 2.6-2.7 ms above the reactive
+ceiling and 4-6 ms ahead of painter (painter's latency got WORSE under the
+new pin because it has to buy its zero stranding with latency).
+Tom's plan executed: size-32 cell 20260907_143058 (lat .1/mean) PAUSED at
+iteration 42 of sim 0 (driver+children+Ray killed cleanly, 14 state pickles
+kept at runs/1788805958-testing_feature-actual-32-sparse/ on i-09a6's EBS,
+harvested as rc=137); i-04d7 STOPPED; i-09a6 stop -> start --type
+r8g.24xlarge (96 vCPU / 768 GB so all cores can be workers at size 32) ->
+push -> relaunch size-32 under the campaign tag with the new defaults,
+SCULPTOR_N_WORKERS = nproc.
