@@ -150,20 +150,35 @@ def test_kill_sampler_rotation_and_stability():
 	fake.calculate_ground_truth_ingress = worker.calculate_ground_truth_ingress
 	fake.iter = 0
 
+	# levers resolve at construction from the plugin defaults + env overrides
 	os.environ['SCULPTOR_FROZEN_PREFIX_N_FAIL'] = '3'
+	os.environ['SCULPTOR_FROZEN_PREFIX_TOP_LOAD'] = '0'   # rotation needs free slots
 	try:
 		gobj = FrozenPrefixObjective(fake, 'frozen_prefix')
+		assert gobj.lp_kwargs['frozen_n_fail'] == 3 and gobj.lp_kwargs['frozen_top_load'] == 0
 		k0a = gobj.per_call_lp_kwargs(adv)['frozen_kill_popps']
 		k0b = gobj.per_call_lp_kwargs(adv)['frozen_kill_popps']
 		assert k0a == k0b, 'kill set must be stable within an iteration'
 		assert len(k0a) == min(3, worker.n_popps)
+		# the objective's levers ride along to the workers with the kill list
+		assert gobj.per_call_lp_kwargs(adv)['frozen_lat_scale'] == gobj.lp_kwargs['frozen_lat_scale']
 		sets = {tuple(k0a)}
 		for it in range(1, 6):
 			fake.iter = it
 			sets.add(tuple(gobj.per_call_lp_kwargs(adv)['frozen_kill_popps']))
 		assert len(sets) > 1, 'kill set must rotate across iterations'
+		# top-load slots are FIXED: with top_load >= n_fail the set is the
+		# heaviest popps every iteration (deliberate, not a bug)
+		os.environ['SCULPTOR_FROZEN_PREFIX_TOP_LOAD'] = '3'
+		gtop = FrozenPrefixObjective(fake, 'frozen_prefix')
+		fixed = {tuple(gtop.per_call_lp_kwargs(adv)['frozen_kill_popps'])}
+		for it in range(1, 4):
+			fake.iter = it
+			fixed.add(tuple(gtop.per_call_lp_kwargs(adv)['frozen_kill_popps']))
+		assert len(fixed) == 1
 	finally:
 		del os.environ['SCULPTOR_FROZEN_PREFIX_N_FAIL']
+		del os.environ['SCULPTOR_FROZEN_PREFIX_TOP_LOAD']
 
 
 @pytest.mark.unit
