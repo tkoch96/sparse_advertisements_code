@@ -432,3 +432,15 @@ normalized; 0 tracebacks; harvested to cache/cluster_runs/...). Table
 Same read as G1: SCULPTOR best-of-practical on latency + no-route,
 congestion a wash. Size-32 cell launch (nsim 3 x 150 it, 32 workers,
 ~2.5-3.5 d / $170-240) blocked by the permission classifier -> needs Tom.
+actual-5 lifted smoke DONE (20260907_123206-frozen_a5_lifted, 16 workers,
+100 it, 6927 s total incl. eval, clean). Table: OPP(reactive) 54.37ms 0/0 |
+SCULPTOR 54.66 1.77% 0.039% | PAINTER 55.53 1.46% 0.064% | Unicast 57.69
+1.32% 0.003% | AnyOpt 60.96 2.00% | Anycast 62.77 1.82% 0. Same read.
+TRAP (2026-09-07 18:27Z): size-32 cell 20260907_141609-frozen32_lifted,
+launched while the a5 smoke was still running, ATTACHED to the a5 run's Ray
+cluster ("Connecting to existing Ray cluster") instead of starting its own;
+a5's end-of-run teardown stopped Ray and the size-32 driver died 2 s later,
+rc=1, NO traceback anywhere (driver, workers, dmesg). The a10+a5 pair had
+survived only because the earlier-finishing one did not own the cluster.
+Rule: one SCULPTOR driver per box, or give the second its own Ray. Relaunched
+alone as 20260907_143058-frozen32_lifted2 (nsim 3 x 150 it, 32 workers).
