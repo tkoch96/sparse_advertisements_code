@@ -370,3 +370,35 @@ Options at size 32 (per-iteration ~42 min @ n_fail 20, ~21 min @ n_fail 10,
   nsim1 x150it:            ~4.4d/$300 |            ~2.2d/$150
 (actual-10 objective plateaued by iter ~30-50 -> 80 iterations likely enough.)
 Awaiting Tom's pick. Restart cost is trivial (belief memo).
+
+## LIFTED formulation (2026-09-07, commit aa26b47) -- exact, LP size independent of K
+Tom: "there's a ton of redundant information across the 20 problems". Yes:
+a single-popp failure k only moves the pairs whose normal winner is k, each
+to ONE fixed BGP fallback (2nd-best pref in the prefix). So scenario k's
+load on popp j = L_j + (volume falling from k onto j): normal load + sparse
+delta. Lifted LP: aux var L_j (normal load, written once), normal overflow
+o0_j, and a row + overflow var only for (k, j) with a non-empty delta;
+untouched popps share o0_j with cost weight 1 + gamma/K*(K - [j killed] -
+m_j). nnz ~ 2*pairs instead of (K+1)*pairs. Vectorized fallbacks via
+popp_by_ug_indicator top-2 per prefix column (== per-scenario gti, 0
+mismatches everywhere). Stacked kept as reference: frozen_formulation=
+'stacked' / SCULPTOR_FROZEN_PREFIX_FORMULATION. Tests:
+unit_tests/test_frozen_prefix_lifted.py (4) + test_frozen_prefix.py (9).
+
+Ladder (worst relative objective gap stacked vs lifted: 7.3e-9 = solver tol):
+  rung       adv                pairs   K=20 stacked->lifted      exhaustive stacked->lifted
+  small      allon/rand8/opp    .2-2k   .023->.002 / 1.7x / 4.3x  33x / 2.5x / 8.7x
+  actual-5   allon/rand8/opp    3-46k   82x / 2.1x / 5.4x          1020x / 12x / 113x
+  actual-10  allon/rand8/opp    3-89k   116x / 70x / 7.1x          1620x / 220x / 133x
+  actual-10  SCULPTOR a10 soln  72k     0.98s -> 0.35s (2.7x)      28.7s -> 3.6s (7.9x)
+Training regime = last row: broad SCULPTOR prefixes -> base pair LP is the
+remaining cost (nnz 1.5M -> 147k, time only 2.7x: near cold-solve floor;
+persistent avg_latency LP warm-solves in 0.036s on the same adv -- warm
+starts across probes are the next order-of-magnitude lever, but they
+re-open the HiGHS shared-state landmine). Exhaustive failures (K=n_popps)
+now 3.6s at actual-10: affordable, not free (coupling rows cost simplex
+iterations). Solver modes on lifted (actual-10 SCULPTOR adv): dual simplex
+0.35s (best); primal 1.5s; ipm 0.85s (2.8s exhaustive -- only wins there);
+pdlp 12s. Python assembly ~0.05s/call.
+actual-32 rung: running on i-09a6 (VM restarted 16:16Z, Tom: "really scale
+this up ... fine to work on there").
