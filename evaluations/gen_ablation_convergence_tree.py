@@ -59,7 +59,7 @@ def armslug(rung):
 #   ME_cdf_testing_feature-actual-10_full-dep2-fixed.pdf
 #   cdf_testing_feature-actual-10_expl_none-dep1-N10-smart_state-12.pkl
 _HARVEST = re.compile(r'^(?P<me>ME_)?(?P<label>.+?)_(?P<rung>[a-z_]+)-dep(?P<seed>\d+)-'
-                      r'(?P<rest>[A-Za-z0-9-]+?)(?:_state-(?P<n>\d+))?\.(?P<ext>pdf|pkl)$')
+                      r'(?P<rest>[^_]+?)(?:_state-(?P<n>\d+))?\.(?P<ext>pdf|pkl)$')
 
 
 def organize_harvest(figs_dir, out_dir):

@@ -519,11 +519,19 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         import shutil
         # every mode is budgeted now (smart | scheduled): carry N + mode in
         # the dir/fig name so grids over N never collide
-        _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE',
-                                os.environ.get('SCULPTOR_PROBE_MODE', 'smart'))
-        _nsuf = '-N{}-{}'.format(
-            os.environ.get('SCULPTOR_ABLATION_PROBE_N',
-                           os.environ.get('SCULPTOR_PROBE_N', '?')), _pmode)
+        # name with what the solver RESOLVED, not the env: the full rung's
+        # env is scrubbed and the budget is per-deployment (prefix count)
+        # since 2026-09-08, so the env alone would print '?'.
+        _solver = locals().get('solver', None)
+        _pmode = getattr(_solver, 'probe_mode',
+                         getattr(_solver, 'abl_probe_mode', None)) or \
+            os.environ.get('SCULPTOR_ABLATION_PROBE_MODE',
+                           os.environ.get('SCULPTOR_PROBE_MODE', 'smart'))
+        _n = getattr(_solver, 'probe_n', getattr(_solver, 'abl_probe_n', None))
+        if _n is None:
+            _n = os.environ.get('SCULPTOR_ABLATION_PROBE_N',
+                                os.environ.get('SCULPTOR_PROBE_N', 'prefixes'))
+        _nsuf = '-N{}-{}'.format(_n, _pmode)
         _dst = os.path.join(os.path.dirname(_srd),
                             'ablation-{}-{}-dep{}{}'.format(dpsize, rung, seed, _nsuf))
         try:
