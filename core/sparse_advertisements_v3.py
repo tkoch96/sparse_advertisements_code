@@ -425,7 +425,7 @@ class Sparse_Advertisement_Wrapper(Optimal_Adv_Wrapper):
 				pm = getattr(_self, 'abl_probe_mode', None)
 				if pm == 'smart':
 					grounded = it >= int(getattr(_self, 'abl_probe_tconv', 0))
-				elif pm in ('gated', 'scheduled', 'adaptive', 'slotted'):
+				elif pm == 'scheduled':
 					grounded = (getattr(_self, 'abl_probes_spent', 0)
 					            >= int(getattr(_self, 'abl_probe_n', 0)))
 				else:
@@ -2981,87 +2981,86 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				timers.append(time.time() - t_last)
 				t_last = time.time()
 
-				if self.probe_mode in ('scheduled', 'slotted', 'gated',
-									   'smart'):
-					# WHEN-probing (merged from the ablation fork L2/L6,
-					# Tom 2026-08-17): measure-XOR-step under a TOTAL
-					# budget of SCULPTOR_PROBE_N groundings over a
-					# SCULPTOR_PROBE_TCONV horizon. 'scheduled' fires
-					# every ~TCONV/N iterations; 'slotted' (L6, the
-					# production WHEN) gives probe k the slot
-					# k*period +- period/2 and, within it, fires early
-					# when the last grounding's realized SURPRISE was
-					# hot, center when quiet, slot-end as backstop.
-					# Probing is pure grounding at the CURRENT
-					# advertisement (WHAT targeting retired 2026-08-17:
-					# the current point is the finite-difference hub).
-					# Budget exhaustion stops MEASURING, never TRAINING.
-					if self.probe_mode == 'smart':
-						# belief bookkeeping must run EVERY iteration, not
-						# only on probe iterations: criteria (b) plateau and
-						# (c) predicted-vs-realized are built from the
-						# per-iteration belief series.
-						self._probe_track_belief()
-						probe = self._probe_smart_decision(grads)
-					elif self.probe_mode == 'gated':
-						probe = self._probe_gated_decision(grads)
-					elif self.probe_mode == 'slotted':
-						probe = self._probe_slotted_decision()
-					else:
-						probe = self._probe_scheduled_decision()
-					_a_before = (np.array(self.optimization_advertisement,
-										  dtype=float)
-								 if self.probe_mode == 'smart' else None)
-					if not (probe and self._probe_ground_current()):
-						# step iteration. Preserve stock's
-						# uncertainty_factor decay invariant: stock
-						# decays inside solve_max_information every
-						# iteration; under probe-XOR-step that code only
-						# runs on probe iterations (the ~16k-factor
-						# deadlock, 2026-08-14).
-						self.uncertainty_factor = max(
-							1.0, self.uncertainty_factor * (1 - .25))
-						self._solve_apply_step(grads)
-						if _a_before is not None:
-							# (c) raw material: first-order predicted change
-							# in the believed objective from this step.
-							_da = (np.asarray(self.optimization_advertisement,
-											  dtype=float) - _a_before)
-							self._probe_pending_pred = float(np.dot(
-								np.asarray(grads).flatten(), _da.flatten()))
-
-					## measure
-					timers.append(time.time() - t_last)
-					t_last = time.time()
-					_log_mem('iter_post_measure', iter=self.iter)
-
-					## info (no separate exploration phase under WHEN)
-					timers.append(time.time() - t_last)
-					t_last = time.time()
-				else:
-					# Step phase: momentum update w = a - alpha*g + beta*(a - a_last),
-					# optional proximal L1, then clip to [0,1] via
-					# impose_advertisement_constraint.
+				# WHEN-probing: measure-XOR-step under a TOTAL budget of
+				# SCULPTOR_PROBE_N groundings over a SCULPTOR_PROBE_TCONV
+				# horizon. 'smart' (default) fires on the uncertainty gate,
+				# stale+plateau, prediction mismatch or the scheduled
+				# backstop; 'scheduled' fires every ~TCONV/N iterations.
+				# Probing is pure grounding at the CURRENT advertisement.
+				# Budget exhaustion stops MEASURING, never TRAINING.
+				# (post_step/slotted/gated retired 2026-09-08, Tom: only
+				# smart and scheduled exist.)
+				if self.probe_mode == 'smart':
+					# belief bookkeeping must run EVERY iteration, not
+					# only on probe iterations: criteria (b) plateau and
+					# (c) predicted-vs-realized are built from the
+					# per-iteration belief series.
+					self._probe_track_belief()
+					probe = self._probe_smart_decision(grads)
+				else:  # 'scheduled'
+					probe = self._probe_scheduled_decision()
+				# Gate-history record for make_plots' probe panels
+				# ("Gate: U vs c", "Probes spent", "Unc factor",
+				# "Explore value"). Tom 2026-09-08: the L6/'full' rung
+				# IS mainline, so its convergence figure had those
+				# panels blank while every fork arm (which records
+				# this in sculptor_fork) had them. Same keys as the
+				# fork's record, mainline attribute names; pure
+				# bookkeeping -- nothing reads it except the plots and
+				# the ladder's result JSON (gate_hist).
+				_gate_rec = {
+					'iter': int(self.iter), 'K': None, 'surprise': None,
+					'U': getattr(self, '_probe_U', None),
+					'c': getattr(self, '_probe_c_now', None),
+					'U_sig': getattr(self, '_probe_U_sig', None),
+					'U_ent': getattr(self, '_probe_U_ent', None),
+					'med_sigma': getattr(self, '_probe_med_sigma', None),
+					'ent_ratio': float(getattr(self, '_probe_ent_ratio', 0.0) or 0.0),
+					'ent_anchor': (float(self._probe_ent_anchor)
+								   if getattr(self, '_probe_ent_anchor', None) is not None
+								   else None),
+					'refresh': bool(getattr(self, '_abl_sigma_refresh_iter', False)),
+					'probe': bool(probe),
+					'spent': int(getattr(self, 'probes_spent', 0) or 0),
+					'uf': float(self.uncertainty_factor),
+					'explore_val': None}
+				if not hasattr(self, '_abl_gate_hist'):
+					self._abl_gate_hist = []
+				self._abl_gate_hist.append(_gate_rec)
+				_a_before = (np.array(self.optimization_advertisement,
+									  dtype=float)
+							 if self.probe_mode == 'smart' else None)
+				_grounded = bool(probe) and self._probe_ground_current()
+				if _grounded:
+					_gate_rec['spent'] = int(getattr(self, 'probes_spent', 0) or 0)
+					_gate_rec['explore_val'] = getattr(
+						self, '_last_explore_value', None)
+				if not _grounded:
+					# step iteration. Preserve stock's
+					# uncertainty_factor decay invariant: stock
+					# decays inside solve_max_information every
+					# iteration; under probe-XOR-step that code only
+					# runs on probe iterations (the ~16k-factor
+					# deadlock, 2026-08-14).
+					self.uncertainty_factor = max(
+						1.0, self.uncertainty_factor * (1 - .25))
 					self._solve_apply_step(grads)
+					if _a_before is not None:
+						# (c) raw material: first-order predicted change
+						# in the believed objective from this step.
+						_da = (np.asarray(self.optimization_advertisement,
+										  dtype=float) - _a_before)
+						self._probe_pending_pred = float(np.dot(
+							np.asarray(grads).flatten(), _da.flatten()))
 
-					# Measurement phase: if the thresholded advertisement changed,
-					# measure ground-truth ingresses (real deployments batch changes
-					# before advertising).
-					self._solve_post_step_measure()
+				## measure
+				timers.append(time.time() - t_last)
+				t_last = time.time()
+				_log_mem('iter_post_measure', iter=self.iter)
 
-					## measure
-					timers.append(time.time() - t_last)
-					t_last = time.time()
-					_log_mem('iter_post_measure', iter=self.iter)
-
-					# Exploration phase: pick and measure up to n_max_info_iter
-					# maximally-informative advertisements (entropy/bimodality of the
-					# predicted benefit distribution) to shrink model uncertainty.
-					self._solve_max_info_phase()
-
-					## info
-					timers.append(time.time() - t_last)
-					t_last = time.time()
+				## info (no separate exploration phase under WHEN)
+				timers.append(time.time() - t_last)
+				t_last = time.time()
 
 				# Stopping phase: update rolling objective/advertisement deltas
 				# and evaluate the stopping condition (respects
@@ -3088,13 +3087,13 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self._solve_finalize()
 
 	# ---- WHEN-probing framework (merged from the ablation fork, Tom ----
-	# 2026-08-17). L6 'slotted' = the production probe-timing method;
-	# 'scheduled' = its even-spacing backstop (L2). Env knobs (each falls
-	# back to its SCULPTOR_ABLATION_* twin so ladder cells keep working):
-	#   SCULPTOR_PROBE_MODE   post_step (stock default) | scheduled | slotted
+	# 2026-08-17; reduced to two modes 2026-09-08). 'smart' = the
+	# production probe-timing method; 'scheduled' = its even-spacing
+	# backstop. Env knobs (each falls back to its SCULPTOR_ABLATION_*
+	# twin so ladder cells keep working):
+	#   SCULPTOR_PROBE_MODE   smart (default) | scheduled
 	#   SCULPTOR_PROBE_N      total grounding budget for the run
-	#   SCULPTOR_PROBE_TCONV  assumed convergence horizon (slot tiling)
-	#   SCULPTOR_SURPRISE_THETA  hot-surprise threshold (default 0.02)
+	#   SCULPTOR_PROBE_TCONV  assumed convergence horizon
 
 	@staticmethod
 	def _probe_env(name, default):
@@ -3102,7 +3101,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 							  os.environ.get('SCULPTOR_ABLATION_' + name,
 											 default))
 
-	PROBE_MODES = ('post_step', 'scheduled', 'slotted', 'gated', 'smart')
+	PROBE_MODES = ('scheduled', 'smart')
 
 	def _probe_framework_init(self):
 		self.probe_mode = self._probe_env('PROBE_MODE', DEFAULT_PROBE_MODE)
@@ -3134,7 +3133,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self._probe_surprise_pending = None
 		self._probe_last_surprise_val = None
 		self._probe_last_surprise = None
-		# --- uncertainty-gated (gated/smart) state -----------------------
+		# --- uncertainty-gated (smart) state -----------------------
 		# The sigma/RB-stat plumbing these consume is ALREADY in this file
 		# (_abl_grad_sigma at the gradient seam, _abl_capture_rb, the
 		# _abl_var_ewma sigma refresh); only the DECISION lived in the
@@ -3155,18 +3154,18 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self._probe_pending_pred = None
 		self._probe_preprobe_belief = None
 		self._probe_skips = 0
-		if self.probe_mode in ('gated', 'smart'):
+		if self.probe_mode == 'smart':
 			# The fork starts both probe clocks at 0, so the (b) staleness
 			# and (s) backstop criteria measure from iteration 0 rather
 			# than from -inf. Left at -10**9 the backstop fires on the
 			# very first iteration -- an extra attempt the fork never
-			# makes. Scoped to the new modes so slotted/scheduled, which
+			# makes. Scoped to smart so scheduled, which
 			# have shipped with the sentinel, are untouched.
 			self._probe_last_iter = 0
 			self._probe_last_attempt = 0
 
 	# ------------------------------------------------------------------
-	# Uncertainty-gated probing (gated + smart), ported verbatim in
+	# Uncertainty-gated probing (smart), ported verbatim in
 	# behaviour from experiments/ablation/sculptor_fork.py 2026-08-21.
 	# The fork remains the reference implementation and its assertions
 	# still gate the ablation ladder; integration_tests/test_probe_merge.py
@@ -3282,26 +3281,6 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				self._probe_c_mult *= 2.0
 			self._probe_preprobe_belief = None
 
-	def _probe_gated_decision(self, grads):
-		"""gated: probe when U exceeds the (auto-learned) threshold."""
-		U, nsr, k = self._probe_uncertainty(grads)
-		self._probe_U = U
-		self._probe_U_history.append(U)
-		c, q_hat, anneal = self._probe_current_c()
-		self._probe_c_now = c
-		want = U > c
-		can = self.probes_spent < self.probe_n
-		decision = want and can
-		print('[probe-gate] iter={} mode=gated U={:.4f} nsr={:.3f} k={} '
-			  'c={:.4f} spent={}/{} -> {}'.format(
-				  self.iter, U, nsr, k, c, self.probes_spent, self.probe_n,
-				  'PROBE' if decision else
-				  ('step (budget exhausted, U high)' if want else 'step')),
-			  flush=True)
-		if decision:
-			self._probe_last_attempt = self.iter
-		return decision
-
 	def _probe_smart_decision(self, grads):
 		"""smart: probe when ANY of
 		  (a) U > c                  -- the model admits uncertainty
@@ -3379,73 +3358,11 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 										   if self._belief_hist else None)
 		return decision
 
-	def _probe_resolve_surprise(self):
-		"""Realized belief surprise of the LAST grounding: how much the
-		measurement moved the belief, relative to the achieved belief span
-		(the one bias-immune error signal -- a biased model never
-		volunteers that it needs checking, L7 autopsy)."""
-		if self._probe_surprise_pending is None:
-			return
-		pre, probe_iter = self._probe_surprise_pending
-		b = getattr(self, 'current_pseudo_objective', None)
-		if b is None or not np.isfinite(b) or self.iter <= probe_iter:
-			return
-		span = max(abs(getattr(self, '_stopv2_b0', float(b))
-					   - getattr(self, '_stopv2_best', float(b))), 1e-9)
-		surprise = abs(float(b) - pre) / span
-		self._probe_last_surprise = float(surprise)
-		self._probe_last_surprise_val = float(surprise)
-		self._probe_surprise_pending = None
-		print('[probe-gate] {} surprise={:.4f}'.format(
-			self.probe_mode, surprise), flush=True)
-
 	def _probe_arm_surprise(self):
 		b = getattr(self, 'current_pseudo_objective', None)
 		self._probe_surprise_pending = (
 			(float(b) if b is not None and np.isfinite(b) else 0.0),
 			int(self.iter))
-
-	def _probe_slotted_decision(self):
-		"""Slotted WHEN (Tom 2026-08-16: "mean measurement rate stays
-		evenly spaced; bias measurements to where they're needed WITHIN
-		their expected interval"). Probe k owns slot k*period +- w
-		(w = period/2, slots tile TCONV exactly), so the budget is always
-		fully spent and the long-run rate IS the schedule. Within a slot:
-		fire from the slot START when the last grounding surprise was hot
-		(the model demonstrably drifting), from the CENTER when quiet;
-		the slot END force-fires (schedule = backstop). Skipped probes
-		retry every iteration until the slot closes -- no budget leak."""
-		period = max(1, int(round(float(self.probe_tconv)
-								  / max(1, self.probe_n))))
-		w = max(1, period // 2)
-		k = self.probes_spent + 1          # next probe, 1-indexed
-		can = k <= self.probe_n
-		self._probe_resolve_surprise()
-		theta = float(self._probe_env('SURPRISE_THETA', '0.02'))
-		hot = (self._probe_last_surprise_val or 0.0) > theta
-		center = k * period
-		earliest, latest = center - w, center + w
-		due = self.iter >= (earliest if hot else center)
-		force = self.iter >= latest
-		# Staleness floor (Tom 2026-08-19: 'if we haven't done a
-		# measurement in X iterations and we have budget, measure').
-		# Guarantees groundings at least every PROBE_MAX_STALENESS iters
-		# while budget remains, independent of slot placement — so a
-		# converging run drains its bank instead of exiting on stale
-		# beliefs. Default X = the natural slot period.
-		max_stale = int(self._probe_env('PROBE_MAX_STALENESS',
-										str(period)))
-		stale = (self.iter - self._probe_last_iter) >= max_stale
-		decision = can and (due or force or stale)
-		if decision:
-			self._probe_last_attempt = self.iter
-			self._probe_arm_surprise()
-		print('[probe-gate] iter={} mode=slotted k={}/{} slot=[{},{}] '
-			  'hot={} stale={} spent={} -> {}'.format(
-				  self.iter, k, self.probe_n, earliest, latest, hot,
-				  stale, self.probes_spent,
-				  'PROBE' if decision else 'step'), flush=True)
-		return decision
 
 	def _probe_scheduled_decision(self):
 		"""scheduled mode: unconditional probe every ~TCONV/N iterations --
@@ -3765,16 +3682,22 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		# ALWAYS report the measurement budget when one is in force -- the
 		# line above is verbose-gated, so a budgeted run previously left no
 		# evidence that its budget bound. This is the line to grep for.
-		if getattr(self, 'probe_mode', 'post_step') != 'post_step':
-			_spent = int(getattr(self, 'probes_spent', 0) or 0)
-			_skips = int(getattr(self, '_probe_skips', 0) or 0)
-			_setup = int(self.path_measures) - _spent
-			print("[probe-budget] EXITING on {} path measures "
-				  "(= {} setup grounding + {} probes) | budget N={} "
-				  "mode={} skipped={} iters={}".format(
-					  int(self.path_measures), _setup, _spent,
-					  int(getattr(self, 'probe_n', -1)), self.probe_mode,
-					  _skips, int(self.iter)), flush=True)
+		# (mainline names first, fork-era abl_* second: the ablation fork
+		# subclass runs this finalize too and names its counters abl_*.)
+		_spent = int(getattr(self, 'probes_spent',
+							 getattr(self, 'abl_probes_spent', 0)) or 0)
+		_skips = int(getattr(self, '_probe_skips',
+							 getattr(self, '_abl_probe_skips', 0)) or 0)
+		_setup = int(self.path_measures) - _spent
+		print("[probe-budget] EXITING on {} path measures "
+			  "(= {} setup grounding + {} probes) | budget N={} "
+			  "mode={} skipped={} iters={}".format(
+				  int(self.path_measures), _setup, _spent,
+				  int(getattr(self, 'probe_n',
+							  getattr(self, 'abl_probe_n', -1))),
+				  getattr(self, 'probe_mode',
+						  getattr(self, 'abl_probe_mode', '?')),
+				  _skips, int(self.iter)), flush=True)
 		self.metrics['t_per_iter'] = self.t_per_iter
 
 

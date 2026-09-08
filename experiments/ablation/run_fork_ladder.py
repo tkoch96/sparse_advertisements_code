@@ -439,7 +439,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             # while the run gated made the queue audit flag stale code)
             result['probe_mode'] = getattr(
                 solver, 'abl_probe_mode',
-                getattr(solver, 'probe_mode', 'fixed'))
+                getattr(solver, 'probe_mode', 'smart'))
             result['probes_spent'] = int(getattr(
                 solver, 'abl_probes_spent',
                 getattr(solver, 'probes_spent', 0) or 0))
@@ -512,26 +512,18 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     #   SCULPTOR_ABLATION_KEEP_RUNS=1: never delete anything
     _srd = getattr(locals().get('solver', None), 'save_run_dir', None)
     # rename the run dir semantically: runs/ablation-<dpsize>-<rung>-dep<seed>
-    # (suffixed -N<budget> under gated probing so grids over N never
+    # (suffixed -N<budget>-<mode> so grids over N never
     # collide on the same dir name within a workspace -- needed for
     # per-run figure/log harvesting)
     if _srd and os.path.isdir(_srd):
         import shutil
-        _nsuf = ''
-        _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
-        if _pmode in ('gated', 'scheduled', 'smart', 'adaptive', 'slotted'):
-            _nsuf = '-N{}-{}'.format(
-                os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'), _pmode)
-        elif _pmode == 'fixed':
-            # budgeted-fixed (L1 v2) is a real N-grid arm: carry N in the
-            # dir/fig name or every N's convergence figure collides on
-            # <rung>-dep<seed>-fixed.pdf (caught 2026-08-14: dash grid
-            # could only link one cell)
-            _nsuf = ('-N{}-fixed'.format(
-                os.environ.get('SCULPTOR_ABLATION_PROBE_N', '?'))
-                if os.environ.get('SCULPTOR_ABLATION_FIXED_BUDGET',
-                                  '0') == '1'
-                else '-fixed')
+        # every mode is budgeted now (smart | scheduled): carry N + mode in
+        # the dir/fig name so grids over N never collide
+        _pmode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE',
+                                os.environ.get('SCULPTOR_PROBE_MODE', 'smart'))
+        _nsuf = '-N{}-{}'.format(
+            os.environ.get('SCULPTOR_ABLATION_PROBE_N',
+                           os.environ.get('SCULPTOR_PROBE_N', '?')), _pmode)
         _dst = os.path.join(os.path.dirname(_srd),
                             'ablation-{}-{}-dep{}{}'.format(dpsize, rung, seed, _nsuf))
         try:

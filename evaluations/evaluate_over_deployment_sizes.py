@@ -580,11 +580,9 @@ def _cli():
 						 'size). Implies --probe-mode smart unless one is '
 						 'given. Default is DEFAULT_PROBE_N in constants.py.')
 	ap.add_argument('--probe-mode', default=None,
-					choices=['post_step', 'scheduled', 'slotted', 'gated',
-							 'smart'],
-					help='WHEN-probing policy. post_step = stock (measure '
-						 'after every step that moved the advertisement, '
-						 'no budget).')
+					choices=['scheduled', 'smart'],
+					help='WHEN-probing policy (default: smart, the solver '
+						 'default in helpers/constants.py; both budgeted).')
 	ap.add_argument('--plot', action='store_true', help='also run make_paper_plots')
 	ap.add_argument('--figures-subdir', default=None,
 					help="namespace this run's figures: figures/<subdir>/... (e.g. --figures-subdir real_sweep_2026_08). Sets SCULPTOR_FIG_SUBDIR.")
@@ -608,15 +606,17 @@ def _cli():
 												  'prefix'):
 			int(a.probe_n)          # fail fast on a typo, not 40 minutes in
 		os.environ['SCULPTOR_PROBE_N'] = str(a.probe_n)
-		if a.probe_mode is None:
-			# a budget with no policy would silently do nothing: post_step
-			# (the default) has no budget at all.
-			a.probe_mode = 'smart'
 	if a.probe_mode is not None:
 		os.environ['SCULPTOR_PROBE_MODE'] = a.probe_mode
+	# Print the EFFECTIVE policy, i.e. what the solver will run, not the env
+	# fallback: this line used to say 'post_step (stock)' whenever the env
+	# var was unset while the solver ran its smart/N=10 default (2026-09-08).
+	from helpers.constants import DEFAULT_PROBE_MODE as _DPM, DEFAULT_PROBE_N as _DPN
+	# Exact 'mode=<m> budget=<n>' form: integration_tests/verify_e2e_probe_budget
+	# greps for it.
 	print('[sweep] probing: mode={} budget={}'.format(
-		os.environ.get('SCULPTOR_PROBE_MODE', 'post_step (stock)'),
-		os.environ.get('SCULPTOR_PROBE_N', 'n/a')), flush=True)
+		os.environ.get('SCULPTOR_PROBE_MODE', _DPM),
+		os.environ.get('SCULPTOR_PROBE_N', _DPN)), flush=True)
 	dpsizes = ([int(x) if x.strip().isdigit() else x.strip()
 				for x in a.dpsizes.split(',')] if a.dpsizes else None)
 	nsim = None

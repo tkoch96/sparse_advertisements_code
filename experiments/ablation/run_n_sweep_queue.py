@@ -202,7 +202,7 @@ def main():
     ap.add_argument('--workers-per-run', type=int, default=1)
     ap.add_argument('--port0', type=int, default=56000)
     ap.add_argument('--dpsize', default='small')
-    ap.add_argument('--probe-mode', default='gated')
+    ap.add_argument('--probe-mode', default='smart')
     ap.add_argument('--gamma', default='0.1')
     ap.add_argument('--no-rescore', action='store_true')
     ap.add_argument('--py', default=sys.executable)
@@ -468,7 +468,7 @@ def main():
             # late only L1 (budgeted-fixed) produces budget_exhausted;
             # remeasure_triggered is legacy (skip-not-stop replaced it) --
             # both stay ACCEPTED for old datasets, neither can occur from
-            # gated/scheduled/smart under current semantics.
+            # smart/scheduled under current semantics.
             early_ok = ((r.get('exit_reason') == 'budget_exhausted'
                          and r.get('probes_spent', 0) >= 1)
                         or r.get('exit_reason') == 'remeasure_triggered'
@@ -485,7 +485,7 @@ def main():
                 # adv IS the paper's cached mainline training, so the
                 # stale-code probing guard doesn't apply to them.
                 continue
-            if sp['probe_mode'] != 'fixed' and r.get('probe_mode') != sp['probe_mode']:
+            if r.get('probe_mode') != sp['probe_mode']:
                 print('[audit] BAD (stale code, probe_mode={}):'.format(r.get('probe_mode')), fn)
                 bad += 1
     print('[audit] {} bad runs'.format(bad), flush=True)

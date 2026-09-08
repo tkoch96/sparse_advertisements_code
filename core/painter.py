@@ -106,8 +106,8 @@ class Painter_Adv_Solver(Optimal_Adv_Wrapper):
 		# Painter measures the live deployment every iteration, so without
 		# this a budgeted sweep caps sparse and lets painter measure
 		# freely -- the per-measurement comparison would be meaningless.
-		# SCULPTOR_PAINTER_MEASURE_CAP still overrides; unset + unbudgeted
-		# probing (PROBE_MODE=post_step) restores legacy unbounded painter.
+		# SCULPTOR_PAINTER_MEASURE_CAP still overrides. (Every probe mode is
+		# budgeted since 2026-09-08, so the cap is always in force.)
 		_cap = os.environ.get('SCULPTOR_PAINTER_MEASURE_CAP', '')
 		if not _cap:
 			_b = resolve_probe_budget(getattr(self, 'n_prefixes', None))

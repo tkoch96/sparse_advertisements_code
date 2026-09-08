@@ -38,36 +38,20 @@ Flags (read at construction):
       ASSERT (every iteration, via the 'abl_mc_stats' worker RPC): every
       worker is the mc-off class, MC_NUM==1, zero stock-sampler calls,
       zero non-point-mass benefit pdfs, pseudo-path builder ran.
-  SCULPTOR_ABLATION_PROBE_MODE 'fixed' (default) | 'gated'
-      'gated': uncertainty-gated measure-XOR-step (Tom's design,
-      2026-08-10). Each iteration: compute gradients as usual and also
-      their per-coordinate uncertainty (sigma of the flip-delta from the
-      LB pdfs the workers already return). If U > PROBE_C and the probe
-      budget is not exhausted, spend the iteration on a MEASUREMENT (the
-      rung's max-info mechanism; falls back to measuring the current
-      advertisement) and do NOT step. Otherwise STEP and measure NOTHING
-      (stock SCULPTOR measured the deployed advertisement after every
-      step; under gating N is the TOTAL measurement budget for solve()).
-      U = g^2-weighted mean sign-error probability Phi(-|raw_i|/sigma_i)
-      over ALL probed coordinates, LB and RB terms COMPOSED per the
-      objective's own weights (independent probes: weighted raw-delta
-      sums, squared-weight variance sums; raw deltas vs standard-error
-      sigmas -- never the heaviside-scaled gradient vs raw sigma).
-      'fixed' reproduces stock semantics exactly. With
-      SCULPTOR_ABLATION_FIXED_BUDGET=1 (budgeted-fixed, Tom 2026-08-14):
-      measure EVERY iteration until the PROBE_N budget is spent (may
-      overshoot by 1: post-step + max-info can both measure in one
-      iteration), then KEEP TRAINING on beliefs -- step-only iterations
-      like a gated 'step', with the same uncertainty-factor decay --
-      until the normal convergence criterion / horizon ends the run.
-      (The 2026-08-12 exit-on-budget form of budgeted-fixed stopped at
-      ~iteration N, i.e. ~at init -- degenerate L1B, retired.)
+  SCULPTOR_ABLATION_PROBE_MODE 'smart' (default) | 'scheduled'
+      Measure-XOR-step under a TOTAL budget of PROBE_N groundings over
+      a PROBE_TCONV horizon; grounding is always at the CURRENT
+      advertisement. 'smart' fires on the uncertainty gate U > c,
+      stale+plateau, prediction mismatch or the scheduled backstop;
+      'scheduled' fires every ~TCONV/N iterations. Budget exhaustion
+      stops MEASURING, never TRAINING. (fixed/gated/adaptive/slotted
+      retired 2026-09-08, Tom: only smart and scheduled exist.)
       ASSERT (every iteration): TOTAL measurements during solve() -- as
       path_measures growth, so every measurement path counts -- never
       exceed PROBE_N; probe iterations never exceed PROBE_N.
   SCULPTOR_ABLATION_PROBE_C   float, default 1.0: INITIAL threshold (auto-c
       anneals down from it; with AUTO_C=0 it is the static threshold)
-  SCULPTOR_ABLATION_PROBE_N   int, default 5 (gated-mode probe budget)
+  SCULPTOR_ABLATION_PROBE_N   int, default 5 (probe budget)
   SCULPTOR_ABLATION_PROBE_AUTO_C '1' (default) | '0'
       Auto-learn c (Tom's scheme, 2026-08-10): budget N should spread over
       ~the first PROBE_FRAC of an assumed PROBE_TCONV-iteration
@@ -145,21 +129,11 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self.abl_explore = os.environ.get('SCULPTOR_ABLATION_EXPLORE', 'default')
         assert self.abl_explore in ('default', 'random', 'none')
         self.abl_mc = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '1'
-        self.abl_probe_mode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'fixed')
-        # fixed: stock semantics (measure every new advertisement).
-        # gated: original U>c gate (2026-08-10).
+        self.abl_probe_mode = os.environ.get('SCULPTOR_ABLATION_PROBE_MODE', 'smart')
         # scheduled: unconditional probe every ~TCONV/N iterations.
         # smart: gated + (b) stale+plateau + (c) prediction-mismatch +
         #        (d) surprise-adaptive threshold (Tom, 2026-08-12).
-        assert self.abl_probe_mode in ('fixed', 'gated', 'scheduled', 'smart', 'adaptive', 'slotted')
-        # exit-on-budget applies to FIXED-BUDGET (L1) ONLY as of
-        # 2026-08-14 late (Tom: "never exit because we ran out of
-        # measurements — that's only for L1"). Gated/scheduled/smart
-        # NEVER set exit_reason='budget_exhausted': budget exhaustion
-        # stops MEASURING, training runs to the normal criterion/horizon.
-        # This flag only selects L1's exit-vs-coast variant.
-        self.abl_exit_on_budget = os.environ.get(
-            'SCULPTOR_ABLATION_EXIT_ON_BUDGET', '1') == '1'
+        assert self.abl_probe_mode in ('scheduled', 'smart')
         self.abl_exit_reason = None
         # smart-gate tunables
         self.abl_smart_stale_frac = float(os.environ.get(
@@ -421,31 +395,6 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         c = (q_hat + (self.abl_probe_c - q_hat) * anneal) * self._abl_c_mult
         return c, q_hat, anneal
 
-    def _abl_probe_decision(self, grads):
-        """gated mode: True -> spend this iteration on a measurement."""
-        U, nsr, k = self._abl_probe_uncertainty(grads)
-        self._abl_probe_U = U
-        self._abl_U_history.append(U)
-        c, q_hat, anneal = self._abl_probe_current_c()
-        self._abl_probe_c_now = c
-        want = U > c
-        can = self.abl_probes_spent < self.abl_probe_n
-        decision = want and can
-        print('[probe-gate] iter={} U={:.4f} nsr={:.3f} med_snr={:.2f} k={} '
-              'c={:.4f} (q_hat={:.4f} anneal={:.2f} mult={:g}) '
-              'spent={}/{} -> {}'.format(
-            self.iter, U, nsr, getattr(self, '_abl_probe_med_snr', float('nan')),
-            k, c, q_hat, anneal, self._abl_c_mult,
-            self.abl_probes_spent, self.abl_probe_n, 'PROBE' if decision else
-            ('step (budget exhausted, U high)' if want else 'step')), flush=True)
-        if decision:
-            # refractory doubling moved to _abl_commit_probe_bookkeeping —
-            # it applies only if the probe actually MEASURES (Tom review
-            # 2026-08-15: skipped probes were paying the penalty)
-            self._abl_last_attempt_iter = self.iter
-            self._abl_pending_probe_ctx = {}
-        return decision
-
     def _abl_decision_probe_target(self):
         # implementation merged into the HEAD as _decision_probe_target
         # (default SCULPTOR_MAXINFO_TARGET=decision); kept as an alias
@@ -567,12 +516,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
 
     # ============ scheduled + smart probing (2026-08-12) =================
 
-    # ---- slotted/scheduled WHEN: merged into the HEAD (Tom 2026-08-17;
-    # sparse_advertisements_v3._probe_{slotted,scheduled}_decision). These
-    # delegates only sync the ablation harness's counters to the mainline
-    # names and back, so the fork keeps its budget asserts + gate records
-    # while the LOGIC lives in production code. Ablation-specific probe
-    # experiments (fixed/budgeted, gated, smart, adaptive) remain below.
+    # ---- scheduled WHEN: merged into the HEAD (Tom 2026-08-17;
+    # sparse_advertisements_v3._probe_scheduled_decision). The delegate
+    # only syncs the ablation harness's counters to the mainline names and
+    # back, so the fork keeps its budget asserts + gate records while the
+    # LOGIC lives in production code. The fork's own smart gate remains
+    # below (fixed/gated/adaptive/slotted retired 2026-09-08).
 
     def _abl_sync_probe_to_main(self):
         self.probe_mode = self.abl_probe_mode
@@ -597,69 +546,10 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         if decision:
             self._abl_pending_probe_ctx = {}
 
-    def _abl_slotted_decision(self):
-        self._abl_sync_probe_to_main()
-        decision = self._probe_slotted_decision()
-        self._abl_sync_probe_from_main(decision)
-        return decision
-
     def _abl_scheduled_decision(self):
         self._abl_sync_probe_to_main()
         decision = self._probe_scheduled_decision()
         self._abl_sync_probe_from_main(decision)
-        return decision
-
-    def _abl_adaptive_decision(self):
-        """new-L6 WHEN (Tom 2026-08-16): surprise-adapted grounding.
-        Iteration-clocked AIMD on the probe interval K -- start at
-        K0 = TCONV/N; after each grounding, the REALIZED belief surprise
-        (the one bias-immune error signal: how much the measurement moved
-        the belief, relative to the achieved belief span) shrinks K
-        multiplicatively on big surprise / grows it on small; clamped to
-        [1, 3*K0]. No model-self-assessed uncertainty anywhere (the L7
-        autopsy: a biased model never volunteers that it needs checking;
-        ~290 of ~400 smart-gate firings were the dumb backstop). The
-        K_max clamp IS the staleness backstop. Probe target is always
-        'current' (pure grounding)."""
-        K0 = max(1.0, float(self.abl_probe_tconv) / max(1, self.abl_probe_n))
-        if not hasattr(self, '_abl_K'):
-            self._abl_K = float(K0)
-            self._abl_surprise_pending = None
-        if self._abl_surprise_pending is not None:
-            pre, probe_iter = self._abl_surprise_pending
-            b = getattr(self, 'current_pseudo_objective', None)
-            if b is not None and np.isfinite(b) and self.iter > probe_iter:
-                span = max(abs(getattr(self, '_stopv2_b0', float(b))
-                               - getattr(self, '_stopv2_best', float(b))), 1e-9)
-                surprise = abs(float(b) - pre) / span
-                theta = float(os.environ.get(
-                    'SCULPTOR_ABLATION_SURPRISE_THETA', '0.02'))
-                self._abl_last_surprise = float(surprise)
-                oldK = self._abl_K
-                if surprise > theta:
-                    self._abl_K = max(1.0, self._abl_K * 0.5)
-                else:
-                    self._abl_K = min(3.0 * K0, self._abl_K * 1.3)
-                print('[probe-gate] adaptive surprise={:.4f} theta={} '
-                      'K {:.1f}->{:.1f}'.format(surprise, theta, oldK,
-                                                self._abl_K), flush=True)
-                self._abl_surprise_pending = None
-        due = (self.iter - self._abl_last_probe_iter) >= int(round(self._abl_K))
-        can = self.abl_probes_spent < self.abl_probe_n
-        decision = due and can
-        if decision:
-            self._abl_last_attempt_iter = self.iter
-            self._abl_pending_probe_ctx = {}
-            b = getattr(self, 'current_pseudo_objective', None)
-            self._abl_surprise_pending = (
-                (float(b) if b is not None and np.isfinite(b) else 0.0),
-                int(self.iter))
-        print('[probe-gate] iter={} mode=adaptive K={:.1f} since_last={} '
-              'spent={}/{} -> {}'.format(
-                  self.iter, self._abl_K,
-                  self.iter - self._abl_last_probe_iter,
-                  self.abl_probes_spent, self.abl_probe_n,
-                  'PROBE' if decision else 'step'), flush=True)
         return decision
 
     def _abl_track_belief(self):
@@ -795,8 +685,6 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         c-trajectories stay quantitatively interpretable (Tom review
         2026-08-15)."""
         ctx = getattr(self, '_abl_pending_probe_ctx', None) or {}
-        if self.abl_probe_mode == 'gated':
-            self._abl_c_mult *= 2.0  # back-off: measured probe doubles c
         if self.abl_probe_mode == 'smart':
             if ctx.get('reasons'):
                 self._abl_probe_reasons[ctx['reasons']] += 1
@@ -1158,13 +1046,6 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                     assert self._l7_diff_total > 0, \
                         ('[ablation-assert] l7: drawn base never differed from '
                          'the thresholded base over the whole run')
-        if self.abl_probe_mode == 'gated':
-            total = int(getattr(self, 'path_measures', 0)) - \
-                int(getattr(self, '_abl_pm_solve_start', 0))
-            print('[probe-gate] FINAL: {} total measurements (budget N={}), '
-                  '{} probe iterations, c={}'.format(
-                      total, self.abl_probe_n, self.abl_probes_spent,
-                      self.abl_probe_c), flush=True)
 
     # ================= solve(): replica of the repo orchestrator ========
     # Verbatim copy of Sparse_Advertisement_Solver.solve() with
@@ -1198,154 +1079,91 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
                 timers.append(time.time() - t_last)
                 t_last = time.time()
 
-                if self.abl_probe_mode in ('gated', 'scheduled', 'smart', 'adaptive', 'slotted'):
-                    # measure-XOR-step under a TOTAL measurement budget: N
-                    # bounds every measurement in the run. Step iterations
-                    # measure nothing; only probe iterations may measure.
-                    # The budget assertion is on total path_measures growth,
-                    # so ANY measurement path that slips through gets caught.
-                    if self.abl_probe_mode == 'smart':
-                        self._abl_track_belief()
-                        probe = self._abl_smart_decision(grads)
-                    elif self.abl_probe_mode == 'slotted':
-                        probe = self._abl_slotted_decision()
-                    elif self.abl_probe_mode == 'adaptive':
-                        probe = self._abl_adaptive_decision()
-                    elif self.abl_probe_mode == 'scheduled':
-                        probe = self._abl_scheduled_decision()
+                # measure-XOR-step under a TOTAL measurement budget: N
+                # bounds every measurement in the run. Step iterations
+                # measure nothing; only probe iterations may measure.
+                # The budget assertion is on total path_measures growth,
+                # so ANY measurement path that slips through gets caught.
+                if self.abl_probe_mode == 'smart':
+                    self._abl_track_belief()
+                    probe = self._abl_smart_decision(grads)
+                elif self.abl_probe_mode == 'scheduled':
+                    probe = self._abl_scheduled_decision()
+                _gate_rec = {'iter': int(self.iter),
+                             'K': (float(self._abl_K)
+                                   if hasattr(self, '_abl_K') else None),
+                             'surprise': getattr(
+                                 self, '_abl_last_surprise', None),
+                             'U': getattr(self, '_abl_probe_U', None),
+                             'c': getattr(self, '_abl_probe_c_now', None),
+                             'U_sig': getattr(self, '_abl_U_sig', None),
+                             'U_ent': getattr(self, '_abl_U_ent', None),
+                             'med_sigma': getattr(
+                                 self, '_abl_med_sigma', None),
+                             'ent_ratio': float(self._abl_ent_ratio),
+                             'ent_anchor': (
+                                 float(self._abl_ent_anchor)
+                                 if self._abl_ent_anchor is not None
+                                 else None),
+                             'refresh': bool(
+                                 self._abl_sigma_refresh_iter),
+                             'probe': bool(probe),
+                             'spent': int(self.abl_probes_spent),
+                             'uf': float(self.uncertainty_factor),
+                             'explore_val': None}
+                if not hasattr(self, '_abl_gate_hist'):
+                    self._abl_gate_hist = []
+                self._abl_gate_hist.append(_gate_rec)
+                self._abl_last_surprise = None  # one record per resolution
+                self._last_explore_value = None
+                if probe:
+                    probed = self._abl_do_probe_iteration()
+                    _gate_rec['explore_val'] = getattr(
+                        self, '_last_explore_value', None)
+                    _gate_rec['spent'] = int(self.abl_probes_spent)
+                    if probed:
+                        self._abl_commit_probe_bookkeeping()
                     else:
-                        probe = self._abl_probe_decision(grads)
-                    _gate_rec = {'iter': int(self.iter),
-                                 'K': (float(self._abl_K)
-                                       if hasattr(self, '_abl_K') else None),
-                                 'surprise': getattr(
-                                     self, '_abl_last_surprise', None),
-                                 'U': getattr(self, '_abl_probe_U', None),
-                                 'c': getattr(self, '_abl_probe_c_now', None),
-                                 'U_sig': getattr(self, '_abl_U_sig', None),
-                                 'U_ent': getattr(self, '_abl_U_ent', None),
-                                 'med_sigma': getattr(
-                                     self, '_abl_med_sigma', None),
-                                 'ent_ratio': float(self._abl_ent_ratio),
-                                 'ent_anchor': (
-                                     float(self._abl_ent_anchor)
-                                     if self._abl_ent_anchor is not None
-                                     else None),
-                                 'refresh': bool(
-                                     self._abl_sigma_refresh_iter),
-                                 'probe': bool(probe),
-                                 'spent': int(self.abl_probes_spent),
-                                 'uf': float(self.uncertainty_factor),
-                                 'explore_val': None}
-                    if not hasattr(self, '_abl_gate_hist'):
-                        self._abl_gate_hist = []
-                    self._abl_gate_hist.append(_gate_rec)
-                    self._abl_last_surprise = None  # one record per resolution
-                    self._last_explore_value = None
-                    if probe:
-                        probed = self._abl_do_probe_iteration()
-                        _gate_rec['explore_val'] = getattr(
-                            self, '_last_explore_value', None)
-                        _gate_rec['spent'] = int(self.abl_probes_spent)
-                        if probed:
-                            self._abl_commit_probe_bookkeeping()
-                        else:
-                            # probe request ignored (nothing informative,
-                            # current adv already measured) -> normal step
-                            self._abl_pending_probe_ctx = None
-                            _gate_rec['skipped'] = True
-                            probe = False
-                    if not probe:
-                        # Preserve stock's uncertainty_factor decay invariant
-                        # (2026-08-14): stock decays the factor every iteration
-                        # inside solve_max_information; under gating that code
-                        # only runs on probe iterations, so a factor spike
-                        # suppressed U, which suppressed probes, which made the
-                        # decay unreachable -- a deadlock that froze runs at
-                        # uncertainty_factor ~16k (dep3). Decay on step
-                        # iterations with stock's alpha and floor.
-                        self.uncertainty_factor = max(
-                            1.0, self.uncertainty_factor * (1 - .25))
-                        a_before = np.array(self.optimization_advertisement,
-                                            dtype=float)
-                        self._solve_apply_step(grads)
-                        self._abl_assert_step()
-                        if self.abl_probe_mode == 'smart':
-                            # (c) raw material: first-order predicted change
-                            # in the believed objective from this step
-                            da = (np.asarray(self.optimization_advertisement,
-                                             dtype=float) - a_before)
-                            self._abl_pending_pred = float(
-                                np.dot(np.asarray(grads).flatten(),
-                                       da.flatten()))
-                    self._abl_assert_measure_budget()
-                    # Budget exhaustion stops MEASURING, never TRAINING
-                    # (Tom, 2026-08-14 late: "never exit because we ran
-                    # out of measurements — that's only for L1"). The
-                    # gate's spend cap already blocks further probes;
-                    # remaining iterations run as belief-driven steps to
-                    # the normal convergence criterion / horizon.
-                    # (Pre-change runs recorded exit_reason=
-                    # 'budget_exhausted' here — quarantined.)
-                    timers.append(time.time() - t_last)
-                    t_last = time.time()
-                    _log_mem('iter_post_measure', iter=self.iter)
-                elif (os.environ.get('SCULPTOR_ABLATION_FIXED_BUDGET',
-                                     '0') == '1'
-                      and not self.abl_exit_on_budget
-                      and (int(getattr(self, 'path_measures', 0))
-                           - int(getattr(self, '_abl_pm_solve_start', 0)))
-                          >= self.abl_probe_n):
-                    # Budgeted-fixed COAST variant (EXIT_ON_BUDGET=0):
-                    # budget spent -> keep training on beliefs to the
-                    # horizon. NOT the L1 arm -- Tom's final definition
-                    # (2026-08-14 late): L1 = measure every one of the
-                    # first N iterations, then IMMEDIATELY EXIT (the
-                    # exit branch below, default). L1 varies with N via
-                    # how many trained iterations it gets.
-                    self.abl_probes_spent = (
-                        int(getattr(self, 'path_measures', 0))
-                        - int(getattr(self, '_abl_pm_solve_start', 0)))
+                        # probe request ignored (nothing informative,
+                        # current adv already measured) -> normal step
+                        self._abl_pending_probe_ctx = None
+                        _gate_rec['skipped'] = True
+                        probe = False
+                if not probe:
+                    # Preserve stock's uncertainty_factor decay invariant
+                    # (2026-08-14): stock decays the factor every iteration
+                    # inside solve_max_information; under gating that code
+                    # only runs on probe iterations, so a factor spike
+                    # suppressed U, which suppressed probes, which made the
+                    # decay unreachable -- a deadlock that froze runs at
+                    # uncertainty_factor ~16k (dep3). Decay on step
+                    # iterations with stock's alpha and floor.
                     self.uncertainty_factor = max(
                         1.0, self.uncertainty_factor * (1 - .25))
+                    a_before = np.array(self.optimization_advertisement,
+                                        dtype=float)
                     self._solve_apply_step(grads)
                     self._abl_assert_step()
-
-                    ## measure (skipped: fixed budget spent — coasting)
-                    timers.append(time.time() - t_last)
-                    t_last = time.time()
-                    _log_mem('iter_post_measure', iter=self.iter)
-                else:
-                    self._solve_apply_step(grads)
-                    self._abl_assert_step()
-
-                    self._solve_post_step_measure()
-
-                    ## measure
-                    timers.append(time.time() - t_last)
-                    t_last = time.time()
-                    _log_mem('iter_post_measure', iter=self.iter)
-
-                    _abl_pm_before = int(getattr(self, 'path_measures', 0))
-                    self._solve_max_info_phase()
-                    self._abl_assert_max_info(_abl_pm_before)
-
-                    if os.environ.get('SCULPTOR_ABLATION_FIXED_BUDGET',
-                                      '0') == '1':
-                        # track spend (may overshoot by 1: post-step +
-                        # max-info can both measure in one iteration).
-                        # L1 semantics (Tom 2026-08-14 late): budget
-                        # spent -> IMMEDIATELY EXIT (default
-                        # exit-on-budget); EXIT_ON_BUDGET=0 -> coast
-                        # branch above instead.
-                        self.abl_probes_spent = (
-                            int(getattr(self, 'path_measures', 0))
-                            - int(getattr(self, '_abl_pm_solve_start', 0)))
-                        if (self.abl_exit_on_budget
-                                and self.abl_probes_spent
-                                >= self.abl_probe_n):
-                            self.abl_exit_reason = 'budget_exhausted'
-
+                    if self.abl_probe_mode == 'smart':
+                        # (c) raw material: first-order predicted change
+                        # in the believed objective from this step
+                        da = (np.asarray(self.optimization_advertisement,
+                                         dtype=float) - a_before)
+                        self._abl_pending_pred = float(
+                            np.dot(np.asarray(grads).flatten(),
+                                   da.flatten()))
+                self._abl_assert_measure_budget()
+                # Budget exhaustion stops MEASURING, never TRAINING
+                # (Tom, 2026-08-14 late: "never exit because we ran
+                # out of measurements — that's only for L1"). The
+                # gate's spend cap already blocks further probes;
+                # remaining iterations run as belief-driven steps to
+                # the normal convergence criterion / horizon.
+                # (Pre-change runs recorded exit_reason=
+                # 'budget_exhausted' here — quarantined.)
+                timers.append(time.time() - t_last)
+                t_last = time.time()
+                _log_mem('iter_post_measure', iter=self.iter)
                 ## info
                 timers.append(time.time() - t_last)
                 t_last = time.time()

@@ -278,19 +278,19 @@ DEFAULT_MC_NUM_EXPLORE = 5
 
 # ---------------------------------------------------------------------------
 # WHEN-probing: measure-XOR-step under a TOTAL measurement budget.
-# Merged from experiments/ablation/sculptor_fork.py (slotted/scheduled
-# 2026-08-17; gated/smart 2026-08-21). Probing is grounding at the CURRENT
-# advertisement; budget exhaustion stops MEASURING, never TRAINING.
+# Merged from experiments/ablation/sculptor_fork.py (2026-08-17/21);
+# reduced to the two surviving modes 2026-09-08 (Tom). Probing is grounding
+# at the CURRENT advertisement; budget exhaustion stops MEASURING, never
+# TRAINING. Every run is budgeted -- there is no unbudgeted stock mode.
 #
 # THE measurement budget for a solve() run. Every mode caps total
 # path_measures growth at this. Override per-run with SCULPTOR_PROBE_N.
 DEFAULT_PROBE_N = 10
-# Assumed convergence horizon the budget is spread over (slot tiling and
-# the smart gate's spacing targets both derive from it). Falls back to the
+# Assumed convergence horizon the budget is spread over (the scheduled
+# period and the smart gate's spacing targets both derive from it). Falls back to the
 # run's max_n_iter when that is known.
 DEFAULT_PROBE_TCONV = 100
-# post_step = stock (measure after every step that moved the advertisement,
-# no budget). scheduled/slotted/gated/smart are budgeted.
+# smart (default) | scheduled. Both budgeted.
 DEFAULT_PROBE_MODE = 'smart'
 # smart-gate shape (see _probe_smart_decision). Defaults reproduce the
 # ablation fork's validated values.
@@ -316,14 +316,9 @@ def resolve_probe_budget(n_prefixes=None):
     and painter must resolve it identically or a "budget-fair" comparison
     silently is not; this is the single place that does it.
 
-    Returns None when probing is unbudgeted (PROBE_MODE=post_step).
+    Every mode is budgeted (smart | scheduled), so this never returns None.
     """
     import os as _os
-    mode = _os.environ.get('SCULPTOR_PROBE_MODE',
-                           _os.environ.get('SCULPTOR_ABLATION_PROBE_MODE',
-                                           DEFAULT_PROBE_MODE))
-    if mode == 'post_step':
-        return None
     raw = str(_os.environ.get('SCULPTOR_PROBE_N',
                               _os.environ.get('SCULPTOR_ABLATION_PROBE_N',
                                               DEFAULT_PROBE_N))).strip().lower()

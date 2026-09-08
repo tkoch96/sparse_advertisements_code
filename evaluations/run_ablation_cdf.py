@@ -144,11 +144,25 @@ def main():
                     help='painter measurement cap in continuation mode')
     ap.add_argument('--init-src', default=None,
                     help='canonical inits dir (default <ws-root>/inits)')
+    ap.add_argument('--artifacts-figs', default=None,
+                    help='per-cell figure harvest dir (default <out-root>'
+                         '_artifacts/figs). Every spec carries it, so '
+                         'ablation_cell.harvest_figs copies each cell\'s '
+                         'convergence/model-error PDFs + final state pickle '
+                         'as <label>_seed<seed>_<rung>.* BEFORE clean_cell '
+                         'wipes the run dir. Without it (the 2026-09-02 '
+                         'campaign) the genuine make_plots PDFs were '
+                         'generated and then discarded.')
+    ap.add_argument('--workers-per-run', type=int, default=None,
+                    help='passed through to run_n_sweep_queue (its default '
+                         'is 1 worker per cell)')
     a = ap.parse_args()
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
     out_root = os.path.abspath(a.out_root)
     ws_root = os.path.abspath(a.ws_root)
+    figs_dir = os.path.abspath(a.artifacts_figs or
+                               out_root + '_artifacts/figs')
     os.makedirs(ws_root, exist_ok=True)
     if a.cell_timeout:
         os.environ['SCULPTOR_CELL_TIMEOUT'] = str(a.cell_timeout)
@@ -207,6 +221,7 @@ def main():
                             SCULPTOR_ABLATION_RESUME_FROM=prior,
                             SCULPTOR_PROBE_N=str(a.probe_n),
                             SCULPTOR_PROBE_TCONV=str(a.max_iter)),
+                'artifacts_figs': figs_dir,
             }]
             if 'painter' in a.rungs.split(','):
                 specs.append({
@@ -221,6 +236,7 @@ def main():
                     'max_iter': a.max_iter,
                     'dpsize': a.dpsize,
                     'env': dict(base_env),
+                    'artifacts_figs': figs_dir,
                 })
         else:
             specs = [{
@@ -237,6 +253,7 @@ def main():
                 # PAPER PARITY: default world, no XOBJS. Dep-file mode rides
                 # in spec env so cells AND the queue's rescore see it.
                 'env': base_env,
+                'artifacts_figs': figs_dir,
             }]
         mf = os.path.join(ws_root, 'cdf_manifest.json')
         with open(mf, 'w') as fh:
@@ -244,12 +261,15 @@ def main():
         print('[cdf] manifest {} ({} rungs x {} deployments = {} cells)'
               .format(mf, len(a.rungs.split(',')), a.deployments,
                       len(a.rungs.split(',')) * a.deployments), flush=True)
-        rc = subprocess.call(
-            [sys.executable, '-u', '-m',
-             'experiments.ablation.run_n_sweep_queue',
-             '--manifest', mf, '--ws-root', ws_root,
-             '--slots', str(a.slots), '--port0', str(a.port0)],
-            cwd=_REPO)
+        print('[cdf] per-cell figures harvested to {}'.format(figs_dir),
+              flush=True)
+        qargs = [sys.executable, '-u', '-m',
+                 'experiments.ablation.run_n_sweep_queue',
+                 '--manifest', mf, '--ws-root', ws_root,
+                 '--slots', str(a.slots), '--port0', str(a.port0)]
+        if a.workers_per_run:
+            qargs += ['--workers-per-run', str(a.workers_per_run)]
+        rc = subprocess.call(qargs, cwd=_REPO)
         if rc != 0:
             print('[cdf] queue rc={} -- not drawing figures from a '
                   'partial sweep'.format(rc), flush=True)

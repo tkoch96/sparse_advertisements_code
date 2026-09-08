@@ -90,9 +90,9 @@ def preset_dpsweep(a, run_id):
     if a.max_iter:
         argv += ['--max-iter', str(a.max_iter)]
     # Measurement budget. Forwarded as flags rather than set as env vars so
-    # the sweep's own validation runs: it fail-fasts on a typo'd budget,
-    # and it implies --probe-mode smart -- a budget left on the default
-    # post_step mode is silently no budget at all.
+    # the sweep's own validation runs (it fail-fasts on a typo'd budget).
+    # Every probe mode is budgeted (smart | scheduled, 2026-09-08); the
+    # solver default is smart with DEFAULT_PROBE_N.
     if a.probe_n:
         argv += ['--probe-n', str(a.probe_n)]
     if a.probe_mode:
@@ -976,10 +976,9 @@ def main(argv=None):
                         'literal "prefixes" for each deployment\'s own '
                         'prefix count. Implies --probe-mode smart.')
     p.add_argument('--probe-mode', default=None,
-                   choices=['post_step', 'scheduled', 'slotted', 'gated',
-                            'smart'],
-                   help='WHEN-probing policy; post_step (stock) has no '
-                        'budget.')
+                   choices=['scheduled', 'smart'],
+                   help='WHEN-probing policy (default: smart, the solver '
+                        'default; both are budgeted).')
     p.add_argument('--port', type=int, default=31415)
     p.add_argument('--plot', action='store_true')
     p.add_argument('--env', action='append', help='K=V, repeatable')

@@ -643,6 +643,25 @@ def run_objective_cell(obj, dpsize, nsim, iters, tag, env_extra=None):
     return ok
 
 
+def final_banner(t0, cell_ok, emitted):
+    """The top-level completion banner. cluster/expctl.verdict() judges a
+    run on '[sweep] ALL DONE' in run.log, never on rc -- but the per-cell
+    sweeps print theirs into cache/table_generate_<tag>.log, so a clean
+    generate_paper_table run used to be reported as 'SUSPECT: exited 0
+    WITHOUT a completion banner' (2026-09-07, frozen_a10_lifted). Print
+    ALL DONE only when every launched cell passed AND a table was emitted;
+    anything else is a FAILED banner so it can never be mistaken."""
+    dt = time.time() - t0
+    bad = sorted(o for o, ok in cell_ok.items() if not ok)
+    if bad or not emitted:
+        print('\n[sweep] FAILED after {:.1f}s: {}'.format(
+            dt, ('cells without a completion banner: {}'.format(bad)
+                 if bad else 'no table emitted')))
+    else:
+        print('\n[sweep] ALL DONE in {:.1f}s. {} objective cell(s) launched, '
+              'all ok; table emitted.'.format(dt, len(cell_ok)))
+
+
 # ---------------------------------------------------------------- table --
 
 def build_table(cov):
@@ -979,11 +998,13 @@ def main():
         emit_key(labels, rows, a.format, a.out)
         print('\n  [condensed] table from L3 pickle in {:.1f}s'.format(
             _t.time() - t0))
+        final_banner(t0, {}, emitted=True)
         return
 
     print('== coverage (dpsize={} nsim>={}) =='.format(dpsize, a.nsim))
     cov = coverage(dpsize, objectives, nsim_by_obj, run_tag)
 
+    cell_ok = {}
     if a.plan_only:
         plan(dpsize, objectives, nsim_by_obj, run_tag, cov)
     else:
@@ -1016,15 +1037,18 @@ def main():
             cell_env.update(env_by_obj.get(obj, {}))
             if obj in hotstart:
                 cell_env['SCULPTOR_HOTSTART_RUN_DIR'] = hotstart[obj]
-            run_objective_cell(obj, dpsize, nsim_for(nsim_by_obj, obj),
-                               a.iters, tag, env_extra=cell_env)
+            cell_ok[obj] = run_objective_cell(
+                obj, dpsize, nsim_for(nsim_by_obj, obj), a.iters, tag,
+                env_extra=cell_env)
         print('\n== re-checking coverage ==')
         cov = coverage(dpsize, objectives, nsim_by_obj, run_tag,
                        tag_overrides=_forced_tags)
 
+    emitted = False
     if any(c[0] is not None for c in cov.values()):
         labels, rows = build_table(cov)
         if labels:
+            emitted = True
             emit(labels, rows, a.format, a.out, basename='paper_table_full')
             emit_key(labels, rows, a.format, a.out)
             if not a.plan_only:
@@ -1052,6 +1076,8 @@ def main():
     else:
         print('\n  no pickles found -- nothing to tabulate yet.')
     print('  total {:.1f}s'.format(_t.time() - t0))
+    if not a.plan_only:
+        final_banner(t0, cell_ok, emitted)
 
 
 if __name__ == '__main__':
