@@ -242,7 +242,11 @@ def main():
         sp['probe_mode'] = sp.get('probe_mode', args.probe_mode)
         sp['dpsize'] = sp.get('dpsize', args.dpsize)
         sp['seeds_list'] = parse_seeds(str(sp.get('seeds', args.seeds)))
-        sp['n_list'] = [int(n) for n in str(sp.get('n_values', args.n_values)).split(',')]
+        # budget tokens: ints, or the literal 'prefixes' (one measurement per
+        # prefix of each deployment, resolved per cell by
+        # helpers.constants.resolve_probe_budget -- the 2026-09-08 default)
+        sp['n_list'] = [int(n) if str(n).strip().isdigit() else str(n).strip()
+                        for n in str(sp.get('n_values', args.n_values)).split(',')]
         _spec_rungs = [r for r in
                        str(sp.get('rungs', args.rungs)).split(',') if r]
         # known ladder rungs keep the heavy-first ordering; custom-runner
