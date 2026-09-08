@@ -92,7 +92,8 @@ def preset_dpsweep(a, run_id):
     # Measurement budget. Forwarded as flags rather than set as env vars so
     # the sweep's own validation runs (it fail-fasts on a typo'd budget).
     # Every probe mode is budgeted (smart | scheduled, 2026-09-08); the
-    # solver default is smart with DEFAULT_PROBE_N.
+    # solver default is smart; the budget resolves per deployment to one
+    # measurement per prefix unless --probe-n sets an int.
     if a.probe_n:
         argv += ['--probe-n', str(a.probe_n)]
     if a.probe_mode:

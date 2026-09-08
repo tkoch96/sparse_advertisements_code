@@ -106,8 +106,11 @@ def main():
                     help="training gamma; '4' matches wrapper_eval / the "
                          'paper evals (choke_config parity)')
     ap.add_argument('--probe-n', default='10',
-                    help='measurement budget; 10 = DEFAULT_PROBE_N, the '
-                         'mainline default the paper evals trained with')
+                    help='measurement budget; 10 = what the 2026-09 paper '
+                         'evals and the cdf_a10 campaign trained with (kept '
+                         'explicit for depstore/choke_config parity). The '
+                         "mainline has no constant default any more: unset "
+                         "= 'prefixes', one per prefix of each deployment.")
     ap.add_argument('--probe-mode', default='smart',
                     help='mainline DEFAULT_PROBE_MODE')
     ap.add_argument('--rungs', default=PAPER_RUNGS)

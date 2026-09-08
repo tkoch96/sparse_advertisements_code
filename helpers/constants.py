@@ -283,9 +283,11 @@ DEFAULT_MC_NUM_EXPLORE = 5
 # at the CURRENT advertisement; budget exhaustion stops MEASURING, never
 # TRAINING. Every run is budgeted -- there is no unbudgeted stock mode.
 #
-# THE measurement budget for a solve() run. Every mode caps total
-# path_measures growth at this. Override per-run with SCULPTOR_PROBE_N.
-DEFAULT_PROBE_N = 10
+# THE measurement budget for a solve() run is NOT a constant (Tom
+# 2026-09-08): it is resolved per deployment by resolve_probe_budget()
+# below -- one measurement per prefix of that deployment unless
+# SCULPTOR_PROBE_N sets an int. Every mode caps total path_measures
+# growth at it.
 # Assumed convergence horizon the budget is spread over (the scheduled
 # period and the smart gate's spacing targets both derive from it). Falls back to the
 # run's max_n_iter when that is known.
@@ -309,23 +311,37 @@ DEFAULT_U_ENT_W = 0.0                # weight of the adjacency-entropy term in U
 
 
 def resolve_probe_budget(n_prefixes=None):
-    """The measurement budget in force, resolving the 'prefixes' sentinel.
+    """The measurement budget in force for THIS deployment.
 
-    SCULPTOR_PROBE_N may be an int or the literal 'prefixes' (each
-    deployment's own prefix count, which varies with size). Both SCULPTOR
-    and painter must resolve it identically or a "budget-fair" comparison
-    silently is not; this is the single place that does it.
+    There is no constant default (Tom 2026-09-08). Unset SCULPTOR_PROBE_N
+    (or the literal 'prefixes') means one measurement per prefix of this
+    deployment: the measurement budget tracks the prefix budget, which
+    varies per deployment, so it can only be resolved where n_prefixes is
+    known. An int in SCULPTOR_PROBE_N (or its SCULPTOR_ABLATION_ twin)
+    overrides. Both SCULPTOR and painter must resolve it identically or a
+    "budget-fair" comparison silently is not; this is the single place
+    that does it.
 
-    Every mode is budgeted (smart | scheduled), so this never returns None.
+    Raises ValueError rather than guessing: an unresolvable budget must
+    never silently become some number.
     """
     import os as _os
     raw = str(_os.environ.get('SCULPTOR_PROBE_N',
                               _os.environ.get('SCULPTOR_ABLATION_PROBE_N',
-                                              DEFAULT_PROBE_N))).strip().lower()
-    if raw in ('prefixes', 'n_prefixes', 'prefix'):
+                                              'prefixes'))).strip().lower()
+    if raw in ('', 'prefixes', 'n_prefixes', 'prefix'):
         n = int(n_prefixes or 0)
-        return n if n > 0 else int(DEFAULT_PROBE_N)
+        if n <= 0:
+            raise ValueError(
+                'resolve_probe_budget: SCULPTOR_PROBE_N is unset/prefixes '
+                'but n_prefixes is unknown ({!r})'.format(n_prefixes))
+        return n
     try:
-        return int(raw)
+        n = int(raw)
     except ValueError:
-        return int(DEFAULT_PROBE_N)
+        raise ValueError('resolve_probe_budget: SCULPTOR_PROBE_N={!r} is '
+                         'neither an int nor "prefixes"'.format(raw))
+    if n <= 0:
+        raise ValueError('resolve_probe_budget: SCULPTOR_PROBE_N must be '
+                         '> 0, got {}'.format(n))
+    return n

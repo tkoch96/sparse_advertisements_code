@@ -578,7 +578,9 @@ def _cli():
 						 'An integer, or the literal "prefixes" to use each '
 						 "deployment's own prefix count (which varies with "
 						 'size). Implies --probe-mode smart unless one is '
-						 'given. Default is DEFAULT_PROBE_N in constants.py.')
+						 'given. Unset = "prefixes": one measurement per prefix '
+						 'of each deployment (helpers.constants.'
+						 'resolve_probe_budget); there is no constant default.')
 	ap.add_argument('--probe-mode', default=None,
 					choices=['scheduled', 'smart'],
 					help='WHEN-probing policy (default: smart, the solver '
@@ -611,12 +613,13 @@ def _cli():
 	# Print the EFFECTIVE policy, i.e. what the solver will run, not the env
 	# fallback: this line used to say 'post_step (stock)' whenever the env
 	# var was unset while the solver ran its smart/N=10 default (2026-09-08).
-	from helpers.constants import DEFAULT_PROBE_MODE as _DPM, DEFAULT_PROBE_N as _DPN
+	from helpers.constants import DEFAULT_PROBE_MODE as _DPM
 	# Exact 'mode=<m> budget=<n>' form: integration_tests/verify_e2e_probe_budget
-	# greps for it.
+	# greps for it. 'prefixes' = one measurement per prefix of each
+	# deployment (helpers.constants.resolve_probe_budget); no constant default.
 	print('[sweep] probing: mode={} budget={}'.format(
 		os.environ.get('SCULPTOR_PROBE_MODE', _DPM),
-		os.environ.get('SCULPTOR_PROBE_N', _DPN)), flush=True)
+		os.environ.get('SCULPTOR_PROBE_N', 'prefixes')), flush=True)
 	dpsizes = ([int(x) if x.strip().isdigit() else x.strip()
 				for x in a.dpsizes.split(',')] if a.dpsizes else None)
 	nsim = None

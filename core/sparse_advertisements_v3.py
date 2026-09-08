@@ -3110,19 +3110,22 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 				  'back to {}'.format(self.probe_mode, DEFAULT_PROBE_MODE),
 				  flush=True)
 			self.probe_mode = DEFAULT_PROBE_MODE
-		# PROBE_N accepts the literal 'prefixes': budget = this deployment's
-		# prefix count. The prefix count varies per deployment
-		# (deployment_to_prefixes scales with |popps|), so a fixed int
-		# cannot express "one measurement per prefix" across a size sweep --
-		# it has to be resolved here, where n_prefixes is known.
-		# Shared resolver, so painter's cap and this budget cannot drift
-		# apart (helpers.constants.resolve_probe_budget).
+		# The budget is resolved per deployment, never a constant (Tom
+		# 2026-09-08): unset SCULPTOR_PROBE_N means one measurement per
+		# prefix of THIS deployment, an int overrides. The prefix count
+		# varies per deployment (deployment_to_prefixes scales with |popps|),
+		# so it has to be resolved here, where n_prefixes is known. Shared
+		# resolver, so painter's cap and this budget cannot drift apart
+		# (helpers.constants.resolve_probe_budget).
 		self.probe_n = int(resolve_probe_budget(
-			getattr(self, 'n_prefixes', None)) or DEFAULT_PROBE_N)
-		if str(self._probe_env('PROBE_N', '')).strip().lower() in (
-				'prefixes', 'n_prefixes', 'prefix'):
-			print('[probe-gate] PROBE_N=prefixes -> budget {}'.format(
-				self.probe_n), flush=True)
+			getattr(self, 'n_prefixes', None)))
+		_raw_n = str(self._probe_env('PROBE_N', '')).strip()
+		print('[probe-gate] budget N={} ({})'.format(
+			self.probe_n,
+			'SCULPTOR_PROBE_N={}'.format(_raw_n) if _raw_n
+			and _raw_n.lower() not in ('prefixes', 'n_prefixes', 'prefix')
+			else 'one per prefix, n_prefixes={}'.format(
+				getattr(self, 'n_prefixes', None))), flush=True)
 		self.probe_tconv = int(self._probe_env(
 			'PROBE_TCONV',
 			str(getattr(self, 'max_n_iter', DEFAULT_PROBE_TCONV)

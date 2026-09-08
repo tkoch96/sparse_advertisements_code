@@ -104,8 +104,8 @@ unreachable.
 |---|---|---|
 | `SCULPTOR_MC_NUM` | `DEFAULT_MC_NUM = 1` | Monte-Carlo draws per latency-benefit call. NOT just a speed knob: 1 is a single-draw noisy estimator. ~2.6x faster per iteration than 5 |
 | `SCULPTOR_MC_NUM_EXPLORE` | `5` | draws during the max-info phase (deliberately higher) |
-| `SCULPTOR_PROBE_MODE` | `post_step` | `post_step` has **no budget** |
-| `SCULPTOR_PROBE_N` | `DEFAULT_PROBE_N = 10` | measurement budget, only in force when mode != post_step |
+| `SCULPTOR_PROBE_MODE` | `smart` | `smart` or `scheduled`; both budgeted (no unbudgeted mode since 2026-09-08) |
+| `SCULPTOR_PROBE_N` | `prefixes` | measurement budget: an int, or (unset/`prefixes`) one measurement per prefix of each deployment, resolved by `helpers.constants.resolve_probe_budget` -- there is no constant default |
 | `SCULPTOR_LAT_SHARDS` | auto (`cache/lat_shards`) | array fast path for deployment setup, ~3x. `''` forces the legacy serial 4.5 GB CSV loop |
 | `SCULPTOR_MAX_ITER` | dpsize-dependent | training iterations |
 | `SCULPTOR_N_WORKERS` | `min(cpu_count, get_n_workers(dpsize))` | Ray actor count |

@@ -51,7 +51,8 @@ Flags (read at construction):
       exceed PROBE_N; probe iterations never exceed PROBE_N.
   SCULPTOR_ABLATION_PROBE_C   float, default 1.0: INITIAL threshold (auto-c
       anneals down from it; with AUTO_C=0 it is the static threshold)
-  SCULPTOR_ABLATION_PROBE_N   int, default 5 (probe budget)
+  SCULPTOR_ABLATION_PROBE_N   int probe budget; unset = one per prefix of
+      this deployment (helpers.constants.resolve_probe_budget)
   SCULPTOR_ABLATION_PROBE_AUTO_C '1' (default) | '0'
       Auto-learn c (Tom's scheme, 2026-08-10): budget N should spread over
       ~the first PROBE_FRAC of an assumed PROBE_TCONV-iteration
@@ -159,7 +160,12 @@ class Ablation_Sparse_Advertisement_Solver(Sparse_Advertisement_Solver):
         self._abl_preprobe_belief = None
         self._abl_probe_reasons = collections.Counter()
         self.abl_probe_c = float(os.environ.get('SCULPTOR_ABLATION_PROBE_C', '1.0'))
-        self.abl_probe_n = int(os.environ.get('SCULPTOR_ABLATION_PROBE_N', '5'))
+        # budget via the shared resolver (no constant default, Tom
+        # 2026-09-08): SCULPTOR_ABLATION_PROBE_N / SCULPTOR_PROBE_N int, or
+        # one measurement per prefix of this deployment when unset.
+        from helpers.constants import resolve_probe_budget
+        self.abl_probe_n = int(resolve_probe_budget(
+            getattr(self, 'n_prefixes', None)))
         self.abl_probe_auto_c = os.environ.get('SCULPTOR_ABLATION_PROBE_AUTO_C', '1') == '1'
         self.abl_probe_tconv = int(os.environ.get('SCULPTOR_ABLATION_PROBE_TCONV', '300'))
         self.abl_probe_frac = float(os.environ.get('SCULPTOR_ABLATION_PROBE_FRAC', '0.75'))
