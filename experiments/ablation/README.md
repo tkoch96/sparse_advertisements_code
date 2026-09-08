@@ -126,6 +126,11 @@ Score/analyze (trusted, driver-side LP):
   routed latency) and the three-panel over-N figures.
 - `table_fork.py`, `cdf_fork.py` (+`plot_normalized.py`) — fixed-mode-era
   tables/CDFs; still valid for the 2026-08-08..11 datasets.
+- `evaluations/evaluate_ablation.py` — THE ablation evaluation (2026-09-08): ladder
+  table (% of painter->OPP gap closed, on means + mean of per-deployment) and the
+  same % over iterations (`pct_gap_closed_over_iterations.{pdf,json}`) from the
+  cells' `gt_objective_series`; called by `cdf_fork.main` (so by run_ablation_cdf);
+  `--prelim` reads a running study.
 - `eval_ladder_metrics.py` — repo-metrics path (per-seed subprocess
   isolation + rescore canary; do not weaken).
 - `mc_off_worker.py`, `test_mc_off_unit.py` — no_mc worker + units.

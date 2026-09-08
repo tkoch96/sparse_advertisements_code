@@ -87,92 +87,10 @@ def scenario_arrays(in_dir):
 
 
 def ladder_summary(in_dir, require_rescored=True):
-    """THE headline metric (Tom 2026-09-08): per rung, the mean trusted
-    objective over deployments and the cumulative percentage of the
-    painter->OPP gap it closes, computed on the MEANS
-    (100 * (mean_painter - mean_rung) / (mean_painter - mean_OPP)), plus
-    the increment over the previous rung in capability order and the
-    per-deployment percentages. Uses each cell JSON's rescored
-    repo_objective (the trusted objective) and opp_objective."""
-    by_rung, opp_cells = {}, {}
-    for fn in sorted(glob.glob(os.path.join(in_dir, 'seed_*_*.json'))):
-        with open(fn) as f:
-            r = json.load(f)
-        # require_rescored=False: preliminary read of a still-running study.
-        # repo_objective/opp_objective are written by the cell itself at
-        # completion (the rescore only adds the latency/failure columns and
-        # sets the flag), so the numbers are the final ones for those cells.
-        if (require_rescored and not r.get('rescored')) \
-                or r.get('repo_objective') is None:
-            continue
-        by_rung.setdefault(r['rung'], {})[int(r['seed'])] = float(r['repo_objective'])
-        if r.get('opp_objective') is not None:
-            opp_cells.setdefault(int(r['seed']), []).append(float(r['opp_objective']))
-    if 'painter' not in by_rung or not opp_cells:
-        return None, ''
-    # Every cell rescores OPP in its own evaluation, so the per-cell OPP values
-    # of one deployment differ by evaluation noise (0.1-0.6 at actual-3, i.e.
-    # comparable to the whole painter->OPP gap there). Anchor each deployment
-    # on the MEAN of its cells' OPP values (not on whichever file the glob
-    # listed last -- that made the summary depend on filesystem order) and
-    # report the cell-to-cell spread as the noise floor of the anchor.
-    opp = {s: float(np.mean(v)) for s, v in opp_cells.items()}
-    opp_spread = {s: float(max(v) - min(v)) for s, v in opp_cells.items()}
-    seeds = sorted(set(by_rung['painter']) & set(opp))
-    rungs = [r for r, _, _ in LADDER if r in by_rung]
-    seeds = [s for s in seeds if all(s in by_rung[r] for r in rungs)]
-    if not seeds:
-        return None, ''
-    mean = {r: float(np.mean([by_rung[r][s] for s in seeds])) for r in rungs}
-    mean_opp = float(np.mean([opp[s] for s in seeds]))
-    gap = mean['painter'] - mean_opp
-    rows, prev = [], 0.0
-    for r in rungs:
-        cum = 100.0 * (mean['painter'] - mean[r]) / gap if gap > 0 else float('nan')
-        per_seed = {}
-        for s in seeds:
-            g = by_rung['painter'][s] - opp[s]
-            per_seed[s] = (100.0 * (by_rung['painter'][s] - by_rung[r][s]) / g
-                           if g > 0 else float('nan'))
-        finite = [v for v in per_seed.values() if np.isfinite(v)]
-        rows.append({'rung': r, 'mean_objective': mean[r],
-                     'mean_minus_opp': mean[r] - mean_opp,
-                     'pct_gap_closed_on_means': cum,
-                     'increment_pct': cum - prev,
-                     # scale-free companion: mean of the per-deployment %
-                     # (raw objectives mix per-deployment scales, so the
-                     # means-based number weights large deployments more)
-                     'mean_of_per_seed_pct': (float(np.mean(finite))
-                                              if finite else float('nan')),
-                     'n_seeds_with_positive_gap': len(finite),
-                     'pct_gap_closed_per_seed': per_seed})
-        prev = cum
-    summary = {'seeds': seeds, 'n_deployments': len(seeds),
-               'mean_opp_objective': mean_opp,
-               'opp_anchor': 'mean of the deployment\'s per-cell rescored OPP values',
-               'opp_cell_spread_per_seed': {s: opp_spread[s] for s in seeds},
-               'painter_to_opp_gap_on_means': gap, 'rungs': rows}
-    hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
-        'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
-    lines = ['LADDER SUMMARY (means over {} deployments; % of painter->OPP '
-             'gap closed on the means; OPP mean {:.3f}):'.format(
-                 len(seeds), mean_opp), hdr, '-' * len(hdr)]
-    for row in rows:
-        lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%{:>+9.1f}{:>13.1f}%'.format(
-            row['rung'], row['mean_objective'], row['mean_minus_opp'],
-            row['pct_gap_closed_on_means'], row['increment_pct'],
-            row['mean_of_per_seed_pct']))
-    lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%'.format(
-        'OPP', mean_opp, 0.0, 100.0))
-    lines.append('per-deployment % gap closed: ' + '; '.join(
-        '{}: {}'.format(row['rung'], ', '.join(
-            '{:.0f}'.format(v) for s, v in sorted(row['pct_gap_closed_per_seed'].items())))
-        for row in rows if row['rung'] != 'painter'))
-    lines.append('OPP anchor = mean of each deployment\'s per-cell rescored OPP; '
-                 'cell-to-cell OPP spread per deployment: ' + ', '.join(
-                     '{}: {:.3f}'.format(s, opp_spread[s]) for s in seeds) +
-                 ' (painter->OPP gap on means {:.3f})'.format(gap))
-    return summary, '\n'.join(lines)
+    """Moved to evaluations.evaluate_ablation (THE ablation evaluation);
+    kept as a shim for callers."""
+    from evaluations.evaluate_ablation import ladder_summary as _ls
+    return _ls(in_dir, require_rescored=require_rescored)
 
 
 def quantile_table(vals_by_rung, unit, fmt='{:>10.2f}'):
@@ -202,22 +120,9 @@ def main():
 
     # headline first: the means-based ladder table (Tom 2026-09-08), also
     # persisted next to the JSONs so the paper pipeline can pick it up
-    summary, table = ladder_summary(args.in_dir)
-    if summary is not None:
-        print(table)
-        with open(os.path.join(args.in_dir, 'ladder_summary.json'), 'w') as f:
-            json.dump(summary, f, indent=1)
-        with open(os.path.join(args.in_dir, 'ladder_summary.csv'), 'w') as f:
-            f.write('rung,mean_objective,mean_minus_opp,pct_gap_closed_on_means,increment_pct,mean_of_per_seed_pct,n_seeds_with_positive_gap\n')
-            for row in summary['rungs']:
-                f.write('{},{:.6f},{:.6f},{:.3f},{:.3f},{:.3f},{}\n'.format(
-                    row['rung'], row['mean_objective'], row['mean_minus_opp'],
-                    row['pct_gap_closed_on_means'], row['increment_pct'],
-                    row['mean_of_per_seed_pct'], row['n_seeds_with_positive_gap']))
-            f.write('OPP,{:.6f},0,100,\n'.format(summary['mean_opp_objective']))
-        print('wrote {}/ladder_summary.{{json,csv}}\n'.format(args.in_dir))
-    else:
-        print('no rescored painter/OPP rows in {} -> no ladder summary\n'.format(args.in_dir))
+    # THE ablation evaluation: ladder table + files + % over iterations
+    from evaluations.evaluate_ablation import run as _evaluate_ablation
+    _evaluate_ablation(args.in_dir)
 
     diffs = combined_diffs(args.in_dir, args.gamma)
     if not diffs:
