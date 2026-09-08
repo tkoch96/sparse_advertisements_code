@@ -86,7 +86,7 @@ def scenario_arrays(in_dir):
     return out
 
 
-def ladder_summary(in_dir):
+def ladder_summary(in_dir, require_rescored=True):
     """THE headline metric (Tom 2026-09-08): per rung, the mean trusted
     objective over deployments and the cumulative percentage of the
     painter->OPP gap it closes, computed on the MEANS
@@ -98,7 +98,12 @@ def ladder_summary(in_dir):
     for fn in sorted(glob.glob(os.path.join(in_dir, 'seed_*_*.json'))):
         with open(fn) as f:
             r = json.load(f)
-        if not r.get('rescored') or r.get('repo_objective') is None:
+        # require_rescored=False: preliminary read of a still-running study.
+        # repo_objective/opp_objective are written by the cell itself at
+        # completion (the rescore only adds the latency/failure columns and
+        # sets the flag), so the numbers are the final ones for those cells.
+        if (require_rescored and not r.get('rescored')) \
+                or r.get('repo_objective') is None:
             continue
         by_rung.setdefault(r['rung'], {})[int(r['seed'])] = float(r['repo_objective'])
         if r.get('opp_objective') is not None:
