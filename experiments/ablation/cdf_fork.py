@@ -121,24 +121,32 @@ def ladder_summary(in_dir):
             g = by_rung['painter'][s] - opp[s]
             per_seed[s] = (100.0 * (by_rung['painter'][s] - by_rung[r][s]) / g
                            if g > 0 else float('nan'))
+        finite = [v for v in per_seed.values() if np.isfinite(v)]
         rows.append({'rung': r, 'mean_objective': mean[r],
                      'mean_minus_opp': mean[r] - mean_opp,
                      'pct_gap_closed_on_means': cum,
                      'increment_pct': cum - prev,
+                     # scale-free companion: mean of the per-deployment %
+                     # (raw objectives mix per-deployment scales, so the
+                     # means-based number weights large deployments more)
+                     'mean_of_per_seed_pct': (float(np.mean(finite))
+                                              if finite else float('nan')),
+                     'n_seeds_with_positive_gap': len(finite),
                      'pct_gap_closed_per_seed': per_seed})
         prev = cum
     summary = {'seeds': seeds, 'n_deployments': len(seeds),
                'mean_opp_objective': mean_opp,
                'painter_to_opp_gap_on_means': gap, 'rungs': rows}
-    hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}'.format(
-        'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr')
+    hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
+        'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
     lines = ['LADDER SUMMARY (means over {} deployments; % of painter->OPP '
              'gap closed on the means; OPP mean {:.3f}):'.format(
                  len(seeds), mean_opp), hdr, '-' * len(hdr)]
     for row in rows:
-        lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%{:>+9.1f}'.format(
+        lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%{:>+9.1f}{:>13.1f}%'.format(
             row['rung'], row['mean_objective'], row['mean_minus_opp'],
-            row['pct_gap_closed_on_means'], row['increment_pct']))
+            row['pct_gap_closed_on_means'], row['increment_pct'],
+            row['mean_of_per_seed_pct']))
     lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%'.format(
         'OPP', mean_opp, 0.0, 100.0))
     lines.append('per-deployment % gap closed: ' + '; '.join(
@@ -181,11 +189,12 @@ def main():
         with open(os.path.join(args.in_dir, 'ladder_summary.json'), 'w') as f:
             json.dump(summary, f, indent=1)
         with open(os.path.join(args.in_dir, 'ladder_summary.csv'), 'w') as f:
-            f.write('rung,mean_objective,mean_minus_opp,pct_gap_closed_on_means,increment_pct\n')
+            f.write('rung,mean_objective,mean_minus_opp,pct_gap_closed_on_means,increment_pct,mean_of_per_seed_pct,n_seeds_with_positive_gap\n')
             for row in summary['rungs']:
-                f.write('{},{:.6f},{:.6f},{:.3f},{:.3f}\n'.format(
+                f.write('{},{:.6f},{:.6f},{:.3f},{:.3f},{:.3f},{}\n'.format(
                     row['rung'], row['mean_objective'], row['mean_minus_opp'],
-                    row['pct_gap_closed_on_means'], row['increment_pct']))
+                    row['pct_gap_closed_on_means'], row['increment_pct'],
+                    row['mean_of_per_seed_pct'], row['n_seeds_with_positive_gap']))
             f.write('OPP,{:.6f},0,100,\n'.format(summary['mean_opp_objective']))
         print('wrote {}/ladder_summary.{{json,csv}}\n'.format(args.in_dir))
     else:
