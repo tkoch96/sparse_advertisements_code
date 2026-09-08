@@ -187,6 +187,53 @@ def parse_seeds(spec):
     return [int(s) for s in spec.split(',')]
 
 
+_WARMUP_SNIPPET = (
+    "import os; from core.deployment_setup import get_random_deployment; "
+    "d = get_random_deployment(os.environ['SCULPTOR_WARMUP_DPSIZE']); "
+    "print('[dep-warmup] built', os.environ['SCULPTOR_WARMUP_DPSIZE'], "
+    "'seed', os.environ['SCULPTOR_DEPLOYMENT_SEED'], 'n_ug', len(d['ugs']), "
+    "'n_popps', len(d['popps']), flush=True)")
+
+
+def warm_deployments(specs, args):
+    """Build every seeded (dpsize, seed) deployment ONCE, serially, before
+    any cell starts.
+
+    2026-09-08 (Tom: 'painter below OPP makes 0 sense'): cells of one seed
+    were being scored on DIFFERENT worlds. Concurrent processes that each
+    regenerate the same seeded deployment (first wave of a fresh box, no
+    per-seed cache yet) do not agree -- two simultaneous actual-3 seed-3
+    builds gave OPP objectives 15.47 vs 14.97 with different ingress
+    priorities and link capacities, while two sequential builds are
+    bit-identical (PYTHONHASHSEED made no difference). Once the per-seed
+    pickle in cache/deployments/ exists, every process loads it and agrees.
+    So: generate serially here; cells then hit the cache. Dep-file specs
+    (SCULPTOR_ABLATION_DEP_FILE in env) skip this -- the pickle IS the
+    world. Caveat: load_actual_deployment bypasses its cache for sizes
+    with >= 30 sites, so those stay exposed; use dep-file mode there."""
+    seen = set()
+    for sp in specs:
+        if 'SCULPTOR_ABLATION_DEP_FILE' in sp.get('env', {}):
+            continue
+        for s in sp['seeds_list']:
+            key = (sp['dpsize'], int(s))
+            if key in seen:
+                continue
+            seen.add(key)
+            env = dict(os.environ, PYTHONPATH=_REPO_ROOT, MPLBACKEND='Agg',
+                       SCULPTOR_DEPLOYMENT_SEED=str(s),
+                       SCULPTOR_WARMUP_DPSIZE=sp['dpsize'])
+            env.update(sp.get('env', {}))
+            t0 = time.time()
+            rc = subprocess.call([args.py, '-c', _WARMUP_SNIPPET], env=env,
+                                 cwd=_REPO_ROOT)
+            print('[dep-warmup] {} seed {} rc={} {:.0f}s'.format(
+                sp['dpsize'], s, rc, time.time() - t0), flush=True)
+            if rc != 0:
+                raise SystemExit('[dep-warmup] deployment build failed for '
+                                 '{} seed {} (rc={})'.format(sp['dpsize'], s, rc))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out-root', default=None)   # required unless --manifest
@@ -205,6 +252,10 @@ def main():
     ap.add_argument('--probe-mode', default='smart')
     ap.add_argument('--gamma', default='0.1')
     ap.add_argument('--no-rescore', action='store_true')
+    ap.add_argument('--no-dep-warmup', action='store_true',
+                    help='skip the serial per-(dpsize, seed) deployment '
+                         'build that runs before any cell starts (see '
+                         'warm_deployments)')
     ap.add_argument('--py', default=sys.executable)
     ap.add_argument('--manifest', default=None,
                     help='JSON list of cell-group specs; one global slot '
@@ -331,6 +382,8 @@ def main():
     # config's max_active when larger than --slots (so a live config can
     # raise concurrency without relaunching); the governor then admits
     # cells up to whichever is smaller at decision time.
+    if not args.no_dep_warmup:
+        warm_deployments(specs, args)
     gov = MemGovernor(max_active=args.slots)
     n_threads = max(args.slots, gov.max_active)
     print('[queue] {} cells to run ({} specs), {} threads (governor '
