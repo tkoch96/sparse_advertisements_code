@@ -62,7 +62,14 @@ def get_random_ingress_priorities(deployment):
 	pop_to_loc = deployment['pop_to_loc']
 	metro_loc = deployment['metro_loc']
 	provider_popps = deployment['provider_popps']
-	provider_ases = list(set(peer for pop,peer in provider_popps))
+	# sorted(): set order is per-process (hash randomization) and every
+	# draw below consumes the seeded RNG in list order, so without it two
+	# processes with the same SCULPTOR_DEPLOYMENT_SEED build different
+	# priorities and (downstream) link capacities -- verified 2026-09-08 on
+	# 'small' seed 1: popps/ugs/perfs/vols identical, priorities/caps
+	# different in 4 of 4 runs; the ablation cells of one seed were then
+	# scored on different worlds.
+	provider_ases = sorted(set(peer for pop,peer in provider_popps))
 
 
 	# SCULPTOR_PREF_MODEL=random: ingress preferences are a fully random
@@ -123,7 +130,7 @@ def get_random_ingress_priorities(deployment):
 			probably_anycast = popps[np.argmin(np.abs(perfs - ug_anycast_perfs[ug]))]
 			priorities = {probably_anycast:0}
 
-		other_peerings = list(get_difference(list(ug_perfs[ug]), [probably_anycast]))
+		other_peerings = sorted(get_difference(list(ug_perfs[ug]), [probably_anycast]))
 		if len(other_peerings) > 0:
 			### Model 
 			## user has a preferred provider
@@ -140,8 +147,8 @@ def get_random_ingress_priorities(deployment):
 
 			priority_counter = 1
 			ases = list(op_by_as)
-			these_non_provider_ases = get_difference(ases, provider_ases)
-			these_provider_ases = get_intersection(ases, provider_ases)
+			these_non_provider_ases = sorted(get_difference(ases, provider_ases))
+			these_provider_ases = sorted(get_intersection(ases, provider_ases))
 			np.random.shuffle(these_non_provider_ases)
 			np.random.shuffle(these_provider_ases)
 			ases = these_non_provider_ases + these_provider_ases
@@ -178,7 +185,7 @@ def get_random_ingress_priorities(deployment):
 				_viol_p = float(os.environ.get('SCULPTOR_ROUTE_VIOLATION', '.05'))
 				for pi in list(priorities):
 					if np.random.random() < _viol_p:
-						other_pi = list(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
+						other_pi = sorted(get_difference(list(priorities), [pi]))[np.random.choice(len(priorities)-1)]
 						tmp = copy.copy(priorities[pi])
 						priorities[pi] = copy.copy(priorities[other_pi])
 						priorities[other_pi] = tmp
@@ -207,7 +214,7 @@ def get_link_capacities_actual_deployment(deployment, anycast_catchments, scale_
 	provider_popps = deployment['provider_popps']
 	ugs = deployment['ugs']
 
-	all_pops = list(set([popp[0] for popp in popps]))
+	all_pops = sorted(set([popp[0] for popp in popps]))
 
 	# vol best is the client volume per popp if everyone went to their lowest latency link
 	# vol popp is reachable volume for a popp
@@ -353,7 +360,7 @@ def get_link_capacities(deployment, scale_factor=1.1, verb=True, **kwargs):
 	provider_popps = deployment['provider_popps']
 	ugs = deployment['ugs']
 
-	all_pops = list(set([popp[0] for popp in popps]))
+	all_pops = sorted(set([popp[0] for popp in popps]))
 
 	# vol best is the client volume per popp if everyone went to their lowest latency link
 	# vol popp is reachable volume for a popp
