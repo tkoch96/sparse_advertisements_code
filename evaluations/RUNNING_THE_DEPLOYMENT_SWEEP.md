@@ -102,8 +102,8 @@ unreachable.
 
 | var | default | effect |
 |---|---|---|
-| `SCULPTOR_MC_NUM` | `DEFAULT_MC_NUM = 1` | Monte-Carlo draws per latency-benefit call. NOT just a speed knob: 1 is a single-draw noisy estimator. ~2.6x faster per iteration than 5 |
-| `SCULPTOR_MC_NUM_EXPLORE` | `5` | draws during the max-info phase (deliberately higher) |
+| `SCULPTOR_MC_NUM` | `DEFAULT_MC_NUM = 2` (was 1 through 2026-09-07) | Monte-Carlo draws per latency-benefit call. NOT just a speed knob: 1 is a single-draw noisy estimator. ~2.6x faster per iteration than 5 |
+| `SCULPTOR_MC_NUM_EXPLORE` | `10` (was 5) | draws during the every-10-iteration sigma refresh and the max-info phase (deliberately higher) |
 | `SCULPTOR_PROBE_MODE` | `smart` | `smart` or `scheduled`; both budgeted (no unbudgeted mode since 2026-09-08) |
 | `SCULPTOR_PROBE_N` | `prefixes` | measurement budget: an int, or (unset/`prefixes`) one measurement per prefix of each deployment, resolved by `helpers.constants.resolve_probe_budget` -- there is no constant default |
 | `SCULPTOR_LAT_SHARDS` | auto (`cache/lat_shards`) | array fast path for deployment setup, ~3x. `''` forces the legacy serial 4.5 GB CSV loop |

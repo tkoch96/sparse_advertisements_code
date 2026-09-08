@@ -223,17 +223,29 @@ class LatencyPlusResilienceObjective(Generic_Objective):
 
 	def get_gamma(self):
 		# Increase gamma toward its configured value as confidence about
-		# adjacent strategies grows.
+		# adjacent strategies grows: a linear ramp from ~0 to gamma over
+		# DEFAULT_GAMMA_RAMP_ITERS iterations (Tom 2026-09-08: "anneal
+		# fully within 20 iters"), scaled down further while the
+		# uncertainty factor is still elevated (emulated runs only).
+		#
+		# The previous form divided by uf * (1 / (1 + 3/sqrt(iter+1))),
+		# i.e. MULTIPLIED by (1 + 3/sqrt(iter+1)): effective gamma
+		# overshot to 2x the configured value at iter ~8 (when uf hit 1)
+		# and was still 1.3x at iter 100 -- the trainer optimised
+		# latency + ~8*resilience while ground truth scored at gamma=4,
+		# visible as the early objective hump in the L6 gate-panel
+		# figures (2026-09-08).
+		import os as _os
+		from helpers.constants import DEFAULT_GAMMA_RAMP_ITERS
 		sas = self.sas
+		ramp_iters = int(_os.environ.get('SCULPTOR_GAMMA_RAMP_ITERS',
+										 DEFAULT_GAMMA_RAMP_ITERS))
+		ramp = min(1.0, (sas.iter + 1) / float(max(1, ramp_iters)))
 		if sas.simulated:
-			uncertainty_factor = np.maximum(
-				1, np.abs(sas.uncertainty_factor))
-			divider = uncertainty_factor * (
-				1 / (1 + 3 / np.sqrt((sas.iter + 1))))
-		else:
-			# no uncertainty factor since we don't do max info (for now)
-			divider = (1 + 5 / np.sqrt((sas.iter + 1)))
-		return sas.gamma / divider
+			uncertainty_factor = float(np.maximum(
+				1, np.abs(sas.uncertainty_factor)))
+			return sas.gamma * ramp / uncertainty_factor
+		return sas.gamma * ramp
 
 	def get_ground_truth_resilience_benefit(self, a, **kwargs):
 		# moved from the base class 2026-08-25: resilience is THIS

@@ -270,11 +270,23 @@ POP2TIMEZONE = {  # GMT
 # 1 is a single-draw noisy estimator. It is ~5x cheaper per job and NOT a
 # cheaper way to compute the same number; see experiments/mc_ab/ for the
 # paired A/B measuring what the noise costs.
-DEFAULT_MC_NUM = 1
-# The max-information (explore) phase deliberately uses MORE draws: it is
-# choosing what to measure from the belief DISTRIBUTION, where single-draw
-# noise is most damaging. Restored to DEFAULT_MC_NUM afterwards.
-DEFAULT_MC_NUM_EXPLORE = 5
+# 2026-09-08 (Tom): 2 draws EVERY iteration so the per-coordinate sigma the
+# smart probe gate needs is a real (if noisy) estimate on every iteration --
+# at 1 draw the pdfs are point masses, sigma was exactly 0 between refreshes,
+# U collapsed to ~0 and the uncertainty criterion (a) was blind (L6 gate
+# panels, 2026-09-08). Paper cells through 2026-09-07 trained at 1.
+DEFAULT_MC_NUM = 2
+# The sigma-refresh / max-information draws deliberately use MORE draws: the
+# refresh (every SCULPTOR_SIGMA_REFRESH=10 iters) re-estimates every sampled
+# coordinate's sigma from a real distribution, and the explore phase chooses
+# what to measure from the belief DISTRIBUTION. Restored to DEFAULT_MC_NUM
+# afterwards. 5 -> 10 on 2026-09-08 (Tom) alongside DEFAULT_MC_NUM 1 -> 2.
+DEFAULT_MC_NUM_EXPLORE = 10
+# Training gamma ramp (LatencyPlusResilienceObjective.get_gamma): the
+# effective gamma rises linearly from ~0 to the configured gamma over this
+# many iterations (Tom 2026-09-08: "anneal fully within 20 iters"), scaled
+# down further while the uncertainty factor is still elevated.
+DEFAULT_GAMMA_RAMP_ITERS = 20
 
 # ---------------------------------------------------------------------------
 # WHEN-probing: measure-XOR-step under a TOTAL measurement budget.

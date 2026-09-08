@@ -2141,7 +2141,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		single draw -- info value degenerates and explore either picks
 		nothing (probe falls back to re-measuring the current adv) or
 		re-picks measured advs. Evaluate explore candidates under
-		SCULPTOR_MC_NUM_EXPLORE draws (default 5), restoring the training
+		SCULPTOR_MC_NUM_EXPLORE draws (DEFAULT_MC_NUM_EXPLORE), restoring the training
 		MC_NUM afterwards."""
 		# SCULPTOR_MAXINFO_TARGET (default 'decision', merged 2026-08-16):
 		# expected-regret targeting first; the entropy proposal remains the
@@ -3487,7 +3487,8 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		_mc_off = os.environ.get('SCULPTOR_ABLATION_MC', '1') == '0'
 		self._abl_sigma_refresh_iter = ((not _mc_off)
 			and (self.iter % max(1, _refresh_every) == 0))
-		_explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE', '5'))
+		_explore_mc = int(os.environ.get('SCULPTOR_MC_NUM_EXPLORE',
+										 DEFAULT_MC_NUM_EXPLORE))
 		_base_mc = int(os.environ.get('SCULPTOR_MC_NUM', DEFAULT_MC_NUM))
 		if self._abl_sigma_refresh_iter and _explore_mc != _base_mc:
 			self._broadcast_mc_num(_explore_mc)
