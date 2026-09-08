@@ -94,17 +94,25 @@ def ladder_summary(in_dir):
     the increment over the previous rung in capability order and the
     per-deployment percentages. Uses each cell JSON's rescored
     repo_objective (the trusted objective) and opp_objective."""
-    by_rung, opp = {}, {}
-    for fn in glob.glob(os.path.join(in_dir, 'seed_*_*.json')):
+    by_rung, opp_cells = {}, {}
+    for fn in sorted(glob.glob(os.path.join(in_dir, 'seed_*_*.json'))):
         with open(fn) as f:
             r = json.load(f)
         if not r.get('rescored') or r.get('repo_objective') is None:
             continue
         by_rung.setdefault(r['rung'], {})[int(r['seed'])] = float(r['repo_objective'])
         if r.get('opp_objective') is not None:
-            opp[int(r['seed'])] = float(r['opp_objective'])
-    if 'painter' not in by_rung or not opp:
+            opp_cells.setdefault(int(r['seed']), []).append(float(r['opp_objective']))
+    if 'painter' not in by_rung or not opp_cells:
         return None, ''
+    # Every cell rescores OPP in its own evaluation, so the per-cell OPP values
+    # of one deployment differ by evaluation noise (0.1-0.6 at actual-3, i.e.
+    # comparable to the whole painter->OPP gap there). Anchor each deployment
+    # on the MEAN of its cells' OPP values (not on whichever file the glob
+    # listed last -- that made the summary depend on filesystem order) and
+    # report the cell-to-cell spread as the noise floor of the anchor.
+    opp = {s: float(np.mean(v)) for s, v in opp_cells.items()}
+    opp_spread = {s: float(max(v) - min(v)) for s, v in opp_cells.items()}
     seeds = sorted(set(by_rung['painter']) & set(opp))
     rungs = [r for r, _, _ in LADDER if r in by_rung]
     seeds = [s for s in seeds if all(s in by_rung[r] for r in rungs)]
@@ -136,6 +144,8 @@ def ladder_summary(in_dir):
         prev = cum
     summary = {'seeds': seeds, 'n_deployments': len(seeds),
                'mean_opp_objective': mean_opp,
+               'opp_anchor': 'mean of the deployment\'s per-cell rescored OPP values',
+               'opp_cell_spread_per_seed': {s: opp_spread[s] for s in seeds},
                'painter_to_opp_gap_on_means': gap, 'rungs': rows}
     hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
         'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
@@ -153,6 +163,10 @@ def ladder_summary(in_dir):
         '{}: {}'.format(row['rung'], ', '.join(
             '{:.0f}'.format(v) for s, v in sorted(row['pct_gap_closed_per_seed'].items())))
         for row in rows if row['rung'] != 'painter'))
+    lines.append('OPP anchor = mean of each deployment\'s per-cell rescored OPP; '
+                 'cell-to-cell OPP spread per deployment: ' + ', '.join(
+                     '{}: {:.3f}'.format(s, opp_spread[s]) for s in seeds) +
+                 ' (painter->OPP gap on means {:.3f})'.format(gap))
     return summary, '\n'.join(lines)
 
 
