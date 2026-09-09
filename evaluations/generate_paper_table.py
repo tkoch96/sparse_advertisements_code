@@ -537,6 +537,13 @@ def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
                 if fs:
                     failed.append((sim, sorted(set(fs))))
             failed_sims = {sim for sim, _ in failed}
+            # a sim is covered only if its advertisements exist AND the
+            # objective's required metric was actually computed for it
+            # (2026-09-09: the size-32 frozen cell was killed during eval;
+            # advs for 3 sims + empty metric dicts read as 'covered', the
+            # relaunch skipped straight to tabulation and emitted '-')
+            need = OBJECTIVE_REQUIRED_KEY.get(obj)
+            need_by_sim = m.get(need) if need else None
             advs = m.get('adv') or {}
             for sim, soldict in (advs.items() if isinstance(advs, dict)
                                  else enumerate(advs)):
@@ -545,6 +552,9 @@ def coverage(dpsize, objectives, nsim_target, run_tag, tag_overrides=None):
                 if isinstance(soldict, dict) and any(
                         v is not None and np.size(v)
                         for v in soldict.values()):
+                    if need and isinstance(need_by_sim, dict) and \
+                            not need_by_sim.get(sim):
+                        continue        # trained but never evaluated
                     n += 1
         status = 'MISSING' if not m else '{} sim(s){}'.format(
             n, ' [FAILED strategies in sims: {}]'.format(
