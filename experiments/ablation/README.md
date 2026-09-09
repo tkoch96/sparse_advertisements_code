@@ -119,18 +119,25 @@ Run:
 Score/analyze (trusted, driver-side LP):
 - `rescore_fork.py` — THE trusted scorer (combined = steady + 4×failure
   excess vs one-per-peering; 30 000 ms no-route sentinel).
-- `policy_table.py` — the policy-ladder table (combined, healthy counts,
-  exit iters, probe reasons, + LP sidecars when present).
+- `policy_table.py`, `compare_paradigms.py`, `normalization_lab.py`,
+  `objective_difficulty.py`, root `run_ablation_grid.py` (+ its e2e test) — one-off
+  era tooling, moved to old_scripts/ablation/ (Tom 2026-09-08).
 - `old_handoffs/MODEL_UNCERTAINTY_DIMENSIONS.md/{rerank_ladder,steady_metrics,plot_mesh}.py` —
   interpretable metrics (failure congestion, steady congestion, clean
   routed latency) and the three-panel over-N figures.
-- `table_fork.py`, `cdf_fork.py` (+`plot_normalized.py`) — fixed-mode-era
-  tables/CDFs; still valid for the 2026-08-08..11 datasets.
-- `evaluations/evaluate_ablation.py` — THE ablation evaluation (2026-09-08): ladder
-  table (% of painter->OPP gap closed, on means + mean of per-deployment) and the
-  same % over iterations (`pct_gap_closed_over_iterations.{pdf,json}`) from the
-  cells' `gt_objective_series`; called by `cdf_fork.main` (so by run_ablation_cdf);
-  `--prelim` reads a running study.
+- `cdf_fork.py` (+`plot_normalized.py`) — the ladder CDF figure (called by `ablation run`).
+  `table_fork.py` moved to old_scripts/ablation/ (2026-09-08).
+- `evaluations/ablation.py` — THE ablation script (Tom 2026-09-08, one file):
+  `run` (study driver: deployments+inits -> queue -> rescore -> CDF -> evaluate ->
+  figure tree), `evaluate` (ladder % table, % over iterations, per-rung feature/
+  probe-policy VERIFICATION under an explicit contract), `selftest` (run on
+  'small' locally, then verify), `tree` (file harvested figures by deployment/rung).
+  The per-cell wrapper (harvest/clean/run_cell) lives in it; the queue imports it.
+  Inputs: --dpsize --deployments --max-iter --probe-n (int | prefixes | <f>x
+  multiplier). Outputs: per-deployment % of painter->OPP gap per rung + averages
+  (ladder_summary.{json,csv}), pct_gap_closed_over_iterations.{pdf,json},
+  verification.txt, <out_root>_tree/deployment_NN/L#_<rung>/ figures.
+  Per-rung WHEN policy: `LADDER_PROBE_MODE` in that file (L2-L5 scheduled, L6 smart).
 - `eval_ladder_metrics.py` — repo-metrics path (per-seed subprocess
   isolation + rescore canary; do not weaken).
 - `mc_off_worker.py`, `test_mc_off_unit.py` — no_mc worker + units.

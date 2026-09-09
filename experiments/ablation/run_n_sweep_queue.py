@@ -64,7 +64,7 @@ import sys
 import threading
 import time
 
-from evaluations import ablation_cell
+from evaluations import ablation as ablation_cell  # per-cell wrapper lives in THE ablation script
 
 _REPO_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
@@ -414,7 +414,7 @@ def main():
     last_launch = [0.0]
 
     def harvest_cell(sp, ws, N, s, rung):
-        """Figure harvest now lives in evaluations.ablation_cell (reusable
+        """Figure harvest lives in evaluations.ablation (reusable
         per-cell eval wrapper); run dir + ray-tmp cleanup happens inside
         run_cell on EVERY exit path, not just rc==0."""
         ablation_cell.harvest_figs(ws, sp.get('artifacts_figs'),
@@ -550,7 +550,7 @@ def main():
     bad = 0
     for sp in specs:
         # Only THIS spec's cells: several specs share one out_root when a
-        # driver splits rungs by probe policy (run_ablation_cdf.LADDER_PROBE_MODE,
+        # driver splits rungs by probe policy (evaluations.ablation LADDER_PROBE_MODE,
         # 2026-09-08); auditing every JSON against every spec's probe_mode
         # flagged the other specs' cells as 'stale code'.
         _sp_rungs = set(sp['rungs'].split(',')) if isinstance(sp.get('rungs'), str) else set(sp.get('rungs') or [])
