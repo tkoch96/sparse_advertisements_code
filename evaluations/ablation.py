@@ -502,19 +502,21 @@ def run_main(argv=None):
             print('[cdf] queue rc={} -- not drawing figures from a '
                   'partial sweep'.format(rc), flush=True)
             return rc
+        if _parse_budget(a.probe_n)[0] == 'mult':
+            # per-seed budgets land in N<N_s>/; unify into N<mult>x/ for the
+            # evaluation (copies: the queue's resume-skip keeps seeing its own).
+            # Done before the --queue-only return so that mode is evaluable too.
+            import glob as _glob
+            import shutil as _shutil
+            _udir = os.path.join(out_root, 'N{}'.format(a.probe_n))
+            os.makedirs(_udir, exist_ok=True)
+            for fn in _glob.glob(os.path.join(out_root, 'N[0-9]*', 'seed_*_*.json')):
+                _shutil.copy(fn, os.path.join(_udir, os.path.basename(fn)))
+            print('[ablation] unified per-deployment budget dirs into {}'.format(_udir), flush=True)
         if a.queue_only:
             return 0
 
     in_dir = os.path.join(out_root, 'N{}'.format(a.probe_n))
-    if _parse_budget(a.probe_n)[0] == 'mult':
-        # per-seed budgets land in N<N_s>/; unify into N<mult>x/ for the
-        # evaluation (copies: the queue's resume-skip keeps seeing its own)
-        import glob as _glob
-        import shutil as _shutil
-        os.makedirs(in_dir, exist_ok=True)
-        for fn in _glob.glob(os.path.join(out_root, 'N[0-9]*', 'seed_*_*.json')):
-            _shutil.copy(fn, os.path.join(in_dir, os.path.basename(fn)))
-        print('[ablation] unified per-deployment budget dirs into {}'.format(in_dir), flush=True)
     if a.continue_from:
         # unify: painter cells land in N<painter_probe_n>; copy them (post-
         # rescore, so trusted fields ride along) into the main N-dir so the
