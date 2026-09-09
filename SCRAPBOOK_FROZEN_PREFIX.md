@@ -570,3 +570,31 @@ harvested as rc=137); i-04d7 STOPPED; i-09a6 stop -> start --type
 r8g.24xlarge (96 vCPU / 768 GB so all cores can be workers at size 32) ->
 push -> relaunch size-32 under the campaign tag with the new defaults,
 SCULPTOR_N_WORKERS = nproc.
+
+## SIZE-32 PAPER CELL DONE (2026-09-09 18:16Z) -- new defaults, nsim=3, 150 it, 96 workers
+Run 20260907_195852-frozen32_newdef (training, r8g.24xlarge, ~40 h wall for
+3 deployments incl. one slow draw) + 20260909_134544-frozen32_newdef_eval3
+(eval-only relaunch, 29.6 min). Campaign tag 20260823_130342_papertable32b;
+pickle transferred to the storage VM; paper_table stage re-aggregated via the
+intent; artifacts pulled (figures/paper_artifacts/paper_table*.{csv,tex}).
+  method           steady   fail_lat  %cong    %no-route  objective
+  OPP (reactive)   29.32    29.36     0.00     0.000      -1.510
+  SCULPTOR         32.07    32.18     0.058    0.000      -1.518   (+/- 0.46 / 0.01 / 0)
+  PAINTER          38.95    39.05     0.245    0.000      -1.745
+  Unicast          36.30    36.38     0.169    0.000      -1.768
+  AnyOpt           47.52    47.53     0.182    0.000      -2.415
+  Anycast          51.76    51.49     0.384    0.000      -2.841
+Read: 2.8 ms above the reactive ceiling, 6.9 ms ahead of painter, 4x less
+congested volume than painter, zero stranding for every method (the summed
+no-route penalty drives every pin to zero at this size -> the no-route
+column is uniformly 0.00 in the key table; Tom may drop it or keep it as
+the "no re-steering, nobody stranded" statement). SCULPTOR bold on all
+three; the caption sentence about frozen columns is in the emitted tex.
+PIPELINE TRAPS fixed on the way (all committed): (1) eval sweep re-ran
+ground-truth ingress per failure -> hours at 32 with no output; now the
+vectorized frozen_fallbacks path (exact, 84fcb98). (2) coverage counted a
+trained-but-unevaluated sim as covered (283373b). (3) the condensed L3
+table was cached with '-' cells and short-circuited the relaunch
+(FORCE_REAGGREGATE=1 bypass; now never cached below requested coverage,
+53a92ad). i-09a6 STOPPED 18:20Z (EBS intact: paused lat-.1/mean run state,
+all campaign pickles). Cost of the size-32 cell ~ $230 (r8g.24xlarge ~41 h).
