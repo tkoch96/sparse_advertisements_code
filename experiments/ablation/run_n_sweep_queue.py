@@ -234,6 +234,17 @@ def warm_deployments(specs, args):
                                  '{} seed {} (rc={})'.format(sp['dpsize'], s, rc))
 
 
+def auto_workers(ncores, max_active, remaining, base=1, cap=32):
+    """Workers for the cell about to launch: share the box among the cells
+    that can run concurrently (min(slots, cells still to run, incl. this
+    one)). The cell driver's own core is not reserved -- it mostly waits on
+    its workers (measured 2026-09-08: 20 cells x 3 workers on 64 cores =
+    88% busy, the sweet spot; 6 x 10 = 71%). Cap 32 keeps a lone tail cell's
+    worker RSS inside RAM (actual-10 workers ~0.7-1.4 GB each)."""
+    concurrent = max(1, min(int(max_active), int(remaining)))
+    return int(max(base, min(cap, ncores // concurrent)))
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('--out-root', default=None)   # required unless --manifest
@@ -246,7 +257,13 @@ def main():
     ap.add_argument('--seeds', default='1-20')
     ap.add_argument('--max-iter', type=int, default=200)
     ap.add_argument('--slots', type=int, default=28)
-    ap.add_argument('--workers-per-run', type=int, default=1)
+    ap.add_argument('--workers-per-run', default='1',
+                    help="Ray workers per cell: an int, or 'auto' (Tom 2026-09-08: "
+                         "always max out the cores) = size each cell's pool from "
+                         "the cores available when it launches, ncores/min(slots, "
+                         "cells still to run), so the tail "
+                         "of a study (fewer cells than slots) widens instead of "
+                         "idling cores. Sets SCULPTOR_RAY_NUM_CPUS=workers+2 per cell.")
     ap.add_argument('--port0', type=int, default=56000)
     ap.add_argument('--dpsize', default='small')
     ap.add_argument('--probe-mode', default='smart')
@@ -427,11 +444,21 @@ def main():
             except queue.Empty:
                 gov.release()
                 return
+            if str(args.workers_per_run) == 'auto':
+                n_workers = auto_workers(os.cpu_count() or 1, gov.max_active,
+                                         q.qsize() + 1)
+                print('[queue] auto workers: {} for {} N={} seed={} rung={} '
+                      '(cores={}, slots={}, cells left incl. this={})'.format(
+                          n_workers, sp['label'], N, s, rung, os.cpu_count(),
+                          gov.max_active, q.qsize() + 1), flush=True)
+            else:
+                n_workers = int(args.workers_per_run)
             env = dict(os.environ)
             env.update({
                 'PYTHONPATH': _REPO_ROOT,
                 'SCULPTOR_ABLATION_GAMMA': sp['gamma'],
-                'SCULPTOR_N_WORKERS': str(args.workers_per_run),
+                'SCULPTOR_N_WORKERS': str(n_workers),
+                'SCULPTOR_RAY_NUM_CPUS': str(n_workers + 2),
                 'MPLBACKEND': 'Agg',
                 'RAY_ADDRESS': 'local',
                 'RAY_TMPDIR': '/tmp/ray_q_S{}'.format(slot),

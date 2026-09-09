@@ -168,9 +168,11 @@ def main():
                          'wipes the run dir. Without it (the 2026-09-02 '
                          'campaign) the genuine make_plots PDFs were '
                          'generated and then discarded.')
-    ap.add_argument('--workers-per-run', type=int, default=None,
-                    help='passed through to run_n_sweep_queue (its default '
-                         'is 1 worker per cell)')
+    ap.add_argument('--workers-per-run', default='auto',
+                    help="Ray workers per cell, passed to run_n_sweep_queue: "
+                         "an int, or 'auto' (default; Tom 2026-09-08: always "
+                         "max out the cores -- ncores / concurrent cells, "
+                         "widening in the tail of the study)")
     a = ap.parse_args()
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
