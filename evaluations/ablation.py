@@ -1114,6 +1114,120 @@ def selftest(iters=16, probe_n=4, deployments=2, keep=False):
     return C.ok
 
 
+
+# ==================== full objective over iterations (rescored) ====================
+def _full_over_iterations_cell(args):
+    """One (deployment, rung): rescore that cell's saved per-iteration
+    advertisements on the FULL objective (a subprocess-friendly worker; the
+    painter/OPP anchors are recomputed per job, 2 extra evaluations)."""
+    seed, rung, dpsize, dep_file, gamma, stride, painter_adv, pkl = args
+    import pickle
+    from experiments.ablation.rescore_fork import FullObjectiveScorer
+    from helpers.helpers import threshold_a
+    sc = FullObjectiveScorer(seed, dpsize, dep_file)
+    opp = sc.opp_full(gamma)
+    painter = sc.full(painter_adv, gamma)
+    gap = painter - opp
+    st = pickle.load(open(pkl, 'rb'))
+    advs = st['metrics'].get('advertisements') or []
+    idx = sorted(set(list(range(0, len(advs), stride)) + [len(advs) - 1])) if advs else []
+    pts = []
+    for i in idx:
+        v = sc.full(threshold_a(np.asarray(advs[i], dtype=float)), gamma)
+        pts.append([int(i), float(v), float(100.0 * (painter - v) / gap) if gap > 0 else float('nan')])
+    print('[full-over-it] seed {} {}: {} points (painter {:.1f}, opp {:.1f})'.format(
+        seed, rung, len(pts), painter, opp), flush=True)
+    return {'seed': seed, 'rung': rung, 'painter_full': painter, 'opp_full': opp, 'points': pts}
+
+
+def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamma=None,
+                                   stride=10, out_dir=None, parallel=None):
+    """Tom 2026-09-09: the FULL objective (latency + gamma*SUM of peering-
+    failure latencies) in % of the painter->OPP gap, OVER ITERATIONS, averaged
+    over deployments. Training records no failure sweep per iteration, so the
+    per-iteration advertisements saved in each cell's state pickle are rescored
+    with the trusted scorer at every `stride`-th iteration (plus the last).
+    Also reports the mean ABSOLUTE distance to OPP per rung, because painter's
+    stranding under failures makes the painter->OPP gap enormous and the % view
+    saturates. Writes pct_full_objective_over_iterations.{json,pdf}."""
+    import re as _re
+    from multiprocessing import Pool
+    out_dir = out_dir or in_dir
+    cells = _load_cells(in_dir, True, 'latency')
+    seeds = sorted({s for s, _ in cells})
+    jobs = []
+    for s in seeds:
+        pj = cells.get((s, 'painter'))
+        if pj is None:
+            continue
+        g = float(gamma if gamma is not None else pj.get('gamma') or next(
+            (r.get('gamma') for (ss, rr), r in cells.items() if ss == s and r.get('gamma')), 4.0))
+        for (ss, rung), r in cells.items():
+            if ss != s or rung == 'painter':
+                continue
+            hits = glob.glob(os.path.join(figs_dir, '*_{}-dep{}-*_state-*.pkl'.format(rung, s)))
+            if not hits:
+                continue
+
+            def _it(f):
+                m = _re.search(r'_state-(\d+)\.pkl$', f)
+                return int(m.group(1)) if m else -1
+            jobs.append((s, rung, dpsize, dep_file, g, int(stride),
+                         np.asarray(pj['adv'], dtype=float), max(hits, key=_it)))
+    if not jobs:
+        print('[full-over-it] no cells with state pickles under {}'.format(figs_dir), flush=True)
+        return None
+    npar = parallel or min(len(jobs), max(1, (os.cpu_count() or 4) // 3))
+    print('[full-over-it] {} (deployment, rung) jobs, stride {}, parallel {}'.format(
+        len(jobs), stride, npar), flush=True)
+    with Pool(processes=npar) as pool:
+        res = pool.map(_full_over_iterations_cell, jobs)
+    order = [x[0] for x in LADDER]
+    rungs = sorted({d['rung'] for d in res}, key=lambda r: order.index(r) if r in order else 99)
+    max_it = max(p[0] for d in res for p in d['points'])
+    grid = sorted(set(list(range(0, max_it + 1, int(stride))) + [max_it]))
+    agg = {'iterations': grid, 'seeds': sorted({d['seed'] for d in res}), 'stride': int(stride),
+           'objective': 'latency + gamma*SUM(peering-failure latencies), rescored per iteration',
+           'cells': res, 'rungs': {}}
+    for r in rungs:
+        rows_pct, rows_abs = [], []
+        for d in res:
+            if d['rung'] != r:
+                continue
+            its = [p[0] for p in d['points']]
+            pc = [p[2] for p in d['points']]
+            ab = [p[1] - d['opp_full'] for p in d['points']]
+            pick = [max(0, np.searchsorted(its, g_, side='right') - 1) for g_ in grid]
+            rows_pct.append([pc[k] for k in pick]); rows_abs.append([ab[k] for k in pick])
+        agg['rungs'][r] = {'mean_pct': np.nanmean(np.array(rows_pct, dtype=float), axis=0).tolist(),
+                           'mean_abs_minus_opp': np.nanmean(np.array(rows_abs, dtype=float), axis=0).tolist(),
+                           'n_deployments': len(rows_pct)}
+    with open(os.path.join(out_dir, 'pct_full_objective_over_iterations.json'), 'w') as f:
+        json.dump(agg, f)
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    color = {r: c for r, _, c in LADDER}; label = {r: l for r, l, _ in LADDER}
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
+    for r, d in agg['rungs'].items():
+        axes[0].plot(grid, d['mean_pct'], '-o', ms=3, color=color.get(r), label=label.get(r, r), lw=1.6)
+        axes[1].plot(grid, d['mean_abs_minus_opp'], '-o', ms=3, color=color.get(r), label=label.get(r, r), lw=1.6)
+    axes[0].axhline(0, color=color['painter'], ls='--', lw=1, label='painter')
+    axes[0].axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP)')
+    axes[0].set_ylabel('% of painter -> OPP gap closed (FULL objective)'); axes[0].set_xlabel('iteration')
+    axes[1].set_yscale('log'); axes[1].set_ylabel('full objective - OPP (mean over deployments, log)'); axes[1].set_xlabel('iteration')
+    n = len(agg['seeds'])
+    axes[0].set_title('full objective = latency + gamma*SUM(failure latencies); mean over {} deployments'.format(n), fontsize=9)
+    axes[1].set_title('same, absolute distance to OPP', fontsize=9)
+    for ax in axes:
+        ax.grid(True, alpha=.3)
+    axes[0].legend(fontsize=7, loc='lower right'); fig.tight_layout()
+    pdf = os.path.join(out_dir, 'pct_full_objective_over_iterations.pdf')
+    fig.savefig(pdf); plt.close(fig)
+    print('[full-over-it] wrote {} (+ .json)'.format(pdf), flush=True)
+    return agg
+
+
 def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=None,
              contract=None, objective='full', gamma=None):
     """Table + files + over-iterations figure (+ verification when ws_root is
@@ -1183,9 +1297,22 @@ def evaluate_main(argv=None):
     ap.add_argument('--prelim', action='store_true',
                     help='running study: drop the rescored gate (table then needs --objective latency)')
     ap.add_argument('--no-plot', action='store_true')
+    ap.add_argument('--full-over-iterations', action='store_true',
+                    help='rescore the saved per-iteration advertisements on the FULL objective '
+                         '(needs --figs-dir with the state pickles and --dpsize; slow: ~269 LPs per point at actual-10)')
+    ap.add_argument('--figs-dir', default=None, help='harvested artifacts dir holding *_state-*.pkl')
+    ap.add_argument('--dep-file', default=None, help="pinned deployment template, e.g. cache/ablation/cdf_a10_deps/dep_seed{seed}.pkl")
+    ap.add_argument('--stride', type=int, default=10, help='rescore every k-th iteration (plus the last)')
+    ap.add_argument('--parallel', type=int, default=None, help='deployments rescored concurrently (default: all)')
     a = ap.parse_args(argv)
     if not a.in_dir:
         ap.error('--in-dir is required')
+    if a.full_over_iterations:
+        if not (a.in_dir and a.figs_dir and a.dpsize):
+            ap.error('--full-over-iterations needs --in-dir, --figs-dir and --dpsize')
+        agg = full_objective_over_iterations(a.in_dir, a.figs_dir, a.dpsize, a.dep_file, a.gamma,
+                                             a.stride, a.out_dir or a.in_dir, a.parallel)
+        return 0 if agg else 1
     contract = {'dpsize': a.dpsize, 'deployments': a.deployments, 'max_iter': a.max_iter,
                 'probe_n': a.probe_n, 'rungs': a.rungs}
     if a.ws_root and any(v is None for v in contract.values()):

@@ -35,6 +35,78 @@ if _REPO_ROOT not in sys.path:
 MARKER = 'lp_driver_v2'
 
 
+class FullObjectiveScorer:
+    """THE trusted scorer as a reusable object (2026-09-09, for the full-
+    objective-over-iterations curve): the same evaluator, steady LP and
+    single-peering failure sweep rescore_seed uses. full(adv, gamma) =
+    steady avg latency + gamma * SUM over popp failures of the avg latency
+    under that failure (30 s no-route sentinel charged), i.e. the ladder's
+    full objective; opp_full(gamma) is the one-per-peering anchor."""
+
+    def __init__(self, seed, dpsize, dep_file=None):
+        os.environ['RAY_ADDRESS'] = 'local'
+        os.environ['RAY_TMPDIR'] = '/tmp/ray_rescore_{}'.format(os.getpid())
+        os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
+        os.environ.setdefault('MPLBACKEND', 'Agg')
+        from helpers.constants import DEFAULT_EXPLORE
+        from evaluations.wrapper_eval import capacity
+        from core.deployment_setup import get_random_deployment
+        from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+        from helpers.helpers import deployment_to_prefixes
+        dep_file = dep_file or os.environ.get('SCULPTOR_ABLATION_DEP_FILE', '')
+        if dep_file:
+            import pickle as _pickle
+            dep = _pickle.load(open(dep_file.format(seed=seed), 'rb'))
+        else:
+            dep = get_random_deployment(dpsize)
+        dep['generic_objective'] = 'avg_latency'
+        self.sas = Sparse_Advertisement_Eval(
+            dep, verbose=False, lambduh=0, with_capacity=capacity,
+            explore=DEFAULT_EXPLORE, using_resilience_benefit=False, gamma=0,
+            n_prefixes=deployment_to_prefixes(dep), generic_objective='avg_latency')
+        self.vols = np.asarray(self.sas.ug_vols)
+        self.n_popps = int(self.sas.n_popps)
+        self._opp = None
+
+    def steady(self, adv):
+        ret = self.sas.solve_lp_with_failure_catch(np.asarray(adv, dtype=float))
+        return float(np.average(np.asarray(ret['lats_by_ug']), weights=self.vols))
+
+    def fail_mean(self, adv):
+        a = np.asarray(adv, dtype=float)
+        per = []
+        for popp in self.sas.popps:
+            a2 = np.copy(a)
+            a2[[self.sas.popp_to_ind[popp]], :] = 0
+            if a2.sum() == 0:
+                per.append(30000.0)
+                continue
+            per.append(self.steady(a2))
+        return float(np.mean(per))
+
+    def _drop_lp_cache(self):
+        # The evaluator memoizes every LP it solves (keyed by advertisement,
+        # with full per-UG path maps). One full() = 1 + n_popps LPs; scoring a
+        # cell's whole iteration history cached ~3000 of them per process and
+        # 12 processes filled a 123 GB box in 10 min (2026-09-09). Nothing
+        # here re-solves an advertisement, so the cache buys nothing: drop it.
+        try:
+            self.sas.linear_prog_soln_cache = {k: {} for k in self.sas.linear_prog_soln_cache}
+        except Exception:
+            pass
+
+    def full(self, adv, gamma):
+        v = self.steady(adv) + float(gamma) * self.n_popps * self.fail_mean(adv)
+        self._drop_lp_cache()
+        return v
+
+    def opp_full(self, gamma):
+        if self._opp is None:
+            self._opp = (self.steady(np.eye(self.n_popps)), self.fail_mean(np.eye(self.n_popps)))
+            self._drop_lp_cache()
+        return self._opp[0] + float(gamma) * self.n_popps * self._opp[1]
+
+
 def rescore_seed(seed, in_dir, dpsize):
     fns = sorted(glob.glob(os.path.join(in_dir, 'seed_{}_*.json'.format(seed))))
     todo = []
