@@ -376,7 +376,7 @@ def run_main(argv=None):
                                val if kind == 'int' else max(1, int(round(val * n_))))}
                     for s_, n_ in npfx.items()}
         study = {'dpsize': a.dpsize, 'deployments': a.deployments, 'max_iter': a.max_iter,
-                 'probe_n': str(a.probe_n), 'rungs': a.rungs,
+                 'probe_n': str(a.probe_n), 'rungs': a.rungs, 'gamma': str(a.gamma),
                  'full_probe_mode': a.full_probe_mode or LADDER_PROBE_MODE['full'],
                  'cell_env': a.cell_env, 'per_seed': per_seed}
         os.makedirs(out_root, exist_ok=True)
@@ -545,7 +545,8 @@ def run_main(argv=None):
          '--dpsize', a.dpsize, '--deployments', str(a.deployments),
          '--max-iter', str(a.max_iter), '--probe-n', str(a.probe_n),
          '--rungs', a.rungs,
-         '--full-probe-mode', a.full_probe_mode or LADDER_PROBE_MODE['full']],
+         '--full-probe-mode', a.full_probe_mode or LADDER_PROBE_MODE['full'],
+         '--gamma', str(a.gamma)],
         cwd=_REPO)
     if rc_eval != 0:
         print('[cdf] EVALUATION/VERIFICATION FAILED (rc={}) -- see verification.txt in {}'.format(rc_eval, in_dir), flush=True)
@@ -563,8 +564,37 @@ def run_main(argv=None):
 # rung order / labels / colors are the ladder's single source of truth
 
 
-def _load_cells(in_dir, require_rescored=True):
-    """{(seed, rung): json} for every scored cell in in_dir."""
+OBJECTIVES = ('full', 'latency')
+
+
+def _cell_objective(r, objective='full', gamma=None):
+    """(cell objective, OPP objective) on the chosen metric.
+
+    full    (Tom 2026-09-09, THE ablation metric): latency + gamma * SUM over
+            peering-failure scenarios of the latency under that failure, all
+            from the trusted rescore (rescore_fork: avg_lat, fail_popp.
+            avg_lat_under_failure_abs = mean over the n_popps single-peering
+            failures, times n_popps = the sum; same for OPP). gamma defaults to
+            the gamma the cell trained with (recorded in its JSON).
+    latency the cell's own measured_objective (repo_objective / opp_objective):
+            the LP objective under the training gamma, resilience term 0."""
+    if objective == 'latency':
+        return (float(r['repo_objective']) if r.get('repo_objective') is not None else None,
+                float(r['opp_objective']) if r.get('opp_objective') is not None else None)
+    fp = r.get('fail_popp') or {}
+    if r.get('avg_lat') is None or fp.get('avg_lat_under_failure_abs') is None:
+        return None, None
+    g = float(gamma if gamma is not None else r.get('gamma', 0.0))
+    n = len(r['adv']) if isinstance(r.get('adv'), list) else 0
+    obj = float(r['avg_lat']) + g * n * float(fp['avg_lat_under_failure_abs'])
+    opp = (float(r['opp_avg_lat']) + g * n * float(fp['opp_avg_lat_under_failure_abs'])
+           if r.get('opp_avg_lat') is not None and fp.get('opp_avg_lat_under_failure_abs') is not None else None)
+    return obj, opp
+
+
+def _load_cells(in_dir, require_rescored=True, objective='full', gamma=None):
+    """{(seed, rung): json} for every scored cell in in_dir; each carries
+    '_obj' / '_opp' on the chosen objective (None when not computable)."""
     cells = {}
     for fn in sorted(glob.glob(os.path.join(in_dir, 'seed_*_*.json'))):
         with open(fn) as f:
@@ -572,6 +602,7 @@ def _load_cells(in_dir, require_rescored=True):
         if (require_rescored and not r.get('rescored')) \
                 or r.get('repo_objective') is None:
             continue
+        r['_obj'], r['_opp'] = _cell_objective(r, objective, gamma)
         cells[(int(r['seed']), r['rung'])] = r
     return cells
 
@@ -582,16 +613,16 @@ def _anchors(cells):
     as the anchor's noise floor), and the gap."""
     painter, opp_cells = {}, {}
     for (s, rung), r in cells.items():
-        if rung == 'painter':
-            painter[s] = float(r['repo_objective'])
-        if r.get('opp_objective') is not None:
-            opp_cells.setdefault(s, []).append(float(r['opp_objective']))
+        if rung == 'painter' and r.get('_obj') is not None:
+            painter[s] = float(r['_obj'])
+        if r.get('_opp') is not None:
+            opp_cells.setdefault(s, []).append(float(r['_opp']))
     opp = {s: float(np.mean(v)) for s, v in opp_cells.items()}
     spread = {s: float(max(v) - min(v)) for s, v in opp_cells.items()}
     return painter, opp, spread
 
 
-def ladder_summary(in_dir, require_rescored=True):
+def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
     """THE headline metric (Tom 2026-09-08): per rung, the mean trusted
     objective over deployments and the cumulative percentage of the
     painter->OPP gap it closes, computed on the MEANS
@@ -599,10 +630,12 @@ def ladder_summary(in_dir, require_rescored=True):
     the increment over the previous rung in capability order, the mean of
     the per-deployment percentages (scale-free companion: raw objectives
     mix per-deployment scales) and the per-deployment percentages."""
-    cells = _load_cells(in_dir, require_rescored)
+    cells = _load_cells(in_dir, require_rescored, objective, gamma)
     by_rung = {}
     for (s, rung), r in cells.items():
-        by_rung.setdefault(rung, {})[s] = float(r['repo_objective'])
+        if r.get('_obj') is None:
+            continue
+        by_rung.setdefault(rung, {})[s] = float(r['_obj'])
     painter, opp, opp_spread = _anchors(cells)
     if 'painter' not in by_rung or not opp:
         return None, ''
@@ -632,7 +665,9 @@ def ladder_summary(in_dir, require_rescored=True):
                      'n_seeds_with_positive_gap': len(finite),
                      'pct_gap_closed_per_seed': per_seed})
         prev = cum
+    g_used = sorted({float(r.get('gamma', 0)) for r in cells.values()}) if gamma is None else [float(gamma)]
     summary = {'seeds': seeds, 'n_deployments': len(seeds),
+               'objective': objective, 'gamma': g_used,
                'mean_opp_objective': mean_opp,
                'opp_anchor': "mean of the deployment's per-cell OPP values",
                'opp_cell_spread_per_seed': {s: opp_spread[s] for s in seeds},
@@ -640,10 +675,13 @@ def ladder_summary(in_dir, require_rescored=True):
                'preliminary': not require_rescored, 'rungs': rows}
     hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
         'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
-    lines = ['LADDER SUMMARY{} (means over {} deployments; % of painter->OPP '
-             'gap closed on the means; OPP mean {:.3f}):'.format(
+    _objdesc = ('latency + gamma*SUM(peering-failure latencies), rescored, gamma={}'.format(
+                    ','.join('{:g}'.format(g) for g in g_used))
+                if objective == 'full' else "cell's own training objective (latency LP)")
+    lines = ['LADDER SUMMARY{} (objective = {}; means over {} deployments; % of '
+             'painter->OPP gap closed on the means; OPP mean {:.3f}):'.format(
                  ' [PRELIMINARY, un-rescored cells]' if not require_rescored else '',
-                 len(seeds), mean_opp), hdr, '-' * len(hdr)]
+                 _objdesc, len(seeds), mean_opp), hdr, '-' * len(hdr)]
     for row in rows:
         lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%{:>+9.1f}{:>13.1f}%'.format(
             row['rung'], row['mean_objective'], row['mean_minus_opp'],
@@ -676,14 +714,19 @@ def write_summary_files(summary, out_dir):
         f.write('OPP,{:.6f},0,100,,100\n'.format(summary['mean_opp_objective']))
 
 
-def pct_over_iterations(in_dir, require_rescored=True):
+def pct_over_iterations(in_dir, require_rescored=True, objective='full', gamma=None):
     """Per rung, the % of the painter->OPP gap closed at every iteration:
     per deployment 100*(painter_s - gt_s(it))/(painter_s - OPP_s) from the
     cell's gt_objective_series (held at its final value past the cell's
     last iteration, which is what an early-stopped cell delivers), then
     (a) the mean of the per-deployment % and (b) the means-based %
     100*(mean painter - mean gt(it))/(mean painter - mean OPP)."""
-    cells = _load_cells(in_dir, require_rescored)
+    # NOTE: the per-iteration series is the cell's own ground-truth objective
+    # (gt_objective_series = the latency LP objective during training; no
+    # failure sweep per iteration exists), so the curve is always on the
+    # 'latency' metric and is anchored on that metric's painter/OPP. The
+    # table above is on the requested objective.
+    cells = _load_cells(in_dir, require_rescored, 'latency', gamma)
     painter, opp, _ = _anchors(cells)
     series = {}   # rung -> seed -> np.array indexed by iteration
     for (s, rung), r in cells.items():
@@ -1000,12 +1043,12 @@ def selftest(iters=16, probe_n=4, deployments=2, keep=False):
 
 
 def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=None,
-             contract=None):
+             contract=None, objective='full', gamma=None):
     """Table + files + over-iterations figure (+ verification when ws_root is
     given). Returns (summary, curves, verification-or-None)."""
     out_dir = out_dir or in_dir
     os.makedirs(out_dir, exist_ok=True)
-    summary, table = ladder_summary(in_dir, require_rescored)
+    summary, table = ladder_summary(in_dir, require_rescored, objective, gamma)
     if summary is None:
         print('[ablation evaluate] no complete painter/OPP deployment in {} '
               '-> no ladder summary'.format(in_dir), flush=True)
@@ -1015,7 +1058,7 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
         write_summary_files(summary, out_dir)
         print('[ablation evaluate] wrote {}/ladder_summary.{{json,csv}}'.format(out_dir),
               flush=True)
-    curves = pct_over_iterations(in_dir, require_rescored) if plot else None
+    curves = pct_over_iterations(in_dir, require_rescored, objective, gamma) if plot else None
     if curves is not None:
         with open(os.path.join(out_dir, 'pct_gap_closed_over_iterations.json'), 'w') as f:
             json.dump(curves, f)
@@ -1052,8 +1095,14 @@ def evaluate_main(argv=None):
     ap.add_argument('--rungs', default=None, help='contract: exactly this comma list of rungs present')
     ap.add_argument('--full-probe-mode', default=None, choices=['smart', 'scheduled'],
                     help="contract: the 'full' rung's WHEN policy (default LADDER_PROBE_MODE)")
+    ap.add_argument('--objective', default='full', choices=OBJECTIVES,
+                    help="ladder metric: 'full' (default; latency + gamma*SUM of peering-"
+                         "failure latencies, from the trusted rescore) or 'latency' (the "
+                         "cell's own training objective)")
+    ap.add_argument('--gamma', type=float, default=None,
+                    help='gamma for the full objective (default: each cell\'s training gamma)')
     ap.add_argument('--prelim', action='store_true',
-                    help='running study: drop the rescored gate')
+                    help='running study: drop the rescored gate (table then needs --objective latency)')
     ap.add_argument('--no-plot', action='store_true')
     a = ap.parse_args(argv)
     if not a.in_dir:
@@ -1064,7 +1113,8 @@ def evaluate_main(argv=None):
         ap.error('--ws-root verification requires the full contract: --dpsize --deployments --max-iter --probe-n --rungs')
     contract['full_probe_mode'] = a.full_probe_mode
     summary, _, ver = evaluate(a.in_dir, a.out_dir, require_rescored=not a.prelim,
-                          plot=not a.no_plot, ws_root=a.ws_root, contract=contract)
+                               plot=not a.no_plot, ws_root=a.ws_root, contract=contract,
+                               objective=a.objective, gamma=a.gamma)
     # exit code: verification is the gate. A missing table (un-rescored
     # study, e.g. --queue-only or --prelim on a run with no complete
     # deployment) is reported, not fatal, unless nothing at all was evaluated.
