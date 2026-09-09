@@ -420,6 +420,9 @@ def main():
         ablation_cell.harvest_figs(ws, sp.get('artifacts_figs'),
                                    sp['label'], sp['dpsize'])
 
+    import hashlib as _hashlib
+    _ws_tag = _hashlib.sha1(os.path.abspath(args.ws_root).encode()).hexdigest()[:6]
+
     def slot_worker(slot):
         ws = os.path.join(args.ws_root, 'S{}'.format(slot))
         for sub in ('runs', 'logs', 'figures/paper'):
@@ -461,7 +464,9 @@ def main():
                 'SCULPTOR_RAY_NUM_CPUS': str(n_workers + 2),
                 'MPLBACKEND': 'Agg',
                 'RAY_ADDRESS': 'local',
-                'RAY_TMPDIR': '/tmp/ray_q_S{}'.format(slot),
+                # unique per workspace so several queues can share a box
+                # (three policy arms of one study, 2026-09-08); short: AF_UNIX cap
+                'RAY_TMPDIR': '/tmp/rq_{}_S{}'.format(_ws_tag, slot),
                 'SCULPTOR_ABLATION_PROBE_MODE': sp['probe_mode'],
                 'SCULPTOR_ABLATION_PROBE_TCONV': str(sp['max_iter']),
                 'SCULPTOR_ABLATION_PROBE_N': str(N),

@@ -296,7 +296,7 @@ def _cell_log(ws_root, seed, rung):
 
 
 def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
-           probe_n=None, rungs=None):
+           probe_n=None, rungs=None, full_probe_mode=None):
     """Prove, per cell, that each rung used exactly the features it claims.
 
     Evidence is the cell's OWN solver log (ws_root/S*/logs/<label>_N<n>_s<seed>_<rung>.log)
@@ -385,7 +385,8 @@ def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
                             'N={} n_prefixes={}'.format(N, npf.group(1) if npf else '?'))
                     budget_by_seed.setdefault(s, set()).add(N)
             if rung == 'full':
-                C.check(gates and modes == [LADDER_PROBE_MODE['full']], cell + ': every gate decision mode={}'.format(LADDER_PROBE_MODE['full']), 'modes={}'.format(modes))
+                _fm = full_probe_mode or LADDER_PROBE_MODE['full']
+                C.check(gates and modes == [_fm], cell + ': every gate decision mode={}'.format(_fm), 'modes={}'.format(modes))
                 C.check(_BANNER.search(text) is None and 'rung=full: scrubbed fork env' in text,
                         cell + ': full is the MAINLINE solver (no fork banner; fork env scrubbed)', '')
                 C.check(N is not None and int(r.get('probes_spent', -1)) <= N,
@@ -528,6 +529,8 @@ def main():
     ap.add_argument('--max-iter', type=int, default=None, help='contract: every trained cell ran this many iterations')
     ap.add_argument('--probe-n', default=None, help="contract: budget per cell (int, or 'prefixes')")
     ap.add_argument('--rungs', default=None, help='contract: exactly this comma list of rungs present')
+    ap.add_argument('--full-probe-mode', default=None, choices=['smart', 'scheduled'],
+                    help="contract: the 'full' rung's WHEN policy (default LADDER_PROBE_MODE)")
     ap.add_argument('--prelim', action='store_true',
                     help='running study: drop the rescored gate')
     ap.add_argument('--no-plot', action='store_true')
@@ -547,6 +550,7 @@ def main():
                 'probe_n': a.probe_n, 'rungs': a.rungs}
     if a.ws_root and any(v is None for v in contract.values()):
         ap.error('--ws-root verification requires the full contract: --dpsize --deployments --max-iter --probe-n --rungs')
+    contract['full_probe_mode'] = a.full_probe_mode
     summary, _, ver = run(a.in_dir, a.out_dir, require_rescored=not a.prelim,
                           plot=not a.no_plot, ws_root=a.ws_root, contract=contract)
     # exit code: verification is the gate. A missing table (un-rescored

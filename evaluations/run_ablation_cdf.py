@@ -126,6 +126,12 @@ def main():
                          "mainline has no constant default any more: unset "
                          "= 'prefixes', one per prefix of each deployment.")
     ap.add_argument('--rungs', default=PAPER_RUNGS)
+    ap.add_argument('--full-probe-mode', default=None, choices=['smart', 'scheduled'],
+                    help="override the 'full' rung's WHEN policy (LADDER_PROBE_MODE) for a "
+                         "probing-policy experiment; the evaluation verifies against it")
+    ap.add_argument('--cell-env', action='append', default=[], metavar='K=V',
+                    help='extra env for every cell (repeatable), e.g. gate knobs '
+                         'SCULPTOR_SMART_STALE_FRAC=2.0 for a probing-policy arm')
     ap.add_argument('--out-root', required=True)
     ap.add_argument('--ws-root', required=True)
     ap.add_argument('--slots', type=int, default=8)
@@ -216,6 +222,12 @@ def main():
 
         base_env = ({'SCULPTOR_ABLATION_DEP_FILE': dep_tpl}
                     if dep_tpl else {})
+        for kv in a.cell_env:
+            k, v = kv.split('=', 1)
+            base_env[k] = v
+        # the per-rung WHEN policy for THIS study (full may be overridden)
+        policy = dict(LADDER_PROBE_MODE)
+        policy['full'] = a.full_probe_mode or LADDER_PROBE_MODE['full']
         if a.continue_from:
             prior = os.path.abspath(a.continue_from)
             # RESUME_FROM: hot-start each arm from its prior final adv. One
@@ -225,7 +237,7 @@ def main():
             _rungs = [r for r in a.rungs.split(',') if r]
             specs = []
             for mode in ('smart', 'scheduled'):
-                group = [r for r in _rungs if LADDER_PROBE_MODE.get(r) == mode]
+                group = [r for r in _rungs if policy.get(r) == mode]
                 if not group:
                     continue
                 specs.append({
@@ -269,7 +281,7 @@ def main():
             # unchanged. PAPER PARITY: default world, no XOBJS. Dep-file
             # mode rides in spec env so cells AND the queue's rescore see it.
             _rungs = [r for r in a.rungs.split(',') if r]
-            _unknown = [r for r in _rungs if r not in LADDER_PROBE_MODE]
+            _unknown = [r for r in _rungs if r not in policy]
             assert not _unknown, 'rungs without a LADDER_PROBE_MODE entry: {}'.format(_unknown)
             _base = {
                 'label': 'cdf_{}'.format(a.dpsize.replace('/', '_')),
@@ -286,7 +298,7 @@ def main():
             # one queue spec per (probe policy); same label/out_root, so the
             # harvested names and the result dir are unchanged
             for mode in ('smart', 'scheduled', None):
-                group = [r for r in _rungs if LADDER_PROBE_MODE[r] == mode]
+                group = [r for r in _rungs if policy[r] == mode]
                 if not group:
                     continue
                 if 'full' in group:
@@ -353,7 +365,8 @@ def main():
          '--in-dir', in_dir, '--ws-root', ws_root,
          '--dpsize', a.dpsize, '--deployments', str(a.deployments),
          '--max-iter', str(a.max_iter), '--probe-n', str(a.probe_n),
-         '--rungs', a.rungs],
+         '--rungs', a.rungs,
+         '--full-probe-mode', a.full_probe_mode or LADDER_PROBE_MODE['full']],
         cwd=_REPO)
     if rc_eval != 0:
         print('[cdf] EVALUATION/VERIFICATION FAILED (rc={}) -- see verification.txt in {}'.format(rc_eval, in_dir), flush=True)
