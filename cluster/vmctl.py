@@ -485,6 +485,23 @@ def cmd_stop(a):
     return 0
 
 
+def cmd_reboot(a):
+    """OS reboot in place (same instance, type, IP, disk). For a box that is
+    running per AWS but no longer answers ssh (2026-09-09: rescore memory
+    storm wedged sshd). No harvest gate -- the disk survives; anything
+    running is lost and must be relaunched (queue-driven studies resume
+    from their result JSONs)."""
+    inst = V.resolve(a.ref)
+    if inst['state'] != 'running':
+        raise SystemExit('{} is {} (reboot needs running)'.format(inst['id'], inst['state']))
+    V.ec2().reboot_instances(InstanceIds=[inst['id']])
+    print('reboot requested for {} ({}); ssh usually answers again within 1-2 min'
+          .format(inst['id'], inst['ip']))
+    V.update_alert(active=True, instance=inst,
+                   note='vmctl reboot {} (box wedged; relaunch the run)'.format(V.utcnow()))
+    return 0
+
+
 def cmd_terminate(a):
     inst = V.resolve(a.ref)
     if not a.yes:
@@ -671,6 +688,9 @@ def main(argv=None):
     p.add_argument('--note', default=None, help='agent_session note for the alert JSON')
     p.add_argument('--timeout', type=int, default=600)
     p.set_defaults(fn=cmd_stop)
+
+    p = sub.add_parser('reboot', help='OS reboot in place for a wedged box (no harvest; running work is lost)')
+    p.add_argument('ref'); p.set_defaults(fn=cmd_reboot)
 
     p = sub.add_parser('terminate', help='DESTRUCTIVE: kills the EBS volume too')
     p.add_argument('ref')
