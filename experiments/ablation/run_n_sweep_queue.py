@@ -517,9 +517,19 @@ def main():
     # ---- audit gate (same rules as run_n_sweep.sh), per spec
     bad = 0
     for sp in specs:
+        # Only THIS spec's cells: several specs share one out_root when a
+        # driver splits rungs by probe policy (run_ablation_cdf.LADDER_PROBE_MODE,
+        # 2026-09-08); auditing every JSON against every spec's probe_mode
+        # flagged the other specs' cells as 'stale code'.
+        _sp_rungs = set(sp['rungs'].split(',')) if isinstance(sp.get('rungs'), str) else set(sp.get('rungs') or [])
+        _sp_seeds = set(int(x) for x in sp.get('seeds_list', []))
         for fn in glob.glob(os.path.join(sp['out_root'], 'N*', 'seed_*_*.json')):
             r = json.load(open(fn))
             if r['rung'] == 'painter':
+                continue
+            if _sp_rungs and r['rung'] not in _sp_rungs:
+                continue
+            if _sp_seeds and int(r.get('seed', -1)) not in _sp_seeds:
                 continue
             # Legitimate early exits end before max_iter. As of 2026-08-14
             # late only L1 (budgeted-fixed) produces budget_exhausted;
