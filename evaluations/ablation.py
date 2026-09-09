@@ -775,6 +775,78 @@ def pct_over_iterations(in_dir, require_rescored=True, objective='full', gamma=N
     return out
 
 
+
+def pct_over_measurements(in_dir, require_rescored=True):
+    """% of the painter->OPP gap closed as a function of MEASUREMENTS spent
+    (Tom 2026-09-09: 'gradient steps are a fake unit'). For each cell the
+    gate history gives the cumulative probes spent per iteration; the value
+    at measurement k is the ground-truth objective at the first iteration
+    where spent == k (the state right after the k-th measurement); k = 0 is
+    the initial advertisement. Per deployment 100*(painter - v_k)/(painter -
+    OPP), then the mean over deployments that reached k (budgets differ per
+    deployment, so the count of deployments is reported per k)."""
+    cells = _load_cells(in_dir, require_rescored, 'latency')
+    painter, opp, _ = _anchors(cells)
+    rungs_present = [r for r, _, _ in LADDER if any(rr == r for _, rr in cells)]
+    # same deployments for every rung: only those with ALL present rungs
+    seeds = sorted(s for s in set(painter) & set(opp) if painter[s] - opp[s] > 0
+                   and all((s, r) in cells for r in rungs_present))
+    out = {'seeds': seeds, 'rungs': {}, 'preliminary': not require_rescored}
+    for r_ in [r for r in rungs_present if r != 'painter']:
+        per_seed = {}
+        for s in seeds:
+            r = cells.get((s, r_))
+            if r is None:
+                continue
+            gh = r.get('gate_hist') or []
+            ser = r.get('gt_objective_series') or []
+            if not gh or not ser:
+                continue
+            v = {int(p[0]): float(p[1]) for p in ser}
+            first_iter = {}
+            for g in gh:
+                k = g.get('spent')
+                if k is None:
+                    continue
+                first_iter.setdefault(int(k), int(g['iter']))
+            first_iter.setdefault(0, 0)
+            gap = painter[s] - opp[s]
+            per_seed[s] = {k: 100.0 * (painter[s] - v[it]) / gap
+                           for k, it in sorted(first_iter.items()) if it in v}
+        if not per_seed:
+            continue
+        ks = sorted({k for d in per_seed.values() for k in d})
+        out['rungs'][r_] = {
+            'k': ks,
+            'mean_pct': [float(np.mean([d[k] for d in per_seed.values() if k in d])) for k in ks],
+            'n_deployments': [int(sum(1 for d in per_seed.values() if k in d)) for k in ks],
+            'per_seed': {s: d for s, d in per_seed.items()}}
+    return out if out['rungs'] else None
+
+
+def plot_pct_over_measurements(data, out_pdf):
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    color = {r: c for r, _, c in LADDER}
+    label = {r: l for r, l, _ in LADDER}
+    fig, ax = plt.subplots(figsize=(7.5, 4.5))
+    for r, d in data['rungs'].items():
+        ax.plot(d['k'], d['mean_pct'], '-o', ms=3.5, color=color.get(r), label=label.get(r, r), lw=1.6)
+    ax.axhline(0, color=color['painter'], ls='--', lw=1, label='painter')
+    ax.axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP)')
+    ax.set_xlabel('measurements spent (BGP advertisements measured)')
+    ax.set_ylabel('% of painter -> OPP gap closed')
+    ax.set_title('mean over {} deployments{}'.format(len(data['seeds']),
+                 ', PRELIMINARY' if data.get('preliminary') else ''), fontsize=10)
+    ax.grid(True, alpha=.3)
+    ax.legend(fontsize=7, loc='lower right')
+    fig.tight_layout()
+    os.makedirs(os.path.dirname(os.path.abspath(out_pdf)), exist_ok=True)
+    fig.savefig(out_pdf)
+    plt.close(fig)
+
+
 def plot_pct_over_iterations(data, out_pdf):
     import matplotlib
     import matplotlib; matplotlib.use('Agg')
@@ -1071,6 +1143,13 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
     elif plot:
         print('[ablation evaluate] no gt_objective_series -> no over-iterations '
               'figure', flush=True)
+    meas = pct_over_measurements(in_dir, require_rescored) if plot else None
+    if meas is not None:
+        with open(os.path.join(out_dir, 'pct_gap_closed_over_measurements.json'), 'w') as f:
+            json.dump(meas, f)
+        pdf = os.path.join(out_dir, 'pct_gap_closed_over_measurements.pdf')
+        plot_pct_over_measurements(meas, pdf)
+        print('[ablation evaluate] wrote {} (+ .json)'.format(pdf), flush=True)
     ver = None
     if ws_root:
         ver = verify(in_dir, ws_root, **(contract or {}))
