@@ -3240,7 +3240,7 @@ class Sparse_Advertisement_Solver(Sparse_Advertisement_Wrapper):
 		self._probe_c_mult = 1.0 + (self._probe_c_mult - 1.0) * float(
 			np.exp(-1.0 / tau))
 		rate = self.probe_n / max(1.0, self.probe_frac * self.probe_tconv)
-		aggr = float(self._probe_env('PROBE_Q_AGGR', '0'))
+		aggr = float(self._probe_env('PROBE_Q_AGGR', DEFAULT_PROBE_Q_AGGR))
 		q_target = max(0.4, min(0.999, 1.0 - rate) - aggr)
 		if len(self._probe_U_history) >= 1:
 			_uw = int(self._probe_env('U_WINDOW',

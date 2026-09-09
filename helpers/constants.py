@@ -310,9 +310,10 @@ DEFAULT_PROBE_MODE = 'smart'
 # ablation fork's validated values.
 DEFAULT_PROBE_C = 1.0            # initial (high) uncertainty threshold
 DEFAULT_PROBE_FRAC = 0.75        # budget spread over this fraction of TCONV
-DEFAULT_PROBE_MINGAP_FRAC = 0.7  # self-assessed criteria held below this gap
+DEFAULT_PROBE_MINGAP_FRAC = 0.4  # self-assessed criteria held below this gap (0.7 -> 0.4, Tom 2026-09-09: the 'loosened' gate is the default)
 DEFAULT_SCHED_FALLBACK_MULT = 1.25   # backstop spacing multiplier
-DEFAULT_SMART_STALE_FRAC = 1.0       # (b) staleness gap, x TCONV/N
+DEFAULT_SMART_STALE_FRAC = 2.0       # (b) staleness gap, x TCONV/N (1.0 -> 2.0, Tom 2026-09-09: loosened gate; the backstop stops setting the cadence)
+DEFAULT_PROBE_Q_AGGR = 0.1           # threshold quantile aggression (0 -> 0.1, Tom 2026-09-09: c anneals toward a lower quantile of U)
 DEFAULT_SMART_PLATEAU_W = 5          # (b) plateau window
 DEFAULT_SMART_PLATEAU_EPS = 0.01     # (b) plateau tolerance, x belief span
 DEFAULT_SMART_SIGN_W = 6             # (c) predicted-vs-realized window
