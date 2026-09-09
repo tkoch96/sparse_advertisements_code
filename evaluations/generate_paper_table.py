@@ -1072,10 +1072,19 @@ def main():
                        if o in objectives and m is not None]
                 _failed = [o for o, (m, _p, n, f) in cov.items()
                            if o in objectives and f]
+                # an objective short of its requested sims (incl. trained-
+                # but-unevaluated, 2026-09-09) must not be cached either:
+                # the cached table would carry '-' cells forever
+                _short = [o for o, (m, _p, n, f) in cov.items()
+                          if o in objectives and n < nsim_for(nsim_by_obj, o)]
                 if _failed:
                     print('  [condensed] NOT saved: failed strategies in {} '
                           '-- the next call must re-solve, not reuse'
                           .format(_failed))
+                elif _short:
+                    print('  [condensed] NOT saved: {} below requested '
+                          'coverage -- the next call must evaluate, not reuse'
+                          .format(_short))
                 else:
                     _achieved = min(_ns) if _ns else 0
                     _save_condensed(dpsize, run_tag, labels, rows,
