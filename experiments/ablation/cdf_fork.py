@@ -86,13 +86,6 @@ def scenario_arrays(in_dir):
     return out
 
 
-def ladder_summary(in_dir, require_rescored=True):
-    """Moved to evaluations.evaluate_ablation (THE ablation evaluation);
-    kept as a shim for callers."""
-    from evaluations.evaluate_ablation import ladder_summary as _ls
-    return _ls(in_dir, require_rescored=require_rescored)
-
-
 def quantile_table(vals_by_rung, unit, fmt='{:>10.2f}'):
     qs = [0.0, 0.25, 0.5, 0.75, 1.0]
     hdr = '{:<14}'.format('rung') + ''.join('{:>10}'.format('p{:g}'.format(q * 100)) for q in qs) + '{:>6}'.format('n')
@@ -120,10 +113,6 @@ def main():
 
     # headline first: the means-based ladder table (Tom 2026-09-08), also
     # persisted next to the JSONs so the paper pipeline can pick it up
-    # THE ablation evaluation: ladder table + files + % over iterations
-    from evaluations.evaluate_ablation import run as _evaluate_ablation
-    _evaluate_ablation(args.in_dir)
-
     diffs = combined_diffs(args.in_dir, args.gamma)
     if not diffs:
         print('no trusted rescores in {}'.format(args.in_dir)); return

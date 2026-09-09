@@ -30,6 +30,20 @@ sys.path.insert(0, _REPO)
 
 # active ladder for the paper CDF: no_direction retired 2026-08-18,
 # expl_random retired 2026-08-12
+# WHEN-to-measure policy PER RUNG (Tom 2026-09-08: the ablation overrides the
+# solver defaults for every rung explicitly; nothing rides on a default).
+# WHAT each rung optimizes with (memory / direction / explore / MC) is defined
+# once in experiments/ablation/sculptor_fork.RUNGS; this table is the probing
+# policy of the same ladder, and evaluations/evaluate_ablation.py verifies
+# both from every cell's own log.
+LADDER_PROBE_MODE = {
+    'painter':       None,          # one-shot baseline, never probes
+    'no_mc':         'scheduled',   # L2: fixed schedule, every ~TCONV/N iterations
+    'no_memory':     'scheduled',   # L3
+    'no_memory_dir': 'scheduled',   # L4
+    'expl_none':     'scheduled',   # L5: no exploration of any kind
+    'full':          'smart',       # L6 = SCULPTOR: uncertainty-gated probing
+}
 PAPER_RUNGS = 'full,expl_none,no_memory_dir,no_memory,no_mc,painter'
 
 
@@ -111,8 +125,6 @@ def main():
                          'explicit for depstore/choke_config parity). The '
                          "mainline has no constant default any more: unset "
                          "= 'prefixes', one per prefix of each deployment.")
-    ap.add_argument('--probe-mode', default='smart',
-                    help='mainline DEFAULT_PROBE_MODE')
     ap.add_argument('--rungs', default=PAPER_RUNGS)
     ap.add_argument('--out-root', required=True)
     ap.add_argument('--ws-root', required=True)
@@ -204,34 +216,40 @@ def main():
                     if dep_tpl else {})
         if a.continue_from:
             prior = os.path.abspath(a.continue_from)
-            rungs_main = ','.join(r for r in a.rungs.split(',')
-                                  if r != 'painter')
-            specs = [{
-                'label': 'cdfext_main',
-                'out_root': out_root,
-                'init_src': init_dir,
-                'probe_mode': a.probe_mode,
-                'rungs': rungs_main,
-                'seeds': '1-{}'.format(a.deployments),
-                'n_values': str(a.probe_n),
-                'gamma': str(a.gamma),
-                'max_iter': a.max_iter,
-                'dpsize': a.dpsize,
-                # RESUME_FROM: hot-start each arm from its prior final adv.
-                # SCULPTOR_PROBE_N/TCONV are the MAINLINE names so the
-                # scrubbed 'full' rung gets the same remaining budget.
-                'env': dict(base_env,
-                            SCULPTOR_ABLATION_RESUME_FROM=prior,
-                            SCULPTOR_PROBE_N=str(a.probe_n),
-                            SCULPTOR_PROBE_TCONV=str(a.max_iter)),
-                'artifacts_figs': figs_dir,
-            }]
-            if 'painter' in a.rungs.split(','):
+            # RESUME_FROM: hot-start each arm from its prior final adv. One
+            # spec per WHEN policy from LADDER_PROBE_MODE (same table as the
+            # fresh branch below). SCULPTOR_PROBE_N/TCONV are the MAINLINE
+            # names so the scrubbed 'full' rung gets the same remaining budget.
+            _rungs = [r for r in a.rungs.split(',') if r]
+            specs = []
+            for mode in ('smart', 'scheduled'):
+                group = [r for r in _rungs if LADDER_PROBE_MODE.get(r) == mode]
+                if not group:
+                    continue
+                specs.append({
+                    'label': 'cdfext_main',
+                    'out_root': out_root,
+                    'init_src': init_dir,
+                    'probe_mode': mode,
+                    'rungs': ','.join(group),
+                    'seeds': '1-{}'.format(a.deployments),
+                    'n_values': str(a.probe_n),
+                    'gamma': str(a.gamma),
+                    'max_iter': a.max_iter,
+                    'dpsize': a.dpsize,
+                    'env': dict(base_env,
+                                SCULPTOR_ABLATION_RESUME_FROM=prior,
+                                SCULPTOR_PROBE_MODE=mode,
+                                SCULPTOR_PROBE_N=str(a.probe_n),
+                                SCULPTOR_PROBE_TCONV=str(a.max_iter)),
+                    'artifacts_figs': figs_dir,
+                })
+            if 'painter' in _rungs:
                 specs.append({
                     'label': 'cdfext_painter',
                     'out_root': out_root,
                     'init_src': init_dir,
-                    'probe_mode': a.probe_mode,
+                    'probe_mode': 'scheduled',
                     'rungs': 'painter',
                     'seeds': '1-{}'.format(a.deployments),
                     'n_values': str(a.painter_probe_n),
@@ -242,22 +260,47 @@ def main():
                     'artifacts_figs': figs_dir,
                 })
         else:
-            specs = [{
+            # One spec per WHEN-to-measure policy (Tom 2026-09-08): the fork
+            # rungs L1-L5 (+ painter, one-shot, no probing) run on the fixed
+            # schedule; 'full' (L6 = SCULPTOR) gets the smart gate. Same
+            # label/out_root, so harvested names and the result dir are
+            # unchanged. PAPER PARITY: default world, no XOBJS. Dep-file
+            # mode rides in spec env so cells AND the queue's rescore see it.
+            _rungs = [r for r in a.rungs.split(',') if r]
+            _unknown = [r for r in _rungs if r not in LADDER_PROBE_MODE]
+            assert not _unknown, 'rungs without a LADDER_PROBE_MODE entry: {}'.format(_unknown)
+            _base = {
                 'label': 'cdf_{}'.format(a.dpsize.replace('/', '_')),
                 'out_root': out_root,
                 'init_src': init_dir,
-                'probe_mode': a.probe_mode,
-                'rungs': a.rungs,
                 'seeds': '1-{}'.format(a.deployments),
                 'n_values': str(a.probe_n),
                 'gamma': str(a.gamma),
                 'max_iter': a.max_iter,
                 'dpsize': a.dpsize,
-                # PAPER PARITY: default world, no XOBJS. Dep-file mode rides
-                # in spec env so cells AND the queue's rescore see it.
-                'env': base_env,
                 'artifacts_figs': figs_dir,
-            }]
+            }
+            specs = []
+            # one queue spec per (probe policy); same label/out_root, so the
+            # harvested names and the result dir are unchanged
+            for mode in ('smart', 'scheduled', None):
+                group = [r for r in _rungs if LADDER_PROBE_MODE[r] == mode]
+                if not group:
+                    continue
+                if 'full' in group:
+                    # SCULPTOR_PROBE_N/MODE are the MAINLINE names (the fork env
+                    # is scrubbed for 'full'), so L6 gets the same budget as
+                    # L1-L5 for numeric --probe-n too ('prefixes' resolves per
+                    # deployment).
+                    env = dict(base_env, SCULPTOR_PROBE_MODE=mode,
+                               SCULPTOR_PROBE_N=str(a.probe_n))
+                else:
+                    env = dict(base_env)
+                specs.append(dict(_base, rungs=','.join(group),
+                                  probe_mode=mode or 'scheduled', env=env))
+            for sp in specs:
+                print('[cdf] spec rungs={} probe_mode={}'.format(
+                    sp['rungs'], sp['probe_mode']), flush=True)
         mf = os.path.join(ws_root, 'cdf_manifest.json')
         with open(mf, 'w') as fh:
             json.dump(specs, fh, indent=1)
@@ -295,11 +338,24 @@ def main():
         _REPO, 'figures', 'paper',
         'ablation_ladder_cdf_{}.pdf'.format(
             a.dpsize.replace('testing_feature-', '').replace('/', '_')))
-    return subprocess.call(
+    rc_cdf = subprocess.call(
         [sys.executable, '-u', '-m', 'experiments.ablation.cdf_fork',
          '--in-dir', in_dir, '--gamma', str(a.gamma),
          '--paper-out', paper_fig],
         cwd=_REPO)
+    # THE ablation evaluation (Tom 2026-09-08, one script): ladder % table +
+    # % over iterations + per-rung feature/probe-policy VERIFICATION from the
+    # cells' own logs. A study that violates its own ladder fails here.
+    rc_eval = subprocess.call(
+        [sys.executable, '-u', '-m', 'evaluations.evaluate_ablation',
+         '--in-dir', in_dir, '--ws-root', ws_root,
+         '--dpsize', a.dpsize, '--deployments', str(a.deployments),
+         '--max-iter', str(a.max_iter), '--probe-n', str(a.probe_n),
+         '--rungs', a.rungs],
+        cwd=_REPO)
+    if rc_eval != 0:
+        print('[cdf] EVALUATION/VERIFICATION FAILED (rc={}) -- see verification.txt in {}'.format(rc_eval, in_dir), flush=True)
+    return rc_cdf or rc_eval
 
 
 if __name__ == '__main__':
