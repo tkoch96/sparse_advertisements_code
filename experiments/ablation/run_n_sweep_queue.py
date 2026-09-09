@@ -448,12 +448,18 @@ def main():
                 gov.release()
                 return
             if str(args.workers_per_run) == 'auto':
+                # cells that will run concurrently with this one = already
+                # running (gov.active counts this slot) + still queued, capped
+                # by the slot count. (Counting only the queue let the pools
+                # grow 12 -> 32 as it drained while earlier cells still ran:
+                # 113 workers on 64 cores, 2026-09-09 tail relaunch.)
+                _concurrent = min(gov.max_active, gov.active + q.qsize())
                 n_workers = auto_workers(os.cpu_count() or 1, gov.max_active,
-                                         q.qsize() + 1)
+                                         _concurrent)
                 print('[queue] auto workers: {} for {} N={} seed={} rung={} '
-                      '(cores={}, slots={}, cells left incl. this={})'.format(
+                      '(cores={}, slots={}, concurrent cells={})'.format(
                           n_workers, sp['label'], N, s, rung, os.cpu_count(),
-                          gov.max_active, q.qsize() + 1), flush=True)
+                          gov.max_active, _concurrent), flush=True)
             else:
                 n_workers = int(args.workers_per_run)
             env = dict(os.environ)
