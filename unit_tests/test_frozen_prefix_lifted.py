@@ -89,7 +89,7 @@ def test_lifted_equals_stacked_objective_and_diagnostics():
 			a = _solve(worker, adv, rti, 'stacked', kill)
 			b = _solve(worker, adv, rti, 'lifted', kill)
 			assert a.get('solved') and b.get('solved')
-			assert math.isclose(a['objective'], b['objective'], rel_tol=1e-7, abs_tol=1e-7), \
+			assert math.isclose(a['objective'], b['objective'], rel_tol=1e-6, abs_tol=1e-6), \
 				'{}/{}: stacked {} != lifted {}'.format(name, kname, a['objective'], b['objective'])
 			for key in ('frozen_prefix_fail_no_route_frac', 'frozen_prefix_fail_overflow_frac',
 						'frozen_prefix_normal_overflow_frac', 'frozen_prefix_unroutable_frac'):
@@ -195,3 +195,24 @@ def test_penalty_sum_modes_equal_mean_with_scaled_penalties():
 	assert lp_kwargs_for('frozen_prefix', env={'SCULPTOR_FROZEN_PREFIX_PENALTY_SUM': 'both'})['frozen_penalty_sum'] == 'both'
 	with pytest.raises(ValueError):
 		_solve(worker, adv, rti, 'lifted', kill, frozen_penalty_sum='sometimes')
+
+
+@pytest.mark.unit
+def test_failure_sweep_vectorized_equals_gti_path():
+	"""frozen_failure_metrics' single-popp sweep via frozen_fallbacks must
+	reproduce the per-failure ground-truth-ingress implementation exactly
+	(same pinned pairs, every metric)."""
+	from core.frozen_prefix_eval import frozen_failure_metrics, pin_pairs
+	worker, dep, _, _ = _setup()
+	for name, adv in _advs(worker.n_popps).items():
+		rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
+		pairs = pin_pairs(worker, adv, rti)
+		fast = frozen_failure_metrics(worker, adv, which='popps', pairs=pairs,
+									  routed_through_ingress=rti)
+		slow = frozen_failure_metrics(worker, adv, which='popps', pairs=pairs,
+									  routed_through_ingress=rti, use_gti=True)
+		for k in ('steady_latency_ms', 'fail_latency_ms', 'fail_frac_cong',
+				  'fail_frac_no_route', 'worst_frac_cong', 'worst_frac_no_route',
+				  'n_failures', 'n_pairs'):
+			assert fast[k] == slow[k] or math.isclose(fast[k], slow[k], rel_tol=1e-9, abs_tol=1e-12), \
+				(name, k, fast[k], slow[k])

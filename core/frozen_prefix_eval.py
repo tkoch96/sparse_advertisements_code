@@ -77,7 +77,13 @@ def pin_pairs(sas, adv, routed_through_ingress, pin_kill_popps=None):
 
 def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 						   routed_through_ingress=None, pin_kill_popps=None,
-						   eval_n_fail=None):
+						   eval_n_fail=None, use_gti=False):
+	"""use_gti=True forces the per-failure calculate_ground_truth_ingress
+	path (the pre-2026-09-09 implementation, exact but O(n_popps) Python
+	ingress recomputations: hours at size 32). Default: single-popp
+	failures use core.frozen_prefix.frozen_fallbacks -- the same exact
+	BGP-fallback rule, vectorized once per prefix column. Site ('pops')
+	failures still use the gti path."""
 	adv = threshold_a(np.asarray(adv, dtype=float))
 	popp_to_ind = sas.popp_to_ind
 	ug_perfs = sas.whole_deployment_ug_perfs
@@ -125,13 +131,34 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 
 	steady_lat, steady_cong, steady_nr = _score(e_popp, e_lat)
 
+	# Vectorized single-popp path: every pair has exactly one fallback
+	# (the best remaining ingress in its prefix when its winner dies), so
+	# the whole sweep is a per-prefix top-2 computation plus bincounts.
+	fb = None
+	if which == 'popps' and not use_gti and n_e:
+		from core.frozen_prefix import frozen_fallbacks
+		ug_to_ind = sas.whole_deployment_ug_to_ind
+		e_ugi = np.asarray([ug_to_ind[u] for u in e_ug], dtype=int)
+		fb = frozen_fallbacks(sas, adv, e_prefix, e_ugi, e_popp)
+		fb_lat = np.zeros(n_e)
+		for i in np.where(fb >= 0)[0]:
+			lat = ug_perfs.get(e_ug[i], {}).get(sas.popps[fb[i]], NO_ROUTE_LATENCY)
+			if lat >= NO_ROUTE_LATENCY:
+				fb[i] = -1
+			else:
+				fb_lat[i] = float(lat)
+		fb[e_popp < 0] = -1          # unrouted entries stay unrouted
+
 	lats, congs, nrs = [], [], []
 	for killed in _scenarios(sas, which, eval_n_fail):
 		killed_set = set(int(k) for k in killed)
 		w_popp = e_popp.copy()
 		w_lat = e_lat.copy()
 		affected = np.where(np.isin(e_popp, list(killed_set)))[0]
-		if len(affected):
+		if len(affected) and fb is not None:
+			w_popp[affected] = fb[affected]
+			w_lat[affected] = np.where(fb[affected] >= 0, fb_lat[affected], 0.0)
+		elif len(affected):
 			a_fail = adv.copy()
 			for k in killed_set:
 				a_fail[k, :] = 0
