@@ -599,7 +599,17 @@ def main():
         sys.exit(1)
 
     if not args.no_rescore:
-        sem = threading.Semaphore(8)
+        # Rescore concurrency: each rescore process starts its OWN local Ray
+        # with SCULPTOR_N_WORKERS workers; with that unset each instance
+        # spawned a core-sized pool (2026-09-09: 8 concurrent x ~64 workers
+        # at actual-10 thrashed a 64-core/123 GB box until sshd stopped
+        # answering). Pin a small pool per rescore and its Ray CPU cap, and
+        # size the parallelism to the box.
+        _rs_workers = int(os.environ.get('SCULPTOR_RESCORE_WORKERS', '4'))
+        _rs_parallel = int(os.environ.get('SCULPTOR_RESCORE_PARALLEL',
+                                          str(max(1, min(8, (os.cpu_count() or 8) // (_rs_workers + 2))))))
+        print('[queue] rescore: {} concurrent x {} workers'.format(_rs_parallel, _rs_workers), flush=True)
+        sem = threading.Semaphore(_rs_parallel)
 
         def rescore(sp, N, s):
             with sem:
@@ -607,7 +617,9 @@ def main():
                 # rescorer or it scores a different deployment than the
                 # cells ran on (Tom 2026-08-31)
                 env = dict(os.environ, RAY_ADDRESS='local', MPLBACKEND='Agg',
-                           RAY_TMPDIR='/tmp/ray_qrs_{}_{}_{}'.format(sp['label'], N, s))
+                           RAY_TMPDIR='/tmp/ray_qrs_{}_{}_{}'.format(sp['label'], N, s),
+                           SCULPTOR_N_WORKERS=str(_rs_workers),
+                           SCULPTOR_RAY_NUM_CPUS=str(_rs_workers + 2))
                 env.update(sp['env'])
                 subprocess.call([args.py, '-m', 'experiments.ablation.rescore_fork',
                                  '--in-dir', os.path.join(sp['out_root'], 'N{}'.format(N)),
