@@ -407,6 +407,15 @@ def run_main(argv=None):
         base_env = ({'SCULPTOR_ABLATION_DEP_FILE': dep_tpl}
                     if dep_tpl else {})
         base_env['SCULPTOR_ABLATION_OBJECTIVE'] = a.train_objective
+        if a.train_objective != 'avg_latency':
+            # extension objectives (core/hard_objectives.py) register their LP
+            # at import time in EVERY process (driver + Ray workers) only
+            # under SCULPTOR_XOBJS=1 -- the paper-table convention; without it
+            # the cell dies at update_deployment with 'Objective X not
+            # implemented in solve_lp_assignment' (smoke 2026-09-09). The
+            # mainline full rung keeps it: the env scrub drops only
+            # SCULPTOR_ABLATION_* keys.
+            base_env['SCULPTOR_XOBJS'] = '1'
         for kv in a.cell_env:
             k, v = kv.split('=', 1)
             if k == 'SCULPTOR_ABLATION_OBJECTIVE' and v != a.train_objective:
