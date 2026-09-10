@@ -1986,7 +1986,9 @@ def backfill_anchors_main(argv=None):
                 pass
         # the recomputed OPP must reproduce the cells' recorded OPP: same world
         for fn, r in cells:
-            rec = r.get('opp_objective')
+            # frozen_prefix cells carry the movable OPP in opp_objective; the
+            # recomputed value here is the FROZEN OPP -> compare to that
+            rec = r.get('opp_objective_frozen', r.get('opp_objective'))
             if rec is not None and abs(float(rec) - opp_obj) > 1e-3 * max(1.0, abs(opp_obj)):
                 raise SystemExit('seed {}: recomputed OPP {:.6f} != recorded {:.6f} in {} -- '
                                  'different world; refusing to backfill'.format(seed, opp_obj, rec, fn))
