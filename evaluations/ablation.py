@@ -571,24 +571,35 @@ def _cell_objective(r, objective='full', gamma=None):
     """(cell objective, OPP objective) on the chosen metric.
 
     full    (Tom 2026-09-09, THE ablation metric): latency + gamma * SUM over
-            peering-failure scenarios of the latency under that failure, all
-            from the trusted rescore (rescore_fork: avg_lat, fail_popp.
-            avg_lat_under_failure_abs = mean over the n_popps single-peering
-            failures, times n_popps = the sum; same for OPP). gamma defaults to
-            the gamma the cell trained with (recorded in its JSON).
+            peering-failure scenarios, scored EXACTLY as optimization scores
+            it (measured_objective): benefit = LB + gamma*RB (gamma <= 1) or
+            LB/gamma + RB, objective = -benefit, where LB is the steady LP's
+            soft-bounded objective and RB the SUM over the n_popps single-
+            peering failures of the failed LP's soft-bounded objective (no
+            sentinel/no-route penalties of our own). All from the trusted
+            rescore (rescore_fork: lb_soft, fail_popp.rb_soft_sum, opp_*).
+            gamma defaults to the gamma the cell trained with.
     latency the cell's own measured_objective (repo_objective / opp_objective):
             the LP objective under the training gamma, resilience term 0."""
     if objective == 'latency':
         return (float(r['repo_objective']) if r.get('repo_objective') is not None else None,
                 float(r['opp_objective']) if r.get('opp_objective') is not None else None)
     fp = r.get('fail_popp') or {}
-    if r.get('avg_lat') is None or fp.get('avg_lat_under_failure_abs') is None:
+    if r.get('rescored') and (r.get('lb_soft') is None or fp.get('rb_soft_sum') is None):
+        raise RuntimeError(
+            'seed {} {}: rescored with the pre-2026-09-09 scorer (raw sentinel '
+            'latencies, not the training objective); re-run the rescore '
+            '(experiments.ablation.rescore_fork, marker {}) before evaluating '
+            '--objective full'.format(r.get('seed'), r.get('rung'),
+                                      __import__('experiments.ablation.rescore_fork',
+                                                 fromlist=['MARKER']).MARKER))
+    if r.get('lb_soft') is None or fp.get('rb_soft_sum') is None:
         return None, None
+    from experiments.ablation.rescore_fork import training_objective
     g = float(gamma if gamma is not None else r.get('gamma', 0.0))
-    n = len(r['adv']) if isinstance(r.get('adv'), list) else 0
-    obj = float(r['avg_lat']) + g * n * float(fp['avg_lat_under_failure_abs'])
-    opp = (float(r['opp_avg_lat']) + g * n * float(fp['opp_avg_lat_under_failure_abs'])
-           if r.get('opp_avg_lat') is not None and fp.get('opp_avg_lat_under_failure_abs') is not None else None)
+    obj = training_objective(float(r['lb_soft']), float(fp['rb_soft_sum']), g)
+    opp = (training_objective(float(r['opp_lb_soft']), float(fp['opp_rb_soft_sum']), g)
+           if r.get('opp_lb_soft') is not None and fp.get('opp_rb_soft_sum') is not None else None)
     return obj, opp
 
 
@@ -675,7 +686,7 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
                'preliminary': not require_rescored, 'rungs': rows}
     hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
         'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
-    _objdesc = ('latency + gamma*SUM(peering-failure latencies), rescored, gamma={}'.format(
+    _objdesc = ('-(LB/gamma + RB) as in training [LB, RB = soft-bounded LP objectives, RB summed over peering failures], rescored, gamma={}'.format(
                     ','.join('{:g}'.format(g) for g in g_used))
                 if objective == 'full' else "cell's own training objective (latency LP)")
     lines = ['LADDER SUMMARY{} (objective = {}; means over {} deployments; % of '
@@ -1187,7 +1198,7 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
     max_it = max(p[0] for d in res for p in d['points'])
     grid = sorted(set(list(range(0, max_it + 1, int(stride))) + [max_it]))
     agg = {'iterations': grid, 'seeds': sorted({d['seed'] for d in res}), 'stride': int(stride),
-           'objective': 'latency + gamma*SUM(peering-failure latencies), rescored per iteration',
+           'objective': 'training objective -(LB/gamma + RB) [soft-bounded LP objectives; RB = SUM over peering failures], rescored per iteration',
            'cells': res, 'rungs': {}}
     for r in rungs:
         rows_pct, rows_abs = [], []
@@ -1217,7 +1228,7 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
     axes[0].set_ylabel('% of painter -> OPP gap closed (FULL objective)'); axes[0].set_xlabel('iteration')
     axes[1].set_yscale('log'); axes[1].set_ylabel('full objective - OPP (mean over deployments, log)'); axes[1].set_xlabel('iteration')
     n = len(agg['seeds'])
-    axes[0].set_title('full objective = latency + gamma*SUM(failure latencies); mean over {} deployments'.format(n), fontsize=9)
+    axes[0].set_title('full objective = training objective, latency + gamma*resilience (sum over peering failures); mean over {} deployments'.format(n), fontsize=8)
     axes[1].set_title('same, absolute distance to OPP', fontsize=9)
     for ax in axes:
         ax.grid(True, alpha=.3)

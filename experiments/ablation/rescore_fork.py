@@ -32,16 +32,59 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-MARKER = 'lp_driver_v2'
+MARKER = 'lp_driver_v3_softobj'   # v3 (2026-09-09): + training-consistent soft-bounded objectives
+
+
+def _stranded_objective(sas):
+    """Soft-bounded objective of an advertisement with NOTHING on (every UG
+    stranded): the LP returns solved=False with no objective, so price it the
+    way the objective helper prices 100% no-route volume."""
+    from core.solve_lp_assignment import _soft_bounded_objective
+    from helpers.constants import NO_ROUTE_LATENCY
+    n = len(np.asarray(sas.whole_deployment_ug_vols).flatten())
+    return float(_soft_bounded_objective(
+        sas, np.full(n, float(NO_ROUTE_LATENCY)), 1.0, -float(NO_ROUTE_LATENCY)))
+
+
+def lp_components(sas, adv, vols):
+    """One LP on `adv` -> (raw vol-weighted mean of lats_by_ug, fraction of
+    volume at the NO_ROUTE sentinel, ret['objective']). The third is the
+    SOFT-BOUNDED objective every training LP returns (solve_lp_assignment.
+    _soft_bounded_objective: -(avg routed latency + priced bad volume)) --
+    i.e. exactly the scalar optimization scores, no 30 s sentinels."""
+    a = np.asarray(adv, dtype=float)
+    if a.sum() == 0:
+        return (float(np.average(np.full(len(vols), 30000.0), weights=vols)), 1.0,
+                _stranded_objective(sas))
+    ret = sas.solve_lp_with_failure_catch(a)
+    lats = np.asarray(ret['lats_by_ug'])
+    return (float(np.average(lats, weights=vols)),
+            float(vols[lats >= 29999.0].sum() / vols.sum()),
+            float(ret['objective']))
+
+
+def training_objective(lb, rb, gamma, lambduh_penalty=0.0):
+    """measured_objective / actual_nonconvex_objective (optimal_adv_wrapper)
+    verbatim: benefit = LB + gamma*RB for gamma <= 1, else LB/gamma + RB;
+    objective = lambduh*penalty - benefit. LB/RB are soft-bounded LP
+    objectives (benefits, <= 0); RB is the SUM over failure scenarios, as
+    get_ground_truth_resilience_benefit sums them. Ladder cells run
+    lambduh=0, so the penalty term is 0."""
+    g = float(gamma)
+    benefit = lb + g * rb if g <= 1 else lb / g + rb
+    return float(lambduh_penalty - benefit)
 
 
 class FullObjectiveScorer:
-    """THE trusted scorer as a reusable object (2026-09-09, for the full-
-    objective-over-iterations curve): the same evaluator, steady LP and
-    single-peering failure sweep rescore_seed uses. full(adv, gamma) =
-    steady avg latency + gamma * SUM over popp failures of the avg latency
-    under that failure (30 s no-route sentinel charged), i.e. the ladder's
-    full objective; opp_full(gamma) is the one-per-peering anchor."""
+    """THE trusted scorer as a reusable object (2026-09-09): the same
+    evaluator, steady LP and single-peering failure sweep rescore_seed uses,
+    scoring the objective EXACTLY as optimization does (Tom 2026-09-09: no
+    sentinel/no-route penalties of our own). full(adv, gamma) =
+    training_objective(LB, RB, gamma) with LB = the steady LP's soft-bounded
+    objective and RB = the SUM over the n_popps single-peering failures of
+    the failed LP's soft-bounded objective; opp_full(gamma) is the one-per-
+    peering anchor on the same rule. steady(adv) keeps the raw vol-weighted
+    mean latency for the diagnostic columns."""
 
     def __init__(self, seed, dpsize, dep_file=None):
         os.environ['RAY_ADDRESS'] = 'local'
@@ -68,21 +111,23 @@ class FullObjectiveScorer:
         self.n_popps = int(self.sas.n_popps)
         self._opp = None
 
-    def steady(self, adv):
-        ret = self.sas.solve_lp_with_failure_catch(np.asarray(adv, dtype=float))
-        return float(np.average(np.asarray(ret['lats_by_ug']), weights=self.vols))
+    def components(self, adv):
+        return lp_components(self.sas, adv, self.vols)
 
-    def fail_mean(self, adv):
+    def steady(self, adv):
+        return self.components(adv)[0]
+
+    def lb(self, adv):
+        return self.components(adv)[2]
+
+    def rb_sum(self, adv):
         a = np.asarray(adv, dtype=float)
-        per = []
+        tot = 0.0
         for popp in self.sas.popps:
             a2 = np.copy(a)
             a2[[self.sas.popp_to_ind[popp]], :] = 0
-            if a2.sum() == 0:
-                per.append(30000.0)
-                continue
-            per.append(self.steady(a2))
-        return float(np.mean(per))
+            tot += self.components(a2)[2]
+        return float(tot)
 
     def _drop_lp_cache(self):
         # The evaluator memoizes every LP it solves (keyed by advertisement,
@@ -96,15 +141,16 @@ class FullObjectiveScorer:
             pass
 
     def full(self, adv, gamma):
-        v = self.steady(adv) + float(gamma) * self.n_popps * self.fail_mean(adv)
+        v = training_objective(self.lb(adv), self.rb_sum(adv), gamma)
         self._drop_lp_cache()
         return v
 
     def opp_full(self, gamma):
         if self._opp is None:
-            self._opp = (self.steady(np.eye(self.n_popps)), self.fail_mean(np.eye(self.n_popps)))
+            opp = np.eye(self.n_popps)
+            self._opp = (self.lb(opp), self.rb_sum(opp))
             self._drop_lp_cache()
-        return self._opp[0] + float(gamma) * self.n_popps * self._opp[1]
+        return training_objective(self._opp[0], self._opp[1], gamma)
 
 
 def rescore_seed(seed, in_dir, dpsize):
@@ -156,14 +202,10 @@ def rescore_seed(seed, in_dir, dpsize):
         n_prefixes=deployment_to_prefixes(dep), generic_objective='avg_latency')
     vols = np.asarray(sas.ug_vols)
 
-    NO_ROUTE_MARK = 29999.0   # lats >= this are NO_ROUTE/congested charges
-
     def score(adv):
-        ret = sas.solve_lp_with_failure_catch(np.asarray(adv, dtype=float))
-        lats = np.asarray(ret['lats_by_ug'])
-        mean = float(np.average(lats, weights=vols))
-        frac_cong = float(vols[lats >= NO_ROUTE_MARK].sum() / vols.sum())
-        return mean, frac_cong
+        # (raw mean latency, sentinel-volume fraction, SOFT-BOUNDED LP
+        # objective = what optimization scores; see lp_components)
+        return lp_components(sas, adv, vols)
 
     def steady(adv):
         return score(adv)[0]
@@ -182,40 +224,43 @@ def rescore_seed(seed, in_dir, dpsize):
     store_scen = os.environ.get('SCULPTOR_RESCORE_STORE_SCENARIOS', '0') == '1'
 
     def fail_abs(adv, which):
+        # returns (mean raw latency, per-scenario raw latencies, mean sentinel
+        # fraction, SUM of the soft-bounded objectives = the training RB)
         a = np.asarray(adv, dtype=float)
-        per_s, per_s_cong = [], []
+        per_s, per_s_cong, soft_sum = [], [], 0.0
         for failed in scenarios(which):
             a2 = np.copy(a)
             a2[failed, :] = 0
-            if a2.sum() == 0:
-                per_s.append(float(np.average(
-                    np.full(len(vols), 30000.0), weights=vols)))
-                per_s_cong.append(1.0)
-                continue
-            m, fc = score(a2)
+            m, fc, so = score(a2)
             per_s.append(m)
             per_s_cong.append(fc)
-        return float(np.mean(per_s)), per_s, float(np.mean(per_s_cong))
+            soft_sum += so
+        return float(np.mean(per_s)), per_s, float(np.mean(per_s_cong)), float(soft_sum)
 
     opp_adv = np.eye(sas.n_popps)
-    opp_steady, opp_steady_cong = score(opp_adv)
-    opp_fail, opp_fail_scen, opp_fail_cong = {}, {}, {}
+    opp_steady, opp_steady_cong, opp_lb = score(opp_adv)
+    opp_fail, opp_fail_scen, opp_fail_cong, opp_rb = {}, {}, {}, {}
     for w in ('popps', 'pops'):
-        opp_fail[w], opp_fail_scen[w], opp_fail_cong[w] = fail_abs(opp_adv, w)
+        opp_fail[w], opp_fail_scen[w], opp_fail_cong[w], opp_rb[w] = fail_abs(opp_adv, w)
 
     for fn, r in todo:
         old = r.get('diff_vs_opp')
-        r['avg_lat'], r['steady_frac_congested'] = score(r['adv'])
+        r['avg_lat'], r['steady_frac_congested'], r['lb_soft'] = score(r['adv'])
         r['opp_avg_lat'] = opp_steady
         r['opp_steady_frac_congested'] = opp_steady_cong
+        r['opp_lb_soft'] = opp_lb
         r['diff_vs_opp'] = r['avg_lat'] - opp_steady
         for which, key in (('popps', 'fail_popp'), ('pops', 'fail_pop')):
-            mean_abs, per_scen, mean_cong = fail_abs(r['adv'], which)
+            mean_abs, per_scen, mean_cong, rb_soft = fail_abs(r['adv'], which)
             r[key] = {
                 'avg_lat_under_failure_abs': mean_abs,
                 'opp_avg_lat_under_failure_abs': opp_fail[which],
                 'avg_frac_congested': mean_cong,
                 'opp_avg_frac_congested': opp_fail_cong[which],
+                # training-consistent resilience benefit: SUM over the
+                # scenarios of the failed LP's soft-bounded objective
+                'rb_soft_sum': rb_soft,
+                'opp_rb_soft_sum': opp_rb[which],
             }
             if store_scen:
                 r[key]['per_scenario_lats'] = per_scen
@@ -226,10 +271,20 @@ def rescore_seed(seed, in_dir, dpsize):
         r['driver_diff_vs_opp'] = old
         with open(fn, 'w') as f:
             json.dump(r, f, indent=2, default=float)
-        comb = r['diff_vs_opp'] + 4 * (r['fail_popp']['avg_lat_under_failure_abs']
-                                       - r['fail_popp']['opp_avg_lat_under_failure_abs'])
-        print('[rescore seed {} {}] steady={:+.3f} combined(g4)={:+.3f}'.format(
-            seed, r['rung'], r['diff_vs_opp'], comb), flush=True)
+        g = float(r.get('gamma') or 4.0)
+        full_cell = training_objective(r['lb_soft'], r['fail_popp']['rb_soft_sum'], g)
+        full_opp = training_objective(opp_lb, opp_rb['popps'], g)
+        # consistency witness: the cell's own repo_objective is
+        # measured_objective with GT resilience 0, i.e. -LB (gamma<=1) or
+        # -LB/gamma; the rescored LB must reproduce it (LP-jitter tolerance)
+        lb_only = training_objective(r['lb_soft'], 0.0, g)
+        ro = r.get('repo_objective')
+        agree = ('' if ro is None else
+                 ' repo_obj={:.4f} rescored_lb_obj={:.4f} {}'.format(
+                     float(ro), lb_only,
+                     'OK' if abs(float(ro) - lb_only) <= 0.02 * max(1.0, abs(float(ro))) else 'MISMATCH'))
+        print('[rescore seed {} {}] steady={:+.3f} full(g{:g})={:.3f} opp_full={:.3f}{}'.format(
+            seed, r['rung'], r['diff_vs_opp'], g, full_cell, full_opp, agree), flush=True)
 
 
 def main():
