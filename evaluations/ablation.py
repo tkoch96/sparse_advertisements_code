@@ -233,11 +233,11 @@ def _ensure_inits(seeds, dpsize, init_dir):
 
 
 def registered_objectives():
-    """Every objective a cell may train on: the training classes
-    (avg_latency, frozen_prefix) plus the registered hard objectives."""
-    from core.generic_objective import OBJECTIVE_CLASSES
-    from core.hard_objectives import REGISTERED_OBJECTIVES
-    return sorted(set(OBJECTIVE_CLASSES) | set(REGISTERED_OBJECTIVES))
+    """Every objective a cell may train on: the CENTRAL objective registry
+    (core/objective_registry.py, Tom 2026-09-06) -- the same list the paper
+    table and the solver dispatch on."""
+    from core import objective_registry as _R
+    return sorted(_R.names())
 
 
 def _parse_budget(token):
