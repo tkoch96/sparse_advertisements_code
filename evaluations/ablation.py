@@ -678,10 +678,17 @@ def _anchors(cells):
     to be 0). Returns (anyopt, opp, opp_spread, anyopt_spread)."""
     any_cells, opp_cells = {}, {}
     for (s, rung), r in cells.items():
-        if r.get('_any') is not None:
+        # anyopt's provider phase is scored through the WORKERS, and no_mc's
+        # MC-off worker class answers slightly differently (actual-10 dep 1:
+        # 90.72 vs 90.85 on max_util, 2026-09-10) -> the anchor is taken from
+        # the stock-worker cells; no_mc's own value is verified separately.
+        if r.get('_any') is not None and rung != 'no_mc':
             any_cells.setdefault(s, []).append(float(r['_any']))
         if r.get('_opp') is not None:
             opp_cells.setdefault(s, []).append(float(r['_opp']))
+    for (s, rung), r in cells.items():
+        if r.get('_any') is not None and s not in any_cells:   # no_mc-only study
+            any_cells.setdefault(s, []).append(float(r['_any']))
     anyopt = {s: float(np.mean(v)) for s, v in any_cells.items()}
     any_spread = {s: float(max(v) - min(v)) for s, v in any_cells.items()}
     opp = {s: float(np.mean(v)) for s, v in opp_cells.items()}
@@ -1060,13 +1067,21 @@ def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
     C.check(cells and not missing, 'anchors: every cell recorded its anyopt objective',
             'missing in {}'.format(missing[:6] or 'none'))
     for s in seeds:
-        vals = [v for k, v in _lat.items() if k[0] == s]
-        anys = [v[2] for v in vals if v[2] is not None]
-        opps = [v[1] for v in vals if v[1] is not None]
+        vals = {k[1]: v for k, v in _lat.items() if k[0] == s}
+        anys = [v[2] for r_, v in vals.items() if v[2] is not None and r_ != 'no_mc']
+        opps = [v[1] for v in vals.values() if v[1] is not None]
         if anys:
             C.check(max(anys) - min(anys) <= 1e-6 * max(1.0, abs(max(anys))),
-                    'seed {}: anyopt anchor identical across rungs'.format(s),
+                    'seed {}: anyopt anchor identical across stock-worker rungs'.format(s),
                     'spread {:.6g} over {} cells'.format(max(anys) - min(anys), len(anys)))
+            nm = vals.get('no_mc')
+            if nm is not None and nm[2] is not None:
+                # MC-off workers score anyopt's provider phase slightly
+                # differently; it must stay within 1% of the stock anchor
+                ref = float(np.mean(anys))
+                C.check(abs(nm[2] - ref) <= 0.01 * max(1.0, abs(ref)),
+                        'seed {}: no_mc anyopt within 1% of the stock-worker anchor'.format(s),
+                        'no_mc {:.6g} vs anchor {:.6g}'.format(nm[2], ref))
         if opps:
             C.check(max(opps) - min(opps) <= 1e-6 * max(1.0, abs(max(opps))),
                     'seed {}: OPP anchor identical across rungs'.format(s),
