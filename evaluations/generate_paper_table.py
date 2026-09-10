@@ -956,6 +956,11 @@ def copy_tables_to_paper(out_dir, paper_dir):
     for fn in sorted(glob.glob(os.path.join(out_dir, 'paper_table*.tex'))):
         shutil.copy(fn, os.path.join(dst, os.path.basename(fn)))
         copied.append(os.path.join(dst, os.path.basename(fn)))
+    # the doc references the key table as tables/paper_table_key.tex
+    key = os.path.join(out_dir, 'paper_table.tex')
+    if os.path.exists(key):
+        shutil.copy(key, os.path.join(dst, 'paper_table_key.tex'))
+        copied.append(os.path.join(dst, 'paper_table_key.tex'))
     print('[paper-table] copied to paper dir: {}'.format(copied or 'nothing'))
     return copied
 
