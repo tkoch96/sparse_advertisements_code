@@ -1370,12 +1370,19 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
     peak_fracs = [round(0.01 * i, 2) for i in range(1, 101)]   # every 1% of peak
     out['peak_fracs'] = peak_fracs
     out['max_iter'] = max(its) if its else None
-    # per deployment: the best % any rung reaches at any iteration
-    peak = {}
+    # per deployment: the best % any rung reaches at any iteration, and the
+    # shared starting level (iteration 0 of the trained rungs; painter is a
+    # one-shot baseline and does not define the start)
+    peak, start = {}, {}
     for rung in (curves['rungs'] if curves else {}):
         for sd, sr in curves['rungs'][rung]['per_seed_pct'].items():
             peak[sd] = max(peak.get(sd, float('-inf')), max(v for v in sr if v is not None))
+            if rung != 'painter' and sr and sr[0] is not None:
+                start[sd] = min(start.get(sd, float('inf')), sr[0])
+    for sd in peak:
+        start.setdefault(sd, 0.0)
     out['peak_pct_per_deployment'] = peak
+    out['start_pct_per_deployment'] = start
     for rung in (curves['rungs'] if curves else {}):
         d = curves['rungs'][rung]
         per = d['per_seed_pct']
@@ -1394,15 +1401,17 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
                                      'mean': (_st.mean(got) if got else None),
                                      'reached': len(got), 'n': len(own)}
         row['auc_pct'] = _st.mean(v for it, v in zip(its, d['mean_of_per_seed_pct']) if it >= 1)
-        # Tom 2026-09-09: iterations to X% of the PEAK performance ANY rung
-        # reaches on that deployment (max over rungs and iterations of the
-        # per-deployment %), X swept over peak_fracs; median over the
-        # deployments that get there + reached count. One reference per
-        # deployment, shared by all rungs, so the rungs are directly
-        # comparable and the endpoint is not the rung's own.
+        # Tom 2026-09-09/10: iterations to X% of the ACHIEVABLE GAIN on that
+        # deployment -- from the shared starting level (the initial
+        # advertisement's %, iteration 0, same for every rung) to the PEAK
+        # any rung reaches -- X swept over peak_fracs; median over the
+        # deployments that get there + reached count. Measuring from the
+        # start makes the speed metric independent of the ladder's 0%
+        # anchor (with anyopt at 0% the start already sits at ~60% of the
+        # gap and every level below it is reached at iteration 0).
         row['iters_to_frac_of_peak'] = {}
         for X in peak_fracs:
-            hits = [_first_at(its, sr, X * peak[sd]) for sd, sr in per.items()]
+            hits = [_first_at(its, sr, start[sd] + X * (peak[sd] - start[sd])) for sd, sr in per.items()]
             got = [h for h in hits if h is not None]
             row['iters_to_frac_of_peak'][str(X)] = {
                 'median': (_st.median(got) if got else None),
@@ -1437,8 +1446,8 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
                      + '{:>16}'.format(cell(row['iters_to_own_final']))
                      + ''.join('{:>16}'.format(cell(row['meas_to_pct'].get(str(t)))) for t in thresholds))
     lines.append('')
-    lines.append('ITERATIONS to X% of the PEAK % any rung reaches on the deployment '
-                 '(median over reaching deployments; reached/n):')
+    lines.append('ITERATIONS to X% of the achievable gain (start = iteration-0 level -> PEAK any rung '
+                 'reaches on the deployment; median over reaching deployments; reached/n):')
     show = [X for X in peak_fracs if abs(X * 100 % 5) < 1e-6 and X >= 0.5]
     hdr2 = '{:<14}'.format('rung') + ''.join('{:>13}'.format('X={:.0%}'.format(X)) for X in show)
     lines += [hdr2, '-' * len(hdr2)]
@@ -1510,7 +1519,7 @@ def headline(summary, speed, x_lo=0.5, x_hi=0.95, smart='full', sched='expl_none
     if 'speed' in out:
         r = out['speed']['range']; a = out['speed']['all']
         lines.append('(b) but smart measurements get you there faster: averaged over target levels '
-                     'X in [{:.0%}, {:.0%}] of peak, {:.1f} iterations to reach X vs {:.1f} scheduled '
+                     'X in [{:.0%}, {:.0%}] of the achievable gain (start->peak), {:.1f} iterations to reach X vs {:.1f} scheduled '
                      '= {:.0f}% faster (mean per-level speedup {:.0f}%); over all X: {:.0f}% faster'.format(
                          r['x_lo'], r['x_hi'], r['mean_iters_to_X_smart'], r['mean_iters_to_X_sched'],
                          r['pct_faster'], r['mean_per_level_pct_faster'], a['pct_faster']))
@@ -1551,7 +1560,7 @@ def plot_learning_speed(speed, pdf):
         speed.get('max_iter')))
     axes[1].set_title('censored mean: a deployment that never reaches X is charged the full run', fontsize=9)
     for ax in axes:
-        ax.set_xlabel('X = % of the peak performance any rung reaches on the deployment')
+        ax.set_xlabel('X = % of the achievable gain (iteration-0 level -> peak of any rung) on the deployment')
         ax.grid(True, alpha=.3); ax.legend(fontsize=8, loc='upper left')
     fig.tight_layout()
     fig.savefig(pdf); plt.close(fig)
@@ -1980,6 +1989,7 @@ def backfill_anchors_main(argv=None):
             r['anyopt_adv'] = np.asarray(any_adv).tolist()
             r['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
             r['anyopt_backfilled'] = True
+            r.setdefault('train_objective', a.train_objective)   # cells predating the field
             r['fail_eval'] = 'needs_rescore_anyopt'    # next rescore pass scores the anchor
             with open(fn, 'w') as f:
                 json.dump(r, f, indent=2, default=float)
