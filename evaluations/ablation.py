@@ -1261,8 +1261,9 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
     import statistics as _st
     out = {'thresholds': list(thresholds), 'own_frac': own_frac, 'rungs': {}}
     its = curves['iterations'] if curves else None
-    peak_fracs = [round(0.5 + 0.05 * i, 2) for i in range(10)]   # 0.50 .. 0.95
+    peak_fracs = [round(0.01 * i, 2) for i in range(1, 101)]   # every 1% of peak
     out['peak_fracs'] = peak_fracs
+    out['max_iter'] = max(its) if its else None
     # per deployment: the best % any rung reaches at any iteration
     peak = {}
     for rung in (curves['rungs'] if curves else {}):
@@ -1300,6 +1301,9 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
             row['iters_to_frac_of_peak'][str(X)] = {
                 'median': (_st.median(got) if got else None),
                 'mean': (_st.mean(got) if got else None),
+                # censored mean: a deployment that never reaches X is charged
+                # the full run (max iteration), so the average is over ALL n
+                'mean_censored': _st.mean(h if h is not None else max(its) for h in hits),
                 'reached': len(got), 'n': len(hits)}
         if meas and rung in meas['rungs']:
             md = meas['rungs'][rung]
@@ -1329,38 +1333,48 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
     lines.append('')
     lines.append('ITERATIONS to X% of the PEAK % any rung reaches on the deployment '
                  '(median over reaching deployments; reached/n):')
-    hdr2 = '{:<14}'.format('rung') + ''.join('{:>13}'.format('X={:.0%}'.format(X)) for X in peak_fracs)
+    show = [X for X in peak_fracs if abs(X * 100 % 5) < 1e-6 and X >= 0.5]
+    hdr2 = '{:<14}'.format('rung') + ''.join('{:>13}'.format('X={:.0%}'.format(X)) for X in show)
     lines += [hdr2, '-' * len(hdr2)]
     for rung, row in out['rungs'].items():
         lines.append('{:<14}'.format(rung) + ''.join(
-            '{:>13}'.format(cell(row['iters_to_frac_of_peak'][str(X)])) for X in peak_fracs))
+            '{:>13}'.format(cell(row['iters_to_frac_of_peak'][str(X)])) for X in show))
     return out, '\n'.join(lines)
 
 
 def plot_learning_speed(speed, pdf):
-    """Iterations to X% of the peak performance of any rung, X swept: one
-    line per rung (median over reaching deployments); marker size shrinks
-    as fewer deployments reach the level."""
+    """Iterations to X% of the peak performance of any rung, every 1% of X,
+    one line per rung. Left: mean over the deployments that reach X (the
+    line fades where fewer reach it). Right: mean over ALL deployments with a
+    never-reached deployment charged the full run (censored at max_iter)."""
     import matplotlib
     matplotlib.use('Agg')
     import matplotlib.pyplot as plt
     color = {r: c for r, _, c in LADDER}; label = {r: l for r, l, _ in LADDER}
     xs = speed['peak_fracs']
-    fig, ax = plt.subplots(figsize=(7, 4.6))
+    fig, axes = plt.subplots(1, 2, figsize=(13, 4.8))
     for rung, row in speed['rungs'].items():
-        ys = [row['iters_to_frac_of_peak'][str(X)]['median'] for X in xs]
-        ns = [row['iters_to_frac_of_peak'][str(X)]['reached'] for X in xs]
-        n = row['iters_to_frac_of_peak'][str(xs[0])]['n'] or 1
-        ax.plot([100 * X for X in xs], [y if y is not None else float('nan') for y in ys], '-',
-                color=color.get(rung), label=label.get(rung, rung), lw=1.6)
-        ax.scatter([100 * X for X, y in zip(xs, ys) if y is not None],
-                   [y for y in ys if y is not None],
-                   s=[8 + 60 * k / n for k, y in zip(ns, ys) if y is not None],
-                   color=color.get(rung), zorder=3)
-    ax.set_xlabel('X = % of the peak performance any rung reaches on the deployment')
-    ax.set_ylabel('iterations to first reach X (median over deployments)')
-    ax.set_title('learning speed: marker size = fraction of deployments that reach X', fontsize=9)
-    ax.grid(True, alpha=.3); ax.legend(fontsize=8); fig.tight_layout()
+        e = [row['iters_to_frac_of_peak'][str(X)] for X in xs]
+        n = e[0]['n'] or 1
+        xp = [100 * X for X in xs]
+        ym = [d['mean'] if d['mean'] is not None else float('nan') for d in e]
+        # fade the reaching-only mean as the reaching fraction drops
+        for i in range(len(xs) - 1):
+            frac = min(e[i]['reached'], e[i + 1]['reached']) / n
+            axes[0].plot(xp[i:i + 2], ym[i:i + 2], '-', color=color.get(rung), lw=1.8,
+                         alpha=0.15 + 0.85 * frac)
+        axes[0].plot([], [], '-', color=color.get(rung), lw=1.8, label=label.get(rung, rung))
+        axes[1].plot(xp, [d['mean_censored'] for d in e], '-', color=color.get(rung), lw=1.8,
+                     label=label.get(rung, rung))
+    axes[0].set_ylabel('iterations to first reach X (mean over deployments that reach it)')
+    axes[0].set_title('line fades as fewer deployments reach X', fontsize=9)
+    axes[1].set_ylabel('iterations to first reach X (mean over ALL deployments; never = {})'.format(
+        speed.get('max_iter')))
+    axes[1].set_title('censored mean: a deployment that never reaches X is charged the full run', fontsize=9)
+    for ax in axes:
+        ax.set_xlabel('X = % of the peak performance any rung reaches on the deployment')
+        ax.grid(True, alpha=.3); ax.legend(fontsize=8, loc='upper left')
+    fig.tight_layout()
     fig.savefig(pdf); plt.close(fig)
 
 
