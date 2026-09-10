@@ -30,6 +30,7 @@ FORCE FLAGS (set here, or override via env of the same name)
 """
 
 # ---------------------------------------------------------------- flags --
+import glob
 import os as _os
 # re-run solves even if L1 pickles exist (uses a fresh sub-tag; never
 # deletes old L1 pickles)
@@ -939,6 +940,26 @@ def _load_condensed(dpsize, run_tag):
     return d['labels'], d['rows']
 
 
+
+def copy_tables_to_paper(out_dir, paper_dir):
+    """Tom 2026-09-10: instead of pasting the table into the Google Doc, the
+    doc holds a raw `\\input{tables/paper_table_key.tex}` line (pandoc's
+    markdown reader passes raw LaTeX through; pdflatex resolves the path
+    relative to the paper directory). This copies every emitted table .tex
+    there, so `make` in the paper directory picks up the latest numbers."""
+    import shutil
+    if not paper_dir:
+        return []
+    dst = os.path.join(os.path.expanduser(paper_dir), 'tables')
+    os.makedirs(dst, exist_ok=True)
+    copied = []
+    for fn in sorted(glob.glob(os.path.join(out_dir, 'paper_table*.tex'))):
+        shutil.copy(fn, os.path.join(dst, os.path.basename(fn)))
+        copied.append(os.path.join(dst, os.path.basename(fn)))
+    print('[paper-table] copied to paper dir: {}'.format(copied or 'nothing'))
+    return copied
+
+
 def main():
     import time as _t
     t0 = _t.time()
@@ -974,6 +995,11 @@ def main():
                     choices=['text', 'latex', 'csv', 'all'])
     ap.add_argument('--out',
                     default=os.path.join(_REPO, 'figures', 'paper_table'))
+    ap.add_argument('--paper-dir', default=os.environ.get('SCULPTOR_PAPER_DIR'),
+                    help='also copy the emitted .tex tables into <paper-dir>/tables/ '
+                         '(the Google Doc carries \\input{tables/paper_table_key.tex}; the '
+                         'pandoc pipeline passes it through and pdflatex pulls the file). '
+                         'Default: $SCULPTOR_PAPER_DIR')
     a = ap.parse_args()
     objectives = _registry.validate_names(
         [o.strip() for o in a.objectives.split(',') if o.strip()],
@@ -1011,6 +1037,7 @@ def main():
         labels, rows = _load_condensed(dpsize, run_tag)
         emit(labels, rows, a.format, a.out, basename='paper_table_full')
         emit_key(labels, rows, a.format, a.out)
+        copy_tables_to_paper(a.out, a.paper_dir)
         print('\n  [condensed] table from L3 pickle in {:.1f}s'.format(
             _t.time() - t0))
         final_banner(t0, {}, emitted=True)
@@ -1066,6 +1093,7 @@ def main():
             emitted = True
             emit(labels, rows, a.format, a.out, basename='paper_table_full')
             emit_key(labels, rows, a.format, a.out)
+            copy_tables_to_paper(a.out, a.paper_dir)
             if not a.plan_only:
                 # Record the ACHIEVED coverage, never the request (2026-09-06):
                 # an aborted cell (deployment 2 of an nsim=2 run died) saved
