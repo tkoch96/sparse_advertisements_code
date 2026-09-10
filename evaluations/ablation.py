@@ -1720,7 +1720,11 @@ def armslug(rung):
 #   cdf_testing_feature-actual-10_no_mc-dep1-N10-smart.pdf
 #   ME_cdf_testing_feature-actual-10_full-dep2-fixed.pdf
 #   cdf_testing_feature-actual-10_expl_none-dep1-N10-smart_state-12.pkl
-_HARVEST = re.compile(r'^(?P<me>ME_)?(?P<label>.+?)_(?P<rung>[a-z_]+)-dep(?P<seed>\d+)-'
+# rung is an explicit alternation (longest first): with a lowercase label such
+# as 'cdf_small' the old '[a-z_]+' rung group swallowed 'small_expl_none' and
+# every small-deployment artifact was 'unrecognized' (smoke50, 2026-09-10).
+_HARVEST = re.compile(r'^(?P<me>ME_)?(?P<label>.+?)_(?P<rung>no_memory_dir|no_memory|no_mc|no_direction|'
+                      r'expl_random|expl_none|painter|full)-dep(?P<seed>\d+)-'
                       r'(?P<rest>[^_]+?)(?:_state-(?P<n>\d+))?\.(?P<ext>pdf|pkl)$')
 
 
