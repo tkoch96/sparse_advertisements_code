@@ -346,7 +346,8 @@ register(ObjectivePlugin(
 		('MLU', '<', 'mean', 'mlu_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('Latency (ms)', 'MLU'),
-	tex_group='Latency + MLU',
+	tex_group='Latency + Maximum Link Utilization',   # Tom 2026-09-09: no MLU abbreviation in the table
+	tex_subs={'MLU': 'Maximum link utilization'},
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_OBJ_MAXUTIL_ALPHA': '',
 					'SCULPTOR_MLU_WEIGHT_MULT': ''},
@@ -540,9 +541,14 @@ register(ObjectivePlugin(
 		('% no-route fail', '<', 'frozen_anchor',
 		 'frozen_fail_no_route_by_strategy', 'reactive_fail_no_route_by_strategy', 100.0),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
-	key_columns=('Latency (ms)', '% cong fail', '% no-route fail'),
+	# key table shows steady + failure latency only (Tom 2026-09-09); the
+	# congestion / no-route columns stay in the full table
+	key_columns=('Steady latency (ms)', 'Latency (ms)'),
 	tex_group='Frozen Failover',
-	tex_subs={'% cong fail': '% cong ingress-fail',
+	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
+	# (ms)' label is shared by every group)
+	tex_subs={'Frozen failover|Latency (ms)': 'Failure latency (ms)',
+			  '% cong fail': '% cong ingress-fail',
 			  '% no-route fail': '% no-route ingress-fail'},
 	paper_table_default=True,
 	semantic_knobs={

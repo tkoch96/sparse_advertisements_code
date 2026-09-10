@@ -809,7 +809,8 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                     '\\setlength{\\tabcolsep}{2pt}\n'
                     '\\resizebox{\\textwidth}{!}{%\n')
             f.write('\\begin{tabular}{l' + 'r' * len(labels) + '}\n\\toprule\n')
-            f.write(' & ' + ' & '.join(
+            # stub cell of the group row (Tom 2026-09-09): 'Objectives'
+            f.write('Objectives & ' + ' & '.join(
                 '\\multicolumn{{{}}}{{c}}{{{}}}'.format(
                     n, _wrap_tex_header(TEX_GROUP_DISPLAY.get(g, g)))
                 for g, n in groups) + ' \\\\\n')
@@ -823,8 +824,12 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             # LaTeX-escape header labels (a bare % in '% cong ...'
             # comments out the row terminator -- found compiling the
             # pasted table in the paper, 2026-08-30)
-            _esc = [_wrap_tex_header(TEX_SUB_DISPLAY.get(x, x))
-                    for x in subs]
+            # per-group override first ('Group|Sub' key, e.g. the frozen
+            # group's 'Latency (ms)' reads 'Failure latency (ms)'), then
+            # the bare label
+            _esc = [_wrap_tex_header(TEX_SUB_DISPLAY.get(
+                        l, TEX_SUB_DISPLAY.get(x, x)))
+                    for l, x in zip(labels, subs)]
             f.write('Method & ' + ' & '.join(_esc) + ' \\\\\n\\midrule\n')
             for _key, disp in METHODS:
                 # tex = the paste-into-the-paper artifact: means only
