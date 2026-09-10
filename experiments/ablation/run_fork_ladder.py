@@ -204,7 +204,11 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
             from core.frozen_prefix_eval import reactive_objective
             _rx = reactive_objective(sas, opp_adv, **getattr(sas.generic_objective, 'lp_kwargs', {}))
             result['opp_objective_frozen'] = result['opp_objective']
-            result['opp_objective'] = float(-_rx['objective'])   # measured_objective convention (cost)
+            # measured_objective convention: -(LB/gamma) for gamma > 1 (RB is 0
+            # for this objective), so the anchor is on the cells' scale. (The
+            # un-divided value made every rung score ~125% on the small smoke.)
+            from experiments.ablation.rescore_fork import training_objective
+            result['opp_objective'] = float(training_objective(_rx['objective'], 0.0, float(gamma_val)))
             result['opp_reactive'] = {k: _rx[k] for k in ('normal', 'kill_popps', 'gamma', 'lat_scale',
                                                           'no_route_penalty', 'congestion_penalty', 'penalty_sum')}
             print('[ladder] frozen_prefix: OPP anchor = reactive OPP {:.4f} (frozen OPP {:.4f})'.format(

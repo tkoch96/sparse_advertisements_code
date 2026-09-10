@@ -1939,6 +1939,7 @@ def backfill_anchors_main(argv=None):
         by_seed.setdefault(int(r['seed']), []).append((fn, r))
     seeds = [int(x) for x in a.seeds.split(',')] if a.seeds else sorted(by_seed)
     from experiments.ablation.run_fork_ladder import avg_lat
+    from experiments.ablation.rescore_fork import training_objective
     for seed in seeds:
         cells = by_seed.get(seed) or []
         if not cells:
@@ -1996,9 +1997,14 @@ def backfill_anchors_main(argv=None):
             r['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
             r['anyopt_backfilled'] = True
             r.setdefault('train_objective', a.train_objective)   # cells predating the field
-            if rx_opp is not None and r.get('opp_objective_frozen') is None:
-                r['opp_objective_frozen'] = r.get('opp_objective')
-                r['opp_objective'] = float(-rx_opp['objective'])
+            if rx_opp is not None:
+                # measured_objective convention (-(LB/gamma), RB 0): same scale
+                # as the cells' recorded objectives. Always recomputed so a
+                # cell written by an older scaling is corrected.
+                from experiments.ablation.rescore_fork import training_objective
+                if r.get('opp_objective_frozen') is None:
+                    r['opp_objective_frozen'] = r.get('opp_objective')
+                r['opp_objective'] = float(training_objective(rx_opp['objective'], 0.0, g))
                 r['opp_reactive'] = {k: rx_opp[k] for k in ('normal', 'kill_popps', 'gamma', 'lat_scale',
                                                              'no_route_penalty', 'congestion_penalty', 'penalty_sum')}
             r['fail_eval'] = 'needs_rescore_anyopt'    # next rescore pass scores the anchor
@@ -2006,7 +2012,7 @@ def backfill_anchors_main(argv=None):
                 json.dump(r, f, indent=2, default=float)
         print('[backfill] seed {}: anyopt objective {:.4f} (OPP {:.4f}{}) written to {} cells'.format(
             seed, any_obj, opp_obj,
-            '; frozen_prefix movable OPP {:.4f}'.format(-rx_opp['objective']) if rx_opp is not None else '',
+            '; frozen_prefix movable OPP {:.4f}'.format(training_objective(rx_opp['objective'], 0.0, g)) if rx_opp is not None else '',
             len(cells)), flush=True)
     return 0
 
