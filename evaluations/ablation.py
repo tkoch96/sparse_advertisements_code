@@ -1972,6 +1972,12 @@ def backfill_anchors_main(argv=None):
             any_adv = sas.solutions['anyopt']['advertisement']
             any_obj = float(sas.solutions['anyopt']['objective'])
             any_lat = avg_lat(sas, any_adv)
+            rx_opp = None
+            if a.train_objective == 'frozen_prefix':
+                # the movable OPP (Tom 2026-09-10) -- mirrors run_fork_ladder
+                from core.frozen_prefix_eval import reactive_objective
+                opp_adv = sas.solutions['one_per_peering']['advertisement']
+                rx_opp = reactive_objective(sas, opp_adv, **getattr(sas.generic_objective, 'lp_kwargs', {}))
         finally:
             try:
                 wm.stop_workers()
@@ -1990,11 +1996,18 @@ def backfill_anchors_main(argv=None):
             r['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
             r['anyopt_backfilled'] = True
             r.setdefault('train_objective', a.train_objective)   # cells predating the field
+            if rx_opp is not None and r.get('opp_objective_frozen') is None:
+                r['opp_objective_frozen'] = r.get('opp_objective')
+                r['opp_objective'] = float(-rx_opp['objective'])
+                r['opp_reactive'] = {k: rx_opp[k] for k in ('normal', 'kill_popps', 'gamma', 'lat_scale',
+                                                             'no_route_penalty', 'congestion_penalty', 'penalty_sum')}
             r['fail_eval'] = 'needs_rescore_anyopt'    # next rescore pass scores the anchor
             with open(fn, 'w') as f:
                 json.dump(r, f, indent=2, default=float)
-        print('[backfill] seed {}: anyopt objective {:.4f} (OPP {:.4f}) written to {} cells'.format(
-            seed, any_obj, opp_obj, len(cells)), flush=True)
+        print('[backfill] seed {}: anyopt objective {:.4f} (OPP {:.4f}{}) written to {} cells'.format(
+            seed, any_obj, opp_obj,
+            '; frozen_prefix movable OPP {:.4f}'.format(-rx_opp['objective']) if rx_opp is not None else '',
+            len(cells)), flush=True)
     return 0
 
 
