@@ -241,3 +241,86 @@ def reactive_optimal_metrics(sas, adv=None, which='popps', n_fail=None):
 		'worst_frac_no_route': float(np.max(nrs)) if nrs else 0.0,
 		'n_failures': len(lats),
 	}
+
+
+def reactive_objective(sas, adv=None, **lp_kwargs):
+  """The frozen_prefix objective SCALAR for an advertisement whose
+  assignment is RE-OPTIMIZED after each failure (Tom 2026-09-10: the
+  ablation's 100% anchor for frozen_prefix is 'the OPP that can move
+  around' -- unrealistic, a bound; frozen one-per-peering strands every
+  pinned user of a failed popp and scores below painter).
+
+  Same composition and weights as the lifted frozen LP
+  (core/frozen_prefix.py _solve_lp_frozen_prefix_lifted), same evaluation
+  kill set (default_kill_popps(n_popps, frozen_n_fail), what the ground-
+  truth measured_objective uses), same levers (registry lp_defaults + env):
+    -( lat_scale * [lat_mass_normal + (gamma/K) * sum_k lat_mass_k] / V
+       + P_nr * [nr_normal + w_nr * sum_k nr_k] / V
+       + P_c  * [ovf_normal + w_c * sum_k ovf_k] / V )
+  with w_nr = gamma (penalty_sum no_route|both) else gamma/K, w_c = gamma
+  (both) else gamma/K -- but every scenario's routing is RE-OPTIMIZED on
+  the surviving advertisement by the frozen LP itself with an empty kill
+  set (same pricing: latency at lat_scale, overflow at P_c with soft
+  capacities, unroutable users at P_nr), so lat_mass sums vol*latency over
+  routed users, nr is the unroutable volume and ovf the overflow volume of
+  that scenario. Returns the LP-convention BENEFIT (negative cost, like
+  ret['objective']); measured_objective negates it."""
+  from core.frozen_prefix import default_kill_popps, _knob, _penalty_sum_mode
+  from core.objective_registry import lp_kwargs_for
+  kw = dict(lp_kwargs_for('frozen_prefix'), **lp_kwargs)
+  gamma = _knob(kw, 'frozen_gamma', 'SCULPTOR_FROZEN_PREFIX_GAMMA', 1.0)
+  n_fail = _knob(kw, 'frozen_n_fail', 'SCULPTOR_FROZEN_PREFIX_N_FAIL', 20, int)
+  p_nr = _knob(kw, 'frozen_no_route_penalty', 'SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY', 50.0)
+  p_c = _knob(kw, 'frozen_congestion_penalty', 'SCULPTOR_FROZEN_PREFIX_CONGESTION_PENALTY', 25.0)
+  lat_scale = _knob(kw, 'frozen_lat_scale', 'SCULPTOR_FROZEN_PREFIX_LAT_SCALE', 1.0)
+  penalty_sum = _penalty_sum_mode(kw)
+  n_popps = sas.n_popps
+  adv = np.eye(n_popps) if adv is None else threshold_a(np.asarray(adv, dtype=float))
+  kill = kw.get('frozen_kill_popps')
+  kill = sorted(set(int(k) for k in (kill if kill is not None else default_kill_popps(n_popps, n_fail))))
+  K = len(kill)
+  w_k = gamma / K if K else 0.0
+  w_nr = (gamma if penalty_sum in ('no_route', 'both') else w_k) if K else 0.0
+  w_c = (gamma if penalty_sum == 'both' else w_k) if K else 0.0
+  vols = np.asarray([sas.whole_deployment_ug_to_vol[u] for u in sas.whole_deployment_ugs], dtype=float)
+  V = float(vols.sum()) or 1.0
+
+  def _scenario(a):
+    # Re-optimized routing for ONE scenario, priced exactly as the frozen
+    # LP prices its normal scenario: the lifted frozen LP with an EMPTY
+    # kill set (K=0) on the surviving advertisement -- latency at
+    # lat_scale, overflow at P_c (soft capacities), unroutable users at
+    # P_nr. (The avg_latency failure-catch LP is NOT usable here: its
+    # fallback marks congested users with the NO_ROUTE sentinel, which
+    # would charge them as stranded -- anycast scored 310 vs 7 frozen on
+    # the small check, 2026-09-10.)
+    if a.sum() == 0:
+      return 0.0, V, 0.0
+    from core.frozen_prefix import solve_lp_frozen_prefix
+    rti, _ = sas.calculate_ground_truth_ingress(a)
+    kw0 = {k: v for k, v in kw.items() if k.startswith('frozen_') and k != 'frozen_kill_popps'}
+    kw0['frozen_kill_popps'] = []
+    ret = solve_lp_frozen_prefix(sas, rti, 'frozen_prefix', adv=a, **kw0)
+    if not ret.get('solved'):
+      return 0.0, V, 0.0
+    unr = float(ret.get('frozen_prefix_unroutable_frac', 0.0) or 0.0)
+    lat = float(ret.get('frozen_prefix_normal_lat', 0.0) or 0.0)      # mean over routed volume
+    ovf = float(ret.get('frozen_prefix_normal_overflow_frac', 0.0) or 0.0)
+    return lat * (1.0 - unr) * V, unr * V, ovf * V
+
+  lm0, nr0, ov0 = _scenario(adv)
+  lat_term, nr_term, c_term = lm0, nr0, ov0
+  per = []
+  for k in kill:
+    a = adv.copy()
+    a[int(k), :] = 0
+    lm, nr, ov = _scenario(a)
+    lat_term += w_k * lm
+    nr_term += w_nr * nr
+    c_term += w_c * ov
+    per.append((int(k), lm / V, nr / V, ov / V))
+  cost = (lat_scale * lat_term + p_nr * nr_term + p_c * c_term) / V
+  return {'objective': -float(cost), 'cost': float(cost),
+          'normal': (lm0 / V, nr0 / V, ov0 / V), 'per_failure': per,
+          'kill_popps': kill, 'gamma': gamma, 'lat_scale': lat_scale,
+          'no_route_penalty': p_nr, 'congestion_penalty': p_c, 'penalty_sum': penalty_sum}

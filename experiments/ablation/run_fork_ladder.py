@@ -195,6 +195,20 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         opp_adv = sas.solutions['one_per_peering']['advertisement']
         result['opp_avg_lat'] = avg_lat(sas, opp_adv)
         result['opp_objective'] = float(sas.solutions['one_per_peering']['objective'])
+        if os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency') == 'frozen_prefix':
+            # Tom 2026-09-10: under frozen_prefix the 100% anchor is the OPP
+            # that can MOVE (assignment re-optimized per failure; unrealistic
+            # bound). Frozen one-per-peering strands every pinned user of a
+            # failed popp and scores below painter. Same scalar composition
+            # and kill set as the frozen LP (core/frozen_prefix_eval).
+            from core.frozen_prefix_eval import reactive_objective
+            _rx = reactive_objective(sas, opp_adv, **getattr(sas.generic_objective, 'lp_kwargs', {}))
+            result['opp_objective_frozen'] = result['opp_objective']
+            result['opp_objective'] = float(-_rx['objective'])   # measured_objective convention (cost)
+            result['opp_reactive'] = {k: _rx[k] for k in ('normal', 'kill_popps', 'gamma', 'lat_scale',
+                                                          'no_route_penalty', 'congestion_penalty', 'penalty_sum')}
+            print('[ladder] frozen_prefix: OPP anchor = reactive OPP {:.4f} (frozen OPP {:.4f})'.format(
+                result['opp_objective'], result['opp_objective_frozen']), flush=True)
 
         # anyopt anchor (Tom 2026-09-10): anyopt is the ladder's 0%, OPP its
         # 100%, painter a real rung. anyopt's provider MC draws are np.random,
