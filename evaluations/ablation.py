@@ -1393,6 +1393,79 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
     return out, '\n'.join(lines)
 
 
+def headline(summary, speed, x_lo=0.5, x_hi=0.95, smart='full', sched='expl_none'):
+    """THE two numbers per objective (Tom 2026-09-10):
+      (a) % of the painter->OPP benefit each ladder rung captures (painter 0,
+          OPP 100; mean of the per-deployment percentages), ending with smart
+          measurements (full) vs scheduled measurements (expl_none) -- the
+          endpoint claim 'smart == not smart'.
+      (b) how much FASTER smart measurements get you there, on average: the
+          AVERAGE CASE over target levels X = the area under the iterations-
+          to-X%-of-peak curve (censored mean over all deployments: a
+          deployment that never reaches X is charged the full run), i.e. the
+          mean over X of the iterations needed to reach X. smart is
+          100*(1 - AUC_smart/AUC_sched) % faster. Reported over X in
+          [x_lo, x_hi] (below 50% every rung is trivially fast) and over the
+          whole 1..100% range; the mean of the per-level speedups is the
+          companion number. Measurements (BGP probes) get the same treatment
+          when the measurement curve exists."""
+    import statistics as _st
+    out = {'x_range': [x_lo, x_hi], 'smart': smart, 'sched': sched}
+    if summary:
+        order = [r for r, _, _ in LADDER]
+        rows = {r['rung']: r for r in summary['rungs']}
+        pct = {r: rows[r]['mean_of_per_seed_pct'] for r in order if r in rows}
+        out['pct_benefit'] = {'painter': 0.0, **{r: pct[r] for r in pct if r != 'painter'}, 'OPP': 100.0}
+        out['pct_benefit_on_means'] = {r: rows[r]['pct_gap_closed_on_means'] for r in order if r in rows}
+        out['objective'] = summary.get('objective')
+        out['n_deployments'] = len(summary.get('seeds', []))
+        if smart in pct and sched in pct:
+            out['smart_minus_sched_pct_points'] = pct[smart] - pct[sched]
+    if speed and smart in speed['rungs'] and sched in speed['rungs']:
+        def _auc(rung, lo, hi, key):
+            d = speed['rungs'][rung]['iters_to_frac_of_peak']
+            xs = [X for X in speed['peak_fracs'] if lo - 1e-9 <= X <= hi + 1e-9]
+            return _st.mean(d[str(X)][key] for X in xs), xs
+        res = {}
+        for tag, (lo, hi) in (('range', (x_lo, x_hi)), ('all', (speed['peak_fracs'][0], speed['peak_fracs'][-1]))):
+            af, xs = _auc(smart, lo, hi, 'mean_censored'); ae, _ = _auc(sched, lo, hi, 'mean_censored')
+            per_x = [100.0 * (1 - speed['rungs'][smart]['iters_to_frac_of_peak'][str(X)]['mean_censored']
+                              / max(speed['rungs'][sched]['iters_to_frac_of_peak'][str(X)]['mean_censored'], 1e-9))
+                     for X in xs]
+            res[tag] = {'x_lo': lo, 'x_hi': hi, 'mean_iters_to_X_smart': af, 'mean_iters_to_X_sched': ae,
+                        'pct_faster': 100.0 * (1 - af / ae) if ae > 0 else None,
+                        'mean_per_level_pct_faster': _st.mean(per_x)}
+        out['speed'] = res
+        # same on BGP measurements when the measurement curve carries both rungs
+        mf = speed['rungs'][smart].get('meas_to_pct') or {}
+        me = speed['rungs'][sched].get('meas_to_pct') or {}
+        common = [t for t in mf if t in me and mf[t]['median'] is not None and me[t]['median'] is not None]
+        if common:
+            out['measurements_to_pct'] = {t: {'smart_median': mf[t]['median'], 'sched_median': me[t]['median'],
+                                              'smart_reached': mf[t]['reached'], 'sched_reached': me[t]['reached']}
+                                          for t in common}
+    lines = ['HEADLINE ({}; {} deployments):'.format(out.get('objective', '?'), out.get('n_deployments', '?'))]
+    if 'pct_benefit' in out:
+        lines.append('(a) % of the painter->OPP benefit captured (mean of per-deployment %): '
+                     + ', '.join('{} {:.0f}%'.format(r, v) for r, v in out['pct_benefit'].items()))
+        if 'smart_minus_sched_pct_points' in out:
+            d = out['smart_minus_sched_pct_points']
+            lines.append('    smart measurements ({}) vs scheduled ({}): {:+.1f} points -> '
+                         'smart measurements == not smart measurements at the endpoint'.format(smart, sched, d))
+    if 'speed' in out:
+        r = out['speed']['range']; a = out['speed']['all']
+        lines.append('(b) but smart measurements get you there faster: averaged over target levels '
+                     'X in [{:.0%}, {:.0%}] of peak, {:.1f} iterations to reach X vs {:.1f} scheduled '
+                     '= {:.0f}% faster (mean per-level speedup {:.0f}%); over all X: {:.0f}% faster'.format(
+                         r['x_lo'], r['x_hi'], r['mean_iters_to_X_smart'], r['mean_iters_to_X_sched'],
+                         r['pct_faster'], r['mean_per_level_pct_faster'], a['pct_faster']))
+    if 'measurements_to_pct' in out:
+        lines.append('    in BGP measurements (median to reach X% of the gap, smart vs scheduled): '
+                     + ', '.join('{}%: {:.0f} vs {:.0f}'.format(t, v['smart_median'], v['sched_median'])
+                                 for t, v in out['measurements_to_pct'].items()))
+    return out, '\n'.join(lines)
+
+
 def plot_learning_speed(speed, pdf):
     """Iterations to X% of the peak performance of any rung, every 1% of X,
     one line per rung. Left: mean over the deployments that reach X (the
@@ -1474,6 +1547,13 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
         plot_learning_speed(speed, os.path.join(out_dir, 'learning_speed.pdf'))
         print('\n' + speed_txt + '\n', flush=True)
         print('[ablation evaluate] wrote {}/learning_speed.{{json,txt,pdf}}'.format(out_dir), flush=True)
+        hl, hl_txt = headline(summary, speed)
+        with open(os.path.join(out_dir, 'headline.json'), 'w') as f:
+            json.dump(hl, f, indent=1)
+        with open(os.path.join(out_dir, 'headline.txt'), 'w') as f:
+            f.write(hl_txt + '\n')
+        print('\n' + hl_txt + '\n', flush=True)
+        print('[ablation evaluate] wrote {}/headline.{{json,txt}}'.format(out_dir), flush=True)
     ver = None
     if ws_root:
         ver = verify(in_dir, ws_root, **(contract or {}))
