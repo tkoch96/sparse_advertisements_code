@@ -1239,6 +1239,74 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
     return agg
 
 
+def _first_at(xs, series, thr):
+    for x, v in zip(xs, series):
+        if v is not None and v >= thr:
+            return x
+    return None
+
+
+def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
+    """Tom 2026-09-09 ('capture that L6 learns quickest'): per rung, how FAST
+    the painter->OPP gap closes, from the per-deployment curves.
+      * iters_to_pct / meas_to_pct: iterations (gradient steps) and BGP
+        measurements to first reach X% of the gap -- median over the
+        deployments that reach it, with the count that ever reach it
+        (a rung that never gets there is censored, not averaged in).
+      * iters_to_own_final: iterations to first reach own_frac of the rung's
+        OWN final percentage -- learning speed with the endpoint factored out.
+      * auc_pct: the mean percentage over iterations 1..max (area under the
+        curve), the scalar summary of the whole trajectory.
+    Returns a dict plus a text table."""
+    import statistics as _st
+    out = {'thresholds': list(thresholds), 'own_frac': own_frac, 'rungs': {}}
+    its = curves['iterations'] if curves else None
+    for rung in (curves['rungs'] if curves else {}):
+        d = curves['rungs'][rung]
+        per = d['per_seed_pct']
+        row = {'iters_to_pct': {}, 'meas_to_pct': {}}
+        for t in thresholds:
+            hits = [_first_at(its, sr, t) for sr in per.values()]
+            got = [h for h in hits if h is not None]
+            row['iters_to_pct'][str(t)] = {'median': (_st.median(got) if got else None),
+                                           'reached': len(got), 'n': len(hits)}
+        own = []
+        for sr in per.values():
+            fin = sr[-1]
+            own.append(_first_at(its, sr, own_frac * fin) if fin and fin > 0 else None)
+        got = [h for h in own if h is not None]
+        row['iters_to_own_final'] = {'median': (_st.median(got) if got else None),
+                                     'mean': (_st.mean(got) if got else None),
+                                     'reached': len(got), 'n': len(own)}
+        row['auc_pct'] = _st.mean(v for it, v in zip(its, d['mean_of_per_seed_pct']) if it >= 1)
+        if meas and rung in meas['rungs']:
+            md = meas['rungs'][rung]
+            ks = md['k']
+            for t in thresholds:
+                hits = [_first_at(ks, [sr.get(str(k), sr.get(k)) for k in ks], t)
+                        for sr in md['per_seed'].values()]
+                got = [h for h in hits if h is not None]
+                row['meas_to_pct'][str(t)] = {'median': (_st.median(got) if got else None),
+                                              'reached': len(got), 'n': len(hits)}
+        out['rungs'][rung] = row
+    hdr = '{:<14}{:>10}'.format('rung', 'AUC %') + ''.join(
+        '{:>16}'.format('it->{}%'.format(t)) for t in thresholds) + '{:>16}'.format(
+        'it->{:.0%} own'.format(own_frac)) + ''.join(
+        '{:>16}'.format('meas->{}%'.format(t)) for t in thresholds)
+    lines = ['LEARNING SPEED (median over deployments that reach the level; reached/n):',
+             hdr, '-' * len(hdr)]
+
+    def cell(e):
+        return ('{:.0f} ({}/{})'.format(e['median'], e['reached'], e['n'])
+                if e and e['median'] is not None else 'never (0/{})'.format(e['n'] if e else 0))
+    for rung, row in out['rungs'].items():
+        lines.append('{:<14}{:>10.1f}'.format(rung, row['auc_pct'])
+                     + ''.join('{:>16}'.format(cell(row['iters_to_pct'][str(t)])) for t in thresholds)
+                     + '{:>16}'.format(cell(row['iters_to_own_final']))
+                     + ''.join('{:>16}'.format(cell(row['meas_to_pct'].get(str(t)))) for t in thresholds))
+    return out, '\n'.join(lines)
+
+
 def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=None,
              contract=None, objective='full', gamma=None):
     """Table + files + over-iterations figure (+ verification when ws_root is
@@ -1275,6 +1343,14 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
         pdf = os.path.join(out_dir, 'pct_gap_closed_over_measurements.pdf')
         plot_pct_over_measurements(meas, pdf)
         print('[ablation evaluate] wrote {} (+ .json)'.format(pdf), flush=True)
+    if curves is not None:
+        speed, speed_txt = learning_speed(curves, meas)
+        with open(os.path.join(out_dir, 'learning_speed.json'), 'w') as f:
+            json.dump(speed, f, indent=1)
+        with open(os.path.join(out_dir, 'learning_speed.txt'), 'w') as f:
+            f.write(speed_txt + '\n')
+        print('\n' + speed_txt + '\n', flush=True)
+        print('[ablation evaluate] wrote {}/learning_speed.{{json,txt}}'.format(out_dir), flush=True)
     ver = None
     if ws_root:
         ver = verify(in_dir, ws_root, **(contract or {}))
