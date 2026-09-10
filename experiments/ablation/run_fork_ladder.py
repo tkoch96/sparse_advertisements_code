@@ -179,7 +179,10 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
     wm = Worker_Manager(sas.get_init_kwa(), deployment)
     wm.start_workers()
     result = {'seed': seed, 'rung': rung, 'max_iter': max_iter,
-              'using_resilience': use_res, 'gamma': float(gamma_val)}
+              'using_resilience': use_res, 'gamma': float(gamma_val),
+              # the objective every rung trained on (evaluation contract,
+              # Tom 2026-09-09: one ablation per objective)
+              'train_objective': os.environ.get('SCULPTOR_ABLATION_OBJECTIVE', 'avg_latency')}
     if _resumed_prior is not None:
         result['continued_from'] = _resumed_prior
     try:

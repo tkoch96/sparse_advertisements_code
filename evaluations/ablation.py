@@ -232,6 +232,14 @@ def _ensure_inits(seeds, dpsize, init_dir):
               .format(s, s, a0.shape), flush=True)
 
 
+def registered_objectives():
+    """Every objective a cell may train on: the training classes
+    (avg_latency, frozen_prefix) plus the registered hard objectives."""
+    from core.generic_objective import OBJECTIVE_CLASSES
+    from core.hard_objectives import REGISTERED_OBJECTIVES
+    return sorted(set(OBJECTIVE_CLASSES) | set(REGISTERED_OBJECTIVES))
+
+
 def _parse_budget(token):
     """--probe-n: int | 'prefixes' (one per prefix) | '<float>x' (measurement
     multiplier: round(f * n_prefixes) per deployment, e.g. 0.5x = half)."""
@@ -278,6 +286,12 @@ def run_main(argv=None):
     ap.add_argument('--full-probe-mode', default=None, choices=['smart', 'scheduled'],
                     help="override the 'full' rung's WHEN policy (LADDER_PROBE_MODE) for a "
                          "probing-policy experiment; the evaluation verifies against it")
+    ap.add_argument('--train-objective', default='avg_latency',
+                    help='the objective EVERY rung trains on (SCULPTOR_ABLATION_OBJECTIVE, incl. '
+                         'the mainline full rung): avg_latency (default) or any registered '
+                         'objective; validated against the registry. Non-avg_latency studies '
+                         'skip the avg_latency failure-sweep rescore and are evaluated on the '
+                         "cells' own training objective (Tom 2026-09-09: one ablation per objective)")
     ap.add_argument('--cell-env', action='append', default=[], metavar='K=V',
                     help='extra env for every cell (repeatable), e.g. gate knobs '
                          'SCULPTOR_SMART_STALE_FRAC=2.0 for a probing-policy arm')
@@ -329,6 +343,10 @@ def run_main(argv=None):
                          "max out the cores -- ncores / concurrent cells, "
                          "widening in the tail of the study)")
     a = ap.parse_args(argv)
+    _reg = registered_objectives()
+    if a.train_objective not in _reg:
+        ap.error('--train-objective {!r} is not a registered objective; choose from {}'.format(
+            a.train_objective, _reg))
 
     os.environ.setdefault('MPLBACKEND', 'Agg')
     out_root = os.path.abspath(a.out_root)
@@ -378,6 +396,7 @@ def run_main(argv=None):
         study = {'dpsize': a.dpsize, 'deployments': a.deployments, 'max_iter': a.max_iter,
                  'probe_n': str(a.probe_n), 'rungs': a.rungs, 'gamma': str(a.gamma),
                  'full_probe_mode': a.full_probe_mode or LADDER_PROBE_MODE['full'],
+                 'train_objective': a.train_objective,
                  'cell_env': a.cell_env, 'per_seed': per_seed}
         os.makedirs(out_root, exist_ok=True)
         with open(os.path.join(out_root, 'study.json'), 'w') as fh:
@@ -387,8 +406,11 @@ def run_main(argv=None):
             {s_: v['N'] for s_, v in per_seed.items()}), flush=True)
         base_env = ({'SCULPTOR_ABLATION_DEP_FILE': dep_tpl}
                     if dep_tpl else {})
+        base_env['SCULPTOR_ABLATION_OBJECTIVE'] = a.train_objective
         for kv in a.cell_env:
             k, v = kv.split('=', 1)
+            if k == 'SCULPTOR_ABLATION_OBJECTIVE' and v != a.train_objective:
+                raise SystemExit('--cell-env {} conflicts with --train-objective {}'.format(kv, a.train_objective))
             base_env[k] = v
         # the per-rung WHEN policy for THIS study (full may be overridden)
         policy = dict(LADDER_PROBE_MODE)
@@ -497,6 +519,9 @@ def run_main(argv=None):
                  '--slots', str(a.slots), '--port0', str(a.port0)]
         if a.workers_per_run:
             qargs += ['--workers-per-run', str(a.workers_per_run)]
+        if a.train_objective != 'avg_latency':
+            # the rescore is the avg_latency failure sweep; meaningless here
+            qargs += ['--no-rescore']
         rc = subprocess.call(qargs, cwd=_REPO)
         if rc != 0:
             print('[cdf] queue rc={} -- not drawing figures from a '
@@ -531,11 +556,17 @@ def run_main(argv=None):
         _REPO, 'figures', 'paper',
         'ablation_ladder_cdf_{}.pdf'.format(
             a.dpsize.replace('testing_feature-', '').replace('/', '_')))
-    rc_cdf = subprocess.call(
-        [sys.executable, '-u', '-m', 'experiments.ablation.cdf_fork',
-         '--in-dir', in_dir, '--gamma', str(a.gamma),
-         '--paper-out', paper_fig],
-        cwd=_REPO)
+    if a.train_objective == 'avg_latency':
+        rc_cdf = subprocess.call(
+            [sys.executable, '-u', '-m', 'experiments.ablation.cdf_fork',
+             '--in-dir', in_dir, '--gamma', str(a.gamma),
+             '--paper-out', paper_fig],
+            cwd=_REPO)
+    else:
+        # the CDF is built from the avg_latency failure-sweep rescore
+        print('[cdf] train objective {}: no failure-sweep rescore -> no ladder CDF'.format(
+            a.train_objective), flush=True)
+        rc_cdf = 0
     # THE ablation evaluation (Tom 2026-09-08, one script): ladder % table +
     # % over iterations + per-rung feature/probe-policy VERIFICATION from the
     # cells' own logs. A study that violates its own ladder fails here.
@@ -546,6 +577,7 @@ def run_main(argv=None):
          '--max-iter', str(a.max_iter), '--probe-n', str(a.probe_n),
          '--rungs', a.rungs,
          '--full-probe-mode', a.full_probe_mode or LADDER_PROBE_MODE['full'],
+         '--train-objective', a.train_objective,
          '--gamma', str(a.gamma)],
         cwd=_REPO)
     if rc_eval != 0:
@@ -688,7 +720,8 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
         'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
     _objdesc = ('-(LB/gamma + RB) as in training [LB, RB = soft-bounded LP objectives, RB summed over peering failures], rescored, gamma={}'.format(
                     ','.join('{:g}'.format(g) for g in g_used))
-                if objective == 'full' else "cell's own training objective (latency LP)")
+                if objective == 'full' else "cell's own training objective ({})".format(
+                    ','.join(sorted({str(r.get('train_objective', 'avg_latency')) for r in cells.values()}))))
     lines = ['LADDER SUMMARY{} (objective = {}; means over {} deployments; % of '
              'painter->OPP gap closed on the means; OPP mean {:.3f}):'.format(
                  ' [PRELIMINARY, un-rescored cells]' if not require_rescored else '',
@@ -933,7 +966,7 @@ def _cell_log(ws_root, seed, rung):
 
 
 def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
-           probe_n=None, rungs=None, full_probe_mode=None):
+           probe_n=None, rungs=None, full_probe_mode=None, train_objective=None):
     """Prove, per cell, that each rung used exactly the features it claims.
 
     Evidence is the cell's OWN solver log (ws_root/S*/logs/<label>_N<n>_s<seed>_<rung>.log)
@@ -981,6 +1014,15 @@ def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
         C.check(rungs_present == want,
                 'contract: rungs present == {}'.format(sorted(want)),
                 'present={} missing={} extra={}'.format(sorted(rungs_present), sorted(want - rungs_present), sorted(rungs_present - want)))
+    if train_objective is not None:
+        # every cell JSON records the objective it trained on (run_fork_ladder
+        # train_objective, 2026-09-09); a cell without the field predates the
+        # recording and cannot prove its objective -> fail, do not assume
+        got = {(s_, r_): r.get('train_objective') for (s_, r_), r in cells.items()}
+        bad = {k: v for k, v in got.items() if v != train_objective}
+        C.check(cells and not bad,
+                'contract: every cell trained on objective {!r}'.format(train_objective),
+                'mismatch/missing: {}'.format({'seed {} {}'.format(*k): v for k, v in sorted(bad.items())} or 'none'))
     if dpsize is not None:
         logs = glob.glob(os.path.join(ws_root, 'S*', 'logs', '*.log'))
         tag = 'cdf_{}_N'.format(str(dpsize).replace('/', '_'))
@@ -1447,7 +1489,11 @@ def evaluate_main(argv=None):
     ap.add_argument('--rungs', default=None, help='contract: exactly this comma list of rungs present')
     ap.add_argument('--full-probe-mode', default=None, choices=['smart', 'scheduled'],
                     help="contract: the 'full' rung's WHEN policy (default LADDER_PROBE_MODE)")
-    ap.add_argument('--objective', default='full', choices=OBJECTIVES,
+    ap.add_argument('--train-objective', default=None,
+                    help='contract: every cell trained on this objective (study.json '
+                         'train_objective). Non-avg_latency studies have no failure-sweep '
+                         "rescore: they are evaluated on the cells' own training objective")
+    ap.add_argument('--objective', default=None, choices=OBJECTIVES,
                     help="ladder metric: 'full' (default; latency + gamma*SUM of peering-"
                          "failure latencies, from the trusted rescore) or 'latency' (the "
                          "cell's own training objective)")
@@ -1477,9 +1523,21 @@ def evaluate_main(argv=None):
     if a.ws_root and any(v is None for v in contract.values()):
         ap.error('--ws-root verification requires the full contract: --dpsize --deployments --max-iter --probe-n --rungs')
     contract['full_probe_mode'] = a.full_probe_mode
-    summary, _, ver = evaluate(a.in_dir, a.out_dir, require_rescored=not a.prelim,
+    contract['train_objective'] = a.train_objective
+    # metric resolution: the 'full' (latency + gamma*failures) rescore exists
+    # only for avg_latency studies; every other objective is scored on the
+    # cells' own training objective, and asking for 'full' there is an error.
+    tobj = a.train_objective or 'avg_latency'
+    if tobj != 'avg_latency':
+        if a.objective == 'full':
+            ap.error("--objective full is the avg_latency failure-sweep metric; a {} study is "
+                     "evaluated on its own training objective (--objective latency)".format(tobj))
+        objective, require_rescored = 'latency', False
+    else:
+        objective, require_rescored = (a.objective or 'full'), not a.prelim
+    summary, _, ver = evaluate(a.in_dir, a.out_dir, require_rescored=require_rescored,
                                plot=not a.no_plot, ws_root=a.ws_root, contract=contract,
-                               objective=a.objective, gamma=a.gamma)
+                               objective=objective, gamma=a.gamma)
     # exit code: verification is the gate. A missing table (un-rescored
     # study, e.g. --queue-only or --prelim on a run with no complete
     # deployment) is reported, not fatal, unless nothing at all was evaluated.
