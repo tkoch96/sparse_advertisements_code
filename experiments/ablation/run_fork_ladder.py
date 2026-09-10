@@ -196,6 +196,22 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         result['opp_avg_lat'] = avg_lat(sas, opp_adv)
         result['opp_objective'] = float(sas.solutions['one_per_peering']['objective'])
 
+        # anyopt anchor (Tom 2026-09-10): anyopt is the ladder's 0%, OPP its
+        # 100%, painter a real rung. anyopt's provider MC draws are np.random,
+        # so seed them per deployment: every rung of a deployment gets the
+        # SAME anyopt (the evaluation checks the cell-to-cell spread is 0).
+        _rs = np.random.get_state()
+        np.random.seed(int(seed) + 7)
+        try:
+            sas.solve_anyopt()
+        finally:
+            np.random.set_state(_rs)
+        anyopt_adv = sas.solutions['anyopt']['advertisement']
+        result['anyopt_objective'] = float(sas.solutions['anyopt']['objective'])
+        result['anyopt_avg_lat'] = avg_lat(sas, anyopt_adv)
+        result['anyopt_adv'] = np.asarray(anyopt_adv).tolist()
+        result['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
+
         if rung == 'painter':
             # Painter is measurement-UNBOUNDED by construction: painter_v5
             # measures every iteration (measure_ingresses + stop_tracker's

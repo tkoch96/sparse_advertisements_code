@@ -622,10 +622,18 @@ def _cell_objective(r, objective='full', gamma=None):
             gamma defaults to the gamma the cell trained with.
     latency the cell's own measured_objective (repo_objective / opp_objective):
             the LP objective under the training gamma, resilience term 0."""
+    def _f(k):
+        return float(r[k]) if r.get(k) is not None else None
     if objective == 'latency':
-        return (float(r['repo_objective']) if r.get('repo_objective') is not None else None,
-                float(r['opp_objective']) if r.get('opp_objective') is not None else None)
+        return _f('repo_objective'), _f('opp_objective'), _f('anyopt_objective')
     fp = r.get('fail_popp') or {}
+    if r.get('rescored') and r.get('anyopt_adv') is not None and (
+            r.get('anyopt_lb_soft') is None or fp.get('anyopt_rb_soft_sum') is None):
+        raise RuntimeError(
+            'seed {} {}: rescored before the anyopt anchor was scored (marker {}); '
+            're-run the rescore'.format(r.get('seed'), r.get('rung'),
+                                        __import__('experiments.ablation.rescore_fork',
+                                                   fromlist=['MARKER']).MARKER))
     if r.get('rescored') and (r.get('lb_soft') is None or fp.get('rb_soft_sum') is None):
         raise RuntimeError(
             'seed {} {}: rescored with the pre-2026-09-09 scorer (raw sentinel '
@@ -635,13 +643,15 @@ def _cell_objective(r, objective='full', gamma=None):
                                       __import__('experiments.ablation.rescore_fork',
                                                  fromlist=['MARKER']).MARKER))
     if r.get('lb_soft') is None or fp.get('rb_soft_sum') is None:
-        return None, None
+        return None, None, None
     from experiments.ablation.rescore_fork import training_objective
     g = float(gamma if gamma is not None else r.get('gamma', 0.0))
     obj = training_objective(float(r['lb_soft']), float(fp['rb_soft_sum']), g)
     opp = (training_objective(float(r['opp_lb_soft']), float(fp['opp_rb_soft_sum']), g)
            if r.get('opp_lb_soft') is not None and fp.get('opp_rb_soft_sum') is not None else None)
-    return obj, opp
+    anyopt = (training_objective(float(r['anyopt_lb_soft']), float(fp['anyopt_rb_soft_sum']), g)
+              if r.get('anyopt_lb_soft') is not None and fp.get('anyopt_rb_soft_sum') is not None else None)
+    return obj, opp, anyopt
 
 
 def _load_cells(in_dir, require_rescored=True, objective='full', gamma=None):
@@ -654,24 +664,29 @@ def _load_cells(in_dir, require_rescored=True, objective='full', gamma=None):
         if (require_rescored and not r.get('rescored')) \
                 or r.get('repo_objective') is None:
             continue
-        r['_obj'], r['_opp'] = _cell_objective(r, objective, gamma)
+        r['_obj'], r['_opp'], r['_any'] = _cell_objective(r, objective, gamma)
         cells[(int(r['seed']), r['rung'])] = r
     return cells
 
 
 def _anchors(cells):
-    """Per seed: painter objective, OPP anchor (mean of the seed's per-cell
-    OPP values -- identical when the world is pinned; the spread is reported
-    as the anchor's noise floor), and the gap."""
-    painter, opp_cells = {}, {}
+    """Per seed: the ladder's two anchors (Tom 2026-09-10) -- anyopt = 0%
+    and one-per-peering (OPP) = 100%; painter is an ordinary rung. Each
+    anchor is the mean of the seed's per-cell values (every cell computes
+    both on the same pinned world, seeded, so they are identical; the
+    cell-to-cell spread is reported as the anchor's noise floor and verified
+    to be 0). Returns (anyopt, opp, opp_spread, anyopt_spread)."""
+    any_cells, opp_cells = {}, {}
     for (s, rung), r in cells.items():
-        if rung == 'painter' and r.get('_obj') is not None:
-            painter[s] = float(r['_obj'])
+        if r.get('_any') is not None:
+            any_cells.setdefault(s, []).append(float(r['_any']))
         if r.get('_opp') is not None:
             opp_cells.setdefault(s, []).append(float(r['_opp']))
+    anyopt = {s: float(np.mean(v)) for s, v in any_cells.items()}
+    any_spread = {s: float(max(v) - min(v)) for s, v in any_cells.items()}
     opp = {s: float(np.mean(v)) for s, v in opp_cells.items()}
     spread = {s: float(max(v) - min(v)) for s, v in opp_cells.items()}
-    return painter, opp, spread
+    return anyopt, opp, spread, any_spread
 
 
 def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
@@ -688,24 +703,25 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
         if r.get('_obj') is None:
             continue
         by_rung.setdefault(rung, {})[s] = float(r['_obj'])
-    painter, opp, opp_spread = _anchors(cells)
-    if 'painter' not in by_rung or not opp:
+    anyopt, opp, opp_spread, any_spread = _anchors(cells)
+    if not anyopt or not opp:
         return None, ''
     rungs = [r for r, _, _ in LADDER if r in by_rung]
-    seeds = sorted(s for s in set(painter) & set(opp)
+    seeds = sorted(s for s in set(anyopt) & set(opp)
                    if all(s in by_rung[r] for r in rungs))
     if not seeds:
         return None, ''
     mean = {r: float(np.mean([by_rung[r][s] for s in seeds])) for r in rungs}
     mean_opp = float(np.mean([opp[s] for s in seeds]))
-    gap = mean['painter'] - mean_opp
+    mean_any = float(np.mean([anyopt[s] for s in seeds]))
+    gap = mean_any - mean_opp
     rows, prev = [], 0.0
     for r in rungs:
-        cum = 100.0 * (mean['painter'] - mean[r]) / gap if gap > 0 else float('nan')
+        cum = 100.0 * (mean_any - mean[r]) / gap if gap > 0 else float('nan')
         per_seed = {}
         for s in seeds:
-            g = painter[s] - opp[s]
-            per_seed[s] = (100.0 * (painter[s] - by_rung[r][s]) / g
+            g = anyopt[s] - opp[s]
+            per_seed[s] = (100.0 * (anyopt[s] - by_rung[r][s]) / g
                            if g > 0 else float('nan'))
         finite = [v for v in per_seed.values() if np.isfinite(v)]
         rows.append({'rung': r, 'mean_objective': mean[r],
@@ -721,9 +737,14 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
     summary = {'seeds': seeds, 'n_deployments': len(seeds),
                'objective': objective, 'gamma': g_used,
                'mean_opp_objective': mean_opp,
+               'mean_anyopt_objective': mean_any,
+               'anchors': 'anyopt = 0%, one-per-peering (OPP) = 100%; painter is a rung',
                'opp_anchor': "mean of the deployment's per-cell OPP values",
                'opp_cell_spread_per_seed': {s: opp_spread[s] for s in seeds},
-               'painter_to_opp_gap_on_means': gap,
+               'anyopt_cell_spread_per_seed': {s: any_spread[s] for s in seeds},
+               'anyopt_per_seed': {s: anyopt[s] for s in seeds},
+               'opp_per_seed': {s: opp[s] for s in seeds},
+               'anyopt_to_opp_gap_on_means': gap,
                'preliminary': not require_rescored, 'rungs': rows}
     hdr = '{:<14}{:>10}{:>12}{:>12}{:>10}{:>14}'.format(
         'rung', 'mean obj', 'mean-OPP', '% gap (cum)', 'incr', 'mean seed-%')
@@ -732,9 +753,10 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
                 if objective == 'full' else "cell's own training objective ({})".format(
                     ','.join(sorted({str(r.get('train_objective', 'avg_latency')) for r in cells.values()}))))
     lines = ['LADDER SUMMARY{} (objective = {}; means over {} deployments; % of '
-             'painter->OPP gap closed on the means; OPP mean {:.3f}):'.format(
+             'anyopt->OPP gap closed on the means; anyopt mean {:.3f}, OPP mean {:.3f}):'.format(
                  ' [PRELIMINARY, un-rescored cells]' if not require_rescored else '',
-                 _objdesc, len(seeds), mean_opp), hdr, '-' * len(hdr)]
+                 _objdesc, len(seeds), mean_any, mean_opp), hdr, '-' * len(hdr)]
+    lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%'.format('ANYOPT', mean_any, mean_any - mean_opp, 0.0))
     for row in rows:
         lines.append('{:<14}{:>10.3f}{:>12.3f}{:>11.1f}%{:>+9.1f}{:>13.1f}%'.format(
             row['rung'], row['mean_objective'], row['mean_minus_opp'],
@@ -745,11 +767,11 @@ def ladder_summary(in_dir, require_rescored=True, objective='full', gamma=None):
     lines.append('per-deployment % gap closed: ' + '; '.join(
         '{}: {}'.format(row['rung'], ', '.join(
             '{:.0f}'.format(v) for s, v in sorted(row['pct_gap_closed_per_seed'].items())))
-        for row in rows if row['rung'] != 'painter'))
-    lines.append("OPP anchor = mean of each deployment's per-cell OPP; "
-                 'cell-to-cell OPP spread per deployment: ' + ', '.join(
-                     '{}: {:.3f}'.format(s, opp_spread[s]) for s in seeds) +
-                 ' (painter->OPP gap on means {:.3f})'.format(gap))
+        for row in rows))
+    lines.append("anchors = mean of each deployment's per-cell anyopt / OPP; cell-to-cell spread "
+                 'per deployment anyopt: ' + ', '.join('{}: {:.3f}'.format(s, any_spread[s]) for s in seeds)
+                 + '; OPP: ' + ', '.join('{}: {:.3f}'.format(s, opp_spread[s]) for s in seeds)
+                 + ' (anyopt->OPP gap on means {:.3f})'.format(gap))
     return summary, '\n'.join(lines)
 
 
@@ -759,6 +781,8 @@ def write_summary_files(summary, out_dir):
     with open(os.path.join(out_dir, 'ladder_summary.csv'), 'w') as f:
         f.write('rung,mean_objective,mean_minus_opp,pct_gap_closed_on_means,'
                 'increment_pct,mean_of_per_seed_pct\n')
+        f.write('ANYOPT,{:.6f},{:.6f},0,,0\n'.format(
+            summary['mean_anyopt_objective'], summary['mean_anyopt_objective'] - summary['mean_opp_objective']))
         for row in summary['rungs']:
             f.write('{},{:.6f},{:.6f},{:.3f},{:.3f},{:.3f}\n'.format(
                 row['rung'], row['mean_objective'], row['mean_minus_opp'],
@@ -780,10 +804,15 @@ def pct_over_iterations(in_dir, require_rescored=True, objective='full', gamma=N
     # 'latency' metric and is anchored on that metric's painter/OPP. The
     # table above is on the requested objective.
     cells = _load_cells(in_dir, require_rescored, 'latency', gamma)
-    painter, opp, _ = _anchors(cells)
+    anyopt, opp, _, _ = _anchors(cells)
     series = {}   # rung -> seed -> np.array indexed by iteration
     for (s, rung), r in cells.items():
-        if rung == 'painter' or s not in painter or s not in opp:
+        if s not in anyopt or s not in opp:
+            continue
+        if rung == 'painter':
+            # one-shot baseline: a flat line at its own objective
+            if r.get('_obj') is not None:
+                series.setdefault(rung, {})[s] = np.array([float(r['_obj'])])
             continue
         ser = r.get('gt_objective_series') or []
         if not ser:
@@ -803,14 +832,15 @@ def pct_over_iterations(in_dir, require_rescored=True, objective='full', gamma=N
     if not series:
         return None
     rungs = [r for r, _, _ in LADDER if r in series]
-    seeds = sorted(s for s in set(painter) & set(opp)
-                   if all(s in series[r] for r in rungs) and painter[s] - opp[s] > 0)
+    seeds = sorted(s for s in set(anyopt) & set(opp)
+                   if all(s in series[r] for r in rungs) and anyopt[s] - opp[s] > 0)
     if not seeds:
         return None
     n_it = max(len(series[r][s]) for r in rungs for s in seeds)
     out = {'iterations': list(range(n_it)), 'seeds': seeds, 'rungs': {},
-           'preliminary': not require_rescored}
-    mean_painter = float(np.mean([painter[s] for s in seeds]))
+           'anchors': 'anyopt = 0%, OPP = 100%', 'preliminary': not require_rescored}
+    painter = anyopt   # 0% anchor (name kept for the arithmetic below)
+    mean_painter = float(np.mean([anyopt[s] for s in seeds]))
     mean_opp = float(np.mean([opp[s] for s in seeds]))
     for r in rungs:
         held = np.array([np.concatenate([series[r][s],
@@ -839,7 +869,7 @@ def pct_over_measurements(in_dir, require_rescored=True):
     OPP), then the mean over deployments that reached k (budgets differ per
     deployment, so the count of deployments is reported per k)."""
     cells = _load_cells(in_dir, require_rescored, 'latency')
-    painter, opp, _ = _anchors(cells)
+    painter, opp, _, _ = _anchors(cells)   # painter := anyopt, the 0% anchor
     rungs_present = [r for r, _, _ in LADDER if any(rr == r for _, rr in cells)]
     # same deployments for every rung: only those with ALL present rungs
     seeds = sorted(s for s in set(painter) & set(opp) if painter[s] - opp[s] > 0
@@ -886,8 +916,8 @@ def plot_pct_over_measurements(data, out_pdf):
     fig, ax = plt.subplots(figsize=(7.5, 4.5))
     for r, d in data['rungs'].items():
         ax.plot(d['k'], d['mean_pct'], '-o', ms=3.5, color=color.get(r), label=label.get(r, r), lw=1.6)
-    ax.axhline(0, color=color['painter'], ls='--', lw=1, label='painter')
-    ax.axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP)')
+    ax.axhline(0, color='gray', ls='--', lw=1, label='anyopt (0%)')
+    ax.axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP, 100%)')
     ax.set_xlabel('measurements spent (BGP advertisements measured)')
     ax.set_ylabel('% of painter -> OPP gap closed')
     ax.set_title('mean over {} deployments{}'.format(len(data['seeds']),
@@ -914,8 +944,8 @@ def plot_pct_over_iterations(data, out_pdf):
                             '% on the means of the objectives')):
         for r, d in data['rungs'].items():
             ax.plot(its, d[key], color=color.get(r), label=label.get(r, r), lw=1.6)
-        ax.axhline(0, color=color['painter'], ls='--', lw=1, label='painter')
-        ax.axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP)')
+        ax.axhline(0, color='gray', ls='--', lw=1, label='anyopt (0%)')
+        ax.axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP, 100%)')
         ax.set_title('{} ({} deployments{})'.format(
             title, len(data['seeds']),
             ', PRELIMINARY' if data.get('preliminary') else ''), fontsize=10)
@@ -1023,6 +1053,24 @@ def verify(in_dir, ws_root, dpsize=None, deployments=None, max_iter=None,
         C.check(rungs_present == want,
                 'contract: rungs present == {}'.format(sorted(want)),
                 'present={} missing={} extra={}'.format(sorted(rungs_present), sorted(want - rungs_present), sorted(rungs_present - want)))
+    # ---- anchors (Tom 2026-09-10): anyopt = 0%, OPP = 100%, both recorded by
+    # every cell on the same pinned, seeded world -> identical across rungs
+    _lat = {k: _cell_objective(r, 'latency') for k, r in cells.items()}
+    missing = sorted('seed {} {}'.format(*k) for k, v in _lat.items() if v[2] is None)
+    C.check(cells and not missing, 'anchors: every cell recorded its anyopt objective',
+            'missing in {}'.format(missing[:6] or 'none'))
+    for s in seeds:
+        vals = [v for k, v in _lat.items() if k[0] == s]
+        anys = [v[2] for v in vals if v[2] is not None]
+        opps = [v[1] for v in vals if v[1] is not None]
+        if anys:
+            C.check(max(anys) - min(anys) <= 1e-6 * max(1.0, abs(max(anys))),
+                    'seed {}: anyopt anchor identical across rungs'.format(s),
+                    'spread {:.6g} over {} cells'.format(max(anys) - min(anys), len(anys)))
+        if opps:
+            C.check(max(opps) - min(opps) <= 1e-6 * max(1.0, abs(max(opps))),
+                    'seed {}: OPP anchor identical across rungs'.format(s),
+                    'spread {:.6g} over {} cells'.format(max(opps) - min(opps), len(opps)))
     if train_objective is not None:
         # every cell JSON records the objective it trained on (run_fork_ladder
         # train_objective, 2026-09-09); a cell without the field predates the
@@ -1182,24 +1230,27 @@ def _full_over_iterations_cell(args):
     """One (deployment, rung): rescore that cell's saved per-iteration
     advertisements on the FULL objective (a subprocess-friendly worker; the
     painter/OPP anchors are recomputed per job, 2 extra evaluations)."""
-    seed, rung, dpsize, dep_file, gamma, stride, painter_adv, pkl = args
+    seed, rung, dpsize, dep_file, gamma, stride, anyopt_adv, pkl = args
     import pickle
     from experiments.ablation.rescore_fork import FullObjectiveScorer
     from helpers.helpers import threshold_a
     sc = FullObjectiveScorer(seed, dpsize, dep_file)
     opp = sc.opp_full(gamma)
-    painter = sc.full(painter_adv, gamma)
-    gap = painter - opp
-    st = pickle.load(open(pkl, 'rb'))
-    advs = st['metrics'].get('advertisements') or []
-    idx = sorted(set(list(range(0, len(advs), stride)) + [len(advs) - 1])) if advs else []
+    lo = sc.full(anyopt_adv, gamma)      # anyopt = the 0% anchor
+    gap = lo - opp
+    if isinstance(pkl, str):
+        st = pickle.load(open(pkl, 'rb'))
+        advs = st['metrics'].get('advertisements') or []
+        idx = sorted(set(list(range(0, len(advs), stride)) + [len(advs) - 1])) if advs else []
+    else:
+        advs, idx = [pkl], [0]         # painter: its final adv, one flat point
     pts = []
     for i in idx:
         v = sc.full(threshold_a(np.asarray(advs[i], dtype=float)), gamma)
-        pts.append([int(i), float(v), float(100.0 * (painter - v) / gap) if gap > 0 else float('nan')])
-    print('[full-over-it] seed {} {}: {} points (painter {:.1f}, opp {:.1f})'.format(
-        seed, rung, len(pts), painter, opp), flush=True)
-    return {'seed': seed, 'rung': rung, 'painter_full': painter, 'opp_full': opp, 'points': pts}
+        pts.append([int(i), float(v), float(100.0 * (lo - v) / gap) if gap > 0 else float('nan')])
+    print('[full-over-it] seed {} {}: {} points (anyopt {:.1f}, opp {:.1f})'.format(
+        seed, rung, len(pts), lo, opp), flush=True)
+    return {'seed': seed, 'rung': rung, 'anyopt_full': lo, 'opp_full': opp, 'points': pts}
 
 
 def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamma=None,
@@ -1219,13 +1270,18 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
     seeds = sorted({s for s, _ in cells})
     jobs = []
     for s in seeds:
-        pj = cells.get((s, 'painter'))
-        if pj is None:
-            continue
-        g = float(gamma if gamma is not None else pj.get('gamma') or next(
-            (r.get('gamma') for (ss, rr), r in cells.items() if ss == s and r.get('gamma')), 4.0))
+        anyc = next((r for (ss, rr), r in cells.items() if ss == s and r.get('anyopt_adv') is not None), None)
+        if anyc is None:
+            raise RuntimeError('seed {}: no cell carries anyopt_adv (the 0% anchor); '
+                               'run `ablation backfill-anchors` first'.format(s))
+        any_adv = np.asarray(anyc['anyopt_adv'], dtype=float)
+        g = float(gamma if gamma is not None else anyc.get('gamma') or 4.0)
         for (ss, rung), r in cells.items():
-            if ss != s or rung == 'painter':
+            if ss != s:
+                continue
+            if rung == 'painter':
+                jobs.append((s, rung, dpsize, dep_file, g, int(stride), any_adv,
+                             np.asarray(r['adv'], dtype=float)))
                 continue
             hits = glob.glob(os.path.join(figs_dir, '*_{}-dep{}-*_state-*.pkl'.format(rung, s)))
             if not hits:
@@ -1234,8 +1290,7 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
             def _it(f):
                 m = _re.search(r'_state-(\d+)\.pkl$', f)
                 return int(m.group(1)) if m else -1
-            jobs.append((s, rung, dpsize, dep_file, g, int(stride),
-                         np.asarray(pj['adv'], dtype=float), max(hits, key=_it)))
+            jobs.append((s, rung, dpsize, dep_file, g, int(stride), any_adv, max(hits, key=_it)))
     if not jobs:
         print('[full-over-it] no cells with state pickles under {}'.format(figs_dir), flush=True)
         return None
@@ -1274,9 +1329,9 @@ def full_objective_over_iterations(in_dir, figs_dir, dpsize, dep_file=None, gamm
     for r, d in agg['rungs'].items():
         axes[0].plot(grid, d['mean_pct'], '-o', ms=3, color=color.get(r), label=label.get(r, r), lw=1.6)
         axes[1].plot(grid, d['mean_abs_minus_opp'], '-o', ms=3, color=color.get(r), label=label.get(r, r), lw=1.6)
-    axes[0].axhline(0, color=color['painter'], ls='--', lw=1, label='painter')
-    axes[0].axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP)')
-    axes[0].set_ylabel('% of painter -> OPP gap closed (FULL objective)'); axes[0].set_xlabel('iteration')
+    axes[0].axhline(0, color='gray', ls='--', lw=1, label='anyopt (0%)')
+    axes[0].axhline(100, color='k', ls=':', lw=1, label='one-per-peering (OPP, 100%)')
+    axes[0].set_ylabel('% of anyopt -> OPP gap closed (FULL objective)'); axes[0].set_xlabel('iteration')
     axes[1].set_yscale('log'); axes[1].set_ylabel('full objective - OPP (mean over deployments, log)'); axes[1].set_xlabel('iteration')
     n = len(agg['seeds'])
     axes[0].set_title('full objective = training objective, latency + gamma*resilience (sum over peering failures); mean over {} deployments'.format(n), fontsize=8)
@@ -1415,7 +1470,7 @@ def headline(summary, speed, x_lo=0.5, x_hi=0.95, smart='full', sched='expl_none
         order = [r for r, _, _ in LADDER]
         rows = {r['rung']: r for r in summary['rungs']}
         pct = {r: rows[r]['mean_of_per_seed_pct'] for r in order if r in rows}
-        out['pct_benefit'] = {'painter': 0.0, **{r: pct[r] for r in pct if r != 'painter'}, 'OPP': 100.0}
+        out['pct_benefit'] = {'anyopt': 0.0, **{r: pct[r] for r in pct}, 'OPP': 100.0}
         out['pct_benefit_on_means'] = {r: rows[r]['pct_gap_closed_on_means'] for r in order if r in rows}
         out['objective'] = summary.get('objective')
         out['n_deployments'] = len(summary.get('seeds', []))
@@ -1446,7 +1501,7 @@ def headline(summary, speed, x_lo=0.5, x_hi=0.95, smart='full', sched='expl_none
                                           for t in common}
     lines = ['HEADLINE ({}; {} deployments):'.format(out.get('objective', '?'), out.get('n_deployments', '?'))]
     if 'pct_benefit' in out:
-        lines.append('(a) % of the painter->OPP benefit captured (mean of per-deployment %): '
+        lines.append('(a) % of the anyopt->OPP benefit captured (mean of per-deployment %): '
                      + ', '.join('{} {:.0f}%'.format(r, v) for r, v in out['pct_benefit'].items()))
         if 'smart_minus_sched_pct_points' in out:
             d = out['smart_minus_sched_pct_points']
@@ -1510,8 +1565,9 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
     os.makedirs(out_dir, exist_ok=True)
     summary, table = ladder_summary(in_dir, require_rescored, objective, gamma)
     if summary is None:
-        print('[ablation evaluate] no complete painter/OPP deployment in {} '
-              '-> no ladder summary'.format(in_dir), flush=True)
+        print('[ablation evaluate] no deployment with both anchors (anyopt + OPP recorded in '
+              'every cell) in {} -> no ladder summary; a study that predates the anyopt anchor '
+              'needs `ablation backfill-anchors` + rescore'.format(in_dir), flush=True)
         summary = None
     if summary is not None:
         print('\n' + table + '\n', flush=True)
@@ -1829,20 +1885,121 @@ def tree_main(argv=None):
 
 
 # ================================ entry point ================================
-_SUBCOMMANDS = {'run': None, 'evaluate': None, 'selftest': None, 'tree': None}
+def backfill_anchors_main(argv=None):
+    """`ablation backfill-anchors`: add the anyopt anchor (Tom 2026-09-10) to
+    the cells of a study that predates it. Per deployment: rebuild the cell's
+    evaluator on the same pinned world (dep-file or seeded draw), start
+    workers, compute OPP + the seeded anyopt exactly as run_fork_ladder does,
+    write anyopt_objective/anyopt_adv/anyopt_avg_lat into every cell JSON of
+    that deployment and clear the rescore marker so the next rescore scores
+    the anchor on the full objective."""
+    ap = argparse.ArgumentParser(prog='ablation backfill-anchors')
+    ap.add_argument('--in-dir', required=True)
+    ap.add_argument('--dpsize', required=True)
+    ap.add_argument('--dep-file', default=None, help='pinned deployment template with {seed}')
+    ap.add_argument('--seeds', default=None, help='comma list (default: every seed in --in-dir)')
+    ap.add_argument('--workers', type=int, default=4)
+    ap.add_argument('--train-objective', default='avg_latency')
+    ap.add_argument('--gamma', type=float, default=None,
+                    help='training gamma for measured_objective (default: the cells\' recorded gamma)')
+    a = ap.parse_args(argv)
+    import pickle
+    os.environ['RAY_ADDRESS'] = 'local'
+    os.environ.setdefault('RAY_TMPDIR', '/tmp/ray_bf_{}'.format(os.getpid()))
+    os.environ.setdefault('MPLBACKEND', 'Agg')
+    os.environ['SCULPTOR_N_WORKERS'] = str(a.workers)
+    os.environ['SCULPTOR_RAY_NUM_CPUS'] = str(a.workers + 2)
+    os.environ['SCULPTOR_ABLATION_OBJECTIVE'] = a.train_objective
+    if a.train_objective != 'avg_latency':
+        os.environ['SCULPTOR_XOBJS'] = '1'
+    from helpers.constants import DEFAULT_EXPLORE
+    from evaluations.wrapper_eval import capacity
+    from core.deployment_setup import get_random_deployment
+    from core.sparse_advertisements_v3 import Sparse_Advertisement_Eval
+    from core.worker_comms import Worker_Manager
+    from helpers.helpers import deployment_to_prefixes
+    fns = sorted(glob.glob(os.path.join(a.in_dir, 'seed_*_*.json')))
+    by_seed = {}
+    for fn in fns:
+        with open(fn) as f:
+            r = json.load(f)
+        by_seed.setdefault(int(r['seed']), []).append((fn, r))
+    seeds = [int(x) for x in a.seeds.split(',')] if a.seeds else sorted(by_seed)
+    from experiments.ablation.run_fork_ladder import avg_lat
+    for seed in seeds:
+        cells = by_seed.get(seed) or []
+        if not cells:
+            print('[backfill] seed {}: no cells'.format(seed), flush=True)
+            continue
+        os.environ['SCULPTOR_DEPLOYMENT_SEED'] = str(seed)
+        if a.dep_file:
+            dep = pickle.load(open(a.dep_file.format(seed=seed), 'rb'))
+        else:
+            dep = get_random_deployment(a.dpsize)
+        g = a.gamma if a.gamma is not None else float(cells[0][1].get('gamma') or 0.0)
+        use_res = bool(cells[0][1].get('using_resilience', g > 0)) and g > 0
+        sas = Sparse_Advertisement_Eval(
+            dep, verbose=False, lambduh=0, with_capacity=capacity,
+            explore=DEFAULT_EXPLORE, using_resilience_benefit=use_res, gamma=g if use_res else 0,
+            n_prefixes=deployment_to_prefixes(dep), generic_objective=a.train_objective)
+        wm = Worker_Manager(sas.get_init_kwa(), dep)
+        wm.start_workers()
+        try:
+            sas.set_worker_manager(wm)
+            sas.update_deployment(dep)
+            sas.solutions = {}
+            sas.solve_one_per_peering()
+            opp_obj = float(sas.solutions['one_per_peering']['objective'])
+            _rs = np.random.get_state()
+            np.random.seed(int(seed) + 7)
+            try:
+                sas.solve_anyopt()
+            finally:
+                np.random.set_state(_rs)
+            any_adv = sas.solutions['anyopt']['advertisement']
+            any_obj = float(sas.solutions['anyopt']['objective'])
+            any_lat = avg_lat(sas, any_adv)
+        finally:
+            try:
+                wm.stop_workers()
+            except Exception:
+                pass
+        # the recomputed OPP must reproduce the cells' recorded OPP: same world
+        for fn, r in cells:
+            rec = r.get('opp_objective')
+            if rec is not None and abs(float(rec) - opp_obj) > 1e-3 * max(1.0, abs(opp_obj)):
+                raise SystemExit('seed {}: recomputed OPP {:.6f} != recorded {:.6f} in {} -- '
+                                 'different world; refusing to backfill'.format(seed, opp_obj, rec, fn))
+        for fn, r in cells:
+            r['anyopt_objective'] = any_obj
+            r['anyopt_avg_lat'] = any_lat
+            r['anyopt_adv'] = np.asarray(any_adv).tolist()
+            r['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
+            r['anyopt_backfilled'] = True
+            r['fail_eval'] = 'needs_rescore_anyopt'    # next rescore pass scores the anchor
+            with open(fn, 'w') as f:
+                json.dump(r, f, indent=2, default=float)
+        print('[backfill] seed {}: anyopt objective {:.4f} (OPP {:.4f}) written to {} cells'.format(
+            seed, any_obj, opp_obj, len(cells)), flush=True)
+    return 0
+
+
+_SUBCOMMANDS = {'run': None, 'evaluate': None, 'selftest': None, 'tree': None, 'backfill-anchors': None}
 
 
 def main(argv=None):
     argv = list(sys.argv[1:] if argv is None else argv)
     if not argv or argv[0] not in _SUBCOMMANDS:
         print(__doc__)
-        print('usage: python -m evaluations.ablation {run|evaluate|selftest|tree} [args]')
+        print('usage: python -m evaluations.ablation {run|evaluate|selftest|tree|backfill-anchors} [args]')
         return 2
     cmd, rest = argv[0], argv[1:]
     if cmd == 'run':
         return run_main(rest)
     if cmd == 'evaluate':
         return evaluate_main(rest)
+    if cmd == 'backfill-anchors':
+        return backfill_anchors_main(rest)
     if cmd == 'selftest':
         ap = argparse.ArgumentParser(prog='ablation selftest')
         ap.add_argument('--iters', type=int, default=16)

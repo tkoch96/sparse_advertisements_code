@@ -32,7 +32,7 @@ if _REPO_ROOT not in sys.path:
     sys.path.insert(0, _REPO_ROOT)
 
 
-MARKER = 'lp_driver_v3_softobj'   # v3 (2026-09-09): + training-consistent soft-bounded objectives
+MARKER = 'lp_driver_v4_anyopt'   # v4 (2026-09-10): + anyopt anchor scored; v3: training-consistent soft-bounded objectives
 
 
 def _stranded_objective(sas):
@@ -246,6 +246,12 @@ def rescore_seed(seed, in_dir, dpsize):
     for fn, r in todo:
         old = r.get('diff_vs_opp')
         r['avg_lat'], r['steady_frac_congested'], r['lb_soft'] = score(r['adv'])
+        # anyopt anchor (the ladder's 0%), scored exactly like the cell
+        if r.get('anyopt_adv') is not None:
+            r['anyopt_avg_lat_rescored'], r['anyopt_steady_frac_congested'], r['anyopt_lb_soft'] = score(r['anyopt_adv'])
+            any_fail = {w: fail_abs(r['anyopt_adv'], w) for w in ('popps', 'pops')}
+        else:
+            any_fail = None
         r['opp_avg_lat'] = opp_steady
         r['opp_steady_frac_congested'] = opp_steady_cong
         r['opp_lb_soft'] = opp_lb
@@ -262,6 +268,10 @@ def rescore_seed(seed, in_dir, dpsize):
                 'rb_soft_sum': rb_soft,
                 'opp_rb_soft_sum': opp_rb[which],
             }
+            if any_fail is not None:
+                r[key]['anyopt_avg_lat_under_failure_abs'] = any_fail[which][0]
+                r[key]['anyopt_avg_frac_congested'] = any_fail[which][2]
+                r[key]['anyopt_rb_soft_sum'] = any_fail[which][3]
             if store_scen:
                 r[key]['per_scenario_lats'] = per_scen
                 r[key]['opp_per_scenario_lats'] = opp_fail_scen[which]
@@ -283,8 +293,12 @@ def rescore_seed(seed, in_dir, dpsize):
                  ' repo_obj={:.4f} rescored_lb_obj={:.4f} {}'.format(
                      float(ro), lb_only,
                      'OK' if abs(float(ro) - lb_only) <= 0.02 * max(1.0, abs(float(ro))) else 'MISMATCH'))
-        print('[rescore seed {} {}] steady={:+.3f} full(g{:g})={:.3f} opp_full={:.3f}{}'.format(
-            seed, r['rung'], r['diff_vs_opp'], g, full_cell, full_opp, agree), flush=True)
+        any_txt = ''
+        if any_fail is not None:
+            any_txt = ' anyopt_full={:.3f}'.format(training_objective(
+                r['anyopt_lb_soft'], r['fail_popp']['anyopt_rb_soft_sum'], g))
+        print('[rescore seed {} {}] steady={:+.3f} full(g{:g})={:.3f} opp_full={:.3f}{}{}'.format(
+            seed, r['rung'], r['diff_vs_opp'], g, full_cell, full_opp, any_txt, agree), flush=True)
 
 
 def main():
