@@ -1261,6 +1261,14 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
     import statistics as _st
     out = {'thresholds': list(thresholds), 'own_frac': own_frac, 'rungs': {}}
     its = curves['iterations'] if curves else None
+    peak_fracs = [round(0.5 + 0.05 * i, 2) for i in range(10)]   # 0.50 .. 0.95
+    out['peak_fracs'] = peak_fracs
+    # per deployment: the best % any rung reaches at any iteration
+    peak = {}
+    for rung in (curves['rungs'] if curves else {}):
+        for sd, sr in curves['rungs'][rung]['per_seed_pct'].items():
+            peak[sd] = max(peak.get(sd, float('-inf')), max(v for v in sr if v is not None))
+    out['peak_pct_per_deployment'] = peak
     for rung in (curves['rungs'] if curves else {}):
         d = curves['rungs'][rung]
         per = d['per_seed_pct']
@@ -1279,6 +1287,20 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
                                      'mean': (_st.mean(got) if got else None),
                                      'reached': len(got), 'n': len(own)}
         row['auc_pct'] = _st.mean(v for it, v in zip(its, d['mean_of_per_seed_pct']) if it >= 1)
+        # Tom 2026-09-09: iterations to X% of the PEAK performance ANY rung
+        # reaches on that deployment (max over rungs and iterations of the
+        # per-deployment %), X swept over peak_fracs; median over the
+        # deployments that get there + reached count. One reference per
+        # deployment, shared by all rungs, so the rungs are directly
+        # comparable and the endpoint is not the rung's own.
+        row['iters_to_frac_of_peak'] = {}
+        for X in peak_fracs:
+            hits = [_first_at(its, sr, X * peak[sd]) for sd, sr in per.items()]
+            got = [h for h in hits if h is not None]
+            row['iters_to_frac_of_peak'][str(X)] = {
+                'median': (_st.median(got) if got else None),
+                'mean': (_st.mean(got) if got else None),
+                'reached': len(got), 'n': len(hits)}
         if meas and rung in meas['rungs']:
             md = meas['rungs'][rung]
             ks = md['k']
@@ -1304,7 +1326,42 @@ def learning_speed(curves, meas, thresholds=(50, 75, 90), own_frac=0.9):
                      + ''.join('{:>16}'.format(cell(row['iters_to_pct'][str(t)])) for t in thresholds)
                      + '{:>16}'.format(cell(row['iters_to_own_final']))
                      + ''.join('{:>16}'.format(cell(row['meas_to_pct'].get(str(t)))) for t in thresholds))
+    lines.append('')
+    lines.append('ITERATIONS to X% of the PEAK % any rung reaches on the deployment '
+                 '(median over reaching deployments; reached/n):')
+    hdr2 = '{:<14}'.format('rung') + ''.join('{:>13}'.format('X={:.0%}'.format(X)) for X in peak_fracs)
+    lines += [hdr2, '-' * len(hdr2)]
+    for rung, row in out['rungs'].items():
+        lines.append('{:<14}'.format(rung) + ''.join(
+            '{:>13}'.format(cell(row['iters_to_frac_of_peak'][str(X)])) for X in peak_fracs))
     return out, '\n'.join(lines)
+
+
+def plot_learning_speed(speed, pdf):
+    """Iterations to X% of the peak performance of any rung, X swept: one
+    line per rung (median over reaching deployments); marker size shrinks
+    as fewer deployments reach the level."""
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    color = {r: c for r, _, c in LADDER}; label = {r: l for r, l, _ in LADDER}
+    xs = speed['peak_fracs']
+    fig, ax = plt.subplots(figsize=(7, 4.6))
+    for rung, row in speed['rungs'].items():
+        ys = [row['iters_to_frac_of_peak'][str(X)]['median'] for X in xs]
+        ns = [row['iters_to_frac_of_peak'][str(X)]['reached'] for X in xs]
+        n = row['iters_to_frac_of_peak'][str(xs[0])]['n'] or 1
+        ax.plot([100 * X for X in xs], [y if y is not None else float('nan') for y in ys], '-',
+                color=color.get(rung), label=label.get(rung, rung), lw=1.6)
+        ax.scatter([100 * X for X, y in zip(xs, ys) if y is not None],
+                   [y for y in ys if y is not None],
+                   s=[8 + 60 * k / n for k, y in zip(ns, ys) if y is not None],
+                   color=color.get(rung), zorder=3)
+    ax.set_xlabel('X = % of the peak performance any rung reaches on the deployment')
+    ax.set_ylabel('iterations to first reach X (median over deployments)')
+    ax.set_title('learning speed: marker size = fraction of deployments that reach X', fontsize=9)
+    ax.grid(True, alpha=.3); ax.legend(fontsize=8); fig.tight_layout()
+    fig.savefig(pdf); plt.close(fig)
 
 
 def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=None,
@@ -1349,8 +1406,9 @@ def evaluate(in_dir, out_dir=None, require_rescored=True, plot=True, ws_root=Non
             json.dump(speed, f, indent=1)
         with open(os.path.join(out_dir, 'learning_speed.txt'), 'w') as f:
             f.write(speed_txt + '\n')
+        plot_learning_speed(speed, os.path.join(out_dir, 'learning_speed.pdf'))
         print('\n' + speed_txt + '\n', flush=True)
-        print('[ablation evaluate] wrote {}/learning_speed.{{json,txt}}'.format(out_dir), flush=True)
+        print('[ablation evaluate] wrote {}/learning_speed.{{json,txt,pdf}}'.format(out_dir), flush=True)
     ver = None
     if ws_root:
         ver = verify(in_dir, ws_root, **(contract or {}))
