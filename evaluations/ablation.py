@@ -100,18 +100,22 @@ def clean_cell(ws, ray_tmp=None):
                 shutil.rmtree(d, ignore_errors=True)
 
 
-def run_cell(cmd, ws, env, log_path, timeout_s,
+def run_cell(cmd, ws, env, log_path, timeout_s=None,
              figs_dir=None, label=None, dpsize=None):
     """Run one ablation cell to completion and ALWAYS leave the slot
-    clean. Returns the subprocess rc (-99 on timeout, matching the queue
-    convention). Figures are harvested before cleanup regardless of rc so
-    a failed cell still leaves its convergence evidence."""
+    clean. Returns the subprocess rc. NO wall-clock kill by default (Tom
+    2026-09-10: 'delete this timeout thing, it only ever does harm' -- the
+    2 h / 6 h caps killed actual-10 frozen_prefix cells at iteration 94 and
+    the queue re-ran them from scratch); timeout_s is honored only when a
+    caller passes one explicitly (rc -99 then). Figures are harvested
+    before cleanup regardless of rc so a failed cell still leaves its
+    convergence evidence."""
     try:
         with open(log_path, 'w') as lf:
             try:
                 rc = subprocess.call(cmd, cwd=ws, env=env, stdout=lf,
                                      stderr=subprocess.STDOUT,
-                                     timeout=timeout_s)
+                                     timeout=(float(timeout_s) if timeout_s else None))
             except subprocess.TimeoutExpired:
                 rc = -99
     finally:
@@ -316,7 +320,8 @@ def run_main(argv=None):
                          'whose key dpsize matches --dpsize (ordered by '
                          'ingest sim), then proceed')
     ap.add_argument('--cell-timeout', type=int, default=None,
-                    help='per-cell timeout seconds (SCULPTOR_CELL_TIMEOUT)')
+                    help='OPT-IN per-cell wall-clock kill in seconds (SCULPTOR_CELL_TIMEOUT). '
+                         'Default: none -- cells run to completion (Tom 2026-09-10)')
     ap.add_argument('--continue-from', default=None,
                     help='CONTINUATION (Tom 2026-09-02): prior N-dir (e.g. '
                          'cache/ablation/cdf_a10/N10). Non-painter arms '

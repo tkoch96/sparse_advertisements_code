@@ -180,6 +180,22 @@ class MemGovernor:
             self.active -= 1
 
 
+
+def _pid_alive(pid):
+    """True iff a process with this pid exists (signal 0)."""
+    if not pid or pid <= 0:
+        return False
+    try:
+        os.kill(int(pid), 0)
+        return True
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    except Exception:
+        return False
+
+
 def parse_seeds(spec):
     if '-' in spec:
         a, b = spec.split('-')
@@ -352,11 +368,13 @@ def main():
         """Re-scannable work list (2026-08-16, Tom: 'there should be a
         central queue of jobs... CPUs report back when finished'). Called
         once per PASS: a cell is work iff its JSON is absent AND no FRESH
-        .inprog marker exists (another slot/queue is computing it; stale
-        markers > SCULPTOR_CELL_TIMEOUT are ignored). This makes purges,
+        .inprog marker exists (another slot/queue is computing it; a
+        marker whose writer pid is dead is stale). This makes purges,
         failures, and killed cells re-enter the queue on the next pass
-        instead of waiting for a whole follow-up sweep."""
-        timeout_s = float(os.environ.get('SCULPTOR_CELL_TIMEOUT', '7200'))
+        instead of waiting for a whole follow-up sweep.
+        A marker is FRESH while the queue process that wrote it is alive
+        (its pid is recorded in the marker); there is no age rule any more
+        -- the age rule was the cell timeout, removed 2026-09-10."""
         found = []
         for s_ in all_seeds:
             for sp_ in specs:
@@ -371,11 +389,12 @@ def main():
                             continue
                         marker = out_fn_ + '.inprog'
                         try:
-                            if (os.path.exists(marker) and
-                                    time.time() - os.path.getmtime(marker)
-                                    < timeout_s):
-                                continue
-                        except OSError:
+                            if os.path.exists(marker):
+                                with open(marker) as mf_:
+                                    mpid = int((json.load(mf_) or {}).get('pid') or 0)
+                                if mpid == os.getpid() or _pid_alive(mpid):
+                                    continue
+                        except (OSError, ValueError, TypeError):
                             pass
                         found.append((sp_, N_, s_, rung_))
         return found
@@ -506,7 +525,10 @@ def main():
                                'ts': time.time()}, mf)
             except OSError:
                 pass
-            timeout_s = float(os.environ.get('SCULPTOR_CELL_TIMEOUT', '7200'))
+            # OPT-IN wall-clock kill only (SCULPTOR_CELL_TIMEOUT set); the
+            # default is none -- Tom 2026-09-10: the cap only ever did harm
+            _to = os.environ.get('SCULPTOR_CELL_TIMEOUT')
+            timeout_s = float(_to) if _to else None
             # per-cell eval wrapper: harvests figs + wipes run dir and the
             # slot's ray sessions on every exit path (Tom 2026-08-27 --
             # failed cells used to leak run dirs, ray_q_S* grew a dead
@@ -518,7 +540,7 @@ def main():
             if rc == -99:
                 print('[queue] TIMEOUT {} N={} seed={} rung={} after '
                       '{}s -> killed, re-queued next pass'.format(
-                          sp['label'], N, s, rung, int(timeout_s)),
+                          sp['label'], N, s, rung, int(timeout_s or 0)),
                       flush=True)
             try:
                 os.remove(marker)
