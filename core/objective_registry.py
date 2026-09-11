@@ -313,21 +313,25 @@ register(ObjectivePlugin(
 		('Subopt PoPP-fail (ms)', '<', 'stats',
 		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_difference', -1.0),
 		('Latency PoPP-fail (ms)', '<', 'stats',
-		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_under_failure'),
+		 'stats_popp_failures_latency_optimal', 'avg_latency_under_failure'),   # all users, non-congested (Tom 2026-09-11)
 		('% cong PoPP-fail', '<', 'stats',
-		 'stats_popp_failures_latency_optimal_specific', 'frac_vol_congested', 100.0),
+		 'stats_popp_failures_latency_optimal', 'frac_vol_congested', 100.0),   # all users
+		('Affected latency PoPP-fail (ms)', '<', 'stats',
+		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_under_failure'),   # users whose traffic was on the failed link
 		('Subopt PoP-fail (ms)', '<', 'stats',
 		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_difference', -1.0),
 		('Latency PoP-fail (ms)', '<', 'stats',
-		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_under_failure'),
+		 'stats_pop_failures_latency_optimal', 'avg_latency_under_failure'),
 		('% cong PoP-fail', '<', 'stats',
-		 'stats_pop_failures_latency_optimal_specific', 'frac_vol_congested', 100.0),
+		 'stats_pop_failures_latency_optimal', 'frac_vol_congested', 100.0),
+		('Affected latency PoP-fail (ms)', '<', 'stats',
+		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_under_failure'),
 		('Flash-crowd resilience', '>', 'stats', 'stats_resilience_to_congestion'),
 		('Diurnal resilience', '>', 'stats', 'stats_diurnal'),
 		('Objective (lat+g*RB)', '<', 'lat_res_objective'),
 	),
-	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoPP-fail',
-			 'Latency PoP-fail (ms)', '% cong PoP-fail',
+	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Affected latency PoPP-fail (ms)',
+			 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Affected latency PoP-fail (ms)',
 			 'Flash-crowd resilience', 'Diurnal resilience'),
 	# paired cells (Tom 2026-09-10): failure latency / % congested in ONE cell
 	# per failure type; the absolute failure latency is a stat the stored run
@@ -344,6 +348,8 @@ register(ObjectivePlugin(
 		'% cong PoP-fail': '% cong site-fail',
 		'Latency PoPP-fail (ms)': 'Latency ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
+		'Affected latency PoPP-fail (ms)': 'Affected latency ingress-fail (ms)',
+		'Affected latency PoP-fail (ms)': 'Affected latency site-fail (ms)',
 		'Flash-crowd resilience': 'Flash crowd intensity (vs anycast)',
 		'Diurnal resilience': 'Diurnal intensity (vs anycast)',
 	},
@@ -557,6 +563,12 @@ register(ObjectivePlugin(
 				 'reactive_fail_latency_by_strategy',
 				 'reactive_fail_cong_by_strategy',
 				 'reactive_fail_no_route_by_strategy',
+				 'frozen_fail_affected_latency_by_strategy', 'frozen_fail_affected_cong_by_strategy',
+				 'frozen_site_fail_latency_by_strategy', 'frozen_site_fail_cong_by_strategy',
+				 'frozen_site_fail_no_route_by_strategy', 'frozen_site_fail_affected_latency_by_strategy',
+				 'frozen_site_fail_affected_cong_by_strategy',
+				 'reactive_site_fail_latency_by_strategy', 'reactive_site_fail_cong_by_strategy',
+				 'reactive_site_fail_no_route_by_strategy',
 				 'objective_value_by_strategy'),
 	table_group='Frozen failover', group_order=2, key_order=2,   # right after the dynamic failover group (Tom 2026-09-10)
 	table_columns=(
@@ -567,16 +579,28 @@ register(ObjectivePlugin(
 		 'frozen_fail_cong_by_strategy', 'reactive_fail_cong_by_strategy', 100.0),
 		('% no-route fail', '<', 'frozen_anchor',
 		 'frozen_fail_no_route_by_strategy', 'reactive_fail_no_route_by_strategy', 100.0),
+		('Affected latency (ms)', '<', 'mean', 'frozen_fail_affected_latency_by_strategy'),
+		('Site latency (ms)', '<', 'frozen_anchor',
+		 'frozen_site_fail_latency_by_strategy', 'reactive_site_fail_latency_by_strategy', 1.0),
+		('% cong site-fail', '<', 'frozen_anchor',
+		 'frozen_site_fail_cong_by_strategy', 'reactive_site_fail_cong_by_strategy', 100.0),
+		('% no-route site-fail', '<', 'frozen_anchor',
+		 'frozen_site_fail_no_route_by_strategy', 'reactive_site_fail_no_route_by_strategy', 100.0),
+		('Site affected latency (ms)', '<', 'mean', 'frozen_site_fail_affected_latency_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	# key table shows steady + failure latency only (Tom 2026-09-09); the
 	# congestion / no-route columns stay in the full table
-	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail'),
-	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),),   # only ingress failures were evaluated for static failover
+	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail', 'Affected latency (ms)',
+			 'Site latency (ms)', '% cong site-fail', 'Site affected latency (ms)'),
+	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),
+			   ('Site fail: latency (ms) / % cong', 'Site latency (ms)', '% cong site-fail')),
 	tex_group='\\stf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
 	tex_secrefs=('sec:eval_stf',),
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
-	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)
+	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',
+		'Affected latency (ms)': 'Affected latency ingress-fail (ms)',
+		'Site affected latency (ms)': 'Affected latency site-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)
 			  '% cong fail': '% cong ingress-fail',
 			  '% no-route fail': '% no-route ingress-fail'},
 	paper_table_default=True,

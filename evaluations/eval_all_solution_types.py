@@ -152,7 +152,7 @@ def evaluate_all_metrics(dpsize, port, save_run_dir=None, **kwargs):
 	### scale individual metro/thing volume
 	X_vals = np.linspace(10,500,num=20)#[10,40,80,100,130,150,180,200,210,220,250]#[10,20,30,40,50,60,70,80,90,100]
 	### overprovisioning factor (1.3 = 30%)
-	Y_vals = [1.3]
+	Y_vals = [1.1]   # flash-crowd capacities at the default 1.1 headroom, same as diurnal/MLU (Tom 2026-09-11; was 1.3)
 
 	wm = None
 	sas = None

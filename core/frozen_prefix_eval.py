@@ -117,17 +117,29 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 		e_lat[i] = float(lat)
 	unroutable_vol = max(0.0, total_vol - float(e_vol.sum()))
 
-	def _score(w_popp, w_lat):
+	def _score(w_popp, w_lat, subset=None):
+		"""(latency of routed non-congested volume, congested fraction,
+		no-route fraction). subset: index array restricting the accounting to
+		those pairs (the 'affected' view, Tom 2026-09-11: the users whose
+		pinned prefix was on the failed link/site); fractions are then of the
+		subset's volume and no-route excludes the never-routable volume."""
 		live = w_popp >= 0
 		loads = np.bincount(w_popp[live], weights=e_vol[live], minlength=n_popps)
 		cong_popp = loads > caps + 1e-9
 		on_cong = live & cong_popp[np.clip(w_popp, 0, None)]
 		good = live & ~on_cong
+		if subset is not None:
+			m = np.zeros(n_e, dtype=bool); m[subset] = True
+			live, on_cong, good = live & m, on_cong & m, good & m
+			denom = float(e_vol[m].sum()) or 1.0
+			nr_vol = float(e_vol[m & ~live].sum())
+		else:
+			denom = total_vol
+			nr_vol = float(e_vol[~live].sum()) + unroutable_vol
 		cong_vol = float(e_vol[on_cong].sum())
-		nr_vol = float(e_vol[~live].sum()) + unroutable_vol
 		gv = float(e_vol[good].sum())
 		lat = float(np.sum(e_vol[good] * w_lat[good]) / gv) if gv > 0 else float('nan')
-		return lat, cong_vol / total_vol, nr_vol / total_vol
+		return lat, cong_vol / denom, nr_vol / denom
 
 	steady_lat, steady_cong, steady_nr = _score(e_popp, e_lat)
 
@@ -150,6 +162,7 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 		fb[e_popp < 0] = -1          # unrouted entries stay unrouted
 
 	lats, congs, nrs = [], [], []
+	alats, acongs, anrs = [], [], []      # affected-users view
 	for killed in _scenarios(sas, which, eval_n_fail):
 		killed_set = set(int(k) for k in killed)
 		w_popp = e_popp.copy()
@@ -176,6 +189,9 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 					w_popp[i] = pi; w_lat[i] = float(lat)
 		l, c, nr = _score(w_popp, w_lat)
 		lats.append(l); congs.append(c); nrs.append(nr)
+		if len(affected):
+			al, ac, anr = _score(w_popp, w_lat, subset=affected)
+			alats.append(al); acongs.append(ac); anrs.append(anr)
 
 	return {
 		'steady_latency_ms': steady_lat,
@@ -188,6 +204,10 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 		'worst_frac_no_route': float(np.max(nrs)) if nrs else 0.0,
 		'n_failures': len(lats),
 		'n_pairs': n_e,
+		# affected users only (their pinned prefix was on the failed element)
+		'fail_affected_latency_ms': float(np.nanmean(alats)) if alats else float('nan'),
+		'fail_affected_frac_cong': float(np.mean(acongs)) if acongs else 0.0,
+		'fail_affected_frac_no_route': float(np.mean(anrs)) if anrs else 0.0,
 	}
 
 

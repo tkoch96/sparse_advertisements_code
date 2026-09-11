@@ -34,12 +34,23 @@ FROZEN_KEYS = (
     'frozen_fail_no_route_by_strategy',
     'frozen_fail_worst_cong_by_strategy',
     'frozen_fail_worst_no_route_by_strategy',
+    # Tom 2026-09-11: affected-users view (ingress) + SITE failures
+    'frozen_fail_affected_latency_by_strategy',
+    'frozen_fail_affected_cong_by_strategy',
+    'frozen_site_fail_latency_by_strategy',
+    'frozen_site_fail_cong_by_strategy',
+    'frozen_site_fail_no_route_by_strategy',
+    'frozen_site_fail_affected_latency_by_strategy',
+    'frozen_site_fail_affected_cong_by_strategy',
 )
 REACTIVE_KEYS = (
     'reactive_steady_latency_by_strategy',
     'reactive_fail_latency_by_strategy',
     'reactive_fail_cong_by_strategy',
     'reactive_fail_no_route_by_strategy',
+    'reactive_site_fail_latency_by_strategy',
+    'reactive_site_fail_cong_by_strategy',
+    'reactive_site_fail_no_route_by_strategy',
 )
 ANCHOR_STRATEGY = 'one_per_peering'
 
@@ -55,7 +66,18 @@ def _score(sas, adv, strategy):
         'frozen_fail_no_route_by_strategy': fm['fail_frac_no_route'],
         'frozen_fail_worst_cong_by_strategy': fm['worst_frac_cong'],
         'frozen_fail_worst_no_route_by_strategy': fm['worst_frac_no_route'],
+        'frozen_fail_affected_latency_by_strategy': fm['fail_affected_latency_ms'],
+        'frozen_fail_affected_cong_by_strategy': fm['fail_affected_frac_cong'],
     }
+    # site failures (Tom 2026-09-11): every popp of a site fails together
+    sm = frozen_failure_metrics(sas, adv, which='pops')
+    out.update({
+        'frozen_site_fail_latency_by_strategy': sm['fail_latency_ms'],
+        'frozen_site_fail_cong_by_strategy': sm['fail_frac_cong'],
+        'frozen_site_fail_no_route_by_strategy': sm['fail_frac_no_route'],
+        'frozen_site_fail_affected_latency_by_strategy': sm['fail_affected_latency_ms'],
+        'frozen_site_fail_affected_cong_by_strategy': sm['fail_affected_frac_cong'],
+    })
     if strategy == ANCHOR_STRATEGY:
         rm = reactive_optimal_metrics(sas, adv, which='popps')
         out.update({
@@ -63,6 +85,12 @@ def _score(sas, adv, strategy):
             'reactive_fail_latency_by_strategy': rm['fail_latency_ms'],
             'reactive_fail_cong_by_strategy': rm['fail_frac_cong'],
             'reactive_fail_no_route_by_strategy': rm['fail_frac_no_route'],
+        })
+        rs = reactive_optimal_metrics(sas, adv, which='pops')
+        out.update({
+            'reactive_site_fail_latency_by_strategy': rs['fail_latency_ms'],
+            'reactive_site_fail_cong_by_strategy': rs['fail_frac_cong'],
+            'reactive_site_fail_no_route_by_strategy': rs['fail_frac_no_route'],
         })
     return out
 

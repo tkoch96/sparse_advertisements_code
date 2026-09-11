@@ -781,6 +781,26 @@ def run(ctx):
 			# x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
 			# x, cdf_x = get_cdf_xy(all_differences,weighted=True,x=x)
 
+			# ALL-USERS failure families (Tom 2026-09-11): (i) latency of the
+
+			# non-congested traffic and (ii) % congested traffic over every user in
+
+			# every failure scenario; the *_specific families above are the users
+
+			# whose traffic was on the failed element ((iii), the 'affected' view).
+
+			for _fam in ('popp_failures_latency_optimal', 'pop_failures_latency_optimal'):
+
+			  try:
+
+			    _d, _x, _st, _th = get_failure_metric_arr(_fam, solution)
+
+			    metrics.setdefault('stats_' + _fam, {})[solution] = _st
+
+			  except Exception as _e:
+
+			    print('[stats] {} {}: {}'.format(_fam, solution, _e))
+
 			all_differences, x, stats, threshold_stats = get_failure_metric_arr('pop_failures_latency_optimal_specific', solution)
 			metrics['stats_' + 'pop_failures_latency_optimal_specific'][solution] = stats
 			metrics['stats_latency_thresholds_fail_pop'][solution] = threshold_stats
