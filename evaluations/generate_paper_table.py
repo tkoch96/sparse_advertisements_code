@@ -828,10 +828,22 @@ TEX_NORMALIZE = {}   # (0..100 band between two methods; superseded by TEX_RATIO
 # Tom 2026-09-10 (tex only): columns shown as a RATIO to a reference method
 # (sublabel -> method whose value is 1.0): MLU, flash-crowd / diurnal
 # intensity and site cost are normalized by anycast.
+# Reference = a METHOD name (its measured value -> 1.0) or a NUMBER: the value
+# provisioning implies for anycast, which makes the column headroom-invariant
+# and anycast's entry derivable (Tom 2026-09-11):
+#   * capacities are headroom x anycast load per link, so anycast's max link
+#     utilization is 1/headroom and the surge it absorbs before congestion is
+#     (headroom - 1) x 100 percent (the diurnal profile peaks at exactly 1.0;
+#     a flash crowd multiplies one metro).
+#   * flash crowd is evaluated at headroom 1.3 (eval_all_solution_types
+#     Y_vals=[1.3]); diurnal and MLU use the deployment's capacities, built at
+#     get_link_capacities' default 1.1 (no SCULPTOR_SCALE_FACTOR in the paper
+#     intent). Keep these in step with those settings.
+FLASH_HEADROOM, DIURNAL_HEADROOM, MLU_HEADROOM = 1.3, 1.1, 1.1
 TEX_RATIO = {
-    'MLU': 'Anycast',
-    'Flash-crowd resilience': 'Anycast',
-    'Diurnal resilience': 'Anycast',
+    'MLU': 1.0 / MLU_HEADROOM,
+    'Flash-crowd resilience': (FLASH_HEADROOM - 1.0) * 100.0,
+    'Diurnal resilience': (DIURNAL_HEADROOM - 1.0) * 100.0,
     'Wgt avg site cost': 'Anycast',
 }
 TEX_FOOTNOTE = ('$^{1}$ An unrealistic optimal, included for comparison.')
@@ -860,7 +872,8 @@ def _tex_normalized(labels, rows):
             continue
         if sub in TEX_RATIO:
             ref = TEX_RATIO[sub]
-            vref = rows[ref][i][0] if ref in rows else None
+            vref = (float(ref) if isinstance(ref, (int, float))
+                    else (rows[ref][i][0] if ref in rows else None))
             if vref is None or abs(vref) < 1e-12:
                 continue
             for disp in out:
