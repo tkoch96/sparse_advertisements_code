@@ -98,6 +98,9 @@ class ObjectivePlugin:
 	# the fallback stands in when the left column is absent from the data
 	# (a stat the stored run predates) and the header says 'subopt'.
 	tex_pairs: Tuple[Tuple, ...] = ()
+	# paper section labels shown under the group header as \cref{...}
+	# (Tom 2026-09-11): on-Internet result, emulated result, in that order
+	tex_secrefs: Tuple[str, ...] = ()
 	paper_table_default: bool = False
 	default_order: int = 999      # cell run order in DEFAULT_OBJECTIVES
 	# --- provenance -------------------------------------------------------
@@ -333,6 +336,7 @@ register(ObjectivePlugin(
 			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)'),
 			   ('Flash Crowd/Diurnal Intensity (vs anycast)', 'Flash-crowd resilience', 'Diurnal resilience')),   # Tom 2026-09-11
 	tex_group='\\dtf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
+	tex_secrefs=('sec:internet-failure', 'sec:eval-failure'),
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
@@ -365,6 +369,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('Latency (ms)', 'MLU'),
 	tex_group='\\latmlu',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-09: no MLU abbreviation in the table
+	tex_secrefs=('sec:internet-steady-state', 'sec:eval-steady-state'),
 	tex_subs={'MLU': 'Maximum link utilization (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_OBJ_MAXUTIL_ALPHA': '',
@@ -399,6 +404,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS,
 	key_columns=('% within 10ms',),
 	tex_group='\\lss',   # macro in the paper's macros.tex (Tom 2026-09-11)
+	tex_secrefs=('sec:eval-latency-sensitive'),
 	tex_subs={'% within 10ms': '% beyond 10ms of optimal'},   # tex shows 100 - value (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_FRACB_SCALAR': '',
@@ -431,6 +437,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('HPrio latency (ms)', 'Crit bulk ratio'),
 	tex_group='\\prios',   # macro in the paper's macros.tex (Tom 2026-09-11)
+	tex_secrefs=('sec:eval-multiple-traffic-classes'),
 	tex_subs={'HPrio cong @SWAN': 'HPrio cong @SWAN'},
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_BULK_SLACK_DOM': '1e3'},
@@ -459,6 +466,7 @@ register(ObjectivePlugin(
 	tex_subs={'Wgt avg site cost': 'Wgt avg site cost (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	key_columns=('Wgt avg site cost',),
 	tex_group='\\sitecost',   # macro in the paper's macros.tex (Tom 2026-09-11)
+	tex_secrefs=('sec:eval-per-site-costs'),
 	paper_table_default=True,
 ))
 
@@ -565,6 +573,7 @@ register(ObjectivePlugin(
 	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail'),
 	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),),   # only ingress failures were evaluated for static failover
 	tex_group='\\stf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
+	tex_secrefs=('sec:eval-static-failover'),
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
 	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)

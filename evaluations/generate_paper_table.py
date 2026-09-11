@@ -745,6 +745,7 @@ TEX_SUB_DISPLAY = _registry.tex_sub_display()
 TEX_SUB_DISPLAY.setdefault('Latency (ms)', 'Latency\n(ms)')
 # group -> [(header, left, right[, fallback_left])] (tex-only paired cells)
 TEX_PAIRS = {p.table_group: list(p.tex_pairs) for p in _registry.PLUGINS.values() if p.tex_pairs}
+TEX_SECREFS = {p.table_group: list(p.tex_secrefs) for p in _registry.PLUGINS.values() if p.tex_secrefs}
 
 
 def _tex_pair_columns(labels, rows, precs):
@@ -970,10 +971,14 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             # stub cell of the group row (Tom 2026-09-09): 'Objectives'
             def _group_cell(g, n):
                 disp = TEX_GROUP_DISPLAY.get(g, g)
+                refs = TEX_SECREFS.get(g) or []
                 if disp.startswith('\\') and ' ' not in disp:
                     # a house macro cannot be word-wrapped by us, so let
                     # LaTeX break it inside a parbox sized to the columns it
-                    # spans (Tom 2026-09-11: keep the macro AND the wrapping)
+                    # spans (Tom 2026-09-11: keep the macro AND the wrapping);
+                    # the paper sections for the objective go on a line below
+                    if refs:
+                        disp = disp + ' \\\\ (\\cref{' + ','.join(refs) + '})'
                     return '\\multicolumn{{{}}}{{c|}}{{\\parbox{{{:.1f}cm}}{{\\centering {}}}}}'.format(
                         n, max(1.9, 1.7 * n), disp)
                 return '\\multicolumn{{{}}}{{c|}}{{{}}}'.format(
