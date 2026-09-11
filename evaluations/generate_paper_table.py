@@ -866,7 +866,9 @@ def _tex_normalized(labels, rows):
                 if mean is None:
                     continue
                 out[disp][i] = (mean / vref, (std / abs(vref)) if std is not None else None, n, best)
-            precs[-1] = 2
+            # ratios sit near 1.0: three decimals for MLU and site cost (Tom
+            # 2026-09-10), two for the intensities
+            precs[-1] = 3 if sub in ('MLU', 'Wgt avg site cost') else 2
             continue
         if sub not in TEX_NORMALIZE:
             continue
