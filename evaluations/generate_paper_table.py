@@ -746,6 +746,9 @@ TEX_SUB_DISPLAY.setdefault('Latency (ms)', 'Latency\n(ms)')
 # group -> [(header, left, right[, fallback_left])] (tex-only paired cells)
 TEX_PAIRS = {p.table_group: list(p.tex_pairs) for p in _registry.PLUGINS.values() if p.tex_pairs}
 TEX_SECREFS = {p.table_group: list(p.tex_secrefs) for p in _registry.PLUGINS.values() if p.tex_secrefs}
+# per-group header font (tex only): the one-column site-cost header broke out
+# of its cell at the normal size (Tom 2026-09-11)
+TEX_GROUP_FONT = {'Site cost': '\\small'}
 
 
 def _tex_pair_columns(labels, rows, precs):
@@ -979,8 +982,9 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                     # the paper sections for the objective go on a line below
                     if refs:
                         disp = disp + ' \\\\ (\\cref{' + ','.join(refs) + '})'
-                    return '\\multicolumn{{{}}}{{c|}}{{\\parbox{{{:.1f}cm}}{{\\centering {}}}}}'.format(
-                        n, max(1.9, 1.7 * n), disp)
+                    font = TEX_GROUP_FONT.get(g, '')
+                    return '\\multicolumn{{{}}}{{c|}}{{\\parbox{{{:.1f}cm}}{{\\centering {}{}}}}}'.format(
+                        n, max(1.9, 1.7 * n), (font + ' ') if font else '', disp)
                 return '\\multicolumn{{{}}}{{c|}}{{{}}}'.format(
                     n, _wrap_tex_header(disp, width=max(14, 12 * n)))   # wrap per spanned column (Tom 2026-09-10)
             f.write('Objectives & ' + ' & '.join(_group_cell(g, n) for g, n in groups) + ' \\\\\n\\hline\n')
