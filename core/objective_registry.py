@@ -381,7 +381,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS,
 	key_columns=('% within 10ms',),
 	tex_group='Latency Sensitive Services',
-	tex_subs={'% within 10ms': '% within 10ms of optimal'},
+	tex_subs={'% within 10ms': '% beyond 10ms of optimal'},   # tex shows 100 - value (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_FRACB_SCALAR': '',
 					'SCULPTOR_FRAC_BEYOND_REL': '',

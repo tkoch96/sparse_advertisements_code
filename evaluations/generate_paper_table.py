@@ -782,6 +782,10 @@ TEX_NORMALIZE = {
     'Diurnal resilience': ('Anycast', 'One-per-peering'),
 }
 TEX_FOOTNOTE = ('$^{1}$ This is an unrealistic optimal, included for comparison.')
+# Tom 2026-09-10 (tex only): '% within 10ms of optimal' is shown as its
+# complement, '% beyond 10ms of optimal' = 100 - value (lower is better;
+# monotone, so the best-in-column flags are unchanged)
+TEX_COMPLEMENT = {'% within 10ms': 100.0}
 
 
 def _tex_normalized(labels, rows):
@@ -792,6 +796,13 @@ def _tex_normalized(labels, rows):
     for i, lab in enumerate(labels):
         sub = lab.split('|', 1)[1]
         precs.append(4 if 'Wgt avg site cost' in lab else 2)
+        if sub in TEX_COMPLEMENT:
+            total = TEX_COMPLEMENT[sub]
+            for disp in out:
+                mean, std, n, best = out[disp][i]
+                if mean is not None:
+                    out[disp][i] = (total - mean, std, n, best)
+            continue
         if sub not in TEX_NORMALIZE:
             continue
         m0, m100 = TEX_NORMALIZE[sub]
