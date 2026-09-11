@@ -367,7 +367,10 @@ def make_paper_plots(cache_fn, **kwargs):
 
 	ax.set_xlabel(xlab)
 	ax.set_ylabel("Avg Suboptimality\nNormal Operation (ms)")
-	ax.legend(fontsize=12)
+	if evaluate_over == 'deployment_size':
+		# the paper shows this figure beside the prefix-budget one, which
+		# shares its legend (Tom 2026-09-10: no legend on the right figure)
+		ax.legend(fontsize=12)
 	save_figure('average_latency_over_{}_normal.pdf'.format(evaluate_over))
 
 	for lp_tp, tp, tp_k in zip(['mlu','mlu'], ['Ingress', 'Site'],
