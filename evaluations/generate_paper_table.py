@@ -968,10 +968,17 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             # column, a horizontal rule under every row
             f.write('\\begin{tabular}{|l|' + '|'.join('r' * n for _g, n in groups) + '|}\n\\hline\n')
             # stub cell of the group row (Tom 2026-09-09): 'Objectives'
-            f.write('Objectives & ' + ' & '.join(
-                '\\multicolumn{{{}}}{{c|}}{{{}}}'.format(
-                    n, _wrap_tex_header(TEX_GROUP_DISPLAY.get(g, g), width=max(14, 12 * n)))   # wrap per spanned column (Tom 2026-09-10)
-                for g, n in groups) + ' \\\\\n\\hline\n')
+            def _group_cell(g, n):
+                disp = TEX_GROUP_DISPLAY.get(g, g)
+                if disp.startswith('\\') and ' ' not in disp:
+                    # a house macro cannot be word-wrapped by us, so let
+                    # LaTeX break it inside a parbox sized to the columns it
+                    # spans (Tom 2026-09-11: keep the macro AND the wrapping)
+                    return '\\multicolumn{{{}}}{{c|}}{{\\parbox{{{:.1f}cm}}{{\\centering {}}}}}'.format(
+                        n, max(1.9, 1.7 * n), disp)
+                return '\\multicolumn{{{}}}{{c|}}{{{}}}'.format(
+                    n, _wrap_tex_header(disp, width=max(14, 12 * n)))   # wrap per spanned column (Tom 2026-09-10)
+            f.write('Objectives & ' + ' & '.join(_group_cell(g, n) for g, n in groups) + ' \\\\\n\\hline\n')
             # LaTeX-escape header labels (a bare % in '% cong ...'
             # comments out the row terminator -- found compiling the
             # pasted table in the paper, 2026-08-30)
