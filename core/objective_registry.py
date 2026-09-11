@@ -316,14 +316,14 @@ register(ObjectivePlugin(
 	),
 	key_columns=('Latency (ms)', '% cong PoPP-fail', '% cong PoP-fail',
 				 'Flash-crowd resilience', 'Diurnal resilience'),
-	tex_group='Failure Robustness',
+	tex_group='Dynamic Traffic Failover (MPQUIC)',   # Tom 2026-09-10
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
 		'Subopt PoP-fail (ms)': 'Subopt site-fail (ms)',
 		'% cong PoP-fail': '% cong site-fail',
-		'Flash-crowd resilience': 'Flash crowd intensity',
-		'Diurnal resilience': 'Diurnal intensity',
+		'Flash-crowd resilience': 'Flash crowd intensity (%)',
+		'Diurnal resilience': 'Diurnal intensity (%)',
 	},
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_USE_RESILIENCE': '1', 'SCULPTOR_GT_RB': '0'},
@@ -374,7 +374,7 @@ register(ObjectivePlugin(
 	required_metric_key='frac_within_threshold_by_strategy',
 	metric_keys=('frac_within_threshold_by_strategy',
 				 'objective_value_by_strategy'),
-	table_group='Frac beyond optimal', group_order=2, key_order=3,
+	table_group='Frac beyond optimal', group_order=3, key_order=4,
 	table_columns=(
 		('% within 10ms', '>', 'pct', 'frac_within_threshold_by_strategy'),
 		_OBJ_COL,
@@ -404,7 +404,7 @@ register(ObjectivePlugin(
 				 'hprio_frac_routed_by_strategy', 'bulk_routable_by_strategy',
 				 'critical_bulk_ratio_by_strategy',
 				 'hprio_cong_swan_by_strategy', 'objective_value_by_strategy'),
-	table_group='High + Low Priority Traffic', group_order=3, key_order=2,
+	table_group='High + Low Priority Traffic', group_order=4, key_order=3,
 	table_columns=(
 		('Frac HPrio routed', '>', 'mean', 'hprio_frac_routed_by_strategy'),
 		('HPrio latency (ms)', '<', 'mean', 'hprio_latency_by_strategy'),
@@ -433,11 +433,12 @@ register(ObjectivePlugin(
 	metric_keys=('active_sites_by_strategy', 'weighted_site_cost_by_strategy',
 				 'max_site_cost_load_by_strategy',
 				 'avg_site_cost_load_by_strategy', 'objective_value_by_strategy'),
-	table_group='Site cost', group_order=4, key_order=4,
+	table_group='Site cost', group_order=5, key_order=5,
 	table_columns=(
 		('Wgt max site cost', '<', 'mean', 'max_site_cost_load_by_strategy'),
 		('Wgt avg site cost', '<', 'mean', 'weighted_site_cost_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
+	tex_subs={'Wgt avg site cost': 'Wgt avg site cost (%)'},   # normalized in the tex (Tom 2026-09-10)
 	key_columns=('Wgt avg site cost',),
 	tex_group='Traffic Cost Across Sites',
 	paper_table_default=True,
@@ -531,7 +532,7 @@ register(ObjectivePlugin(
 				 'reactive_fail_cong_by_strategy',
 				 'reactive_fail_no_route_by_strategy',
 				 'objective_value_by_strategy'),
-	table_group='Frozen failover', group_order=5, key_order=5,
+	table_group='Frozen failover', group_order=2, key_order=2,   # right after the dynamic failover group (Tom 2026-09-10)
 	table_columns=(
 		('Steady latency (ms)', '<', 'mean', 'frozen_steady_latency_by_strategy'),
 		('Latency (ms)', '<', 'frozen_anchor',
@@ -544,7 +545,7 @@ register(ObjectivePlugin(
 	# key table shows steady + failure latency only (Tom 2026-09-09); the
 	# congestion / no-route columns stay in the full table
 	key_columns=('Steady latency (ms)', 'Latency (ms)'),
-	tex_group='Frozen Failover',
+	tex_group='Static Traffic Failover (DNS)',   # Tom 2026-09-10
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
 	tex_subs={'Frozen failover|Latency (ms)': 'Failure latency (ms)',
