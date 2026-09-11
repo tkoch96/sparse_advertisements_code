@@ -824,10 +824,15 @@ def _wrap_tex_header(text, width=None):
 # reference methods -- sublabel -> (method at 0, method at 100). Site cost:
 # one-per-peering 0, anycast 100 (lower is better stays lower). Flash-crowd /
 # diurnal intensity: anycast 0, one-per-peering 100 (higher stays higher).
-TEX_NORMALIZE = {
-    'Wgt avg site cost': ('One-per-peering', 'Anycast'),
-    'Flash-crowd resilience': ('Anycast', 'One-per-peering'),
-    'Diurnal resilience': ('Anycast', 'One-per-peering'),
+TEX_NORMALIZE = {}   # (0..100 band between two methods; superseded by TEX_RATIO, Tom 2026-09-10)
+# Tom 2026-09-10 (tex only): columns shown as a RATIO to a reference method
+# (sublabel -> method whose value is 1.0): MLU, flash-crowd / diurnal
+# intensity and site cost are normalized by anycast.
+TEX_RATIO = {
+    'MLU': 'Anycast',
+    'Flash-crowd resilience': 'Anycast',
+    'Diurnal resilience': 'Anycast',
+    'Wgt avg site cost': 'Anycast',
 }
 TEX_FOOTNOTE = ('$^{1}$ An unrealistic optimal, included for comparison.')
 # Tom 2026-09-10 (tex only): '% within 10ms of optimal' is shown as its
@@ -850,6 +855,18 @@ def _tex_normalized(labels, rows):
                 mean, std, n, best = out[disp][i]
                 if mean is not None:
                     out[disp][i] = (total - mean, std, n, best)
+            continue
+        if sub in TEX_RATIO:
+            ref = TEX_RATIO[sub]
+            vref = rows[ref][i][0] if ref in rows else None
+            if vref is None or abs(vref) < 1e-12:
+                continue
+            for disp in out:
+                mean, std, n, best = out[disp][i]
+                if mean is None:
+                    continue
+                out[disp][i] = (mean / vref, (std / abs(vref)) if std is not None else None, n, best)
+            precs[-1] = 2
             continue
         if sub not in TEX_NORMALIZE:
             continue

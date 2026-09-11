@@ -339,8 +339,8 @@ register(ObjectivePlugin(
 		'% cong PoP-fail': '% cong site-fail',
 		'Latency PoPP-fail (ms)': 'Latency ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
-		'Flash-crowd resilience': 'Flash crowd intensity (%)',
-		'Diurnal resilience': 'Diurnal intensity (%)',
+		'Flash-crowd resilience': 'Flash crowd intensity (vs anycast)',
+		'Diurnal resilience': 'Diurnal intensity (vs anycast)',
 	},
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_USE_RESILIENCE': '1', 'SCULPTOR_GT_RB': '0'},
@@ -364,7 +364,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('Latency (ms)', 'MLU'),
 	tex_group='Latency + Maximum Link Utilization',   # Tom 2026-09-09: no MLU abbreviation in the table
-	tex_subs={'MLU': 'Maximum link utilization'},
+	tex_subs={'MLU': 'Maximum link utilization (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_OBJ_MAXUTIL_ALPHA': '',
 					'SCULPTOR_MLU_WEIGHT_MULT': ''},
@@ -455,7 +455,7 @@ register(ObjectivePlugin(
 		('Wgt max site cost', '<', 'mean', 'max_site_cost_load_by_strategy'),
 		('Wgt avg site cost', '<', 'mean', 'weighted_site_cost_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
-	tex_subs={'Wgt avg site cost': 'Wgt avg site cost (%)'},   # normalized in the tex (Tom 2026-09-10)
+	tex_subs={'Wgt avg site cost': 'Wgt avg site cost (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	key_columns=('Wgt avg site cost',),
 	tex_group='Traffic Cost Across Sites',
 	paper_table_default=True,
