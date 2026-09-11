@@ -856,6 +856,7 @@ def _tex_normalized(labels, rows):
                 mean, std, n, best = out[disp][i]
                 if mean is not None:
                     out[disp][i] = (total - mean, std, n, best)
+            precs[-1] = 1   # '% beyond 10ms of optimal' at one decimal (Tom 2026-09-10)
             continue
         if sub in TEX_RATIO:
             ref = TEX_RATIO[sub]
