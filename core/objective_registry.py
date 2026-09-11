@@ -330,7 +330,8 @@ register(ObjectivePlugin(
 	# per failure type; the absolute failure latency is a stat the stored run
 	# may predate -> the suboptimality column stands in until regeneration
 	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Subopt PoPP-fail (ms)'),
-			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)')),
+			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)'),
+			   ('Flash Crowd/Diurnal Intensity (vs anycast)', 'Flash-crowd resilience', 'Diurnal resilience')),   # Tom 2026-09-11
 	tex_group='Dynamic Traffic Failover',   # Tom 2026-09-10
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',

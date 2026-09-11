@@ -740,6 +740,9 @@ def _fmt(cell, latex=False, prec=2, with_std=True):
 # stay stable so caches and merge tooling never re-key.
 TEX_GROUP_DISPLAY = _registry.tex_group_display()
 TEX_SUB_DISPLAY = _registry.tex_sub_display()
+# '(ms)' on its own line for the bare latency columns (Tom 2026-09-11); an
+# explicit newline in a display string is a forced line break in the header
+TEX_SUB_DISPLAY.setdefault('Latency (ms)', 'Latency\n(ms)')
 # group -> [(header, left, right[, fallback_left])] (tex-only paired cells)
 TEX_PAIRS = {p.table_group: list(p.tex_pairs) for p in _registry.PLUGINS.values() if p.tex_pairs}
 
@@ -804,6 +807,11 @@ def _wrap_tex_header(text, width=None):
     emitted as \\makecell (the paper loads makecell). Escapes % and &."""
     if width is None:
         width = int(_os.environ.get('SCULPTOR_TEX_HEADER_WIDTH', '12'))
+    if '\n' in text:
+        # explicit breaks: wrap each segment separately, keep the breaks
+        parts = [_wrap_tex_header(seg, width=width) for seg in text.split('\n')]
+        inner = [p_[len('\\makecell{'):-1] if p_.startswith('\\makecell{') else p_ for p_ in parts]
+        return '\\makecell{' + '\\\\'.join(inner) + '}'
     words = text.split()
     lines, cur = [], ''
     for w in words:
@@ -842,8 +850,10 @@ TEX_NORMALIZE = {}   # (0..100 band between two methods; superseded by TEX_RATIO
 FLASH_HEADROOM, DIURNAL_HEADROOM, MLU_HEADROOM = 1.3, 1.1, 1.1
 TEX_RATIO = {
     'MLU': 1.0 / MLU_HEADROOM,
-    'Flash-crowd resilience': (FLASH_HEADROOM - 1.0) * 100.0,
-    'Diurnal resilience': (DIURNAL_HEADROOM - 1.0) * 100.0,
+    # intensities: plain ratio to measured anycast (Tom 2026-09-11: "just
+    # normalize both to anycast for now")
+    'Flash-crowd resilience': 'Anycast',
+    'Diurnal resilience': 'Anycast',
     'Wgt avg site cost': 'Anycast',
 }
 TEX_FOOTNOTE = ('$^{1}$ An unrealistic optimal, included for comparison.')
