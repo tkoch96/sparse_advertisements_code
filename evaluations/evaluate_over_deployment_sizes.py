@@ -347,7 +347,7 @@ def make_paper_plots(cache_fn, **kwargs):
 	xlab = kwargs.get('xlab', "Deployment Size (Num Sites)")
 	evaluate_over = kwargs.get('evaluate_over', 'deployment_size')
 
-	f,ax = get_figure()
+	f,ax = get_figure(l=3.5)   # square-ish like the real-deployment CDFs (Tom 2026-09-10); was the wide 7x3 default
 	metric_by_solution = {}
 	for solution in solutions:
 		avg_latency_diff_normal = []
