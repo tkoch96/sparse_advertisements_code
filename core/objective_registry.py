@@ -378,7 +378,7 @@ register(ObjectivePlugin(
 	required_metric_key='frac_within_threshold_by_strategy',
 	metric_keys=('frac_within_threshold_by_strategy',
 				 'objective_value_by_strategy'),
-	table_group='Frac beyond optimal', group_order=3, key_order=4,
+	table_group='Frac beyond optimal', group_order=3, key_order=3,   # before Traffic Classes (Tom 2026-09-10)
 	table_columns=(
 		('% within 10ms', '>', 'pct', 'frac_within_threshold_by_strategy'),
 		_OBJ_COL,
@@ -408,7 +408,7 @@ register(ObjectivePlugin(
 				 'hprio_frac_routed_by_strategy', 'bulk_routable_by_strategy',
 				 'critical_bulk_ratio_by_strategy',
 				 'hprio_cong_swan_by_strategy', 'objective_value_by_strategy'),
-	table_group='High + Low Priority Traffic', group_order=4, key_order=3,
+	table_group='High + Low Priority Traffic', group_order=4, key_order=4,
 	table_columns=(
 		('Frac HPrio routed', '>', 'mean', 'hprio_frac_routed_by_strategy'),
 		('HPrio latency (ms)', '<', 'mean', 'hprio_latency_by_strategy'),
