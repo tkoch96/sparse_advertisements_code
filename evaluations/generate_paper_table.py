@@ -892,20 +892,9 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             f.write('\\multicolumn{{{}}}{{l}}{{\\footnotesize {}}} \\\\\n'.format(
                 ncols, TEX_FOOTNOTE))
             f.write('\\end{tabular}\n')
-            _cap = ('Performance of all methods across objectives. '
-                    '\\sparse outperforms every methodology on every metric.')
-            _norm = [l.split('|', 1)[1] for l in labels if l.split('|', 1)[1] in TEX_NORMALIZE]
-            if 'Wgt avg site cost' in _norm:
-                _cap += (' Site cost is normalized so that \\expensive is 0 and '
-                         '\\acast is 100.')
-            if any(x in _norm for x in ('Flash-crowd resilience', 'Diurnal resilience')):
-                _cap += (' Flash crowd and diurnal intensity are normalized so that '
-                         '\\acast is 0 and \\expensive is 100.')
-            if any(l.split('|')[0] == 'Frozen failover' for l in labels):
-                _cap += (' Static traffic failover columns fix each user\'s prefix '
-                         'allocation before the failure (no re-steering); '
-                         'the \\expensive row there is the re-optimized '
-                         'ceiling.')
+            # caption = the first sentence only (Tom 2026-09-10: no
+            # normalization / frozen-failover explainers in the caption)
+            _cap = 'Performance of all methods across objectives.'
             f.write('}\n\\caption{' + _cap + '}\n'
                     '\\label{tab:' + basename + '}\n'
                     '\\end{table*}\n')
