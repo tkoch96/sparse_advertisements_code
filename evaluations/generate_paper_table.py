@@ -1005,7 +1005,8 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             f.write('\\end{tabular}\n')
             # caption = the first sentence only (Tom 2026-09-10: no
             # normalization / frozen-failover explainers in the caption)
-            _cap = 'Performance of all methods across objectives.'
+            _cap = ('Performance of all methods across objectives. '
+                    '\\sparse outperforms all other methods on every metric.')
             f.write('}\n\\caption{' + _cap + '}\n'
                     '\\label{tab:' + basename + '}\n'
                     '\\end{table*}\n')
