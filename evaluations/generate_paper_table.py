@@ -749,7 +749,7 @@ TEX_SECREFS = {p.table_group: ([p.tex_secrefs] if isinstance(p.tex_secrefs, str)
                for p in _registry.PLUGINS.values() if p.tex_secrefs}
 # per-group header font (tex only): the one-column site-cost header broke out
 # of its cell at the normal size (Tom 2026-09-11)
-TEX_GROUP_FONT = {'Site cost': '\\small'}
+TEX_GROUP_FONT = {'Site cost': '\\small', 'Frac beyond optimal': '\\small'}   # one-column groups
 
 
 def _tex_pair_columns(labels, rows, precs):
