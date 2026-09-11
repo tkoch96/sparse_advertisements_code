@@ -848,7 +848,8 @@ def _tex_normalized(labels, rows):
     precs = []
     for i, lab in enumerate(labels):
         sub = lab.split('|', 1)[1]
-        precs.append(4 if 'Wgt avg site cost' in lab else 2)
+        # latencies (any '(ms)' column) at one decimal (Tom 2026-09-10)
+        precs.append(4 if 'Wgt avg site cost' in lab else (1 if '(ms)' in sub else 2))
         if sub in TEX_COMPLEMENT:
             total = TEX_COMPLEMENT[sub]
             for disp in out:
