@@ -66,7 +66,7 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         # them for keying. DEP_FILE/INIT_FILE stay for the same reason.
         _keep = {'SCULPTOR_ABLATION_GAMMA', 'SCULPTOR_ABLATION_OBJECTIVE',
                  'SCULPTOR_ABLATION_DEP_FILE', 'SCULPTOR_ABLATION_INIT_FILE',
-                 'SCULPTOR_ABLATION_RESUME_FROM'}
+                 'SCULPTOR_ABLATION_RESUME_FROM', 'SCULPTOR_ABLATION_ANYOPT'}
         _gone = sorted(k for k in os.environ
                        if k.startswith('SCULPTOR_ABLATION_')
                        and k not in _keep)
@@ -218,17 +218,20 @@ def run_one(seed, rung, port, max_iter, out_dir, dpsize='small'):
         # 100%, painter a real rung. anyopt's provider MC draws are np.random,
         # so seed them per deployment: every rung of a deployment gets the
         # SAME anyopt (the evaluation checks the cell-to-cell spread is 0).
-        _rs = np.random.get_state()
-        np.random.seed(int(seed) + 7)
-        try:
-            sas.solve_anyopt()
-        finally:
-            np.random.set_state(_rs)
-        anyopt_adv = sas.solutions['anyopt']['advertisement']
-        result['anyopt_objective'] = float(sas.solutions['anyopt']['objective'])
-        result['anyopt_avg_lat'] = avg_lat(sas, anyopt_adv)
-        result['anyopt_adv'] = np.asarray(anyopt_adv).tolist()
-        result['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
+        # Opt-in since Tom 2026-09-10 evening ("get rid of anyopt, painter is
+        # 0 again"): SCULPTOR_ABLATION_ANYOPT=1 records the anyopt anchor.
+        if os.environ.get('SCULPTOR_ABLATION_ANYOPT', '0') == '1':
+            _rs = np.random.get_state()
+            np.random.seed(int(seed) + 7)
+            try:
+                sas.solve_anyopt()
+            finally:
+                np.random.set_state(_rs)
+            anyopt_adv = sas.solutions['anyopt']['advertisement']
+            result['anyopt_objective'] = float(sas.solutions['anyopt']['objective'])
+            result['anyopt_avg_lat'] = avg_lat(sas, anyopt_adv)
+            result['anyopt_adv'] = np.asarray(anyopt_adv).tolist()
+            result['anyopt_n_advs'] = int(sas.solutions['anyopt'].get('n_advs') or -1)
 
         if rung == 'painter':
             # Painter is measurement-UNBOUNDED by construction: painter_v5
