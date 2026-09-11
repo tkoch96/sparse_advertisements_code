@@ -781,7 +781,7 @@ TEX_NORMALIZE = {
     'Flash-crowd resilience': ('Anycast', 'One-per-peering'),
     'Diurnal resilience': ('Anycast', 'One-per-peering'),
 }
-TEX_FOOTNOTE = ('$^{1}$ This is an unrealistic optimal, included for comparison.')
+TEX_FOOTNOTE = ('$^{1}$ An unrealistic optimal, included for comparison.')
 # Tom 2026-09-10 (tex only): '% within 10ms of optimal' is shown as its
 # complement, '% beyond 10ms of optimal' = 100 - value (lower is better;
 # monotone, so the best-in-column flags are unchanged)
