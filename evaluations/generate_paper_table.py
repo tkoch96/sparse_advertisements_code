@@ -1059,10 +1059,16 @@ def reemit_from_csv(csv_path, out_dir, paper_dir):
     else:
         _gseq = [g for g, _o, _c in _registry.table_groups()]
     group_rank = {g: i for i, g in enumerate(_gseq)}
-    # within a group keep the CSV's column order (it already carries the
-    # emitted key/column order; a column the registry no longer lists stays
-    # where it was so an interim table is not silently thinner)
-    ordered = sorted(labels_csv, key=lambda l: (group_rank.get(l.split('|')[0], 99), labels_csv.index(l)))
+    # within a group: the registry's own column order (table_columns), so
+    # the result is deterministic and a column the registry no longer
+    # promotes to the key table still lands in its natural place (an
+    # interim table is not silently thinner)
+    col_rank = {}
+    for g, _o, cols in _registry.table_groups():
+        for i, c in enumerate(cols):
+            col_rank['{}|{}'.format(g, c[0])] = i
+    ordered = sorted(labels_csv, key=lambda l: (group_rank.get(l.split('|')[0], 99),
+                                                col_rank.get(l, 99), labels_csv.index(l)))
     missing = [l for l in want if l not in labels_csv]
     if missing:
         print('[paper-table] NOTE: current key columns absent from the CSV (need a real '
