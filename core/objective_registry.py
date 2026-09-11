@@ -318,7 +318,7 @@ register(ObjectivePlugin(
 	),
 	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoP-fail',   # Tom 2026-09-10: latency under ingress failure replaces % cong
 				 'Flash-crowd resilience', 'Diurnal resilience'),
-	tex_group='Dynamic Traffic Failover (MPQUIC)',   # Tom 2026-09-10
+	tex_group='Dynamic Traffic Failover',   # Tom 2026-09-10
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
@@ -549,7 +549,7 @@ register(ObjectivePlugin(
 	# key table shows steady + failure latency only (Tom 2026-09-09); the
 	# congestion / no-route columns stay in the full table
 	key_columns=('Steady latency (ms)', 'Latency (ms)'),
-	tex_group='Static Traffic Failover (DNS)',   # Tom 2026-09-10
+	tex_group='Static Traffic Failover',   # Tom 2026-09-10
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
 	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)
