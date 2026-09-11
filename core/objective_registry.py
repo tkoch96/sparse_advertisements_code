@@ -93,6 +93,11 @@ class ObjectivePlugin:
 	key_columns: Tuple[str, ...] = ()   # sublabels promoted to the paper table
 	tex_group: str = ''
 	tex_subs: Dict[str, str] = field(default_factory=dict)
+	# tex-only paired cells (Tom 2026-09-10): (header, left sublabel, right
+	# sublabel[, left fallback sublabel]) -> ONE column showing 'left / right';
+	# the fallback stands in when the left column is absent from the data
+	# (a stat the stored run predates) and the header says 'subopt'.
+	tex_pairs: Tuple[Tuple, ...] = ()
 	paper_table_default: bool = False
 	default_order: int = 999      # cell run order in DEFAULT_OBJECTIVES
 	# --- provenance -------------------------------------------------------
@@ -310,14 +315,22 @@ register(ObjectivePlugin(
 		 'stats_popp_failures_latency_optimal_specific', 'frac_vol_congested', 100.0),
 		('Subopt PoP-fail (ms)', '<', 'stats',
 		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_difference', -1.0),
+		('Latency PoP-fail (ms)', '<', 'stats',
+		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_under_failure'),
 		('% cong PoP-fail', '<', 'stats',
 		 'stats_pop_failures_latency_optimal_specific', 'frac_vol_congested', 100.0),
 		('Flash-crowd resilience', '>', 'stats', 'stats_resilience_to_congestion'),
 		('Diurnal resilience', '>', 'stats', 'stats_diurnal'),
 		('Objective (lat+g*RB)', '<', 'lat_res_objective'),
 	),
-	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoP-fail',   # Tom 2026-09-10: latency under ingress failure replaces % cong
-				 'Flash-crowd resilience', 'Diurnal resilience'),
+	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoPP-fail',
+			 'Latency PoP-fail (ms)', '% cong PoP-fail',
+			 'Flash-crowd resilience', 'Diurnal resilience'),
+	# paired cells (Tom 2026-09-10): failure latency / % congested in ONE cell
+	# per failure type; the absolute failure latency is a stat the stored run
+	# may predate -> the suboptimality column stands in until regeneration
+	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Subopt PoPP-fail (ms)'),
+			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)')),
 	tex_group='Dynamic Traffic Failover',   # Tom 2026-09-10
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
@@ -548,7 +561,8 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	# key table shows steady + failure latency only (Tom 2026-09-09); the
 	# congestion / no-route columns stay in the full table
-	key_columns=('Steady latency (ms)', 'Latency (ms)'),
+	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail'),
+	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),),   # only ingress failures were evaluated for static failover
 	tex_group='Static Traffic Failover',   # Tom 2026-09-10
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
