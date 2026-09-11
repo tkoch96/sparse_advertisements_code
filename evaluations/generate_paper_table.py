@@ -958,7 +958,9 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                 # (Tom 2026-08-30: no +/- in the paper table)
                 name = TEX_METHOD_DISPLAY.get(disp, disp)
                 if disp in REFERENCE_METHODS:
-                    name += '$^{1}$'     # footnoted: unrealistic optimal
+                    # footnoted: unrealistic optimal; \small keeps the long
+                    # 'One-per-Peering' from widening the method column
+                    name = '{\\small ' + name + '$^{1}$}'
                 f.write(name + ' & '
                         + ' & '.join(_fmt_pair(c, p) for c, p in zip(trows[disp], tprecs))
                         + ' \\\\\n\\hline\n')
