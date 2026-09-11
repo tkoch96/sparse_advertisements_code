@@ -332,7 +332,7 @@ register(ObjectivePlugin(
 	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Subopt PoPP-fail (ms)'),
 			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)'),
 			   ('Flash Crowd/Diurnal Intensity (vs anycast)', 'Flash-crowd resilience', 'Diurnal resilience')),   # Tom 2026-09-11
-	tex_group='Dynamic Traffic Failover',   # Tom 2026-09-10
+	tex_group='\\dtf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
 	tex_subs={
 		'Subopt PoPP-fail (ms)': 'Subopt ingress-fail (ms)',
 		'% cong PoPP-fail': '% cong ingress-fail',
@@ -364,7 +364,7 @@ register(ObjectivePlugin(
 		('MLU', '<', 'mean', 'mlu_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('Latency (ms)', 'MLU'),
-	tex_group='Latency + Maximum Link Utilization',   # Tom 2026-09-09: no MLU abbreviation in the table
+	tex_group='\\latmlu',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-09: no MLU abbreviation in the table
 	tex_subs={'MLU': 'Maximum link utilization (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_OBJ_MAXUTIL_ALPHA': '',
@@ -398,7 +398,7 @@ register(ObjectivePlugin(
 		_OBJ_COL,
 	) + _LAT_SPLIT_COLS,
 	key_columns=('% within 10ms',),
-	tex_group='Latency Sensitive Services',
+	tex_group='\\lss',   # macro in the paper's macros.tex (Tom 2026-09-11)
 	tex_subs={'% within 10ms': '% beyond 10ms of optimal'},   # tex shows 100 - value (Tom 2026-09-10)
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_FRACB_SCALAR': '',
@@ -430,7 +430,7 @@ register(ObjectivePlugin(
 		('HPrio cong @SWAN', '<', 'mean', 'hprio_cong_swan_by_strategy'),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	key_columns=('HPrio latency (ms)', 'Crit bulk ratio'),
-	tex_group='Traffic Classes',
+	tex_group='\\prios',   # macro in the paper's macros.tex (Tom 2026-09-11)
 	tex_subs={'HPrio cong @SWAN': 'HPrio cong @SWAN'},
 	paper_table_default=True,
 	semantic_knobs={'SCULPTOR_BULK_SLACK_DOM': '1e3'},
@@ -458,7 +458,7 @@ register(ObjectivePlugin(
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	tex_subs={'Wgt avg site cost': 'Wgt avg site cost (vs anycast)'},   # ratio to anycast in the tex (Tom 2026-09-10)
 	key_columns=('Wgt avg site cost',),
-	tex_group='Traffic Cost Across Sites',
+	tex_group='\\sitecost',   # macro in the paper's macros.tex (Tom 2026-09-11)
 	paper_table_default=True,
 ))
 
@@ -564,7 +564,7 @@ register(ObjectivePlugin(
 	# congestion / no-route columns stay in the full table
 	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail'),
 	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),),   # only ingress failures were evaluated for static failover
-	tex_group='Static Traffic Failover',   # Tom 2026-09-10
+	tex_group='\\stf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
 	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)

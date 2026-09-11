@@ -807,6 +807,8 @@ def _wrap_tex_header(text, width=None):
     emitted as \\makecell (the paper loads makecell). Escapes % and &."""
     if width is None:
         width = int(_os.environ.get('SCULPTOR_TEX_HEADER_WIDTH', '12'))
+    if text.startswith('\\') and ' ' not in text:
+        return text   # a house macro (e.g. \\dtf): never wrapped, no makecell
     if '\n' in text:
         # explicit breaks: wrap each segment separately, keep the breaks
         parts = [_wrap_tex_header(seg, width=width) for seg in text.split('\n')]
