@@ -989,7 +989,7 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                 if disp in REFERENCE_METHODS:
                     # footnoted: unrealistic optimal; \small keeps the long
                     # 'One-per-Peering' from widening the method column
-                    name = '{\\small ' + name + '$^{1}$}'
+                    name = '{\\footnotesize ' + name + '$^{1}$}'   # a step smaller than \small (Tom 2026-09-11)
                 f.write(name + ' & '
                         + ' & '.join(_fmt_pair(c, p) for c, p in zip(trows[disp], tprecs))
                         + ' \\\\\n\\hline\n')
