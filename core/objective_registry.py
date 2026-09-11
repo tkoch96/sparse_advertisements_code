@@ -304,6 +304,8 @@ register(ObjectivePlugin(
 		('Subopt normal (ms)', '<', 'stats', 'stats_best_latencies', None, -1.0),
 		('Subopt PoPP-fail (ms)', '<', 'stats',
 		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_difference', -1.0),
+		('Latency PoPP-fail (ms)', '<', 'stats',
+		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_under_failure'),
 		('% cong PoPP-fail', '<', 'stats',
 		 'stats_popp_failures_latency_optimal_specific', 'frac_vol_congested', 100.0),
 		('Subopt PoP-fail (ms)', '<', 'stats',
@@ -314,7 +316,7 @@ register(ObjectivePlugin(
 		('Diurnal resilience', '>', 'stats', 'stats_diurnal'),
 		('Objective (lat+g*RB)', '<', 'lat_res_objective'),
 	),
-	key_columns=('Latency (ms)', '% cong PoPP-fail', '% cong PoP-fail',
+	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoP-fail',   # Tom 2026-09-10: latency under ingress failure replaces % cong
 				 'Flash-crowd resilience', 'Diurnal resilience'),
 	tex_group='Dynamic Traffic Failover (MPQUIC)',   # Tom 2026-09-10
 	tex_subs={
@@ -322,6 +324,8 @@ register(ObjectivePlugin(
 		'% cong PoPP-fail': '% cong ingress-fail',
 		'Subopt PoP-fail (ms)': 'Subopt site-fail (ms)',
 		'% cong PoP-fail': '% cong site-fail',
+		'Latency PoPP-fail (ms)': 'Latency ingress-fail (ms)',
+		'% cong PoPP-fail': '% cong ingress-fail',
 		'Flash-crowd resilience': 'Flash crowd intensity (%)',
 		'Diurnal resilience': 'Diurnal intensity (%)',
 	},
@@ -548,7 +552,7 @@ register(ObjectivePlugin(
 	tex_group='Static Traffic Failover (DNS)',   # Tom 2026-09-10
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency
 	# (ms)' label is shared by every group)
-	tex_subs={'Frozen failover|Latency (ms)': 'Failure latency (ms)',
+	tex_subs={'Frozen failover|Latency (ms)': 'Latency ingress-fail (ms)',   # same metric name as the dynamic group (Tom 2026-09-10)
 			  '% cong fail': '% cong ingress-fail',
 			  '% no-route fail': '% no-route ingress-fail'},
 	paper_table_default=True,

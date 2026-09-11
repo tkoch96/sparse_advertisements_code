@@ -866,7 +866,7 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
             # stub cell of the group row (Tom 2026-09-09): 'Objectives'
             f.write('Objectives & ' + ' & '.join(
                 '\\multicolumn{{{}}}{{c|}}{{{}}}'.format(
-                    n, _wrap_tex_header(TEX_GROUP_DISPLAY.get(g, g)))
+                    n, _wrap_tex_header(TEX_GROUP_DISPLAY.get(g, g), width=max(14, 12 * n)))   # wrap per spanned column (Tom 2026-09-10)
                 for g, n in groups) + ' \\\\\n\\hline\n')
             # LaTeX-escape header labels (a bare % in '% cong ...'
             # comments out the row terminator -- found compiling the
@@ -1048,7 +1048,25 @@ def reemit_from_csv(csv_path, out_dir, paper_dir):
         want = ['{}|{}'.format(g, sub) for g, sub in KEY_COLUMNS]
     else:
         want = ['{}|{}'.format(g, c[0]) for g, _o, cols in _registry.table_groups() for c in cols]
-    ordered = [l for l in want if l in labels_csv] + [l for l in labels_csv if l not in want]
+    # group-aware order: registry group order; within a group the current
+    # key/column order first, then any CSV column the registry no longer
+    # lists (kept in place so an interim table is not silently thinner)
+    if basename == 'paper_table':
+        _gseq = []
+        for g, _sub in KEY_COLUMNS:
+            if g not in _gseq:
+                _gseq.append(g)
+    else:
+        _gseq = [g for g, _o, _c in _registry.table_groups()]
+    group_rank = {g: i for i, g in enumerate(_gseq)}
+    # within a group keep the CSV's column order (it already carries the
+    # emitted key/column order; a column the registry no longer lists stays
+    # where it was so an interim table is not silently thinner)
+    ordered = sorted(labels_csv, key=lambda l: (group_rank.get(l.split('|')[0], 99), labels_csv.index(l)))
+    missing = [l for l in want if l not in labels_csv]
+    if missing:
+        print('[paper-table] NOTE: current key columns absent from the CSV (need a real '
+              'regeneration, not a re-emit): {}'.format(missing))
     idx = [labels_csv.index(l) for l in ordered]
     rows = {disp: [] for _k, disp in METHODS}
     for l, i in zip(ordered, idx):

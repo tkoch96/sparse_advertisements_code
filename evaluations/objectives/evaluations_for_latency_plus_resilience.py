@@ -577,6 +577,7 @@ def run(ctx):
 	def get_failure_metric_arr(k, solution, verb=False):
 		ret = []
 		avg_ret = []
+		abs_ret = []   # (absolute latency under failure, vol): same routed, non-high population as avg_ret
 		mind,maxd = np.inf,-1*np.inf
 		all_vol = 0
 		actually_all_vol = 0
@@ -626,6 +627,7 @@ def run(ctx):
 					_is_high = (perf2 >= _hi_cut)
 					if not _is_high:
 						avg_ret.append((perf1-perf2,vol))
+						abs_ret.append((perf2, vol))
 						this_diffs.append(perf1-perf2)
 						this_vols.append(vol)
 					else:
@@ -675,12 +677,20 @@ def run(ctx):
 				weights=[el[1] for el in avg_ret + with_high_extra])
 		except ZeroDivisionError:
 			avg_latency_difference_with_high = float('nan')
+		# Tom 2026-09-10: the paper's dynamic-failover column is the ABSOLUTE
+		# average latency under ingress failure (comparable to the static
+		# failover group's failure latency), not the difference to optimal.
+		try:
+		  avg_latency_under_failure = np.average([el[0] for el in abs_ret], weights=[el[1] for el in abs_ret])
+		except ZeroDivisionError:
+		  avg_latency_under_failure = float('nan')
 		print("Average latency difference {},{}: {}".format(solution, k, avg_latency_difference))
 		print("{} pct. volume congested".format(round(100 * vol_congested / (actually_all_vol + .00001), 2)))
 		print("{} pct. optimally congested, all volume: {}".format(round(100 * vol_best_case_congested / (actually_all_vol+.00001), 2), actually_all_vol))
 
 		return ret, x, {
-			'avg_latency_difference': avg_latency_difference, 
+			'avg_latency_difference': avg_latency_difference,
+			'avg_latency_under_failure': avg_latency_under_failure,
 			'avg_latency_difference_with_high': avg_latency_difference_with_high,
 			'frac_vol_congested': vol_congested / (all_vol+.0000001), 
 			'frac_vol_high_latency': vol_high_latency / (all_vol+.0000001),
