@@ -123,6 +123,9 @@ SEMANTIC_KNOBS = {
     'SCULPTOR_ROUTE_VIOLATION': '',
     'SCULPTOR_LP_BACKEND': 'gurobi',
     'SCULPTOR_OPP_FROZEN': '',
+    # frozen_prefix: share of sampled failures that fail a whole site
+    # (registry default 0.1 since 2026-09-11; 0 = the single-peering objective)
+    'SCULPTOR_FROZEN_PREFIX_SITE_FAIL_FRAC': '0.1',
     'SCULPTOR_PAINTER_MEASURE_CAP': '',
     'SCULPTOR_ABLATION_ALPHA': '',
     'SCULPTOR_ABLATION_ALPHA0': '',

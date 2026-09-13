@@ -48,6 +48,7 @@ HOURLY_USD = {
     'c8g.8xlarge': 1.28, 'c8g.4xlarge': 0.64,
     'c7g.16xlarge': 2.32, 'c7g.12xlarge': 1.74, 'c7g.8xlarge': 1.16,
     'c7g.4xlarge': 0.58,
+    'm8g.48xlarge': 8.44, 'm8g.24xlarge': 4.22, 'c8g.48xlarge': 7.66,
     'm8g.16xlarge': 2.81, 'm8g.8xlarge': 1.41,
     'm7g.16xlarge': 2.61, 'm7g.12xlarge': 1.96, 'm7g.8xlarge': 1.31,
     'm7g.4xlarge': 0.65, 'm7g.2xlarge': 0.33, 'm7g.large': 0.08,

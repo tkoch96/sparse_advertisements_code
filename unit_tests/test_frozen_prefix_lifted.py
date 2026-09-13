@@ -87,7 +87,7 @@ def test_lifted_equals_stacked_objective_and_diagnostics():
 		rti, _ = worker.calculate_ground_truth_ingress(adv, do_cache=False)
 		for kname, kill in kills.items():
 			a = _solve(worker, adv, rti, 'stacked', kill)
-			b = _solve(worker, adv, rti, 'lifted', kill)
+			b = _solve(worker, adv, rti, 'lifted', kill, frozen_persistent=0)   # the lifted BUILDER itself
 			assert a.get('solved') and b.get('solved')
 			assert math.isclose(a['objective'], b['objective'], rel_tol=1e-6, abs_tol=1e-6), \
 				'{}/{}: stacked {} != lifted {}'.format(name, kname, a['objective'], b['objective'])
@@ -123,7 +123,8 @@ def test_formulation_switch_and_default():
 	from core.frozen_prefix import solve_lp_frozen_prefix
 	worker, dep, adv, rti = _setup()
 	ret = solve_lp_frozen_prefix(worker, rti, 'frozen_prefix', adv=adv)
-	assert ret['frozen_prefix_formulation'] == 'lifted', 'default must be lifted'
+	# 'persistent' is the lifted model kept alive across probes (2026-09-11)
+	assert ret['frozen_prefix_formulation'] in ('lifted', 'persistent'), 'default must be lifted'
 	ret = solve_lp_frozen_prefix(worker, rti, 'frozen_prefix', adv=adv,
 								 frozen_formulation='stacked')
 	assert 'frozen_prefix_formulation' not in ret     # reference returns no tag
@@ -133,7 +134,7 @@ def test_formulation_switch_and_default():
 		assert 'frozen_prefix_formulation' not in ret
 		ret = solve_lp_frozen_prefix(worker, rti, 'frozen_prefix', adv=adv,
 									 frozen_formulation='lifted')
-		assert ret['frozen_prefix_formulation'] == 'lifted', 'kwarg beats env'
+		assert ret['frozen_prefix_formulation'] in ('lifted', 'persistent'), 'kwarg beats env'
 	finally:
 		del os.environ['SCULPTOR_FROZEN_PREFIX_FORMULATION']
 
@@ -156,11 +157,14 @@ def test_eval_pin_is_exhaustive_by_default():
 	fp.solve_lp_frozen_prefix = spy     # pin_pairs imports it at call time
 	try:
 		pin_pairs(worker, adv, rti)
-		assert seen['kill'] == list(range(worker.n_popps))
+		# every peering, plus every SITE now that frozen_site_fail_frac
+		# defaults to 0.1 (Tom 2026-09-11) -- the pin hedges what training hedges
+		from core.frozen_prefix import site_groups
+		assert seen['kill'] == list(range(worker.n_popps)) + site_groups(worker)
 		assert seen['tl'] and seen['tl'] > 30
 		os.environ['SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL'] = '7'
 		pin_pairs(worker, adv, rti)
-		assert len(seen['kill']) == 7
+		assert len(seen['kill']) == 7 + len(site_groups(worker))
 	finally:
 		fp.solve_lp_frozen_prefix = orig
 		os.environ.pop('SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL', None)

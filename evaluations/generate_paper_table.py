@@ -761,15 +761,21 @@ def _tex_pair_columns(labels, rows, precs):
     consumed, plan = set(), []
     for g, pairs in TEX_PAIRS.items():
         for pr in pairs:
+            # (header, left, right[, left-fallback-or-None[, more members...]])
+            # -- a declared column folds 2+ metrics into one 'a / b / c' cell
+            # (third member: % no-route, Tom 2026-09-11)
             header, left, right = pr[0], pr[1], pr[2]
             fb = pr[3] if len(pr) > 3 else None
+            more = list(pr[4:])
             lk, rk = '{}|{}'.format(g, left), '{}|{}'.format(g, right)
             if lk not in idx and fb and '{}|{}'.format(g, fb) in idx:
                 lk = '{}|{}'.format(g, fb)
                 header = header.replace('latency (ms)', 'latency subopt (ms)')
-            if lk in idx and rk in idx:
-                plan.append((min(idx[lk], idx[rk]), '{}|{}'.format(g, header), header, idx[lk], idx[rk]))
-                consumed.update([idx[lk], idx[rk]])
+            keys = [lk, rk] + ['{}|{}'.format(g, m) for m in more]
+            if all(k in idx for k in keys):
+                members = [idx[k] for k in keys]
+                plan.append((min(members), '{}|{}'.format(g, header), header, members))
+                consumed.update(members)
     if not plan:
         return labels, rows, precs, {}
     pos = {p_[0]: p_ for p_ in plan}
@@ -777,10 +783,10 @@ def _tex_pair_columns(labels, rows, precs):
     new_rows = {d: [] for d in rows}
     for i, l in enumerate(labels):
         if i in pos:
-            _p, nl, header, li, ri = pos[i]
-            new_labels.append(nl); new_precs.append((precs[li], precs[ri])); headers[nl] = header
+            _p, nl, header, members = pos[i]
+            new_labels.append(nl); new_precs.append(tuple(precs[m] for m in members)); headers[nl] = header
             for d in rows:
-                new_rows[d].append(('pair', rows[d][li], rows[d][ri]))
+                new_rows[d].append(('pair',) + tuple(rows[d][m] for m in members))
         elif i in consumed:
             continue
         else:
@@ -791,10 +797,10 @@ def _tex_pair_columns(labels, rows, precs):
 
 
 def _fmt_pair(cell, prec):
-    if isinstance(cell, tuple) and len(cell) == 3 and cell[0] == 'pair':
-        pl, pr_ = prec if isinstance(prec, tuple) else (prec, prec)
-        return '{} / {}'.format(_fmt(cell[1], latex=True, prec=pl, with_std=False),
-                                _fmt(cell[2], latex=True, prec=pr_, with_std=False))
+    if isinstance(cell, tuple) and len(cell) >= 3 and cell[0] == 'pair':
+        vals = cell[1:]
+        ps = prec if isinstance(prec, tuple) else (prec,) * len(vals)
+        return ' / '.join(_fmt(v, latex=True, prec=pp, with_std=False) for v, pp in zip(vals, ps))
     return _fmt(cell, latex=True, prec=prec, with_std=False)
 # house macros defined in the paper's macros.tex
 TEX_METHOD_DISPLAY = {
@@ -850,11 +856,13 @@ TEX_NORMALIZE = {}   # (0..100 band between two methods; superseded by TEX_RATIO
 #     utilization is 1/headroom and the surge it absorbs before congestion is
 #     (headroom - 1) x 100 percent (the diurnal profile peaks at exactly 1.0;
 #     a flash crowd multiplies one metro).
-#   * flash crowd is evaluated at headroom 1.3 (eval_all_solution_types
-#     Y_vals=[1.3]); diurnal and MLU use the deployment's capacities, built at
-#     get_link_capacities' default 1.1 (no SCULPTOR_SCALE_FACTOR in the paper
-#     intent). Keep these in step with those settings.
-FLASH_HEADROOM, DIURNAL_HEADROOM, MLU_HEADROOM = 1.3, 1.1, 1.1
+#   * flash crowd is evaluated at headroom 1.1 (eval_all_solution_types
+#     Y_vals=[1.1]; was 1.3 before 2026-09-11); diurnal and MLU use the
+#     deployment's capacities, built at get_link_capacities' default 1.1 (no
+#     SCULPTOR_SCALE_FACTOR in the paper intent). Keep these in step with
+#     those settings (informational: TEX_RATIO normalizes the intensities to
+#     anycast, so these constants are not used in the emitted numbers).
+FLASH_HEADROOM, DIURNAL_HEADROOM, MLU_HEADROOM = 1.1, 1.1, 1.1
 TEX_RATIO = {
     'MLU': 1.0 / MLU_HEADROOM,
     # intensities: plain ratio to measured anycast (Tom 2026-09-11: "just
@@ -1039,6 +1047,19 @@ def emit(labels, rows, fmt, out_dir, basename='paper_table'):
                     '' if c[0] is None else '{:.4f}'.format(c[0])
                     for c in rows[disp]) + '\n')
         print('  wrote {}'.format(pth))
+        # mean|std|n per cell (Tom 2026-09-12): the paper's named numbers
+        # (evaluations/paper_numbers.py) read std / n from here; the means
+        # CSV above stays the paper-of-record format for --reemit-from-csv
+        pth = os.path.join(out_dir, basename + '_stats.csv')
+        with open(pth, 'w') as f:
+            f.write('method,' + ','.join(disp_labels) + '\n')
+            for _key, disp in METHODS:
+                f.write(disp + ',' + ','.join(
+                    '' if c[0] is None else '{:.6f}|{}|{}'.format(
+                        c[0], '' if c[1] is None else '{:.6f}'.format(c[1]),
+                        '' if c[2] is None else c[2])
+                    for c in rows[disp]) + '\n')
+        print('  wrote {}'.format(pth))
 
 
 
@@ -1146,15 +1167,21 @@ def reemit_from_csv(csv_path, out_dir, paper_dir):
     if 'full' not in os.path.basename(csv_path):
         full = os.path.join(os.path.dirname(csv_path), 'paper_table_full.csv')
         if os.path.exists(full):
-            basename_hint, csv_path = 'paper_table', full
-        else:
-            basename_hint = 'paper_table'
-    else:
-        basename_hint = 'paper_table_full'
+            csv_path = full
     with open(csv_path) as f:
         rd = list(_csv.reader(f))
     hdr, dirrow = rd[0], rd[1]
     assert hdr[0] == 'method' and dirrow[0] == 'DIRECTION', 'not an emitted paper table CSV'
+    # BOTH tables every time (2026-09-11: re-emitting the full CSV wrote only
+    # paper_table_full.tex, and copy_tables_to_paper then shipped a stale
+    # local paper_table.tex to the paper dir as paper_table_key.tex)
+    for basename_hint in ('paper_table_full', 'paper_table'):
+        _reemit_one(hdr, dirrow, rd, csv_path, basename_hint, out_dir)
+    copy_tables_to_paper(out_dir, paper_dir)
+    return 0
+
+
+def _reemit_one(hdr, dirrow, rd, csv_path, basename_hint, out_dir):
     labels_csv = hdr[1:]
     all_labels = list(labels_csv)   # CSV column positions (rows are indexed by these)
     dirs = dict(zip(labels_csv, dirrow[1:]))
@@ -1168,10 +1195,13 @@ def reemit_from_csv(csv_path, out_dir, paper_dir):
     basename = basename_hint
     if basename == 'paper_table':
         want = ['{}|{}'.format(g, sub) for g, sub in KEY_COLUMNS]
-        # fallback members of declared pairs are part of the selection too
+        # a declared pair's fallback member stands in ONLY while its primary
+        # column is absent from the CSV (2026-09-11: once the all-users
+        # failure latency existed, the Subopt fallback was emitted as an
+        # extra key column next to it)
         for g, pairs in TEX_PAIRS.items():
             for pr in pairs:
-                if len(pr) > 3:
+                if len(pr) > 3 and pr[3] and '{}|{}'.format(g, pr[1]) not in labels_csv:
                     want.append('{}|{}'.format(g, pr[3]))
         labels_csv = [l for l in labels_csv if l in want]
     else:
@@ -1215,12 +1245,6 @@ def reemit_from_csv(csv_path, out_dir, paper_dir):
             rows[disp].append((col[disp], None, 1, disp == best and len(finite) > 1))
     print('[paper-table] re-emitting {} columns from {} as {}'.format(len(ordered), csv_path, basename))
     emit(ordered, rows, 'latex', out_dir, basename=basename)   # tex only: the CSVs are the record
-    if basename == 'paper_table':
-        # keep the second filename the doc uses
-        copy_tables_to_paper(out_dir, paper_dir)
-    else:
-        copy_tables_to_paper(out_dir, paper_dir)
-    return 0
 
 
 def main():

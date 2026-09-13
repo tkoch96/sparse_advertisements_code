@@ -36,6 +36,8 @@ there. Direct callers may still pass kwargs (kwargs > env > default):
   frozen_kill_popps / (deterministic stride)  popp indices to fail
   frozen_gamma  / SCULPTOR_FROZEN_PREFIX_GAMMA               (1.0)
   frozen_n_fail / SCULPTOR_FROZEN_PREFIX_N_FAIL              (20)
+  frozen_site_fail_frac / SCULPTOR_FROZEN_PREFIX_SITE_FAIL_FRAC (0.0)  share of the
+        n_fail slots that fail a WHOLE SITE (all its peerings at once)
   frozen_no_route_penalty / SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY  (50.0)
   frozen_congestion_penalty / SCULPTOR_FROZEN_PREFIX_CONGESTION_PENALTY (25.0)
 
@@ -53,6 +55,11 @@ from scipy.sparse import csr_matrix
 from helpers.constants import NO_ROUTE_LATENCY
 from helpers.helpers import threshold_a
 import core.gpshim as gp
+
+
+# per-process column-generation warm start: n_popps -> (ug, prefix) keys of
+# the last converged solve's support (see _solve_lp_frozen_prefix_lifted)
+_COLGEN_WARM = {}
 
 
 def _clear_highs_model(model):
@@ -108,6 +115,65 @@ def default_kill_popps(n_popps, n_fail):
 	return list(range(n_popps))[::step][:n_fail]
 
 
+def site_groups(sas):
+	"""[(popp indices of one site), ...] in order of first appearance."""
+	groups = {}
+	for i, popp in enumerate(sas.popps):
+		groups.setdefault(popp[0], []).append(i)
+	return [tuple(v) for v in groups.values()]
+
+
+def normalize_kill_scenarios(kill):
+	"""frozen_kill_popps entries -> list of sorted popp-index tuples. An int
+	is a single-peering failure, an iterable a GROUP failing together (a
+	site: every peering at that site, Tom 2026-09-11). Order kept, exact
+	duplicates dropped, empty groups dropped."""
+	out, seen = [], set()
+	for k in kill:
+		if isinstance(k, (int, np.integer)):
+			t = (int(k),)
+		else:
+			t = tuple(sorted(set(int(x) for x in k)))
+		if t and t not in seen:
+			seen.add(t)
+			out.append(t)
+	return out
+
+
+def default_kill_scenarios(sas, n_fail, site_frac=0.0):
+	"""Deterministic default kill set: default_kill_popps' stride sample of
+	single peerings, with round(site_frac * n_fail) of the n_fail slots spent
+	on whole-site failures (a stride over the sites). site_frac == 0 is
+	exactly the pre-2026-09-11 default."""
+	n_popps = sas.n_popps
+	n_site = int(round(float(site_frac) * n_fail)) if site_frac and site_frac > 0 else 0
+	sites = []
+	if n_site > 0:
+		groups = site_groups(sas)
+		n_site = min(n_site, len(groups))
+		step = max(1, len(groups) // n_site)
+		sites = groups[::step][:n_site]
+	singles = default_kill_popps(n_popps, max(int(n_fail) - len(sites), 0))
+	return [int(k) for k in singles] + [tuple(g) for g in sites]
+
+
+def kill_scenarios_from_kwargs(sas, kwargs, n_fail):
+	"""The scenario list an LP call prices: frozen_kill_popps if given (ints
+	and/or groups), else the deterministic default with the objective's
+	site share (frozen_site_fail_frac / SCULPTOR_FROZEN_PREFIX_SITE_FAIL_FRAC)."""
+	kill = kwargs.get('frozen_kill_popps')
+	if kill is None:
+		site_frac = _knob(kwargs, 'frozen_site_fail_frac',
+						  'SCULPTOR_FROZEN_PREFIX_SITE_FAIL_FRAC', 0.0)
+		kill = default_kill_scenarios(sas, n_fail, site_frac)
+	return normalize_kill_scenarios(kill)
+
+
+def kill_scenarios_as_list(scenarios):
+	"""Result-dict form: an int per single failure, a list per group."""
+	return [s[0] if len(s) == 1 else list(s) for s in scenarios]
+
+
 def solve_lp_frozen_prefix(sas, routed_through_ingress, obj, **kwargs):
 	# The generic-LP dispatcher wraps the registered-function call in
 	# `except KeyError: pass` (solve_lp_assignment.py) -- so a KeyError
@@ -129,6 +195,14 @@ def _solve_lp_frozen_prefix_impl(sas, routed_through_ingress, obj, **kwargs):
 		'SCULPTOR_FROZEN_PREFIX_FORMULATION', 'lifted')
 	if form == 'stacked':
 		return _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs)
+	if form == 'lifted':
+		# persistent per-process model with a basis warm start across probes
+		# (core/frozen_prefix_persistent.py, Tom 2026-09-11); the exhaustive
+		# eval pin (K ~ n_popps) and K=0 calls stay on the lifted builder
+		from core.frozen_prefix_persistent import persistent_enabled, solve_persistent
+		n_fail = _knob(kwargs, 'frozen_n_fail', 'SCULPTOR_FROZEN_PREFIX_N_FAIL', 20, int)
+		if kwargs.get('adv') is not None and persistent_enabled(kwargs, len(kill_scenarios_from_kwargs(sas, kwargs, n_fail))):
+			return solve_persistent(sas, routed_through_ingress, obj, **kwargs)
 	return _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs)
 
 
@@ -208,6 +282,55 @@ def _frozen_fallbacks_via_gti(sas, a, pair_prefix, pair_ugi, base_winner):
 	return fb
 
 
+def frozen_fallbacks_killed(sas, adv, pair_prefix, pair_ugi, base_winner, killed):
+	"""Fallbacks for a GROUP failure (several popps -- a site -- die
+	together): for every pair whose normal winner is in `killed`, the best
+	remaining BGP ingress among the prefix's advertised popps OUTSIDE
+	`killed` (frozen_fallbacks' rule with the whole group removed; -1 if
+	none). Returns (moved_idx, fb) with fb aligned to moved_idx. For a
+	singleton group this equals frozen_fallbacks on those pairs."""
+	killed = np.asarray(sorted(set(int(k) for k in killed)), dtype=int)
+	base_winner = np.asarray(base_winner, dtype=int)
+	moved_idx = np.where(np.isin(base_winner, killed))[0]
+	fb = np.full(len(moved_idx), -1, dtype=int)
+	if len(moved_idx) == 0 or adv is None:
+		return moved_idx, fb
+	a = threshold_a(np.asarray(adv, dtype=float))
+	ind = getattr(sas, 'popp_by_ug_indicator', None)
+	pp = np.asarray(pair_prefix, dtype=int)[moved_idx]
+	pu = np.asarray(pair_ugi, dtype=int)[moved_idx]
+	if ind is None:
+		a_fail = a.copy()
+		a_fail[killed, :] = 0
+		fail_rti, _ = sas.calculate_ground_truth_ingress(a_fail)
+		ugs = sas.whole_deployment_ugs
+		popp_to_ind = sas.popp_to_ind
+		kset = set(int(k) for k in killed)
+		for j in range(len(moved_idx)):
+			popp_tuple = fail_rti.get(int(pp[j]), {}).get(ugs[pu[j]])
+			poppi = popp_to_ind.get(popp_tuple) if popp_tuple is not None else None
+			if poppi is not None and poppi not in kset:
+				fb[j] = poppi
+		return moved_idx, fb
+	kill_mask = np.zeros(a.shape[0], dtype=bool)
+	kill_mask[killed] = True
+	order = np.argsort(pp, kind='stable')
+	bounds = np.searchsorted(pp[order], np.arange(a.shape[1] + 1))
+	for prefix_i in range(a.shape[1]):
+		lo, hi = bounds[prefix_i], bounds[prefix_i + 1]
+		if hi <= lo:
+			continue
+		active = np.where((a[:, prefix_i] > 0) & ~kill_mask)[0]
+		if len(active) == 0:
+			continue
+		idx = order[lo:hi]
+		D = ind[active][:, pu[idx]].toarray()
+		top1 = np.argmax(D, axis=0)
+		ok = D[top1, np.arange(D.shape[1])] > 0
+		fb[idx] = np.where(ok, active[top1], -1)
+	return moved_idx, fb
+
+
 def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	"""LIFTED formulation (2026-09-07). Same optimum as the stacked
 	reference, but the LP size no longer scales with the number of failure
@@ -265,18 +388,23 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	caps = np.asarray(sas.link_capacities_arr, dtype=float).flatten()
 	total_vol = float(sum(ug_to_vol.values())) or 1.0
 
-	kill_popps = kwargs.get('frozen_kill_popps')
-	if kill_popps is None:
-		kill_popps = default_kill_popps(n_popps, n_fail)
-	kill_popps = sorted(set(int(k) for k in kill_popps))
-	K = len(kill_popps)
+	# scenarios: single peerings and/or GROUPS (sites) failing together
+	# (Tom 2026-09-11); a group scenario is priced exactly like a single one
+	# (latency of the displaced pairs at their fallback, P_nr for the
+	# stranded ones, P_c on the overflow its fallback volume causes).
+	scenarios = kill_scenarios_from_kwargs(sas, kwargs, n_fail)
+	K = len(scenarios)
 	w_k = gamma / K if K else 0.0                 # latency weight per failure scenario
 	w_nr = (gamma if penalty_sum in ('no_route', 'both') else w_k) if K else 0.0
 	w_c = (gamma if penalty_sum == 'both' else w_k) if K else 0.0
-	in_kill = np.zeros(n_popps, dtype=bool)
-	in_kill[kill_popps] = True
-	kpos = np.full(n_popps, -1, dtype=int)
-	kpos[kill_popps] = np.arange(K)
+	kill_count = np.zeros(n_popps, dtype=int)     # scenarios in which popp j is dead
+	for sc in scenarios:
+		kill_count[list(sc)] += 1
+	kpos1 = np.full(n_popps, -1, dtype=int)       # popp -> its SINGLE-failure scenario
+	for si, sc in enumerate(scenarios):
+		if len(sc) == 1:
+			kpos1[sc[0]] = si
+	group_scen = [(si, sc) for si, sc in enumerate(scenarios) if len(sc) > 1]
 
 	# ---- pairs: every (ug, prefix) routable in the NORMAL scenario
 	pair_ug, pair_ugi, pair_prefix, base_winner, base_lat = [], [], [], [], []
@@ -325,35 +453,55 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	base_winner = np.asarray(base_winner, dtype=int)
 	base_lat = np.asarray(base_lat, dtype=float)
 
-	# ---- fallbacks: where each pair lands when its winner fails
-	fb = frozen_fallbacks(sas, adv, pair_prefix, pair_ugi, base_winner)
-	fb_lat = np.zeros(n_pairs)
-	for i in np.where(fb >= 0)[0]:
-		lat = ug_perfs[pair_ug[i]].get(popps[fb[i]], NO_ROUTE_LATENCY)
+	# ---- moved entries: one per (pair, scenario) in which the pair's winner
+	# dies, with where it lands. Single-popp scenarios: the vectorized
+	# top-2 fallback (every pair has one). Group scenarios: the best
+	# remaining ingress outside the whole group.
+	fb1 = frozen_fallbacks(sas, adv, pair_prefix, pair_ugi, base_winner)
+	mv_pair, mv_scen, mv_fb = [], [], []
+	m1 = np.where(kpos1[base_winner] >= 0)[0]
+	if len(m1):
+		mv_pair.append(m1); mv_scen.append(kpos1[base_winner[m1]]); mv_fb.append(fb1[m1])
+	for si, sc in group_scen:
+		idx, fbs = frozen_fallbacks_killed(sas, adv, pair_prefix, pair_ugi, base_winner, sc)
+		if len(idx):
+			mv_pair.append(idx); mv_scen.append(np.full(len(idx), si, dtype=int)); mv_fb.append(fbs)
+	if mv_pair:
+		mv_pair = np.concatenate(mv_pair).astype(int)
+		mv_scen = np.concatenate(mv_scen).astype(int)
+		mv_fb = np.concatenate(mv_fb).astype(int)
+	else:
+		mv_pair = np.zeros(0, dtype=int); mv_scen = np.zeros(0, dtype=int); mv_fb = np.zeros(0, dtype=int)
+	mv_fb_lat = np.zeros(len(mv_pair))
+	for j in np.where(mv_fb >= 0)[0]:
+		lat = ug_perfs[pair_ug[mv_pair[j]]].get(popps[mv_fb[j]], NO_ROUTE_LATENCY)
 		if lat >= NO_ROUTE_LATENCY:
-			fb[i] = -1
+			mv_fb[j] = -1
 		else:
-			fb_lat[i] = float(lat)
-	moved = in_kill[base_winner]            # pairs displaced in SOME sampled scenario
-	moved_live = moved & (fb >= 0)
-	moved_dead = moved & (fb < 0)
-	pair_scen = np.where(moved, kpos[base_winner], -1)   # scenario index per pair
+			mv_fb_lat[j] = float(lat)
+	mv_live = mv_fb >= 0
+	mv_dead = ~mv_live
+	n_moved = np.bincount(mv_pair, minlength=n_pairs)   # scenarios displacing each pair
 
 	# ---- objective on x: normal weight 1 + gamma/K per scenario where the
-	# pair keeps its winner; its own failure scenario prices the fallback
-	n_keep = K - moved.astype(int)
+	# pair keeps its winner; each scenario displacing it prices the fallback
+	n_keep = K - n_moved
 	c_x = (1.0 + w_k * n_keep) * base_lat * lat_scale / total_vol
-	c_x = c_x + (w_k * np.where(moved_live, fb_lat * lat_scale, 0.0)
-				 + w_nr * np.where(moved_dead, p_nr, 0.0)) / total_vol
+	if mv_live.any():
+		c_x = c_x + np.bincount(mv_pair[mv_live], weights=w_k * mv_fb_lat[mv_live] * lat_scale,
+								minlength=n_pairs) / total_vol
+	if mv_dead.any():
+		c_x = c_x + np.bincount(mv_pair[mv_dead], weights=np.full(int(mv_dead.sum()), w_nr * p_nr),
+								minlength=n_pairs) / total_vol
 
-	# ---- rows
+	# ---- rows (row layout of the model: cons | loaddef | normcap | aff)
 	keep = np.asarray(sorted(routable_ugis), dtype=int)
-	cons_A = csr_matrix((np.ones(n_pairs), (pair_ugi, np.arange(n_pairs))),
-						shape=(n_ug, n_pairs))[keep, :]
+	ug_row = np.searchsorted(keep, pair_ugi)            # pair -> its conservation row
 	cons_b = np.asarray([ug_to_vol[sas.whole_deployment_ugs[u]] for u in keep], dtype=float)
-	if moved_live.any():
-		ml = np.where(moved_live)[0]
-		key = pair_scen[ml] * n_popps + fb[ml]
+	if mv_live.any():
+		ml_e = np.where(mv_live)[0]              # moved-entry indices
+		ml = mv_pair[ml_e]                        # their pair (LP column)
+		key = mv_scen[ml_e] * n_popps + mv_fb[ml_e]
 		uniq, row_of = np.unique(key, return_inverse=True)
 		n_aff = len(uniq)
 		aff_scen = uniq // n_popps
@@ -363,65 +511,178 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 		n_aff = 0
 		aff_scen = np.zeros(0, dtype=int); aff_popp = np.zeros(0, dtype=int)
 
-	# variable layout: z = [x | L | o0 | o_aff]
-	iL = n_pairs
-	iO0 = iL + n_popps
-	iOA = iO0 + n_popps
-	n_z = iOA + n_aff
-
-	def _sp(rows, cols, vals, nrows):
-		return csr_matrix((np.asarray(vals, dtype=float), (rows, cols)), shape=(nrows, n_z))
-
-	# L_j - sum_{i: winner j} x_i = 0
-	loaddef_A = _sp(np.concatenate([base_winner, np.arange(n_popps)]),
-					np.concatenate([np.arange(n_pairs), iL + np.arange(n_popps)]),
-					np.concatenate([-np.ones(n_pairs), np.ones(n_popps)]), n_popps)
-	# L_j - o0_j <= cap_j
-	normcap_A = _sp(np.concatenate([np.arange(n_popps), np.arange(n_popps)]),
-					np.concatenate([iL + np.arange(n_popps), iO0 + np.arange(n_popps)]),
-					np.concatenate([np.ones(n_popps), -np.ones(n_popps)]), n_popps)
-	cons_A_z = sp_hstack([cons_A, csr_matrix((cons_A.shape[0], n_z - n_pairs))], format='csr')
-	eq_A = sp_vstack([cons_A_z, loaddef_A], format='csr')
-	eq_b = np.concatenate([cons_b, np.zeros(n_popps)])
-	if n_aff:
-		# L_j + sum_{i falls onto j in scenario k} x_i - o_kj <= cap_j
-		r = np.arange(n_aff)
-		aff_A = _sp(np.concatenate([row_of, r, r]),
-					np.concatenate([ml, iL + aff_popp, iOA + r]),
-					np.concatenate([np.ones(len(ml)), np.ones(n_aff), -np.ones(n_aff)]), n_aff)
-		le_A = sp_vstack([normcap_A, aff_A], format='csr')
-		le_b = np.concatenate([caps * cap_headroom, caps[aff_popp] * cap_headroom])
-	else:
-		le_A = normcap_A
-		le_b = caps * cap_headroom
-
 	# ---- overflow costs. o0_j stands in for every scenario in which popp j
-	# is untouched: all K sampled scenarios minus its own failure (if
-	# sampled) minus the m_j scenarios in which it receives fallback volume.
+	# is untouched: all K sampled scenarios minus its own failures minus the
+	# m_j scenarios in which it receives fallback volume.
 	m_j = np.bincount(aff_popp, minlength=n_popps) if n_aff else np.zeros(n_popps, dtype=int)
-	c_o0 = (1.0 + w_c * (K - in_kill.astype(int) - m_j)) * p_c / total_vol
+	c_o0 = (1.0 + w_c * (K - kill_count - m_j)) * p_c / total_vol
 	c_oa = np.full(n_aff, w_c * p_c / total_vol)
-	c_z = np.concatenate([c_x, np.zeros(n_popps), c_o0, c_oa])
+	n_cons = len(keep)
 
-	ts = time.time()
-	model = gp.Model()
-	model.Params.LogToConsole = 0
-	model.Params.TimeLimit = time_limit
-	model.Params.Threads = 1     # see the stacked reference: shared-scheduler hazard
-	z = model.addMVar(n_z, name='vol_ug_prefix_load_overflow', lb=0)
-	model.addConstr(eq_A @ z == eq_b)
-	model.addConstr(le_A @ z <= le_b)
-	model.setObjective(c_z @ z)
-	model.optimize()
+	def _solve_cols(active, limit=None):
+		"""Solve the lifted LP over the x columns `active` (sorted pair
+		indices; every other pair fixed at 0). All rows are kept (the aff rows
+		belong to (scenario, popp) keys, not to pairs), so the row duals price
+		any excluded pair exactly. Returns (status, z, objval, row_duals)."""
+		from scipy.sparse import hstack as sp_hstack, vstack as sp_vstack
+		n_a = len(active)
+		pos = np.full(n_pairs, -1, dtype=int)
+		pos[active] = np.arange(n_a)
+		iL = n_a
+		iO0 = iL + n_popps
+		iOA = iO0 + n_popps
+		n_z = iOA + n_aff
 
-	if model.status != 2:
+		def _sp(rows, cols, vals, nrows):
+			return csr_matrix((np.asarray(vals, dtype=float), (rows, cols)), shape=(nrows, n_z))
+		# conservation: sum_{i in ug} x_i = vol_ug
+		cons_A = _sp(ug_row[active], np.arange(n_a), np.ones(n_a), n_cons)
+		# L_j - sum_{i: winner j} x_i = 0
+		loaddef_A = _sp(np.concatenate([base_winner[active], np.arange(n_popps)]),
+						np.concatenate([np.arange(n_a), iL + np.arange(n_popps)]),
+						np.concatenate([-np.ones(n_a), np.ones(n_popps)]), n_popps)
+		# L_j - o0_j <= cap_j
+		normcap_A = _sp(np.concatenate([np.arange(n_popps), np.arange(n_popps)]),
+						np.concatenate([iL + np.arange(n_popps), iO0 + np.arange(n_popps)]),
+						np.concatenate([np.ones(n_popps), -np.ones(n_popps)]), n_popps)
+		eq_A = sp_vstack([cons_A, loaddef_A], format='csr')
+		eq_b = np.concatenate([cons_b, np.zeros(n_popps)])
+		if n_aff:
+			# L_j + sum_{i falls onto j in scenario k} x_i - o_kj <= cap_j
+			r = np.arange(n_aff)
+			sel = pos[ml] >= 0
+			aff_A = _sp(np.concatenate([row_of[sel], r, r]),
+						np.concatenate([pos[ml[sel]], iL + aff_popp, iOA + r]),
+						np.concatenate([np.ones(int(sel.sum())), np.ones(n_aff), -np.ones(n_aff)]), n_aff)
+			le_A = sp_vstack([normcap_A, aff_A], format='csr')
+			le_b = np.concatenate([caps * cap_headroom, caps[aff_popp] * cap_headroom])
+		else:
+			le_A = normcap_A
+			le_b = caps * cap_headroom
+		c_z = np.concatenate([c_x[active], np.zeros(n_popps), c_o0, c_oa])
+		model = gp.Model()
+		model.Params.LogToConsole = 0
+		model.Params.TimeLimit = time_limit if limit is None else float(limit)
+		model.Params.Threads = 1     # see the stacked reference: shared-scheduler hazard
+		z = model.addMVar(n_z, name='vol_ug_prefix_load_overflow', lb=0)
+		model.addConstr(eq_A @ z == eq_b)
+		model.addConstr(le_A @ z <= le_b)
+		model.setObjective(c_z @ z)
+		model.optimize()
+		if model.status != 2:
+			_clear_highs_model(model)
+			return model.status, None, None, None, (int(eq_A.shape[0] + le_A.shape[0]), int(n_z), int(eq_A.nnz + le_A.nnz))
+		zv = np.asarray(z.X).flatten()
+		objval = float(model.objVal)
+		try:
+			y = np.asarray(model.getRowDuals(), dtype=float)
+		except Exception:
+			y = None
 		_clear_highs_model(model)
-		return {'solved': False}
+		return 2, zv, objval, y, (int(eq_A.shape[0] + le_A.shape[0]), int(n_z), int(eq_A.nnz + le_A.nnz))
 
-	zv = np.asarray(z.X).flatten()
-	raw_objval = float(model.objVal)
-	_clear_highs_model(model)
-	xv = zv[:n_pairs]
+	def _reduced_costs(y):
+		"""c_i - A_i^T y for EVERY pair (rows: cons | loaddef | normcap | aff)."""
+		y_cons = y[:n_cons]
+		y_load = y[n_cons:n_cons + n_popps]
+		y_aff = y[n_cons + 2 * n_popps:]
+		rc = c_x - y_cons[ug_row] + y_load[base_winner]
+		if n_aff:
+			rc = rc - np.bincount(ml, weights=y_aff[row_of], minlength=n_pairs)
+		return rc
+
+	# ---- column generation (Tom 2026-09-11: "prune the LP"). The optimum
+	# uses ~1.1 pairs per user out of ~40 routable ones (size 32: 5.7k of
+	# 217k), but a static latency-based prune is badly wrong (capacity relief
+	# needs far-away prefixes). So: solve on a small candidate set, price
+	# every excluded pair with the row duals, add the violators, repeat --
+	# exact at convergence (all reduced costs >= 0), and 5-10x fewer columns
+	# per solve. Off: SCULPTOR_FROZEN_PREFIX_COLGEN=0 / frozen_colgen=0.
+	colgen = _knob(kwargs, 'frozen_colgen', 'SCULPTOR_FROZEN_PREFIX_COLGEN', 1, int)
+	colgen_k = _knob(kwargs, 'frozen_colgen_k', 'SCULPTOR_FROZEN_PREFIX_COLGEN_K', 6, int)
+	colgen_min_pairs = _knob(kwargs, 'frozen_colgen_min_pairs', 'SCULPTOR_FROZEN_PREFIX_COLGEN_MIN_PAIRS', 5000, int)
+	ts = time.time()
+	colgen_rounds = 0
+	if colgen and n_pairs > colgen_min_pairs:
+		# initial set: per user, the colgen_k cheapest pairs by objective cost
+		order = np.lexsort((c_x, pair_ugi))
+		rank = np.empty(n_pairs, dtype=int)
+		first = np.r_[0, np.flatnonzero(np.diff(pair_ugi[order])) + 1]
+		rank[order] = np.arange(n_pairs) - np.repeat(first, np.diff(np.r_[first, n_pairs]))
+		active_mask = rank < colgen_k
+		# warm start: the pairs the PREVIOUS solve in this process ended with
+		# (a worker prices many probes around one advertisement; the optimal
+		# support barely moves between them) -- keyed by (ug, prefix), so it
+		# survives the pair set changing with the adv
+		pair_key = pair_ugi.astype(np.int64) * int(adv.shape[1] if adv is not None else 1 << 20) + pair_prefix.astype(np.int64)
+		_warm = _COLGEN_WARM.get(n_popps)
+		if _warm is not None:
+			active_mask |= np.isin(pair_key, _warm)
+		warm = kwargs.get('frozen_colgen_warm_pairs')
+		if warm is not None and len(warm):
+			active_mask[np.asarray(warm, dtype=int)] = True
+		status, converged = None, False
+		# A pair only counts as improving when its reduced cost is negative
+		# beyond the solver's own dual tolerance in the COST's scale (costs
+		# here are ~1e-6..1e-5 per unit volume: an absolute 1e-9 test, the
+		# first version, treated dual noise as violators and cycled to the
+		# round cap, then fell back to a full solve -- 100 s probes at
+		# iteration 90 of deployment 2, 2026-09-12).
+		c_scale = float(np.abs(c_x).max()) if n_pairs else 1.0
+		rc_tol = 1e-6 * max(c_scale, 1e-12)
+		max_rounds = _knob(kwargs, 'frozen_colgen_max_rounds', 'SCULPTOR_FROZEN_PREFIX_COLGEN_MAX_ROUNDS', 12, int)
+		# per-round solver cap: a hard restricted LP must not turn one probe into
+		# max_rounds x time_limit (12 x 120 s straggler probes stretched
+		# iterations 90/110 of the 2026-09-12 size-32 run to 12-30 min while
+		# 158 workers sat idle); a capped round falls back to the last optimal
+		# round's solution, which is feasible and near-optimal
+		round_limit = min(time_limit, _knob(kwargs, 'frozen_colgen_round_limit',
+											 'SCULPTOR_FROZEN_PREFIX_COLGEN_ROUND_LIMIT', 60.0))
+		last_good = None
+		for colgen_rounds in range(1, max_rounds + 1):
+			active = np.flatnonzero(active_mask)
+			status, zv, raw_objval, y, dims = _solve_cols(active, round_limit)
+			if status != 2 or y is None:
+				break
+			last_good = (active, zv, raw_objval, y, dims)
+			rc = _reduced_costs(y)
+			rc[active_mask] = 0.0
+			viol = np.flatnonzero(rc < -rc_tol)
+			if len(viol) == 0:
+				converged = True
+				break
+			if len(viol) > 20000:
+				viol = viol[np.argsort(rc[viol])[:20000]]
+			active_mask[viol] = True
+		if status != 2 or y is None:
+			if last_good is not None:
+				active, zv, raw_objval, y, dims = last_good
+			else:
+				# the very first restricted solve failed (time limit / no duals):
+				# the exact full solve is the last resort
+				active = np.arange(n_pairs)
+				status, zv, raw_objval, y, dims = _solve_cols(active)
+				if status != 2:
+					return {'solved': False}
+				converged = True
+		# not converged within max_rounds: the restricted solution is feasible
+		# and within sum(|rc| * vol) of optimal -- accept it (a near-exact
+		# probe beats a 100 s full solve or an unsolved fallback price)
+		# remember the support (pairs carrying volume) for the next probe
+		n_a0 = len(active)
+		_COLGEN_WARM[n_popps] = pair_key[active[zv[:n_a0] > 1e-12]]
+		colgen_converged = converged
+	else:
+		active = np.arange(n_pairs)
+		status, zv, raw_objval, y, dims = _solve_cols(active)
+		if status != 2:
+			return {'solved': False}
+		colgen_converged = True
+	n_a = len(active)
+	iO0 = n_a + n_popps
+	iOA = iO0 + n_popps
+	xv = np.zeros(n_pairs)
+	xv[active] = zv[:n_a]
 	o0 = zv[iO0:iOA]
 	oa = zv[iOA:]
 
@@ -450,16 +711,17 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 	if K:
 		tot_lat_mass = float(np.sum(xv * base_lat))
 		tot_x = float(np.sum(xv))
-		lost_lat = np.bincount(pair_scen[moved], weights=(xv * base_lat)[moved], minlength=K)
-		gain_lat = np.bincount(pair_scen[moved_live], weights=(xv * fb_lat)[moved_live], minlength=K)
-		dead_vol = np.bincount(pair_scen[moved_dead], weights=xv[moved_dead], minlength=K)
+		lost_lat = np.bincount(mv_scen, weights=(xv * base_lat)[mv_pair], minlength=K)
+		gain_lat = np.bincount(mv_scen[mv_live], weights=xv[mv_pair[mv_live]] * mv_fb_lat[mv_live], minlength=K)
+		dead_vol = np.bincount(mv_scen[mv_dead], weights=xv[mv_pair[mv_dead]], minlength=K)
 		live_vol = tot_x - dead_vol
 		lat_mass = tot_lat_mass - lost_lat + gain_lat
 		fail_lat = list(np.where(live_vol > 0, lat_mass / np.maximum(live_vol, 1e-12), 0.0))
 		fail_nr = list((dead_vol + unroutable_vol) / total_vol)
 		ovf_aff = np.bincount(aff_scen, weights=oa, minlength=K) if n_aff else np.zeros(K)
 		o0_recv = np.bincount(aff_scen, weights=o0[aff_popp], minlength=K) if n_aff else np.zeros(K)
-		fail_ovf = list((ovf_aff + float(np.sum(o0)) - o0[kill_popps] - o0_recv) / total_vol)
+		o0_killed = np.asarray([float(o0[list(sc)].sum()) for sc in scenarios])
+		fail_ovf = list((ovf_aff + float(np.sum(o0)) - o0_killed - o0_recv) / total_vol)
 
 	obj_val = raw_objval + const_term
 	return {
@@ -468,12 +730,13 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 		'paths_by_ug': paths_by_ug,
 		'lats_by_ug': lats_by_ug_arr,
 		'available_paths': [(pair_ug[i], int(base_winner[i])) for i in range(n_pairs)],
-		'solved': model.status,
+		'solved': status,
 		'vols_by_poppi': {poppi: round(v / float(caps[poppi]), 2)
 						  for poppi, v in vols_by_poppi.items()},
 		'fraction_congested_volume': fraction_congested_volume,
 		'frozen_prefix_n_fail': K,
-		'frozen_prefix_kill_popps': kill_popps,
+		'frozen_prefix_kill_popps': kill_scenarios_as_list(scenarios),
+		'frozen_prefix_n_site_fail': len(group_scen),
 		'frozen_prefix_gamma': gamma,
 		'frozen_prefix_no_route_penalty': p_nr,
 		'frozen_prefix_congestion_penalty': p_c,
@@ -481,9 +744,12 @@ def _solve_lp_frozen_prefix_lifted(sas, routed_through_ingress, obj, **kwargs):
 		'frozen_prefix_cap_headroom': cap_headroom,
 		'frozen_prefix_formulation': 'lifted',
 		'frozen_prefix_penalty_sum': penalty_sum,
-		'frozen_prefix_n_rows': int(eq_A.shape[0] + le_A.shape[0]),
-		'frozen_prefix_n_vars': int(n_z),
-		'frozen_prefix_nnz': int(eq_A.nnz + le_A.nnz),
+		'frozen_prefix_n_rows': dims[0],
+		'frozen_prefix_n_vars': dims[1],
+		'frozen_prefix_nnz': dims[2],
+		'frozen_prefix_colgen_rounds': colgen_rounds,
+		'frozen_prefix_colgen_converged': bool(colgen_converged),
+		'frozen_prefix_active_pairs': int(n_a),
 		'frozen_prefix_normal_lat': (float(np.sum(xv * base_lat)) /
 									 max(float(np.sum(xv)), 1e-9)),
 		'frozen_prefix_fail_lat_mean': float(np.mean(fail_lat)) if len(fail_lat) else 0.0,
@@ -538,11 +804,9 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 	caps = np.asarray(sas.link_capacities_arr, dtype=float).flatten()
 	total_vol = float(sum(ug_to_vol.values())) or 1.0
 
-	kill_popps = kwargs.get('frozen_kill_popps')
-	if kill_popps is None:
-		kill_popps = default_kill_popps(n_popps, n_fail)
-	kill_popps = [int(k) for k in kill_popps]
-	K = len(kill_popps)
+	scenarios = kill_scenarios_from_kwargs(sas, kwargs, n_fail)
+	kill_popps = kill_scenarios_as_list(scenarios)
+	K = len(scenarios)
 	weights = [1.0] + ([gamma / K] * K if K else [])            # latency
 	nr_weights = [1.0] + ([gamma if penalty_sum in ('no_route', 'both') else gamma / K] * K if K else [])
 	c_weights = [1.0] + ([gamma if penalty_sum == 'both' else gamma / K] * K if K else [])
@@ -608,18 +872,19 @@ def _solve_lp_frozen_prefix_stacked(sas, routed_through_ingress, obj, **kwargs):
 	a_thresh = threshold_a(np.asarray(adv, dtype=float)) if adv is not None else None
 	scen_winner = [base_winner]
 	scen_lat = [base_lat]
-	for k in kill_popps:
+	for sc in scenarios:
 		w_s = base_winner.copy()
 		l_s = base_lat.copy()
-		affected = np.where(base_winner == k)[0]
+		kset = set(int(k) for k in sc)
+		affected = np.where(np.isin(base_winner, list(kset)))[0]
 		if len(affected) and a_thresh is not None:
 			a_fail = a_thresh.copy()
-			a_fail[k, :] = 0
+			a_fail[list(kset), :] = 0
 			fail_rti, _ = sas.calculate_ground_truth_ingress(a_fail)
 			for i in affected:
 				popp_tuple = fail_rti.get(pair_prefix[i], {}).get(pair_ug[i])
 				poppi = popp_to_ind.get(popp_tuple) if popp_tuple is not None else None
-				if poppi is None or poppi == k:
+				if poppi is None or poppi in kset:
 					w_s[i] = -1
 					l_s[i] = 0.0
 				else:

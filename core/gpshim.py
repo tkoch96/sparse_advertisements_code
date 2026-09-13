@@ -564,6 +564,17 @@ else:
             sol = self._sol
             return [float(sol[o.idx]) for o in objs]
 
+        # -- duals (HiGHS convention: reduced cost = c - A^T row_dual) ----
+        def getRowDuals(self):
+            if self.status != 2:
+                raise RuntimeError('no optimal solution')
+            return self._row_dual
+
+        def getColDuals(self):
+            if self.status != 2:
+                raise RuntimeError('no optimal solution')
+            return self._col_dual
+
         # -- solve -------------------------------------------------------
         def optimize(self):
             self._h.run()
@@ -585,7 +596,11 @@ else:
             else:
                 self.status = 13
             if self.status == 2:
-                self._sol = np.asarray(self._h.getSolution().col_value)
+                _hsol = self._h.getSolution()
+                self._sol = np.asarray(_hsol.col_value)
+                # duals for column generation (core/frozen_prefix.py, 2026-09-11)
+                self._row_dual = np.asarray(_hsol.row_dual)
+                self._col_dual = np.asarray(_hsol.col_dual)
                 if os.environ.get('SCULPTOR_GPSHIM_AUDIT') == '1':
                     self._audit()
                 if os.environ.get('SCULPTOR_GPSHIM_DUAL') == '1':

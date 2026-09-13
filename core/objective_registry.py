@@ -316,6 +316,8 @@ register(ObjectivePlugin(
 		 'stats_popp_failures_latency_optimal', 'avg_latency_under_failure'),   # all users, non-congested (Tom 2026-09-11)
 		('% cong PoPP-fail', '<', 'stats',
 		 'stats_popp_failures_latency_optimal', 'frac_vol_congested', 100.0),   # all users
+		('% no-route PoPP-fail', '<', 'stats',
+		 'stats_popp_failures_latency_optimal', 'frac_vol_no_route', 100.0),   # all users, fully stranded
 		('Affected latency PoPP-fail (ms)', '<', 'stats',
 		 'stats_popp_failures_latency_optimal_specific', 'avg_latency_under_failure'),   # users whose traffic was on the failed link
 		('Subopt PoP-fail (ms)', '<', 'stats',
@@ -324,18 +326,25 @@ register(ObjectivePlugin(
 		 'stats_pop_failures_latency_optimal', 'avg_latency_under_failure'),
 		('% cong PoP-fail', '<', 'stats',
 		 'stats_pop_failures_latency_optimal', 'frac_vol_congested', 100.0),
+		('% no-route PoP-fail', '<', 'stats',
+		 'stats_pop_failures_latency_optimal', 'frac_vol_no_route', 100.0),
 		('Affected latency PoP-fail (ms)', '<', 'stats',
 		 'stats_pop_failures_latency_optimal_specific', 'avg_latency_under_failure'),
 		('Flash-crowd resilience', '>', 'stats', 'stats_resilience_to_congestion'),
 		('Diurnal resilience', '>', 'stats', 'stats_diurnal'),
 		('Objective (lat+g*RB)', '<', 'lat_res_objective'),
 	),
-	key_columns=('Latency (ms)', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Affected latency PoPP-fail (ms)',
-			 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Affected latency PoP-fail (ms)',
+	# affected-users latency columns stay in the full table only (Tom 2026-09-11)
+	# normal latency lives in the latency+MLU group (Tom 2026-09-11)
+	key_columns=('Latency PoPP-fail (ms)', '% cong PoPP-fail',
+			 'Latency PoP-fail (ms)', '% cong PoP-fail',
 			 'Flash-crowd resilience', 'Diurnal resilience'),
 	# paired cells (Tom 2026-09-10): failure latency / % congested in ONE cell
 	# per failure type; the absolute failure latency is a stat the stored run
 	# may predate -> the suboptimality column stands in until regeneration
+	# no '% no-route' member here: with re-optimized routing any surviving ingress
+	# serves a user, so it is 0 by nature (Tom 2026-09-11); the columns stay in the
+	# full table. % cong = volume on over-capacity links (wrapper_eval buckets).
 	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency PoPP-fail (ms)', '% cong PoPP-fail', 'Subopt PoPP-fail (ms)'),
 			   ('Site fail: latency (ms) / % cong', 'Latency PoP-fail (ms)', '% cong PoP-fail', 'Subopt PoP-fail (ms)'),
 			   ('Flash Crowd/Diurnal Intensity (vs anycast)', 'Flash-crowd resilience', 'Diurnal resilience')),   # Tom 2026-09-11
@@ -524,6 +533,10 @@ register(ObjectivePlugin(
 	lp_defaults=dict(
 		frozen_gamma=4.0,               # failure-block weight vs normal
 		frozen_n_fail=20,               # popps failed per iteration
+		frozen_site_fail_frac=0.1,      # share of the n_fail slots that fail a
+										# WHOLE SITE (Tom 2026-09-11: default after
+										# the actual-5 smoke; 0 = the pre-09-11
+										# single-peering objective)
 		frozen_top_load=5,              # of which: heaviest-loaded ALWAYS in
 		frozen_explore_frac=0.5,        # uniform share of the sampled rest
 		frozen_no_route_penalty=50.0,   # ms-equivalent per unit no-route
@@ -538,10 +551,16 @@ register(ObjectivePlugin(
 										# Tom 2026-09-07: stranding is worse
 		frozen_cap_headroom=1.0,        # LP solves against caps*this (<1 =
 										# slack; no measurable help in A/B)
+		frozen_time_limit=120.0,        # training-probe solver cap (was the LP's
+										# 30 s default: size-32 probes crossed it
+										# under contention on 2026-09-11 and a
+										# capped probe prices as the MLU fallback)
 	),
 	lp_env_overrides=dict(
 		frozen_gamma='SCULPTOR_FROZEN_PREFIX_GAMMA',
 		frozen_n_fail='SCULPTOR_FROZEN_PREFIX_N_FAIL',
+		frozen_site_fail_frac='SCULPTOR_FROZEN_PREFIX_SITE_FAIL_FRAC',
+		frozen_time_limit='SCULPTOR_FROZEN_PREFIX_TIME_LIMIT',
 		frozen_top_load='SCULPTOR_FROZEN_PREFIX_TOP_LOAD',
 		frozen_explore_frac='SCULPTOR_FROZEN_PREFIX_EXPLORE_FRAC',
 		frozen_no_route_penalty='SCULPTOR_FROZEN_PREFIX_NO_ROUTE_PENALTY',
@@ -569,6 +588,8 @@ register(ObjectivePlugin(
 				 'frozen_site_fail_affected_cong_by_strategy',
 				 'reactive_site_fail_latency_by_strategy', 'reactive_site_fail_cong_by_strategy',
 				 'reactive_site_fail_no_route_by_strategy',
+				 'reactive_fail_affected_latency_by_strategy', 'reactive_fail_affected_cong_by_strategy',
+				 'reactive_site_fail_affected_latency_by_strategy', 'reactive_site_fail_affected_cong_by_strategy',
 				 'objective_value_by_strategy'),
 	table_group='Frozen failover', group_order=2, key_order=2,   # right after the dynamic failover group (Tom 2026-09-10)
 	table_columns=(
@@ -579,21 +600,26 @@ register(ObjectivePlugin(
 		 'frozen_fail_cong_by_strategy', 'reactive_fail_cong_by_strategy', 100.0),
 		('% no-route fail', '<', 'frozen_anchor',
 		 'frozen_fail_no_route_by_strategy', 'reactive_fail_no_route_by_strategy', 100.0),
-		('Affected latency (ms)', '<', 'mean', 'frozen_fail_affected_latency_by_strategy'),
+		# affected users: the one-per-peering row shows the re-optimized anchor
+		# (frozen one-per-peering strands every affected user: no latency)
+		('Affected latency (ms)', '<', 'frozen_anchor',
+		 'frozen_fail_affected_latency_by_strategy', 'reactive_fail_affected_latency_by_strategy', 1.0),
 		('Site latency (ms)', '<', 'frozen_anchor',
 		 'frozen_site_fail_latency_by_strategy', 'reactive_site_fail_latency_by_strategy', 1.0),
 		('% cong site-fail', '<', 'frozen_anchor',
 		 'frozen_site_fail_cong_by_strategy', 'reactive_site_fail_cong_by_strategy', 100.0),
 		('% no-route site-fail', '<', 'frozen_anchor',
 		 'frozen_site_fail_no_route_by_strategy', 'reactive_site_fail_no_route_by_strategy', 100.0),
-		('Site affected latency (ms)', '<', 'mean', 'frozen_site_fail_affected_latency_by_strategy'),
+		('Site affected latency (ms)', '<', 'frozen_anchor',
+		 'frozen_site_fail_affected_latency_by_strategy', 'reactive_site_fail_affected_latency_by_strategy', 1.0),
 	) + _LAT_SPLIT_COLS + (_OBJ_COL,),
 	# key table shows steady + failure latency only (Tom 2026-09-09); the
 	# congestion / no-route columns stay in the full table
-	key_columns=('Steady latency (ms)', 'Latency (ms)', '% cong fail', 'Affected latency (ms)',
-			 'Site latency (ms)', '% cong site-fail', 'Site affected latency (ms)'),
-	tex_pairs=(('Ingress fail: latency (ms) / % cong', 'Latency (ms)', '% cong fail'),
-			   ('Site fail: latency (ms) / % cong', 'Site latency (ms)', '% cong site-fail')),
+	key_columns=('Latency (ms)', '% cong fail', '% no-route fail',
+			 'Site latency (ms)', '% cong site-fail', '% no-route site-fail'),
+	# third member = average % no-route over the failure scenarios (Tom 2026-09-11)
+	tex_pairs=(('Ingress fail: latency (ms) / % cong / % no-route', 'Latency (ms)', '% cong fail', None, '% no-route fail'),
+			   ('Site fail: latency (ms) / % cong / % no-route', 'Site latency (ms)', '% cong site-fail', None, '% no-route site-fail')),
 	tex_group='\\stf',   # macro in the paper's macros.tex (Tom 2026-09-11)   # Tom 2026-09-10
 	tex_secrefs=('sec:eval_stf',),
 	# 'Group|Sub' keys are per-group display overrides (the bare 'Latency

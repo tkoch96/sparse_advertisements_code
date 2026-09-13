@@ -813,9 +813,39 @@ class FrozenPrefixObjective(Generic_Objective):
 		n_popps = sas.n_popps
 		n_fail = int(self.lp_kwargs.get('frozen_n_fail', 20))
 		explore_frac = float(self.lp_kwargs.get('frozen_explore_frac', 0.5))
-		if n_fail >= n_popps:
-			return list(range(n_popps))
+		# SITE failures (Tom 2026-09-11): round(site_frac * n_fail) of the slots
+		# fail a whole site (every peering at it) -- sampled without
+		# replacement proportional to the site's summed popp weight, so the
+		# heavily loaded sites are hedged most. They enter the kill list as
+		# tuples; the LP prices them like any other scenario.
+		site_frac = float(self.lp_kwargs.get('frozen_site_fail_frac', 0.0) or 0.0)
+		groups = []
+		if site_frac > 0:
+			try:
+				from core.frozen_prefix import site_groups
+				groups = site_groups(sas)
+			except Exception as e:  # sampler must never kill training
+				print('[frozen_prefix] site sampler: no site groups ({}); single failures only'.format(e))
+		n_site = min(int(round(site_frac * n_fail)), len(groups)) if groups else 0
+		n_fail = max(n_fail - n_site, 0)
 		rng = np.random.RandomState(2718 + 31 * int(it))
+		sites = []
+		if n_site > 0:
+			try:
+				w = None
+				if base_adv is not None:
+					w = self._load_weights(base_adv)
+				if w is None or w.sum() <= 0:
+					w = self._volume_reach_weights()
+				gw = np.asarray([float(np.sum(w[list(g)])) for g in groups])
+				p = gw / gw.sum() if gw.sum() > 0 else None
+				pick = rng.choice(len(groups), size=n_site, replace=False, p=p)
+			except Exception as e:  # sampler must never kill training
+				print('[frozen_prefix] site sampler fell back to uniform: {}'.format(e))
+				pick = rng.choice(len(groups), size=n_site, replace=False)
+			sites = [tuple(groups[int(i)]) for i in pick]
+		if n_fail >= n_popps:
+			return list(range(n_popps)) + sites
 		# SCULPTOR_FROZEN_PREFIX_TOP_LOAD (default 0): ALWAYS include the K
 		# heaviest-loaded popps under the current adv, then explore/exploit
 		# the rest. The actual-10 trace (2026-09-06) showed the worst
@@ -850,7 +880,7 @@ class FrozenPrefixObjective(Generic_Objective):
 			kill = sorted(int(x) for x in
 						  np.random.RandomState(2718 + 31 * int(it)).choice(
 							  n_popps, size=n_fail, replace=False))
-		return kill
+		return kill + sites
 
 	def per_call_lp_kwargs(self, base_adv=None):
 		it = int(getattr(self.sas, 'iter', 0) or 0)

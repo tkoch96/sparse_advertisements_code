@@ -625,6 +625,11 @@ def run(ctx):
 					# never the headline mean.
 					_hi_cut = 200.0 + 0.01 * (NO_ROUTE_LATENCY - 200.0)
 					_is_high = (perf2 >= _hi_cut)
+					# ALL-USERS bucket tuples (wrapper_eval._all_users_bucket_tuples)
+					# name their bucket: 'congested' (routed on an overloaded link)
+					# and 'noroute' (no path at all) are DISJOINT there; the legacy
+					# per-ug tuples mark both with the NO_ROUTE sentinel (Tom 2026-09-11)
+					_bucket = ug[1] if (isinstance(ug, tuple) and len(ug) == 2 and ug[0] == '__all_users__') else None
 					if not _is_high:
 						avg_ret.append((perf1-perf2,vol))
 						abs_ret.append((perf2, vol))
@@ -633,9 +638,16 @@ def run(ctx):
 					else:
 						vol_high_latency += vol
 						with_high_extra.append((perf1-perf2, vol))
-						if perf2 == NO_ROUTE_LATENCY:
+						if _bucket is not None:
+							if _bucket == 'noroute':
+								vol_no_route += vol
+						elif perf2 == NO_ROUTE_LATENCY:
 							vol_no_route += vol
-					if perf2 == NO_ROUTE_LATENCY:
+					if _bucket is not None:
+						if _bucket == 'congested':
+							vol_congested += vol
+							this_sim_total_volume_congested += vol
+					elif perf2 == NO_ROUTE_LATENCY:
 						vol_congested += vol
 						this_sim_total_volume_congested += vol
 						perf2=perf2*100

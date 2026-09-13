@@ -138,6 +138,7 @@ def _grow_disk(inst, target_gb, verbose=True):
 # arm64). An x86 type here would fail to boot, which is a far worse
 # failure than "no capacity".
 _ARM_LADDER = [
+    'm8g.48xlarge', 'c8g.48xlarge', 'm8g.24xlarge', 'c8g.24xlarge',
     'c8g.16xlarge', 'c7g.16xlarge', 'm8g.16xlarge', 'm7g.16xlarge',
     'c8g.12xlarge', 'c7g.12xlarge', 'm7g.12xlarge',
     'r8g.8xlarge', 'c8g.8xlarge', 'c7g.8xlarge', 'm8g.8xlarge',

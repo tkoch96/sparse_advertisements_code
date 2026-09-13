@@ -15,6 +15,7 @@ real-deployment scenarios.
 | A new contributor | This README, then [unit_tests/README.md](unit_tests/README.md) |
 | Picking up mid-stream | [HANDOFF_NEXT.md](HANDOFF_NEXT.md) — the canonical current handoff; earlier ones live in [old_handoffs/](old_handoffs/) |
 | Standing up the AWS cluster | [CLUSTER_RUNBOOK.md](CLUSTER_RUNBOOK.md) |
+| Looking for the pickles behind a paper figure or table (deployment-size sweep, paper table, prefix sweep, ablation) | [STORAGE_BOX_PICKLES.md](STORAGE_BOX_PICKLES.md) — every artifact's L1 pickles on the storage box, with deployment counts and caveats |
 | Looking for the research backlog | [old_handoffs/RESEARCH_ROADMAP.md](old_handoffs/RESEARCH_ROADMAP.md) — stale since 2026-05-27 |
 
 Older handoffs and session snapshots all live in `old_handoffs/`

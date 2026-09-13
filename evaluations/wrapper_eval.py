@@ -252,6 +252,70 @@ def precompute_one_per_peering_failure_lps(sas, which='popps', **kwargs):
 	return {iteri: lp_rets[i] for i, iteri in enumerate(iterover)}
 
 
+def _all_users_bucket_tuples(sas, ug_vols, ug_inds, old_lats, this_soln, best_lats, element, caps):
+	"""Per-scenario aggregate of the ALL-USERS failure view as at most three
+	synthetic (best-new, vol, ug, element, best, new) tuples, one per VOLUME
+	bucket, so get_failure_metric_arr's volume-weighted stats over them are
+	the scenario's exact all-users numbers (Tom 2026-09-11):
+	  good      : routed volume on links within capacity -- carries the latency
+	              of the non-congested traffic (per-path latency, not the
+	              per-ug NO_ROUTE blend the LP writes into lats_by_ug)
+	  congested : routed volume on links the LP left over capacity (its own
+	              rule: round(load / cap, 2) > 1 on headroom-applied caps)
+	  noroute   : volume of users with NO path at all (absent from paths_by_ug)
+	'congested' and 'noroute' are disjoint: congested traffic HAS a route on
+	an overloaded link, no-route traffic has none. The ug field is
+	('__all_users__', bucket) so get_failure_metric_arr can tell them apart
+	(the legacy per-ug tuples mark both with the NO_ROUTE sentinel). The
+	'best' (one-per-peering reference) latency of a bucket is the
+	volume-weighted mean over its users, kept strictly below the sentinel so
+	no bucket is dropped as 'reference congested' (the all-users view is
+	unconditional). Returns [(tuple_optimal, tuple_before), ...]."""
+	lats = np.asarray(this_soln['lats_by_ug'], dtype=float)
+	paths_by_ug = this_soln.get('paths_by_ug') or {}
+	bestp = np.asarray(best_lats, dtype=float)
+	oldp = np.asarray(old_lats, dtype=float)
+	ug_perfs = sas.whole_deployment_ug_perfs
+	ugs_wd = sas.whole_deployment_ugs
+	vols_wd = np.asarray(sas.whole_deployment_ug_vols, dtype=float)
+	popps = sas.popps
+	# link loads exactly as the LP computes vols_by_poppi (low-latency traffic)
+	load = np.zeros(sas.n_popps)
+	for ugi, pathvols in paths_by_ug.items():
+		v = vols_wd[ugi]
+		for poppi, pct in pathvols:
+			load[poppi] += pct * v
+	cong_link = np.round(load / np.asarray(caps, dtype=float)[:sas.n_popps], 2) > 1
+	acc = {b: [0.0, 0.0, 0.0, 0.0] for b in ('good', 'congested', 'noroute')}  # vol, sum v*new, sum v*best, sum v*old
+	for i in ug_inds:
+		v = vols_wd[i]
+		pv = paths_by_ug.get(i)
+		if not pv:
+			a = acc['noroute']
+			a[0] += v; a[1] += v * NO_ROUTE_LATENCY; a[2] += v * bestp[i]; a[3] += v * oldp[i]
+			continue
+		ug = ugs_wd[i]
+		perfs = ug_perfs[ug]
+		for poppi, pct in pv:
+			pvol = pct * v
+			if pvol <= 0:
+				continue
+			if cong_link[poppi]:
+				a = acc['congested']; lat = NO_ROUTE_LATENCY
+			else:
+				a = acc['good']; lat = float(perfs[popps[poppi]])
+			a[0] += pvol; a[1] += pvol * lat; a[2] += pvol * bestp[i]; a[3] += pvol * oldp[i]
+	out = []
+	for name, (vol, s_new, s_best, s_old) in acc.items():
+		if vol <= 0:
+			continue
+		n = NO_ROUTE_LATENCY if name != 'good' else s_new / vol
+		b = min(s_best / vol, NO_ROUTE_LATENCY - 1.0)
+		o = s_old / vol
+		key = ('__all_users__', name)
+		out.append(((b - n, vol, key, element, b, n), (o - n, vol, key, element, b, n)))
+	return out
+
 def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **kwargs):
 	ret = {redirection_mode: {'congestion_delta': [], 'latency_delta_optimal': [], 'latency_delta_before': [], 'latency_delta_specific': []}
 		for redirection_mode in ['sticky', 'mutable']}
@@ -334,6 +398,11 @@ def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **k
 	# why cache_res=False and light_result=True here.
 	lp_rets = sas.solve_lp_with_failure_catch_mp(call_args, cache_res=False, light_result=True, **kwargs)
 
+	ug_inds = np.array([sas.whole_deployment_ug_to_ind[ug] for ug in sas.ugs], dtype=int)
+	ug_vols = np.array([sas.ug_to_vol[ug] for ug in sas.ugs], dtype=float)
+	from core.solve_lp_assignment import _apply_capacity_headroom
+	_caps_headroom = _apply_capacity_headroom(np.asarray(sas.link_capacities_arr, dtype=float).flatten(), sas)
+
 	for i,iteri in enumerate(iterover):
 
 		## q: what is latency experienced for these ugs compared to optimal?
@@ -358,12 +427,8 @@ def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **k
 			old_perf = base_user_latencies[sas.ug_to_ind[ug]]
 			new_perf = user_latencies[sas.ug_to_ind[ug]]
 			best_perf = best_user_latencies[sas.ug_to_ind[ug]]
-			### Too much data to store
-			# ret['mutable']['latency_delta_optimal'].append((best_perf - new_perf, 
-			# 	sas.ug_to_vol[ug], ug, iteri, best_perf, new_perf))
-			# ret['mutable']['latency_delta_before'].append((old_perf - new_perf, 
-			# 	sas.ug_to_vol[ug], ug, iteri, best_perf, new_perf))
-			
+			### Too much data to store per (ug, scenario): the ALL-USERS families
+			### are filled with per-scenario bucket aggregates below the loop.
 			try:
 				fracv = these_ugs[ug]
 				ret['mutable']['latency_delta_specific'].append((best_perf - new_perf,
@@ -371,6 +436,17 @@ def assess_failure_resilience(sas, adv, which='popps', opp_ref_results=None, **k
 					this_soln['paths_by_ug'][sas.ug_to_ind[ug]] ))
 			except KeyError:
 				pass
+
+		# ALL-USERS view (Tom 2026-09-11): (i) latency of the non-congested
+		# traffic and (ii) % congested traffic over EVERY user in every failure
+		# scenario. One tuple per (ug, scenario) was "too much data to store"
+		# (n_ugs x n_scenarios), so each scenario contributes at most four
+		# volume-weighted bucket tuples that get_failure_metric_arr classifies
+		# exactly like it would the per-ug tuples (same stats, ~1e-4 the size).
+		for tup, tup_before in _all_users_bucket_tuples(
+				sas, ug_vols, ug_inds, base_user_latencies, this_soln, best_user_latencies, iteri, _caps_headroom):
+			ret['mutable']['latency_delta_optimal'].append(tup)
+			ret['mutable']['latency_delta_before'].append(tup_before)
 
 
 			# #### Sticky (DNS) decisions

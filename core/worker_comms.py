@@ -217,8 +217,16 @@ class Worker_Manager:
 		env_override = os.environ.get('SCULPTOR_N_WORKERS')
 		if env_override is not None:
 			try:
+				# The override is AUTHORITATIVE (Tom 2026-09-11: it was min()'d
+				# with the per-size heuristic, so actual-5 ran 5 workers on a
+				# 64-core box while asking for 24 -- 98% idle, 170 s iterations).
+				# Callers size the pool for the box; the heuristic only applies
+				# when nothing is set.
+				n = int(env_override)
 				suggested_num_workers = get_n_workers(self.dpsize)
-				n = min(int(env_override), suggested_num_workers)
+				if n > suggested_num_workers:
+					print("SCULPTOR_N_WORKERS={} above the dpsize heuristic ({}); "
+						  "using the override".format(n, suggested_num_workers))
 				return n
 			except ValueError:
 				print("WARNING: SCULPTOR_N_WORKERS={!r} is not an int; falling back".format(env_override))

@@ -1,0 +1,78 @@
+{
+  "_comment": "Numbers the paper quotes that have NO automated source yet. Each entry: value, doc (what it means), from (where it came from: run id / script / figure / date), optional prec. Referenced in the doc as \\pn{manual.<slug>}. Every entry here is a debt: replace it with a grammar key when the producing script emits an artifact. Entries with \"placeholder\": true have no value yet and render red until filled.",
+  "sculptor_prefixes_a32": {
+    "value": 42,
+    "doc": "prefixes SCULPTOR advertised on the size-32 paper-table deployment",
+    "from": "HANDOFF_PAPER_FRAMING.md 2026-09-05 (papertable32b cell); CONFIRM against the stored advertisement -- the doc's Implementation section says 60 (one tenth of ingresses)",
+    "prec": 0
+  },
+  "opp_prefixes_a32": {
+    "value": 779,
+    "doc": "prefixes one-per-peering needs on the size-32 paper-table deployment (= number of peerings)",
+    "from": "HANDOFF_PAPER_FRAMING.md 2026-09-05 (papertable32b cell)",
+    "prec": 0
+  },
+  "_comment_figures": "Numbers read off figures that have no CSV artifact.",
+  "prios_cong_reduction_at_5x_pct": {
+    "value": 50,
+    "prec": 0,
+    "doc": "traffic classes, LPrio/HPrio = 5: percent less high-priority congestion for SCULPTOR than PAINTER and Unicast ('half as much')",
+    "from": "doc prose 2026-09-12 reading fig priority_bulk_traffic_congestion; the producing eval (priority_bulk_sweep) should emit a CSV"
+  },
+  "sitecost_gap_ratio_model_b": {
+    "value": 1.5,
+    "prec": 1,
+    "doc": "site cost model (b) (half the sites 1.2x cost): PAINTER's objective gap to one-per-peering divided by SCULPTOR's",
+    "from": "doc prose 2026-09-12; 3-deployment site-cost experiment, artifacts not in paper_artifacts"
+  },
+  "sitecost_gap_ratio_model_c": {
+    "value": 3,
+    "prec": 0,
+    "doc": "site cost model (c) (carbon intensity): PAINTER's objective gap to one-per-peering divided by SCULPTOR's",
+    "from": "doc prose 2026-09-12; 3-deployment site-cost experiment, artifacts not in paper_artifacts"
+  },
+  "sitecost_100x_latency_cost_ms": {
+    "value": 24,
+    "prec": 0,
+    "doc": "site cost weight x100: extra average latency SCULPTOR accepts",
+    "from": "doc prose 2026-09-12; artifacts not in paper_artifacts"
+  },
+  "sitecost_100x_cost_saving_pct": {
+    "value": 12,
+    "prec": 0,
+    "doc": "site cost weight x100: percent lower site cost SCULPTOR achieves",
+    "from": "doc prose 2026-09-12; artifacts not in paper_artifacts"
+  },
+  "sitecost_100x_gap_ratio": {
+    "value": 8,
+    "prec": 0,
+    "doc": "site cost weight x100: PAINTER's objective gap to one-per-peering divided by SCULPTOR's",
+    "from": "doc prose 2026-09-12; artifacts not in paper_artifacts"
+  },
+  "_comment_ablation": "The doc's ablation numbers (40/78/91%) come from an older study; the current ladder (evaluations/ablation.py) has rungs no_mc/no_memory/no_memory_dir/expl_none/full. Copy its ladder_summary.json to figures/paper_artifacts/ablation/avg_latency/ and use abl.dtf.<rung>.pctbenefit keys instead of these.",
+  "ablation_mc_pct_benefit": {
+    "value": 40,
+    "prec": 0,
+    "doc": "ablation: % of the PAINTER-to-OPP gap closed by Monte Carlo objective estimation alone",
+    "from": "doc prose 2026-09-12; older ablation study, provenance unknown -- replace with abl.dtf.* keys"
+  },
+  "ablation_mc_descent_pct_benefit": {
+    "value": 78,
+    "prec": 0,
+    "doc": "ablation: % of the gap closed by Monte Carlo + descent (no gradient memory)",
+    "from": "doc prose 2026-09-12; older ablation study -- replace with abl.dtf.* keys"
+  },
+  "ablation_full_pct_benefit": {
+    "value": 91,
+    "prec": 0,
+    "doc": "ablation: % of the gap closed by Monte Carlo + gradient descent (= full SCULPTOR)",
+    "from": "doc prose 2026-09-12; older ablation study -- replace with abl.dtf.full.pctbenefit"
+  },
+  "ablation_measurement_savings_pct": {
+    "placeholder": true,
+    "value": null,
+    "doc": "smart measurements: percent fewer BGP measurements to reach the same objective vs scheduled measurements",
+    "from": "ablation study (evaluations/ablation.py evaluate, headline 'speed') -- TODO quote it"
+  },
+  "_comment_internet": "On-Internet numbers are NOT manual any more: evaluations/actual_deployment_numbers.py writes actual_deployment_stats.csv from the real-deployment pickle and paper_numbers serves them as internet.<scenario>.<metric>.<method> keys."
+}

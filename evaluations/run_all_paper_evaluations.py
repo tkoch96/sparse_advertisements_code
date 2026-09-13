@@ -435,6 +435,23 @@ def _paper_repo_copy(intent):
         n += 1
         print('[paper-copy] {} -> {}'.format(fn, dst_dir))
     print('[paper-copy] {} file(s) copied'.format(n))
+    _paper_numbers_emit(os.path.dirname(dst_dir))
+
+
+def _paper_numbers_emit(paper_dir):
+    """Post-copy hook (Tom 2026-09-12): regenerate the paper's named numbers
+    (tables/paper_numbers.tex) from the freshly grabbed artifacts so every
+    \\pn{key} in the doc tracks the paper-of-record set. Never fails the
+    grab; the report lists keys the doc references that are still
+    undefined."""
+    if not os.path.exists(os.path.join(paper_dir, 'resilience.tex')):
+        print('[paper-numbers] no resilience.tex in {}; skipped'.format(paper_dir))
+        return
+    try:
+        from evaluations import paper_numbers
+        paper_numbers.main(['--paper-dir', paper_dir, 'emit'])
+    except Exception as e:   # noqa
+        print('[paper-numbers] WARN: emit failed: {!r}'.format(e))
 
 
 def main():

@@ -56,17 +56,21 @@ def _scenarios(sas, which, cap):
 
 def pin_pairs(sas, adv, routed_through_ingress, pin_kill_popps=None):
 	"""[(ug, prefix_i, vol)] -- the frozen_prefix LP's allocation for adv."""
-	from core.frozen_prefix import solve_lp_frozen_prefix, default_kill_popps
+	from core.frozen_prefix import solve_lp_frozen_prefix, default_kill_popps, site_groups
 	from core.objective_registry import lp_kwargs_for
 	levers = lp_kwargs_for('frozen_prefix')   # the objective's own tunables
 	if pin_kill_popps is None:
 		pin_n = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_PIN_N_FAIL', '0'))
 		pin_kill_popps = (default_kill_popps(sas.n_popps, pin_n) if pin_n > 0
 						  else list(range(sas.n_popps)))
+		# an objective trained against site failures is pinned against
+		# EVERY site failure too (Tom 2026-09-11)
+		if float(levers.get('frozen_site_fail_frac', 0.0) or 0.0) > 0:
+			pin_kill_popps = list(pin_kill_popps) + site_groups(sas)
 	levers = {k: v for k, v in levers.items() if k not in ('frozen_n_fail',)}
-	# one pin per strategy per sim: let the exhaustive model finish
-	levers.setdefault('frozen_time_limit',
-					  float(os.environ.get('SCULPTOR_FROZEN_PREFIX_PIN_TIME_LIMIT', '1800')))
+	# one pin per strategy per sim: let the exhaustive model finish (the
+	# registry's frozen_time_limit is the TRAINING-probe cap, not this)
+	levers['frozen_time_limit'] = float(os.environ.get('SCULPTOR_FROZEN_PREFIX_PIN_TIME_LIMIT', '1800'))
 	ret = solve_lp_frozen_prefix(sas, routed_through_ingress, 'frozen_prefix',
 								 adv=adv, frozen_kill_popps=list(pin_kill_popps),
 								 **levers)
@@ -77,7 +81,7 @@ def pin_pairs(sas, adv, routed_through_ingress, pin_kill_popps=None):
 
 def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 						   routed_through_ingress=None, pin_kill_popps=None,
-						   eval_n_fail=None, use_gti=False):
+						   eval_n_fail=None, use_gti=False, steady_only=False):
 	"""use_gti=True forces the per-failure calculate_ground_truth_ingress
 	path (the pre-2026-09-09 implementation, exact but O(n_popps) Python
 	ingress recomputations: hours at size 32). Default: single-popp
@@ -117,7 +121,7 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 		e_lat[i] = float(lat)
 	unroutable_vol = max(0.0, total_vol - float(e_vol.sum()))
 
-	def _score(w_popp, w_lat, subset=None):
+	def _score(w_popp, w_lat, subset=None, masks=False):
 		"""(latency of routed non-congested volume, congested fraction,
 		no-route fraction). subset: index array restricting the accounting to
 		those pairs (the 'affected' view, Tom 2026-09-11: the users whose
@@ -139,9 +143,18 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 		cong_vol = float(e_vol[on_cong].sum())
 		gv = float(e_vol[good].sum())
 		lat = float(np.sum(e_vol[good] * w_lat[good]) / gv) if gv > 0 else float('nan')
+		if masks:
+			return lat, cong_vol / denom, nr_vol / denom, good, live
 		return lat, cong_vol / denom, nr_vol / denom
 
 	steady_lat, steady_cong, steady_nr = _score(e_popp, e_lat)
+	if steady_only:
+		# reactive_optimal_metrics prices one re-optimized scenario this way;
+		# the entry arrays let it score the affected-users subset too.
+		_, _, _, good, live = _score(e_popp, e_lat, masks=True)
+		return {'steady_latency_ms': steady_lat, 'steady_frac_cong': steady_cong,
+				'steady_frac_no_route': steady_nr, 'n_pairs': n_e,
+				'entries': (e_ug, e_popp, e_lat, e_vol, good, live)}
 
 	# Vectorized single-popp path: every pair has exactly one fallback
 	# (the best remaining ingress in its prefix when its winner dies), so
@@ -212,45 +225,94 @@ def frozen_failure_metrics(sas, adv, which='popps', pairs=None,
 
 
 def reactive_optimal_metrics(sas, adv=None, which='popps', n_fail=None):
-	"""Upper anchor: assignment RE-OPTIMIZED (avg_latency LP) after each
+	"""Upper anchor: the user->prefix assignment RE-OPTIMIZED after each
 	failure on a full-availability advertisement (one-per-peering by
-	default). Same three metrics as frozen_failure_metrics."""
-	from core.solve_lp_assignment import solve_generic_lp_with_failure_catch
+	default). Same three metrics, same accounting as frozen_failure_metrics:
+	every scenario's surviving advertisement is pinned by the frozen LP with
+	an EMPTY kill set (no failure hedging -- the assignment is chosen for
+	that scenario alone) and scored with _score (latency of the routed
+	non-congested volume; a link over capacity congests all of its volume;
+	no-route = the unroutable volume). The pre-2026-09-11 version priced
+	scenarios with the avg_latency failure-catch LP, whose fallback marks
+	congested users with the NO_ROUTE sentinel -- so congested volume was
+	counted as stranded too (site failures: 14% congested AND 14% no-route
+	for one-per-peering at size 32, next to 0.0% / 3.9% on its frozen row)."""
 	n_popps = sas.n_popps
 	if adv is None:
 		adv = np.eye(n_popps)
 	adv = threshold_a(np.asarray(adv, dtype=float))
 	if n_fail is None:
 		n_fail = int(os.environ.get('SCULPTOR_FROZEN_PREFIX_ANCHOR_N_FAIL', '50'))
-	vols = np.asarray([sas.whole_deployment_ug_to_vol[u]
-					   for u in sas.whole_deployment_ugs], dtype=float)
-	total = float(vols.sum()) or 1.0
 
-	def _m(ret):
-		lats = np.asarray(ret['lats_by_ug'], dtype=float)
-		nr = lats >= NO_ROUTE_LATENCY - 1e-9
-		routed = ~nr
-		lat = (float(np.average(lats[routed], weights=vols[routed]))
-			   if routed.any() else float('nan'))
-		return (lat, float(ret.get('fraction_congested_volume', 0.0) or 0.0),
-				float(vols[nr].sum() / total))
+	def _steady(a):
+		if a.sum() == 0:
+			return float('nan'), 1.0, 1.0, None
+		m = frozen_failure_metrics(sas, a, pin_kill_popps=[], steady_only=True)
+		return m['steady_latency_ms'], m['steady_frac_cong'], m['steady_frac_no_route'], m['entries']
 
-	rti, _ = sas.calculate_ground_truth_ingress(adv)
-	st = solve_generic_lp_with_failure_catch(sas, rti, 'avg_latency')
-	steady = _m(st) if st.get('solved') else (float('nan'), float('nan'), float('nan'))
+	def _affected(base_entries, killed_set, entries):
+		# The users whose STEADY-STATE pinned ingress was on the failed element
+		# (the same population frozen_failure_metrics' affected view scores),
+		# weighted by that volume; scored on their RE-OPTIMIZED entries:
+		# latency = volume-weighted mean of their routed non-congested volume,
+		# congested / no-route = fractions of their volume on over-capacity
+		# links / left unrouted (unroutable users count as no-route).
+		b_ug, b_popp, _, b_vol, _, _ = base_entries
+		w = {}
+		for i in range(len(b_ug)):
+			if b_popp[i] in killed_set:
+				w[b_ug[i]] = w.get(b_ug[i], 0.0) + float(b_vol[i])
+		if not w:
+			return None
+		if entries is None:
+			return float('nan'), 1.0, 1.0
+		e_ug, e_popp, e_lat, e_vol, good, live = entries
+		tot = {u: 0.0 for u in w}; gvol = {u: 0.0 for u in w}; glat = {u: 0.0 for u in w}
+		cvol = {u: 0.0 for u in w}
+		for i in range(len(e_ug)):
+			u = e_ug[i]
+			if u not in w:
+				continue
+			v = float(e_vol[i])
+			tot[u] += v
+			if good[i]:
+				gvol[u] += v; glat[u] += v * float(e_lat[i])
+			elif live[i]:
+				cvol[u] += v
+		W = float(sum(w.values()))
+		ug_vol = sas.whole_deployment_ug_to_vol
+		lat_num = lat_den = 0.0
+		cong = nr = 0.0
+		for u, wu in w.items():
+			full = float(ug_vol.get(u, tot[u])) or 1.0
+			if gvol[u] > 0:
+				lat_num += wu * (glat[u] / gvol[u]); lat_den += wu
+			cong += wu * cvol[u] / full
+			nr += wu * max(0.0, full - gvol[u] - cvol[u]) / full
+		return ((lat_num / lat_den) if lat_den > 0 else float('nan'), cong / W, nr / W)
+
+	steady = _steady(adv)
+	base_entries = steady[3]
 	lats, congs, nrs = [], [], []
+	alats, acongs, anrs = [], [], []
 	for killed in _scenarios(sas, which, n_fail):
+		killed_set = set(int(k) for k in killed)
 		a = adv.copy()
-		for k in killed:
-			a[int(k), :] = 0
-		rf, _ = sas.calculate_ground_truth_ingress(a)
-		ret = solve_generic_lp_with_failure_catch(sas, rf, 'avg_latency')
-		if not ret.get('solved'):
-			lats.append(float('nan')); congs.append(1.0); nrs.append(1.0)
-			continue
-		l, c, nr = _m(ret)
+		for k in killed_set:
+			a[k, :] = 0
+		try:
+			l, c, nr, entries = _steady(a)
+		except ValueError:          # pin LP unsolved for this scenario
+			l, c, nr, entries = float('nan'), 1.0, 1.0, None
 		lats.append(l); congs.append(c); nrs.append(nr)
+		if base_entries is not None:
+			aff = _affected(base_entries, killed_set, entries)
+			if aff is not None:
+				alats.append(aff[0]); acongs.append(aff[1]); anrs.append(aff[2])
 	return {
+		'fail_affected_latency_ms': float(np.nanmean(alats)) if alats and not all(np.isnan(alats)) else float('nan'),
+		'fail_affected_frac_cong': float(np.mean(acongs)) if acongs else 0.0,
+		'fail_affected_frac_no_route': float(np.mean(anrs)) if anrs else 0.0,
 		'steady_latency_ms': steady[0],
 		'steady_frac_cong': steady[1],
 		'steady_frac_no_route': steady[2],
@@ -285,7 +347,7 @@ def reactive_objective(sas, adv=None, **lp_kwargs):
   routed users, nr is the unroutable volume and ovf the overflow volume of
   that scenario. Returns the LP-convention BENEFIT (negative cost, like
   ret['objective']); measured_objective negates it."""
-  from core.frozen_prefix import default_kill_popps, _knob, _penalty_sum_mode
+  from core.frozen_prefix import kill_scenarios_from_kwargs, _knob, _penalty_sum_mode
   from core.objective_registry import lp_kwargs_for
   kw = dict(lp_kwargs_for('frozen_prefix'), **lp_kwargs)
   gamma = _knob(kw, 'frozen_gamma', 'SCULPTOR_FROZEN_PREFIX_GAMMA', 1.0)
@@ -296,8 +358,7 @@ def reactive_objective(sas, adv=None, **lp_kwargs):
   penalty_sum = _penalty_sum_mode(kw)
   n_popps = sas.n_popps
   adv = np.eye(n_popps) if adv is None else threshold_a(np.asarray(adv, dtype=float))
-  kill = kw.get('frozen_kill_popps')
-  kill = sorted(set(int(k) for k in (kill if kill is not None else default_kill_popps(n_popps, n_fail))))
+  kill = kill_scenarios_from_kwargs(sas, kw, n_fail)   # single peerings and/or sites
   K = len(kill)
   w_k = gamma / K if K else 0.0
   w_nr = (gamma if penalty_sum in ('no_route', 'both') else w_k) if K else 0.0
@@ -331,16 +392,17 @@ def reactive_objective(sas, adv=None, **lp_kwargs):
   lm0, nr0, ov0 = _scenario(adv)
   lat_term, nr_term, c_term = lm0, nr0, ov0
   per = []
-  for k in kill:
+  for sc in kill:
     a = adv.copy()
-    a[int(k), :] = 0
+    a[list(sc), :] = 0
     lm, nr, ov = _scenario(a)
     lat_term += w_k * lm
     nr_term += w_nr * nr
     c_term += w_c * ov
-    per.append((int(k), lm / V, nr / V, ov / V))
+    per.append((sc[0] if len(sc) == 1 else list(sc), lm / V, nr / V, ov / V))
   cost = (lat_scale * lat_term + p_nr * nr_term + p_c * c_term) / V
   return {'objective': -float(cost), 'cost': float(cost),
           'normal': (lm0 / V, nr0 / V, ov0 / V), 'per_failure': per,
-          'kill_popps': kill, 'gamma': gamma, 'lat_scale': lat_scale,
+          'kill_popps': [sc[0] if len(sc) == 1 else list(sc) for sc in kill],
+          'gamma': gamma, 'lat_scale': lat_scale,
           'no_route_penalty': p_nr, 'congestion_penalty': p_c, 'penalty_sum': penalty_sum}
