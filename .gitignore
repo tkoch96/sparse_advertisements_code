@@ -147,3 +147,9 @@ hardb3_dash/
 __pycache__/
 *.pyc
 figures/integration_tests/
+
+# real-deployment figure reconstruction lives IN the repo (Tom 2026-09-15): its pickles,
+# checkpoints and emitted PDFs are the record, so re-include what the global rules above drop
+!experiments/actual_deployment_figures/cache/
+!experiments/actual_deployment_figures/runs/
+!experiments/actual_deployment_figures/figures/

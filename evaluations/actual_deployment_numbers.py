@@ -7,7 +7,7 @@ evaluations/paper_numbers.py as the `internet.*` key family:
 
 PRIMARY SOURCE: the real-deployment metrics pickle the paper figures were made
 from (old_scripts/make_actual_deployment_plots.py --dpsize actual_third_prototype),
-pulled from the old campus VM into ~/Documents/actual_deployment_figures/cache/.
+pulled from the old campus VM into experiments/actual_deployment_figures/cache/.
 The statistics are computed exactly as that script prints them (its run.log
 reproduces the prose numbers: SCULPTOR 1.93 ms / 91.8% steady, 7.93 ms link,
 13.09 ms site; PAINTER 5.50 ms / 88.0%; Unicast 14.24 / 25.14 ms).
@@ -51,8 +51,9 @@ import numpy as np
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 REPO = os.path.dirname(HERE)
-DEFAULT_PICKLE = os.path.expanduser(
-    '~/Documents/actual_deployment_figures/cache/popp_failure_latency_comparison_actual_third_prototype.pkl')
+DEFAULT_PICKLE = os.path.join(          # the reconstruction lives in the repo (Tom 2026-09-15)
+    REPO, 'experiments', 'actual_deployment_figures', 'cache',
+    'popp_failure_latency_comparison_actual_third_prototype.pkl')
 DEFAULT_FIGURES = os.path.expanduser('~/Documents/resilient_advertisements_paper/figures')
 DEFAULT_OUT = os.path.join(REPO, 'figures', 'paper_artifacts', 'actual_deployment_stats.csv')
 CONGESTION_CAP_MS = 450.0     # the eval's latency for an overloaded user (perf2 == 450)

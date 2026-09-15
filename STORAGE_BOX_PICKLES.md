@@ -101,11 +101,23 @@ Rungs: `full, expl_none, no_memory_dir, no_memory, no_mc, painter`. Re-evaluate 
 | Paper CDF figure (Sep 2) | latency objective, actual-10, 20 deployment seeds, 100 iters (`run_ablation_cdf.py`) | deployments `cache/ablation/cdf_a10_deps/dep_seed{1..20}.pkl`, inits `/home/ubuntu/abl_cdf10_ws/inits`, manifest `/home/ubuntu/abl_cdf10_ws/cdf_manifest.json`. The per-cell results were NOT retained (that campaign cleaned its run dirs; only the figures survive). |
 | 10-deployment ladder (Sep 9) | latency objective, actual-10, 10 deployments, 100 iters, probe budget 0.5x | `cache/ablation/cdf_a10_night{,_artifacts,_tree}` |
 | Per-objective ladders (Sep 10) | one actual-10 deployment, 100 iters, 0.5x, for each of `avg_latency, max_util, frac_beyond_optimal, joint_priority, per_site_cost, frozen_prefix` | `cache/ablation/obj_a10d1_<objective>{,_artifacts}` (+ `_tree` for the four that have one) |
+| Per-objective ladders, 5 deployments (Sep 14) | actual-10 deployments `cdf_a10_deps/dep_seed{1..5}`, 100 iters, 0.5x, `SCULPTOR_GRAD_BUDGET_SCALE=0.25` on every rung, for each of `max_util, per_site_cost, frac_beyond_optimal, joint_priority, frozen_prefix` (run on the throwaway clone `i-01b6d3cf7d10a5dbd`, terminated the same day) | `cache/ablation/obj_a10d5_<objective>{,_artifacts}`; queue logs + launcher in `cache/ablation/obj_a10d5_logs/`. Headlines (% of painter->OPP, mean of per-deployment %): max_util 47/88/92/93/93, per_site_cost 36/81/86/86/89, frac_beyond_optimal 83/89/93/96/94, joint_priority 82/85/88/98/101, frozen_prefix 49/45/65/54/59 (no_mc/no_memory/no_memory_dir/expl_none/full). |
 | Probing-policy study (Sep 9) | actual-5, smart vs scheduled vs loose, 150 iters | `cache/ablation/probe_a5_150_{smart,sched,loose}{,_artifacts,_tree}` |
 | Small/actual-3 smokes | `cache/ablation/smoke_*` | not paper material |
 
 The Sep 9/10 studies were run on the study box `i-04d7439fa93efaf2a` and copied here on
 2026-09-12; the study box is not a store, everything it produced that matters is here.
+
+## (e) APNIC-targeted measurement campaign (2026-09, `SCULPTOR_APNIC=1`)
+
+`cache/apnic/` on this box mirrors the laptop: `apnic_ingress_latency_20260913.tar.gz` (the raw
+per-(pop, peer) min-latency csvs Tom measured 2026-08-26..09-05; 134 MB), `apnic_targets_asn_users.csv`
+(target -> origin ASN -> APNIC user estimate), `provider_popps_apnic.csv` (coverage-rule providers),
+`aspop_20260910.json` (APNIC per-AS user estimates) and `routeviews-rv2-20260911-1200.pfx2as.gz`
+(CAIDA prefix2as). `cache/apnic/lat_shards/` is rebuilt from the tarball on first use
+(core/convert_apnic_latencies). Trainings under the flag have their own depstore fingerprints and
+`*_apnic` deployment caches; nothing here is used when the flag is off. Comparison with the old
+data: `experiments/apnic_data/README.md` in the repo.
 
 ## Other stores on this box
 
@@ -115,4 +127,4 @@ The Sep 9/10 studies were run on the study box `i-04d7439fa93efaf2a` and copied 
 - `backups/i-09a6_final/cache/`: the Aug 25-28 copies of the paper-table pickles from the retired
   r8g head.
 - Real-deployment (campus VM) figures do not live here; see
-  `~/Documents/actual_deployment_figures` (git: tkoch96/actual_deployment_figures).
+  `experiments/actual_deployment_figures/` in this repo (moved 2026-09-15 from the standalone tkoch96/actual_deployment_figures).
